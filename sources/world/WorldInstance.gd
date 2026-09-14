@@ -13,8 +13,14 @@ var timers : Node						= Node.new()
 var idlePolicies : Array[IdlePolicy]	= []
 
 #
-func _process(delta : float):
+func _physics_process(delta : float):
 	# SOM-IDLE: F2 — tick idle policies; server-side only (Launcher.World guard)
+	# SOM-IDLE D1 (b): the pump moved from _process (render delta) to
+	# _physics_process on 2026-09-14 — agents fight on physics steps
+	# (BaseAgent._physics_process), so a render-clocked policy tick made pacing
+	# machine/load dependent (60/h idle vs 24/h at the end of a loaded suite —
+	# decisions fired at wall-clock speed while combat starved with the steps).
+	# The real-time probe now measures kills/game-hour on ONE clock.
 	if Launcher.World != null and not idlePolicies.is_empty():
 		for policy in idlePolicies:
 			if policy and is_instance_valid(policy.agent):

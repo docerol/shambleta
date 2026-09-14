@@ -16,6 +16,7 @@ enum State
 }
 
 const TickInterval : float = 0.25
+const MaxCatchUpSeconds : float = 2.0	# D1 (b): cap pathological pumps at 8 substeps
 
 const SeekInterval : float = 0.4			# re-evaluate target every 0.4s
 const LootInterval : float = 0.4
@@ -118,11 +119,23 @@ func Tick(delta : float):
 	if halted or not _isValid():
 		return
 
-	_accumulator += delta
 	sessionGameTime += delta
 	if agent:
 		metricWalkDistance += agent.position.distance_to(_metricLastPos)
 		_metricLastPos = agent.position
+
+	# SOM-IDLE D1 (b): fixed-cadence substeps. The pump (WorldInstance) runs on
+	# the physics clock; under load or time compression one call can carry a
+	# huge delta (timeScale 20 -> 0.667 game-s per step). Driving the state
+	# machine in TickInterval-sized GAME seconds keeps pacing identical no
+	# matter how the host machine schedules frames/steps.
+	_accumulator = minf(_accumulator + delta, MaxCatchUpSeconds)
+	while _accumulator >= TickInterval:
+		_accumulator -= TickInterval
+		_tickStep(TickInterval)
+
+# One decision tick — all cooldowns/accumulators below advance in game seconds.
+func _tickStep(delta : float):
 	_tickVigor(delta)
 
 	# SOM-IDLE: boss duel — se o farmer caiu enquanto o boss ainda vive, é
