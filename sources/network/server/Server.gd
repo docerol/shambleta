@@ -15,8 +15,12 @@ func CreateAccount(accountName : String, password : String, email : String, reme
 		if err == NetworkCommons.AuthError.ERR_OK and not consentAccepted:
 			err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
 		if err == NetworkCommons.AuthError.ERR_OK:
-			if Launcher.SQL.HasAccount(accountName) or Launcher.SQL.HasEmail(email):
+			# SOM-IDLE F4 follow-up: name and email collisions get distinct errors —
+			# "account name not available" for a taken EMAIL was misleading QA.
+			if Launcher.SQL.HasAccount(accountName):
 				err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
+			elif Launcher.SQL.HasEmail(email):
+				err = NetworkCommons.AuthError.ERR_EMAIL_TAKEN
 			elif not Launcher.SQL.AddAccount(accountName, password, email, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, Peers.GetPeerIP(peerID)):
 				err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
 			else:

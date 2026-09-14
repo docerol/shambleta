@@ -72,6 +72,9 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 		NetworkCommons.AuthError.ERR_NAME_AVAILABLE:
 			warn = "Account name not available."
 			RequestFocus(nameTextControl)
+		NetworkCommons.AuthError.ERR_EMAIL_TAKEN:
+			warn = "Email already in use, pick another or recover the account."
+			RequestFocus(emailTextControl)
 		NetworkCommons.AuthError.ERR_NAME_VALID:
 			warn = "Name should should only include alpha-numeric characters and symbols."
 			RequestFocus(nameTextControl)

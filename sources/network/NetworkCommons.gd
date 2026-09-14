@@ -200,6 +200,8 @@ enum AuthError {
 	ERR_PASSWORD_CHANGE_WRONG,
 	# SOM-IDLE LGPD: cadastro exige aceite afirmativo dos termos.
 	ERR_CONSENT_REQUIRED,
+	# SOM-IDLE F4 follow-up: email já cadastrado não é "nome indisponível".
+	ERR_EMAIL_TAKEN,
 }
 
 # SOM-IDLE LGPD: status da conta para o direito ao esquecimento (art. 18).
