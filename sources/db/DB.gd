@@ -200,6 +200,14 @@ static func PreloadUpdate():
 static func Load():
 	Populate()
 	StripUnused()
+	# SOM-IDLE D1: resolve farm-zone map hashes the moment the DB is up,
+	# BEFORE any dbInitialized consumer. Production had no SyncWithDB caller
+	# (only the test suites called it), so zone.mapID stayed UnknownHash
+	# forever, IdlePolicyService.StartIdleSession always bailed at its zone
+	# guard and the live game silently never went idle-first. load() keeps
+	# this a runtime reference — no static parse cycle with FarmZoneData->DB.
+	var farmZones : GDScript = load("res://sources/idle/FarmZoneData.gd")
+	farmZones.call("SyncWithDB")
 	Launcher.dbInitialized.emit()
 
 static func Populate():

@@ -37,6 +37,12 @@ Efeito colateral de saúde (standalone 180s): `attacks_per_kill` **1210 → 44**
 
 `XP_PROGRESSION.md` §4.1.1 cita banda medida "80–160/h (wall-clock, máquina da calibração)". Nesta máquina, com o clock de jogo, a banda honesta é **36–80/h** (in-suíte–standalone). Não editamos o contrato (read-only); desvio registrado aqui.
 
+## Bug de produção encontrado na sequência (QA: "o jogo inicia mas ainda é controle antigo, não é idle")
+
+Causa: **`FarmZoneData.SyncWithDB()` não tinha chamador em produção** — só as suítes de teste o chamavam. No boot real, `zone.mapID` ficava `UnknownHash` para sempre → `IdlePolicyService.StartIdleSession()` abortava no primeiro guard e o hook *idle-first* do login (`ConnectCharacter` → `AutoFarmOnLogin`) falhava em silêncio: o char ficava na cidade sob controle manual. A suíte headless nunca pegaria isso porque as próprias suítes sincronizavam o catálogo.
+
+Fix: `DB.Load()` chama `load("res://sources/idle/FarmZoneData.gd").SyncWithDB()` **antes** de emitir `dbInitialized` — referência runtime via `load()` evita ciclo de parse `DB↔FarmZoneData`; `_build()` é one-shot, então as chamadas idempotentes dos testes continuam seguras. Verificado em boot real sem suíte: zona 1 resolvida e **24/24 zonas com mapa**. Com isso, login → char entra na instância de farm da zona salva e luta sozinho; `/farm <n>` troca de zona, `/farm stop` devolve o controle; o caminho adventure (input manual) permanece intacto por design.
+
 ## Reprodução
 
 - Suíte completa (~13–15 min com carga): `cd sourceofmana-audit && rm -rf .test-home && mkdir -p .test-home/data .test-home/cache && XDG_DATA_HOME="$PWD/.test-home/data" XDG_CACHE_HOME="$PWD/.test-home/cache" godot --headless --path . -s tests/run_idle_tests.gd`
