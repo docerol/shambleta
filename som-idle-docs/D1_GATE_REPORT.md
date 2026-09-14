@@ -57,3 +57,13 @@ Fix: `DB.Load()` chama `load("res://sources/idle/FarmZoneData.gd").SyncWithDB()`
 ## Resultado da validação
 
 *(preenchido pela corrida de validação pós-fix — ver seção final abaixo)*
+
+## Hotfix 2 — "tp funciona mas não há mobs nem idle" (QA)
+
+Sintoma: pós-fix SyncWithDB, o login teleportava para a zona mas o char ficava parado e a zona parecia vazia. Sonda headless replicando o fluxo real de login (`ConnectCharacter` → `AutoFarmOnLogin`) mediu o servidor: **instância 1001 com 60 mobs vivos, char dentro dela, `policy=NULL`**.
+
+Causa: em `_Attach`, a policy era entregue ao agente **antes** do warp — mas `World.Warp → WorldAgent.PopAgent` faz `remove_child`, disparando `PlayerAgent._exit_tree`, que faz `idlePolicy.Halt(); idlePolicy = null`. Toda sessão vinda da cidade (login idle-first e `/farm`) destruía o próprio cérebro um passo após o attach. O harness nunca viu: os agentes de teste **nascem dentro** da instância de farm (`currentInst.id == instID` pula o warp). "Sem mobs" no cliente é consequência: sem policy não há combate, mobs ociosos nunca se auto-broadcastam e o `AgentWarped` só semeia `FullUpdateEntity` de quem **se move** — com o char vivo e atacando, o aggro torna os mobs visíveis.
+
+Fix: mover `player.idlePolicy = policy` / `inst.AttachIdlePolicy(policy)` para **depois** do warp. Verificação: mesma sonda → `state=COMBAT, kills=2, L1→L2`, mobs 60→58. Suíte completa: 561/0.
+
+Arma base não é necessária: o agente da sonda era nu (atk 13, formação `{}`) e killou — `_getSkill()` cai em `SkillMeleeName` quando o loadout está vazio e o `FarmDamageFloor` garante dano mínimo no farm. Zonas fundas continuam sendo o loop de gear projetado (§4.1.3 do contrato).

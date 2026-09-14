@@ -146,15 +146,22 @@ static func _Attach(player : PlayerAgent, map : WorldMap, instID : int, zoneID :
 	if pos == Vector2i.ZERO:
 		return false
 
-	player.idlePolicy = policy
-	inst.AttachIdlePolicy(policy)
-
-	# Warp only when the player is not already entering this instance: a fresh
-	# agent has a pending deferred add_child (CreateAgent → Warp already queued
-	# it), and a second queued add_child for the same frame would collide.
+	# SOM-IDLE hotfix (live idle-first): the warp must happen BEFORE the policy
+	# is handed to the agent. World.Warp -> WorldAgent.PopAgent does a
+	# remove_child, which fires PlayerAgent._exit_tree — and that handler
+	# halts and nulls player.idlePolicy. Setting the policy first meant every
+	# LIVE attach (player coming from town, i.e. every real /farm and the
+	# idle-first login) self-destroyed its brain one step after attach:
+	# parentInst=1001, mobs=60, policy=NULL. Sim/test agents are born INSIDE
+	# the farm instance (the currentInst check skips their warp) and never hit
+	# it — which is why 561 headless checks stayed green while the GUI farmed
+	# nothing.
 	var currentInst : Node = player.get_parent()
 	if currentInst == null or not (currentInst is WorldInstance) or (currentInst as WorldInstance).id != instID:
 		Launcher.World.Warp(player, map, pos, ActorCommons.Direction.UNKNOWN, instID)
+
+	player.idlePolicy = policy
+	inst.AttachIdlePolicy(policy)
 
 	Util.PrintLog("Idle", "Player %s is now farming zone %d on instance %d" % [player.nick, zoneID, instID])
 	return true
