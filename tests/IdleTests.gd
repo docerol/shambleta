@@ -1665,6 +1665,35 @@ func SuiteI18n(_sql : SQLService) -> void:
 	TranslationServer.set_locale("en")
 	Check(TranslationServer.translate("Create Account") == "Create Account", "i18n: locale restored to en")
 
+	# SOM-IDLE i18n phase 1: Localizer — the runtime tree pass that translates
+	# scene/code labels (Godot 4 has no auto-translate for Control.text).
+	var loc : GDScript = load("res://sources/gui/Localizer.gd")
+	TranslationServer.set_locale("pt_BR")
+	var host : Control = Control.new()
+	(Engine.get_main_loop() as SceneTree).root.add_child(host)	# tr() needs tree context
+	var lab : Label = Label.new()
+	lab.text = "Delete my account (erase personal data)"
+	var btn : Button = Button.new()
+	btn.text = "Create Account"
+	var edit : LineEdit = LineEdit.new()
+	edit.placeholder_text = "Password"
+	host.add_child(lab)
+	host.add_child(btn)
+	host.add_child(edit)
+	loc.call("Apply", host)
+	Check(lab.text == "Excluir minha conta (apagar meus dados pessoais)", "i18n: Localizer translates label")
+	Check(btn.text == "Criar conta", "i18n: Localizer translates button")
+	Check(edit.placeholder_text == "Senha", "i18n: Localizer translates placeholder")
+	loc.call("Apply", host)
+	Check(lab.text == "Excluir minha conta (apagar meus dados pessoais)", "i18n: Apply is idempotent")
+	lab.text = "gerosnaldo"		# app writes dynamic content into a translated node
+	loc.call("Apply", host)
+	Check(lab.text == "gerosnaldo", "i18n: dynamic text rebases and passes through")
+	TranslationServer.set_locale("en")
+	loc.call("Apply", host)
+	Check(btn.text == "Create Account", "i18n: locale switch re-translates stashed original")
+	host.queue_free()
+
 # Auth hardening (SOM-IDLE A1): KDF, lockout, e-mail único, LGPD.
 func SuiteAuthHardening(sql : SQLService) -> void:
 	print("[suite] Auth hardening (A1)")

@@ -326,6 +326,11 @@ func _ready():
 	get_tree().set_auto_accept_quit(false)
 	get_tree().set_quit_on_go_back(false)
 	DisplayServer.pip_mode_set_auto_enter_on_background(true)
+	# SOM-IDLE i18n: Godot 4 does not auto-translate Control.text; Localizer runs
+	# the periodic tree pass that translates scene/code labels via ui.csv.
+	var i18n : Localizer = Localizer.new()
+	i18n.name = "I18N"
+	add_child(i18n)
 	DB.WarmShaders()
 
 func _on_ui_margin_resized():

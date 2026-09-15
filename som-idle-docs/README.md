@@ -33,6 +33,7 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
 |---|---|
 | [D1_GATE_REPORT.md](D1_GATE_REPORT.md) | Gate D1: forense do bug de dois relógios, normalização do tick, hotfixes produção (SyncWithDB, `_Attach`) |
 | [LGPD_CONSENT_VERSION_REPORT.md](LGPD_CONSENT_VERSION_REPORT.md) | Gate de consentimento por versão + fluxo de re-aceite (`AcceptConsent`) |
+| [I18N_PHASE1_REPORT.md](I18N_PHASE1_REPORT.md) | Fase 1 da tradução pt-BR: pipeline (`tools/extract_i18n.py` + `Localizer.gd` — Godot 4 não auto-traduz cena), UI 100%, conteúdo 730 chaves na fase 2; gap report em `data/i18n/coverage_report.md` |
 
 ## Onde está o resto
 
