@@ -1,9 +1,10 @@
 extends ServiceBase
 class_name EconomyService
 
-# SOM-IDLE: F2 idle-spike economy service (TECH_SPEC_CORE.md §4 + ECONOMY_STUDY.md)
-# Spike scope: settle-path ledger writes + balance/audit helpers.
-# ExecuteTrade/OpenChest are documented stubs (F4 scope) and always return false.
+# SOM-IDLE: economy service (TECH_SPEC_CORE.md §4-§5 + ECONOMY_STUDY.md).
+# Ledger de ouro/XP/gems/itens, trade P2P (fee burn), baús provably-fair com
+# pity, boss economy e grants de pagamento. ExecuteTrade/OpenChest saíram de
+# stub (F4) para implementação completa — ver ECONOMY_STUDY.md §2-§3.
 
 const LedgerKindGold : String = "gold"
 const LedgerKindXP : String = "xp"

@@ -214,8 +214,8 @@ enum AccountStatus {
 # Versões dos textos legais que o cliente está exibindo/aceitando. bump a cada
 # revisão jurídica — força re-aceite dos ativos (handoff: sincronizar com o
 # conteúdo de data/db/agreement.json e a política de privacidade publicada).
-const AgreementTosVersion : String = "2026-09"
-const AgreementPrivacyVersion : String = "2026-09"
+const AgreementTosVersion : String = "2026-09-b"		# bumped: AFK-farm rule + BR jurisdiction (agreement.json)
+const AgreementPrivacyVersion : String = "2026-09-b"
 
 static func CheckSize(entry : String, minSize : int, maxSize : int) -> bool:
 	var currentSize : int = entry.length()
