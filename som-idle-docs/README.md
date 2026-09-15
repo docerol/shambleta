@@ -34,6 +34,7 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
 | [D1_GATE_REPORT.md](D1_GATE_REPORT.md) | Gate D1: forense do bug de dois relógios, normalização do tick, hotfixes produção (SyncWithDB, `_Attach`) |
 | [LGPD_CONSENT_VERSION_REPORT.md](LGPD_CONSENT_VERSION_REPORT.md) | Gate de consentimento por versão + fluxo de re-aceite (`AcceptConsent`) |
 | [I18N_PHASE1_REPORT.md](I18N_PHASE1_REPORT.md) | Fase 1 da tradução pt-BR: pipeline (`tools/extract_i18n.py` + `Localizer.gd` — Godot 4 não auto-traduz cena), UI 100%, conteúdo 730 chaves na fase 2; gap report em `data/i18n/coverage_report.md` |
+| [REBALANCE_XP_OPTIONS.md](REBALANCE_XP_OPTIONS.md) | Decisão de owner: quantificação das 3 recalibragens da parede de XP pós-L70 (treadmill / prestige / soft-cap+seasons) + híbrido canônico |
 | [I18N_PHASE2_REPORT.md](I18N_PHASE2_REPORT.md) | Fase 2 da tradução: conteúdo pt-BR dos NPCs/quests (lotes 2A/2B/2C com mapas versionados), corpus 100%, regras editoriais + pendência de nomes de item (2D) |
 
 ## Onde está o resto
