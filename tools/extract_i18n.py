@@ -26,10 +26,16 @@ CONTENT_DIR = os.path.join(ROOT, 'sources', 'scripts')
 
 # Chaves de identidade deliberada: simbolos, numeros e loanwords que a comunidade
 # BR usa verbatim (Mana, PC, Slot, Gems:, Odds:, Drops:, VIP:, Artis proper noun).
+# Credits (nomes de autores premiados no conteúdo) não se traduzem: ficam por
+# identidade, como símbolos/números acima. Regra da casa: créditos são intocáveis.
 IDENTITY = {"⏎", "\n", "+", "-", "<", ">", "?", "~", "0", "1", "2", "3", "4", "5",
 	"6", "7", "8", "9", "0/0", "35%", "999+", "x1", "x2", "x3", "+%s XP", "+0 XP",
 	"000000", "Artis", "Drops: %d", "Drops: 0", "Gems: —", "Mana", "Odds: —",
-	"PC", "Slot", "Slots", "VIP: —", "Visual", "★ Local Server"}
+	"PC", "Slot", "Slots", "VIP: —", "Visual", "★ Local Server",
+    "Johanne Laliberté, 2011", "Nard, 2011",
+    # pontuação/interjeições/loanwords de mesa usados crus pela comunidade BR
+    "...", "Blackjack!", "ARGH.",
+}
 
 def unesc(s):
     return s.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')

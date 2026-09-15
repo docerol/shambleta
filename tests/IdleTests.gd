@@ -1702,6 +1702,11 @@ func SuiteI18n(_sql : SQLService) -> void:
 	var trpt2 : Translation = load("res://data/i18n/ui.pt_BR.translation")
 	Check(str(trpt2.get_message("Language")).begins_with("Idioma"), "i18n: selector row label translated")
 	Check(trpt2.get_message("Auto") == "Automático", "i18n: selector Auto item translated")
+	# fase 2A (conteúdo das cidades pequenas): amostra do registro de tradução
+	Check(str(trpt2.get_message("Welcome to the Heart of Candor, where Mana comes to die!")).begins_with("Bem-vindo"), "i18n: phase 2A content sample translated (candor)")
+	Check(trpt2.get_message("This well has run dry.") == "Este poço secou.", "i18n: phase 2A content sample translated (generic)")
+	Check(str(trpt2.get_message("Hi! I\'m Watchman Nathan.")).begins_with("Oi! Eu sou o Vigia"), "i18n: phase 2B content sample translated (sandstorm)")
+	Check(str(trpt2.get_message("Hello, welcome to Tulimshar!")).begins_with("Olá, bem-vindo a Tulimshar"), "i18n: phase 2C content sample translated (tulimshar)")
 
 # Auth hardening (SOM-IDLE A1): KDF, lockout, e-mail único, LGPD.
 func SuiteAuthHardening(sql : SQLService) -> void:
