@@ -1693,6 +1693,15 @@ func SuiteI18n(_sql : SQLService) -> void:
 	loc.call("Apply", host)
 	Check(btn.text == "Create Account", "i18n: locale switch re-translates stashed original")
 	host.queue_free()
+	# seletor de idioma (Settings "General-Language"): resolução auto/en/pt_BR e
+	# as chaves de UI do próprio seletor traduzidas
+	var locG : GDScript = load("res://sources/gui/Localizer.gd")
+	Check(locG.call("ResolveLocale", "pt_BR") == "pt_BR", "i18n: selector resolves explicit locale")
+	Check(locG.call("ResolveLocale", "en") == "en", "i18n: selector resolves en")
+	Check(locG.call("ResolveLocale", "auto") == OS.get_locale(), "i18n: auto follows OS locale")
+	var trpt2 : Translation = load("res://data/i18n/ui.pt_BR.translation")
+	Check(str(trpt2.get_message("Language")).begins_with("Idioma"), "i18n: selector row label translated")
+	Check(trpt2.get_message("Auto") == "Automático", "i18n: selector Auto item translated")
 
 # Auth hardening (SOM-IDLE A1): KDF, lockout, e-mail único, LGPD.
 func SuiteAuthHardening(sql : SQLService) -> void:

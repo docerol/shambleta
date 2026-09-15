@@ -32,6 +32,13 @@ func _process(delta : float) -> void:
 	_elapsed = 0.0
 	Apply(get_parent())
 
+# Resolve the persisted selector value ("auto"/"en"/"pt_BR") to a concrete
+# locale. "auto" follows the OS, exactly like Godot's untouched default.
+static func ResolveLocale(setting : String) -> String:
+	if setting.is_empty() or setting == "auto":
+		return OS.get_locale()
+	return setting
+
 # Translates node and all descendants. Safe to call any number of times.
 static func Apply(node : Node) -> void:
 	for child in node.get_children():

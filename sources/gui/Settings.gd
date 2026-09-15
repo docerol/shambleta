@@ -142,6 +142,27 @@ func apply_scaling(mode : int):
 	Launcher.Root.set_content_scale_factor(mode + 1)
 	init_actionoverlay(true)
 
+# Language (SOM-IDLE i18n)
+const LanguageOptions : Array[String] = ["auto", "en", "pt_BR"]
+func init_language(apply : bool):
+	var setting : String = str(GetVal("General-Language"))
+	var idx : int = LanguageOptions.find(setting)
+	if idx < 0:
+		idx = 0
+	renderAccessors["General-Language"][ACC_TYPE.LABEL].selected = idx
+	if apply:
+		apply_language(idx)
+func set_language(idx : int):
+	SetVal("General-Language", LanguageOptions[idx])
+	apply_language(idx)
+	# OptionButton item labels bypass the Localizer prop-pass: refresh in place
+	var opt : OptionButton = renderAccessors["General-Language"][ACC_TYPE.LABEL]
+	opt.set_item_text(0, tr("Auto"))
+	opt.set_item_text(1, "English")
+	opt.set_item_text(2, "Português")
+func apply_language(idx : int):
+	TranslationServer.set_locale(Localizer.ResolveLocale(LanguageOptions[idx]))
+
 # ActionOverlay
 func init_actionoverlay(apply : bool):
 	var enable : bool = GetVal("Render-ActionOverlay")
@@ -376,6 +397,27 @@ func _ready():
 		return
 
 	PopulateCredits()
+	# SOM-IDLE i18n: seletor de idioma criado em runtime no topo da aba Render
+	# (mesma política do botão LGPD: não edita .tscn). Persistido em USERSETTINGS
+	# como "General-Language" ("auto"|"en"|"pt_BR"); aplicar o locale dispara a
+	# re-tradução pela pass do Localizer (1s) — ver Localizer.gd.
+	var langBox : HBoxContainer = HBoxContainer.new()
+	langBox.name = "LanguageRow"
+	var langLabel : Label = Label.new()
+	langLabel.name = "Text"
+	langLabel.text = "Language"
+	var langOption : OptionButton = OptionButton.new()
+	langOption.name = "LanguageOption"
+	langOption.add_item("Auto")
+	langOption.add_item("English")
+	langOption.add_item("Português")
+	langOption.item_selected.connect(set_language)
+	langBox.add_child(langLabel)
+	langBox.add_child(langOption)
+	var visualVBox : Node = renderAccessors["Render-Scaling"][ACC_TYPE.LABEL].get_parent()
+	visualVBox.add_child(langBox)
+	visualVBox.move_child(langBox, 0)
+	renderAccessors["General-Language"] = [init_language, null, apply_language, langOption]
 	RefreshSettings(true)
 	FSM.enter_game.connect(RefreshSettings.bind(true))
 	FSM.exit_game.connect(SaveSettings.bind())
