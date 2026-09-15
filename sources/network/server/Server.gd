@@ -74,6 +74,11 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 				var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
 				if not accountData:
 					err = NetworkCommons.AuthError.ERR_AUTH
+				elif not Launcher.SQL.IsConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
+					# SOM-IDLE LGPD: version gate — bumping the agreements above
+					# holds every existing account at the door until it accepts
+					# through the AcceptConsent RPC (dialog on the client).
+					err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
 				else:
 					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
 	Network.AuthError(err, peerID)
@@ -93,9 +98,53 @@ func LoginWithToken(accountName : String, token : String, platform : int, peerID
 			var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthToken(accountID, tokenHash, ipAddress)
 			if not accountData:
 				err = NetworkCommons.AuthError.ERR_TOKEN
+			elif not Launcher.SQL.IsConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
+				err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
 			else:
 				err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
 				Launcher.SQL.RefreshAuthToken(peer.accountID, ipAddress)
+	Network.AuthError(err, peerID)
+
+# SOM-IDLE LGPD: re-acceptance after an agreements bump. Verifies a credential
+# exactly like the login RPCs do (password — with the same lockout predicate —
+# or a remember-me token) and only then persists the CURRENT versions with the
+# audit timestamp/IP and completes the original login (the final ERR_OK drives
+# the client FSM through its normal path). Consent is never granted on a bare
+# accountName.
+func AcceptConsent(accountName : String, password : String, token : String, rememberMe : bool, platform : int, peerID : int):
+	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer:
+		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
+	else:
+		var accountData : Peers.AccountData = null
+		var ipAddress : String = Peers.GetPeerIP(peerID)
+		if not password.is_empty():
+			err = NetworkCommons.CheckAuthInformation(accountName, password)
+			if err == NetworkCommons.AuthError.ERR_OK:
+				var accountID : int = Launcher.SQL.GetAccountID(accountName)
+				if accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
+					err = NetworkCommons.AuthError.ERR_AUTH
+				else:
+					accountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
+					if not accountData:
+						err = NetworkCommons.AuthError.ERR_AUTH
+		elif not token.is_empty():
+			accountData = Launcher.SQL.ValidateAuthToken(Launcher.SQL.GetAccountID(accountName), Hasher.HashPassword(token), ipAddress)
+			if not accountData:
+				err = NetworkCommons.AuthError.ERR_TOKEN
+		else:
+			err = NetworkCommons.AuthError.ERR_AUTH
+		if err == NetworkCommons.AuthError.ERR_OK and accountData:
+			if not Launcher.SQL.SetConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, ipAddress):
+				err = NetworkCommons.AuthError.ERR_AUTH
+			else:
+				Util.PrintLog("Auth", "LGPD: account %d accepted agreements %s/%s" % [accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion])
+				if not password.is_empty():
+					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
+				else:
+					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
+					Launcher.SQL.RefreshAuthToken(peer.accountID, ipAddress)
 	Network.AuthError(err, peerID)
 
 func RequestPasswordReset(accountName : String, peerID : int):

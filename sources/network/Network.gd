@@ -69,6 +69,11 @@ func AuthError(err : NetworkCommons.AuthError, peerID : int = NetworkCommons.Pee
 func LoginWithToken(accountName : String, token : String, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
 	return CallServer("LoginWithToken", [accountName, token, platform], peerID, NetworkCommons.DelayLogin)
 
+# SOM-IDLE LGPD: re-accept updated agreements at login (server re-verifies).
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func AcceptConsent(accountName : String, password : String, token : String, rememberMe : bool, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("AcceptConsent", [accountName, password, token, rememberMe, platform], peerID, NetworkCommons.DelayLogin)
+
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func AuthTokenResult(accountName : String, token : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("AuthTokenResult", [accountName, token], peerID)

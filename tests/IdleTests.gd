@@ -1758,17 +1758,25 @@ func SuiteLGPD(sql : SQLService):
 	Check(sql.AddAccount(acct, pw, acct + "@test.local", NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, "203.0.113.7"), "lgpd: account created with consent")
 	var accountID : int = sql.GetAccountID(acct)
 	Check(accountID != NetworkCommons.PeerUnknownID, "lgpd: account id resolves")
-	Check(sql.IsConsentAccepted(accountID), "lgpd: consent accepted")
+	Check(sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: consent accepted")
 	var crow : Array = sql.QueryBindings("SELECT consent_timestamp, consent_ip, status FROM account WHERE account_id = ?;", [accountID])
 	Check(int(crow[0].get("consent_timestamp", 0)) > 0, "lgpd: consent timestamp stored")
 	Check(str(crow[0].get("consent_ip", "")) == "203.0.113.7", "lgpd: consent ip stored")
 	CheckEq(int(crow[0].get("status", -1)), NetworkCommons.AccountStatus.ACTIVE, "lgpd: initial status ACTIVE")
 
+	# SOM-IDLE LGPD: version-aware — bumping the current agreements must force
+	# re-acceptance; re-accept stores and validates the new versions.
+	Check(not sql.IsConsentAccepted(accountID, "2099-01", NetworkCommons.AgreementPrivacyVersion), "lgpd: bumped ToS version forces re-accept")
+	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, "2099-01"), "lgpd: bumped Privacy version forces re-accept")
+	Check(sql.SetConsentAccepted(accountID, "2099-01", "2099-01", "203.0.113.8"), "lgpd: re-accept persists new versions")
+	Check(sql.IsConsentAccepted(accountID, "2099-01", "2099-01"), "lgpd: re-consent matches new versions")
+	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: previous versions stop counting")
+
 	# sem aceite => não considerado aceito (SQL guarda vazio; gate é no Server)
 	var noAcct : String = "idle_lgpd_noconsent"
 	sql.db.delete_rows("account", "username = '%s'" % noAcct)
 	Check(sql.AddAccount(noAcct, pw, noAcct + "@test.local"), "lgpd: no-consent account row still creatable")
-	Check(not sql.IsConsentAccepted(sql.GetAccountID(noAcct)), "lgpd: no-consent NOT accepted")
+	Check(not sql.IsConsentAccepted(sql.GetAccountID(noAcct), NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: no-consent NOT accepted")
 
 	# monta personagem + wallet + ledger (financeiro deve sobreviver à deleção)
 	Check(sql.AddCharacter(accountID, nick, ActorCommons.DefaultStats, ActorCommons.DefaultTraits, ActorCommons.DefaultAttributes), "lgpd: character created")
@@ -1788,7 +1796,8 @@ func SuiteLGPD(sql : SQLService):
 	Check(str(erow[0].get("consent_ip", "")) == "", "lgpd: consent ip erased")
 	CheckEq(int(erow[0].get("status", -1)), NetworkCommons.AccountStatus.DELETED, "lgpd: status DELETED")
 	Check(str(erow[0].get("password_salt", "")) == "", "lgpd: password salt wiped")
-	Check(not sql.IsConsentAccepted(accountID), "lgpd: consent blanked after erase")
+	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: consent blanked after erase")
+	Check(not sql.IsConsentAccepted(accountID, "", ""), "lgpd: erased account matches nothing (null-safe)")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM character WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: characters purged")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM wallet WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: wallet purged")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE account_id = ?;", [accountID])[0]["c"]), ledgerBefore, "lgpd: LEDGER preserved (fiscal retention)")

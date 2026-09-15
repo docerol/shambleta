@@ -25,6 +25,12 @@ enum RecoveryState { NONE, REQUEST_EMAIL, ENTER_CODE }
 # SOM-IDLE LGPD: aceite afirmativo (scroll do termo não é consentimento — exige
 # checkbox). Criado em runtime p/ não editar o .tscn; visível só no cadastro.
 var consentCheckBox : CheckBox				= null
+# SOM-IDLE LGPD: re-consent dialog state — the credentials of the last login
+# attempt, replayed to AcceptConsent (server re-verifies before recording).
+var lastAuthAccount : String				= ""
+var lastAuthPassword : String				= ""
+var lastAuthToken : String				= ""
+var reconsentDialog : AcceptDialog			= null
 
 var nameText : String						= ""
 var savedToken : String						= ""
@@ -88,8 +94,15 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 			warn = "Email is incorrect, please us a normal email format."
 			RequestFocus(emailTextControl)
 		NetworkCommons.AuthError.ERR_CONSENT_REQUIRED:
-			warn = tr("You must read and accept the Terms of Use and Privacy Policy to register.")
-			RequestFocus(consentCheckBox)
+			if isAccountCreatorEnabled:
+				warn = tr("You must read and accept the Terms of Use and Privacy Policy to register.")
+				RequestFocus(consentCheckBox)
+			else:
+				# SOM-IDLE LGPD: server version gate — agreements changed since
+				# this account's last acceptance; offer the re-accept dialog.
+				warn = tr("The Terms of Use and Privacy Policy were updated. Accept to continue.")
+				if not lastAuthAccount.is_empty():
+					OpenReconsentDialog.call_deferred()
 		NetworkCommons.AuthError.ERR_RESET_UNAVAILABLE:
 			warn = "Password reset is not available on this server."
 			SetRecoveryState(RecoveryState.NONE)
@@ -280,6 +293,9 @@ func FillFieldsFromToken():
 func Connect():
 	nameText = nameTextControl.get_text()
 	if not savedToken.is_empty():
+		lastAuthAccount = savedAccountName
+		lastAuthPassword = ""
+		lastAuthToken = savedToken
 		if Network.LoginWithToken(savedAccountName, savedToken, NetworkCommons.GetPlatform()):
 			nameText = savedAccountName
 			FSM.EnterState(FSM.States.LOGIN_PROGRESS)
@@ -291,10 +307,29 @@ func Connect():
 	var authError : NetworkCommons.AuthError = NetworkCommons.CheckAuthInformation(nameText, passwordText)
 	FillWarningLabel(authError)
 	if authError == NetworkCommons.AuthError.ERR_OK:
+		lastAuthAccount = nameText
+		lastAuthPassword = passwordText
+		lastAuthToken = ""
 		if Network.LoginWithPassword(nameText, passwordText, rememberMeCheckBox.button_pressed, NetworkCommons.GetPlatform()):
 			FSM.EnterState(FSM.States.LOGIN_PROGRESS)
 			if Launcher.GUI.settingsWindow:
 				Launcher.GUI.settingsWindow.set_sessionaccountname(nameText)
+
+func OpenReconsentDialog():
+	if reconsentDialog == null:
+		reconsentDialog = AcceptDialog.new()
+		reconsentDialog.title = tr("Agreements Update")
+		reconsentDialog.ok_button_text = tr("Accept")
+		reconsentDialog.confirmed.connect(OnReconsentAccepted)
+		add_child(reconsentDialog)
+	reconsentDialog.dialog_text = tr("A new version of the Terms of Use and the Privacy Policy is in effect. Please review them on the game website and accept to enter.")
+	if not reconsentDialog.visible:
+		reconsentDialog.popup_centered()
+
+func OnReconsentAccepted():
+	FSM.EnterState(FSM.States.LOGIN_PROGRESS)
+	if not Network.AcceptConsent(lastAuthAccount, lastAuthPassword, lastAuthToken, rememberMeCheckBox.button_pressed, NetworkCommons.GetPlatform()):
+		FSM.EnterState(FSM.States.LOGIN_SCREEN)
 
 func CreateAccount():
 	nameText = nameTextControl.get_text()

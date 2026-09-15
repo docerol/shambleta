@@ -65,11 +65,35 @@ func AddAccount(username : String, password : String, email : String, tosVersion
 	}
 	return db.insert_row("account", accountData)
 
-func IsConsentAccepted(accountID : int) -> bool:
+func IsConsentAccepted(accountID : int, tosVersion : String, privacyVersion : String) -> bool:
+	# SOM-IDLE LGPD: version-aware — stored consent only counts when it matches
+	# the CURRENT agreements, so bumping NetworkCommons.AgreementTosVersion /
+	# AgreementPrivacyVersion forces every existing account to re-accept at
+	# login. Legacy rows with NULL columns must read as no-consent (str(null)
+	# yields "<null>", which is NOT empty) — hence the explicit null guards.
 	var rows : Array[Dictionary] = QueryBindings("SELECT consent_tos_version, consent_privacy_version FROM account WHERE account_id = ?;", [accountID])
 	if rows.is_empty():
 		return false
-	return str(rows[0].get("consent_tos_version", "")) != "" and str(rows[0].get("consent_privacy_version", "")) != ""
+	var storedTos : Variant = rows[0].get("consent_tos_version")
+	var storedPrivacy : Variant = rows[0].get("consent_privacy_version")
+	if storedTos == null or storedPrivacy == null:
+		return false
+	# a consent record must always carry a real version — empty strings on
+	# either side (erased rows, misconfigured constants) never match
+	if tosVersion.is_empty() or privacyVersion.is_empty():
+		return false
+	return String(storedTos) == tosVersion and String(storedPrivacy) == privacyVersion
+
+func SetConsentAccepted(accountID : int, tosVersion : String, privacyVersion : String, ip : String) -> bool:
+	# SOM-IDLE LGPD: records a (re-)acceptance of the given agreement versions
+	# with timestamp + IP audit trail (single-row house update, like
+	# UpdatePowerScore — no transaction wrapper needed).
+	return db.update_rows("account", "account_id = %d" % accountID, {
+		"consent_tos_version" : tosVersion,
+		"consent_privacy_version" : privacyVersion,
+		"consent_timestamp" : SQLCommons.Timestamp(),
+		"consent_ip" : ip,
+	})
 
 func RemoveAccount(accountID : int) -> bool:
 	return db.delete_rows("account", "account_id = %d" % accountID)
