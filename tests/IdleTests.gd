@@ -1798,6 +1798,18 @@ func SuiteLGPD(sql : SQLService):
 	Check(str(erow[0].get("password_salt", "")) == "", "lgpd: password salt wiped")
 	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: consent blanked after erase")
 	Check(not sql.IsConsentAccepted(accountID, "", ""), "lgpd: erased account matches nothing (null-safe)")
+	# SOM-IDLE LGPD compliance: consent text must be intelligible to the BR
+	# user (validity of consent). The re-consent flow's strings must carry a
+	# pt_BR translation in ui.csv (empty or echoed key = untranslated).
+	var trpt : Translation = load("res://data/i18n/ui.pt_BR.translation")
+	Check(trpt != null, "lgpd: pt_BR translation resource loads")
+	for k in ["Agreements Update", "Accept",
+			"A new version of the Terms of Use and the Privacy Policy is in effect. Please review them on the game website and accept to enter.",
+			"The Terms of Use and Privacy Policy were updated. Accept to continue.",
+			"I have read and accept the Terms of Use and Privacy Policy",
+			"You must read and accept the Terms of Use and Privacy Policy to register."] :
+		var msg : String = trpt.get_message(k)
+		Check(not msg.is_empty() and msg != k, "lgpd: pt_BR consent string translated: %s" % (k.left(32)))
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM character WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: characters purged")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM wallet WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: wallet purged")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE account_id = ?;", [accountID])[0]["c"]), ledgerBefore, "lgpd: LEDGER preserved (fiscal retention)")
