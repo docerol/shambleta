@@ -214,6 +214,13 @@ func AddExperience(value : int, hasFeedback : bool = true):
 		experience -= experiencelNeeded
 		level += 1
 		experiencelNeeded = Experience.GetNeededExperienceForNextLevel(level)
+	# SOM-IDLE rebirth: XP at the cap converts to essence (1%), server-side only
+	# (sims/tests without Launcher.Economy keep the XP banked — same behavior as
+	# before the cap change). Whole divisor chunks only; remainder keeps banking.
+	if experience >= RebirthData.EssenceDivisor and Experience.IsMaxLevel(level) and actor is PlayerAgent and Launcher.Economy != null:
+		var convert : int = (experience / RebirthData.EssenceDivisor) * RebirthData.EssenceDivisor
+		experience -= convert
+		Launcher.Economy.AddEssence(actor.GetCharacterID(), convert / RebirthData.EssenceDivisor, "xp_overflow")
 	vital_stats_updated.emit()
 	if actor is PlayerAgent:
 		Network.TargetAlteration(actor.get_rid().get_id(), actor.get_rid().get_id(), value, ActorCommons.Alteration.EXP, DB.UnknownHash, hasFeedback, actor.peerID)

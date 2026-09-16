@@ -493,6 +493,28 @@ func ChallengeBoss(peerID : int = NetworkCommons.PeerAuthorityID):
 func BossResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("BossResult", [result], peerID)
 
+# SOM-IDLE: rebirth (híbrido B+C). Painel pede estado ao abrir; RebirthNow/Buy
+# devolvem RebirthResult e depois RebirthState fresco (essência/custos mudam).
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetRebirthState(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetRebirthState", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func RebirthState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("RebirthState", [state], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func RebirthNow(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("RebirthRequest", [], peerID, 1500)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyRebirthUpgrade(upgradeID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyRebirthUpgrade", [upgradeID], peerID, 1500)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func RebirthResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("RebirthResult", [result], peerID)
+
 # Inventory
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)
 func ItemAdded(itemID : int, customfield : StringName, count : int, peerID : int = NetworkCommons.PeerOfflineID):

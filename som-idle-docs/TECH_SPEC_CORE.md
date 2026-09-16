@@ -28,7 +28,8 @@ Serviços centrais (`sources/idle/`, `sources/economy/`):
 | `FarmZoneData` | `FarmZoneData.gd` | Catálogo estático das 24 zonas de farm (curva de XP/ouro/par, ver `XP_PROGRESSION.md`) |
 | `OfflineSettle` | `OfflineSettle.gd` | Liquida o progresso acumulado enquanto o jogador estava desconectado |
 | `BossService` | `BossService.gd` | Sistema de chave de farm → duelo de boss escalado ao nível do personagem |
-| `EconomyService` | `EconomyService.gd` | Ledger de ouro/XP/gems/itens, trade P2P, baús (provably-fair), grants de pagamento |
+| `RebirthData` | `RebirthData.gd` | Contrato numérico do renascimento (cap L60, divisor de essência, loja `base × 1.7^n`, favores `1.05^n`, cap do attune) — pura, sem I/O |
+| `EconomyService` | `EconomyService.gd` | Ledger de ouro/XP/gems/itens/**essência**, trade P2P, baús (provably-fair), grants de pagamento, loja e ato de renascimento (`BuyRebirthUpgrade`/`Rebirth`) |
 | `TelemetryService` | `TelemetryService.gd` | Buffer de eventos de produto (login/settle/levelup), flush periódico para `telemetry_event` |
 
 ## §2. Farm spawns e respawn (por zona)
@@ -76,6 +77,15 @@ para o ritmo esperado online quanto para a liquidação offline).
   hash de `server_seed + client_seed + nonce`; odds públicas (`/chests`) e
   snapshot persistido por baú aberto, para replay em disputa (ver
   `ECONOMY_STUDY.md §7`).
+- **Invariante 5 (rebirth)** — renascer exige o **agente vivo no cap** (offline
+  responde `not_online`, abaixo do cap responde `below_cap`); contador + reset de
+  `level/experience/gp` acontecem em **uma única transação**, e o cache de
+  multiplicadores só é invalidado depois do commit. Nenhum outro estado é
+  tocado: equipamento, chaves, essência e favores sobrevivem ao reset.
+- **Invariante 6 (essência)** — o excedente de XP do cap é convertido em chunks
+  inteiros do divisor (100 XP : 1), nunca em fração: o resto continua no bucket
+  de XP. Online (`Stats.AddExperience`) e offline (`OfflineSettle._Apply`) usam o
+  mesmo `RebirthData.EssenceDivisor`, então a taxa é idêntica nos dois caminhos.
 
 ## §6/§7 — ver `ECONOMY_STUDY.md`
 

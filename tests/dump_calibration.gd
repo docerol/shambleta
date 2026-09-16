@@ -37,7 +37,12 @@ func _dump():
 
 	print("\n=== A. CURVA DE NÍVEL (XP necessário L->L+1) ===")
 	var cum : int = 0
+	# SOM-IDLE rebirth: a tabela para no cap de renascimento (acima dele o XP não
+	# compra nível, compra essência — dumpar L75/L150 seria imprimir o sentinel).
+	var cap : int = int(expScript.MAX_LEVEL)
 	for lvl in [1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150]:
+		if lvl > cap:
+			break
 		var need : int = expScript.GetNeededExperienceForNextLevel(lvl)
 		print("L%-4d needed=%-14d cumToReach~%d" % [lvl, need, cum])
 		cum += need
@@ -122,7 +127,11 @@ func _dump():
 	# --- E: power score de char nu por nível (calibração de minPower) ---
 	print("\n=== E. POWER DE CHAR NU POR NIVEL ===")
 	var playerEntity = dbScript.EntitiesDB.get(dbScript.PlayerHash, null)
-	for lvl in [1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150]:
+	# idem A: acima do cap de renascimento não existe nível, logo não existe power
+	# de char nu — a porta de zona funda passa a ser gear, não nível.
+	for lvl in [1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 150]:
+		if lvl > cap:
+			break
 		var stat = statScript2.new()
 		var base : Dictionary = {"level": lvl}
 		if playerEntity:

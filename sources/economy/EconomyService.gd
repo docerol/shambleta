@@ -11,6 +11,7 @@ const LedgerKindXP : String = "xp"
 const LedgerKindItem : String = "item"
 const LedgerKindGems : String = "gems"
 const LedgerKindBossKey : String = "boss_key"
+const LedgerKindEssence : String = "essence"
 
 var settleMutex : Mutex						= Mutex.new()
 
@@ -128,6 +129,123 @@ func GrantBossKey(charID : int, amount : int, reason : String) -> int:
 	settleMutex.unlock()
 	return Launcher.SQL.GetCharacterBossKeys(charID) if applied else -1
 
+# ------------------------------------------------------------------ rebirth (B+C)
+# Contrato: XP_PROGRESSION.md §4.2. Essência é a moeda do motor: entra 1 por 100
+# XP de overflow (nunca some no cap), sai em upgrades de custo 1.7^n. Cache de
+# multipliers por char é invalidado em qualquer mutação (buy/rebirth/settle).
+var _rebirthCache : Dictionary = {}
+
+func GetRebirthMults(charID : int) -> Dictionary:
+	if _rebirthCache.has(charID):
+		return _rebirthCache[charID]
+	var info : Dictionary = Launcher.SQL.GetRebirthInfo(charID)
+	if info.is_empty():
+		return {"xp" = 1.0, "gold" = 1.0, "attune" = 0}
+	var mults : Dictionary = {
+		"xp" : RebirthData.XpMult(int(info["favor_xp"])),
+		"gold" : RebirthData.GoldMult(int(info["favor_gold"])),
+		"attune" : int(info["attune_offline"]),
+	}
+	_rebirthCache[charID] = mults
+	return mults
+
+func InvalidateRebirthCache(charID : int) -> void:
+	_rebirthCache.erase(charID)
+
+func AddEssence(charID : int, amount : int, reason : String) -> int:
+	if amount == 0:
+		return Launcher.SQL.GetCharacterEssence(charID)
+	var applied : bool = false
+	settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var next : int = Launcher.SQL.AddCharacterEssence(charID, amount)
+		if next < 0:
+			return false
+		var acct : int = _AccountIDForCharacterRaw(charID)
+		return _LedgerAppendLocked(acct, charID, LedgerKindEssence, amount, next, reason)):
+		applied = true
+	settleMutex.unlock()
+	return Launcher.SQL.GetCharacterEssence(charID) if applied else -1
+
+func BuyRebirthUpgrade(charID : int, upgradeID : String) -> Dictionary:
+	if not RebirthData.IsUpgrade(upgradeID):
+		return {"ok" = false, "reason" = "unknown_upgrade"}
+	var info : Dictionary = Launcher.SQL.GetRebirthInfo(charID)
+	if info.is_empty():
+		return {"ok" = false, "reason" = "no_character"}
+	if upgradeID == RebirthData.UpgradeAttune and int(info[upgradeID]) >= RebirthData.OfflineMaxLevels:
+		return {"ok" = false, "reason" = "maxed"}
+	var cost : int = RebirthData.Cost(upgradeID, int(info[upgradeID]))
+	if int(info["essence"]) < cost:
+		return {"ok" = false, "reason" = "insufficient_essence", "cost" = cost}
+	var ok : bool = false
+	settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var nextEssence : int = Launcher.SQL.AddCharacterEssence(charID, -cost)
+		if nextEssence < int(info["essence"]) - cost:
+			return false
+		if Launcher.SQL.IncRebirthUpgrade(charID, upgradeID) < 0:
+			return false
+		var acct : int = _AccountIDForCharacterRaw(charID)
+		return _LedgerAppendLocked(acct, charID, LedgerKindEssence, -cost, nextEssence, "rebirth_upgrade:" + upgradeID)):
+		ok = true
+	settleMutex.unlock()
+	if not ok:
+		return {"ok" = false, "reason" = "transaction_failed"}
+	InvalidateRebirthCache(charID)
+	return {"ok" = true, "upgrade" = upgradeID, "cost" = cost}
+
+# Renascimento de verdade exige o agente vivo (stats in-memory). Offline/logged-out
+# NÃO renasce: o pedido só passa quando o char está conectado e no cap.
+func Rebirth(charID : int, player) -> Dictionary:
+	if player == null or not is_instance_valid(player) or player.stat == null:
+		return {"ok" = false, "reason" = "not_online"}
+	if player.stat.level < Experience.MAX_LEVEL:
+		return {"ok" = false, "reason" = "below_cap"}
+	var statRow : Dictionary = Launcher.SQL.GetStat(charID)
+	var goldKept : int = 0
+	var value : Variant = statRow.get("gp", 0)
+	goldKept = 0 if value == null else int(value)
+	var ok : bool = false
+	settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		if Launcher.SQL.IncRebirthCounter(charID) < 0:
+			return false
+		return Launcher.SQL.UpdateStatDirect(charID, 1, 0, goldKept)):
+		ok = true
+	settleMutex.unlock()
+	if not ok:
+		return {"ok" = false, "reason" = "transaction_failed"}
+	# Espelha no agente vivo (mesma ordem do settle: nível, XP, then attributes)
+	player.stat.level = 1
+	player.stat.experience = 0
+	player.stat.ResetAttributesIfOverBudget()
+	player.stat.vital_stats_updated.emit()
+	InvalidateRebirthCache(charID)
+	var info : Dictionary = Launcher.SQL.GetRebirthInfo(charID)
+	return {"ok" = true, "rebirths" = int(info.get("rebirths", 0))}
+
+func GetRebirthState(charID : int) -> Dictionary:
+	var info : Dictionary = Launcher.SQL.GetRebirthInfo(charID)
+	if info.is_empty():
+		return {}
+	var statRow : Dictionary = Launcher.SQL.GetStat(charID)
+	var lvl : Variant = statRow.get("level", 1)
+	var costs : Dictionary = {}
+	for id in RebirthData.UpgradeOrder:
+		costs[id] = RebirthData.Cost(id, int(info[id]))
+	return {
+		"essence" : int(info["essence"]),
+		"rebirths" : int(info["rebirths"]),
+		"level" : 1 if lvl == null else int(lvl),
+		"cap" : Experience.MAX_LEVEL,
+		"favor_xp" : int(info["favor_xp"]),
+		"favor_gold" : int(info["favor_gold"]),
+		"attune_offline" : int(info["attune_offline"]),
+		"attune_max" : RebirthData.OfflineMaxLevels,
+		"costs" : costs,
+	}
+
 func SpendBossKey(charID : int, amount : int, reason : String) -> bool:
 	if amount <= 0:
 		return false
@@ -229,12 +347,14 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 	var newbie : bool = player.stat.level < FarmZoneData.NewbieBoostMaxLevel
 	var nb : float = float(FarmZoneData.NewbieBoostFactor) if newbie else 1.0
 
+	# SOM-IDLE rebirth: o faucet do boss respeita os mesmos favores da zona.
+	var reb : Dictionary = GetRebirthMults(charID)
 	var baseXp : int = BossService.VictoryXp(zoneXp) if win else BossService.ConsolationXp(zoneXp)
-	var xpGrant : int = maxi(1, roundi(float(baseXp) * nb * vipMult))
+	var xpGrant : int = maxi(1, roundi(float(baseXp) * nb * vipMult * float(reb.get("xp", 1.0))))
 	player.stat.AddExperience(xpGrant, false)
 	var goldGrant : int = 0
 	if win:
-		goldGrant = roundi(float(BossService.VictoryGold(zoneXp)) * nb * vipMult)
+		goldGrant = roundi(float(BossService.VictoryGold(zoneXp)) * nb * vipMult * float(reb.get("gold", 1.0)))
 		player.stat.AddGP(goldGrant, false)
 
 	var chestsGranted : int = 0

@@ -14,6 +14,9 @@ static var LastLeaderboard : Array = []
 # SOM-IDLE: estado do ladder de bosses + último resultado de desafio (janela Boss).
 static var LastBossState : Dictionary = {}
 static var LastBossResult : Dictionary = {}
+# SOM-IDLE: rebirth
+static var LastRebirthState : Dictionary = {}
+static var LastRebirthResult : Dictionary = {}
 # SOM-IDLE (1d): último resultado de pedido de reembolso (CDC art.49).
 static var LastRefundResult : Dictionary = {}
 
@@ -422,6 +425,33 @@ func BossState(state : Dictionary, _peerID : int):
 	LastBossState = state
 	if Launcher.GUI and Launcher.GUI.bossWindow and Launcher.GUI.bossWindow.is_visible():
 		Launcher.GUI.bossWindow.ShowState(state)
+
+# SOM-IDLE: rebirth — empurra para o painel de personagem (criado em runtime).
+func RebirthState(state : Dictionary, _peerID : int):
+	LastRebirthState = state
+	_PushRebirth()
+
+func RebirthResult(result : Dictionary, _peerID : int):
+	LastRebirthResult = result
+	if bool(result.get("ok", false)):
+		UICommons.MessageBox(tr("Rebirth complete. A new cycle begins — your bonuses, essence, gold and equipment stay with you."))
+	else:
+		match str(result.get("reason", "")):
+			"below_cap":
+				UICommons.MessageBox(tr("You must reach the level cap before rebirthing."))
+			"insufficient_essence":
+				UICommons.MessageBox(tr("Not enough essence for that upgrade."))
+			"maxed":
+				UICommons.MessageBox(tr("That upgrade is already at its maximum."))
+			"":
+				pass
+			_:
+				push_warning("Rebirth rejected: %s\n" % str(result.get("reason", "")))
+	_PushRebirth()
+
+func _PushRebirth():
+	if Launcher.GUI and Launcher.GUI.characterPanel and Launcher.GUI.characterPanel.statsPanel:
+		Launcher.GUI.characterPanel.statsPanel.ShowRebirthState(LastRebirthState)
 
 func BossResult(result : Dictionary, _peerID : int):
 	LastBossResult = result

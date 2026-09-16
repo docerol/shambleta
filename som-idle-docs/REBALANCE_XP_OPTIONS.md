@@ -2,6 +2,12 @@
 
 Data: 2026-07 · Depende de: `XP_PROGRESSION.md` (curva vigente) · Gera decisão para `ROADMAP.md` Fase 2
 
+> **DECIDIDO E IMPLEMENTADO (2026-07):** híbrido **C no topo + B como motor**, como
+> recomendado abaixo — cap L60, overflow XP→essência (1%), loja de bônus com custo
+> 1.7^n (a defesa anti-burnout da simulação), renascimento preservando gear/ouro/
+> chaves/essência. Contrato em `XP_PROGRESSION.md §4.2`; engine `RebirthData.gd` +
+> `EconomyService` + migração 021. A (treadmill) fica recusada como eixo único.
+
 ## O problema (quantificado, jogo como está)
 
 Custo: `XP(L→L+1) = 8000 × 1.22^L`, cap `MAX_LEVEL 150`.

@@ -110,6 +110,11 @@ func _run_tests():
 			suites.SuiteGuilds(sql)
 			suites.SuiteSeasonAH(sql)
 			suites.SuiteSeasonPayout(sql)
+			# SOM-IDLE: rebirth (híbrido B+C, XP_PROGRESSION §4.2) — awaited: a
+			# metade B exige agente vivo no cap (o motor de renascimento é async).
+			var rebChar : int = suites.CreateFixture(sql, "idle_rebirth_account", "IdleRebirth")
+			if suites.Check(rebChar != 0, "rebirth fixture created (charID %d)" % rebChar):
+				await suites.SuiteRebirth(sql, rebChar, economy)
 			suites.SuiteI18n(sql)
 
 		# SOM-IDLE: A1 auth hardening + A2 ops hardening

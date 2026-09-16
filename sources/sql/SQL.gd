@@ -631,6 +631,59 @@ func AddCharacterBossKeys(charID : int, delta : int) -> int:
 	UpdateRowsRaw("character", "char_id = %d" % charID, {"boss_keys" = next})
 	return next
 
+# SOM-IDLE rebirth: colunas de essência/renascimentos/bônus (migração 021).
+# Mesmo padrão null-safe dos helpers de boss_keys (colunas podem chegar NULL em
+# linhas antigas; conversões diretas estouram no Godot 4.7).
+func GetRebirthInfo(charID : int) -> Dictionary:
+	var rows : Array = db.select_rows("character", "char_id = %d" % charID,
+		["essence", "rebirths", "favor_xp", "favor_gold", "attune_offline"])
+	if rows.is_empty():
+		return {}
+	var out : Dictionary = {}
+	for col in ["essence", "rebirths", "favor_xp", "favor_gold", "attune_offline"]:
+		var value : Variant = rows[0].get(col, 0)
+		out[col] = 0 if value == null else int(value)
+	return out
+
+func GetCharacterEssence(charID : int) -> int:
+	var info : Dictionary = GetRebirthInfo(charID)
+	return -1 if info.is_empty() else int(info["essence"])
+
+func AddCharacterEssence(charID : int, delta : int) -> int:
+	var info : Dictionary = GetRebirthInfo(charID)
+	if info.is_empty():
+		return -1
+	var next : int = maxi(0, int(info["essence"]) + delta)
+	# Essência é moeda: se o UPDATE falhar o chamador PRECISA derrubar a
+	# transação — senão o ledger cobra um gasto que nunca chegou à conta.
+	if not UpdateRowsRaw("character", "char_id = %d" % charID, {"essence" = next}):
+		return -1
+	return next
+
+func IncRebirthCounter(charID : int) -> int:
+	var info : Dictionary = GetRebirthInfo(charID)
+	if info.is_empty():
+		return -1
+	var next : int = int(info["rebirths"]) + 1
+	if not UpdateRowsRaw("character", "char_id = %d" % charID, {"rebirths" = next}):
+		return -1
+	return next
+
+func IncRebirthUpgrade(charID : int, upgradeID : String) -> int:
+	if not RebirthData.IsUpgrade(upgradeID):
+		return -1
+	var info : Dictionary = GetRebirthInfo(charID)
+	if info.is_empty():
+		return -1
+	var next : int = int(info[upgradeID]) + 1
+	# NOTA (custou um ciclo de debug): no literal lua-style `{upgradeID = next}`
+	# a chave é o NOME do identificador ("upgradeID"), não o valor da variável —
+	# o UPDATE ia para uma coluna inexistente e silenciosamente não aplicava o
+	# bônus comprado. Chave dinâmica exige a forma `{chave: valor}`.
+	if not UpdateRowsRaw("character", "char_id = %d" % charID, {upgradeID: next}):
+		return -1
+	return next
+
 func GetCharacterBossesBeaten(charID : int) -> int:
 	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["bosses_beaten"])
 	if rows.is_empty():

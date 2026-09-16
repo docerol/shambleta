@@ -485,6 +485,34 @@ func ChallengeBoss(peerID : int):
 	if bool(result.get("ok", false)):
 		Network.BossState(Launcher.Economy.GetBossState(charID, player.stat.level), peerID)
 
+# SOM-IDLE: rebirth (B+C). Estado/cache/mutação vivem em EconomyService; aqui só
+# o roteamento peers→charID com o mesmo formato do ladder de bosses.
+func GetRebirthState(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		return
+	Network.RebirthState(Launcher.Economy.GetRebirthState(charID), peerID)
+
+func RebirthRequest(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.RebirthResult({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	var player : PlayerAgent = Peers.GetAgent(peerID)
+	var result : Dictionary = Launcher.Economy.Rebirth(charID, player)
+	Network.RebirthResult(result, peerID)
+	if bool(result.get("ok", false)):
+		Network.RebirthState(Launcher.Economy.GetRebirthState(charID), peerID)
+
+func BuyRebirthUpgrade(upgradeID : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.RebirthResult({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyRebirthUpgrade(charID, upgradeID)
+	Network.RebirthResult(result, peerID)
+	Network.RebirthState(Launcher.Economy.GetRebirthState(charID), peerID)
+
 func CharacterListing(peerID : int):
 	var err : NetworkCommons.CharacterError = NetworkCommons.CharacterError.ERR_OK
 	var accountID : int = Peers.GetAccount(peerID)

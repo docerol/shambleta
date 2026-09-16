@@ -169,14 +169,22 @@ static func ApplyXp(agent : AIAgent):
 				zone = FarmZoneData.GetZone(policy.zoneID)
 
 			if zone:
+				# SOM-IDLE rebirth: favor multipliers (1.05^n, custo 1.7^n) compõem
+				# a renda de quem renasceu; 1.0 para quem nunca gastou essência.
+				var rebXp : float = 1.0
+				var rebGold : float = 1.0
+				if Launcher.Economy != null and entry.attacker is PlayerAgent:
+					var reb : Dictionary = Launcher.Economy.GetRebirthMults(entry.attacker.GetCharacterID())
+					rebXp = float(reb.get("xp", 1.0))
+					rebGold = float(reb.get("gold", 1.0))
 				var zoneXp : int = zone.xpPerKill
 				if entry.attacker.stat.level < FarmZoneData.NewbieBoostMaxLevel:
 					zoneXp = roundi(float(zoneXp) * FarmZoneData.NewbieBoostFactor)
-				zoneXp = maxi(1, roundi(float(zoneXp) * damageRatio))
+				zoneXp = maxi(1, roundi(float(zoneXp) * damageRatio * rebXp))
 				entry.attacker.stat.AddExperience(zoneXp, false)
 
 				if damageRatio > 0.5:
-					var zoneGold : int = maxi(1, roundi(float(zone.goldPerKill) * damageRatio))
+					var zoneGold : int = maxi(1, roundi(float(zone.goldPerKill) * damageRatio * rebGold))
 					entry.attacker.stat.AddGP(zoneGold, false)
 					# SOM-IDLE: boss-key drop — mobs de farm dropam chaves (raras)
 					# que abrem a escada de bosses. Só com o EconomyService no ar

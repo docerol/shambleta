@@ -3,7 +3,7 @@ class_name IdleTests
 
 # SOM-IDLE: F2 idle-spike test suites (TECH_SPEC_CORE §7)
 # Suites:
-#   1. XP curve          — L2 golden 9760 ±0.5%, monotonic, L150 int64-safe, L1→150 < 1s
+#   1. XP curve          — L2 golden 9760 ±0.5%, monotonic, cap int64-safe, L1→cap < 1s
 #   2. Zone catalog      — 40 zones, golden pacing values, zone-1 map resolves in MapsDB
 #   3. Formatter         — Util.FormatNumber golden values
 #   4. Settle golden     — 12h, efficiency/death-tax/drops/chests exact values
@@ -12,6 +12,7 @@ class_name IdleTests
 #   7. Ledger triggers   — append-only enforcement
 #   8. ReconcileDaily    — zero divergence on clean data
 #   9. IdlePolicy sim    — deterministic farm on a live instance (zone 1)
+#  10. Rebirth (B+C)     — essência no cap, loja 1.7^n, renascimento com agente vivo
 
 const Zone1GoldenXpPerKill : int = 1200
 const Zone1GoldenParKills : int = 150			# SOM-IDLE: par recalibrado pós cast-fix+dano-mínimo (probe mede ~160/h)
@@ -78,7 +79,7 @@ func SuiteXpCurve() -> void:
 	print("[suite] XP curve")
 	# (a) L1 -> L2 golden: round(8000 * 1.22^1) = 9760 (±0.5%)
 	CheckNear(Experience.GetNeededExperienceForNextLevel(1), 9760.0, TolerancePct, "L2 needed XP golden")
-	# Monotonic non-decreasing 1..149
+	# Monotonic non-decreasing 1..MAX-1
 	var previous : int = 0
 	var monotonic : bool = true
 	for level in range(1, Experience.MAX_LEVEL):
@@ -88,21 +89,24 @@ func SuiteXpCurve() -> void:
 			break
 		previous = needed
 	Check(monotonic, "XP curve monotonic L1..L%d" % (Experience.MAX_LEVEL - 1))
-	# (b) L150 reachable without int64 overflow: total < 2^62 and magnitude ≥ 1e15
+	# (b) Full-cycle (L1 -> cap) totals sane: int64-safe and not collapsed.
+	# Rebirth cap (2026-07): MAX_LEVEL = 60 é o cap de renascimento — um ciclo
+	# custa ~5.5e9 XP (≈ 17 dias de farm na zona 24). Piso 1e9 pega curva quebrada.
 	var total : int = 0
 	for level in range(1, Experience.MAX_LEVEL):
 		total += Experience.GetNeededExperienceForNextLevel(level)
-	Check(total > 0, "Total XP to L150 positive")
-	Check(total < 4611686018427387904, "Total XP to L150 int64-safe (%d)" % total)
-	Check(total > 1000000000000000, "Total XP to L150 ≥ 1e15 (%d)" % total)
+	Check(total > 0, "Total XP to cap positive")
+	Check(total < 4611686018427387904, "Total XP to cap int64-safe (%d)" % total)
+	Check(total > 1000000000, "Total XP to cap >= 1e9 (%d)" % total)
+	CheckEq(Experience.MAX_LEVEL, 60, "rebirth cap is the XP cap (L60)")
 	# Sentinel + boundary behavior
-	CheckEq(Experience.GetNeededExperienceForNextLevel(Experience.MAX_LEVEL), Experience.MAX_LEVEL_REACHED, "L150 sentinel 0")
+	CheckEq(Experience.GetNeededExperienceForNextLevel(Experience.MAX_LEVEL), Experience.MAX_LEVEL_REACHED, "cap sentinel 0")
 	CheckEq(Experience.GetNeededExperienceForNextLevel(0), Experience.MAX_LEVEL_REACHED, "L0 sentinel 0")
-	Check(Experience.IsMaxLevel(Experience.MAX_LEVEL), "IsMaxLevel at L150")
+	Check(Experience.IsMaxLevel(Experience.MAX_LEVEL), "IsMaxLevel at cap")
 	# Progress ratio bounds
 	Check(Experience.GetLevelProgress(0, 1) == 0.0, "Progress 0 at L1/0xp")
 	Check(Experience.GetLevelProgress(1, Experience.MAX_LEVEL) == 1.0, "Progress 1 at max")
-	# (c) L1 -> L150 walk under 1s
+	# (c) L1 -> cap walk under 1s (SOM-IDLE rebirth: o cap é o de renascimento)
 	var startTicks : int = Time.get_ticks_usec()
 	var level : int = 1
 	var xp : int = total + 100000
@@ -117,8 +121,8 @@ func SuiteXpCurve() -> void:
 		xp -= needed
 		level += 1
 	var elapsedUsec : int = Time.get_ticks_usec() - startTicks
-	CheckEq(level, Experience.MAX_LEVEL, "Walk reaches L150")
-	Check(elapsedUsec < 1000000, "L1→L150 walk < 1s (%d us)" % elapsedUsec)
+	CheckEq(level, Experience.MAX_LEVEL, "Walk reaches the rebirth cap (L%d)" % Experience.MAX_LEVEL)
+	Check(elapsedUsec < 1000000, "L1→L%d walk < 1s (%d us)" % [Experience.MAX_LEVEL, elapsedUsec])
 
 func SuiteZoneCatalog() -> void:
 	print("[suite] zone catalog")
@@ -1789,6 +1793,143 @@ func SuiteOpsA2(sql : SQLService) -> void:
 	DirAccess.remove_absolute(offsite)
 
 # ------------------------------------------------------------------ LGPD
+
+# SOM-IDLE: rebirth (híbrido B+C) — motor de essência + loja superlinear
+func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> void:
+	print("[suite] rebirth")
+	# pure math (RebirthData)
+	CheckEq(RebirthData.Cost(RebirthData.UpgradeXp, 0), 2000, "favor_xp base cost 2000")
+	CheckEq(RebirthData.Cost(RebirthData.UpgradeXp, 1), 3400, "cost grows superlinearly x1.7 (n=1 -> 3400)")
+	CheckEq(RebirthData.Cost(RebirthData.UpgradeXp, 5), 28397, "cost n=5 = round(2000*1.7^5)")
+	CheckNear(RebirthData.XpMult(20), pow(1.05, 20), 0.000001, "xp mult = 1.05^n composed")
+	CheckEq(RebirthData.EssenceFromOverflowXp(123456), 1234, "overflow converts 1:100 floored")
+	CheckNear(RebirthData.OfflineFactorWithBonus(0.6, 50), 0.8, 0.0000001, "attune capped at +0.2 (0.6 -> 0.8)")
+	Check(RebirthData.OfflineFactorWithBonus(0.6, 0) == 0.6, "attune identity at 0")
+	Check(not RebirthData.IsUpgrade("gold_finger"), "unknown upgrade rejected")
+	# DB-backed: essence currency + shop
+	var fresh : Dictionary = sql.GetRebirthInfo(charID)
+	CheckEq(int(fresh.get("essence", -1)), 0, "fresh char has zero essence")
+	CheckEq(economy.AddEssence(charID, 5000, "test"), 5000, "AddEssence credits and reports balance")
+	var buy1 : Dictionary = economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeXp)
+	Check(bool(buy1.get("ok", false)), "buy favor_xp accepted at 2000")
+	CheckEq(sql.GetCharacterEssence(charID), 3000, "essence debited after purchase")
+	Check(bool(economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeGold).get("ok", false)), "buy favor_gold accepted at 1500")
+	CheckEq(sql.GetRebirthInfo(charID).get("favor_gold", -1), 1, "favor_gold level 1")
+	var cheap : Dictionary = economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeAttune)
+	Check(not bool(cheap.get("ok", true)), "attune (3000) rejected on 1500 essence")
+	Check(str(cheap.get("reason", "")) == "insufficient_essence", "rejection reason is insufficient_essence")
+	Check(not bool(economy.BuyRebirthUpgrade(charID, "no_such").get("ok", true)), "unknown id rejected")
+	# multiplier cache invalidates on purchase
+	var mults : Dictionary = economy.GetRebirthMults(charID)
+	CheckNear(float(mults.get("xp", 0.0)), 1.05, 0.000001, "cache reflects bought favor_xp")
+	# rebirth guard: only the live agent at the cap may rebirth
+	var guard : Dictionary = economy.Rebirth(charID, null)
+	Check(not bool(guard.get("ok", true)), "offline rebirth refused")
+	Check(str(guard.get("reason", "")) == "not_online", "refusal reason not_online")
+	# state payload for the panel
+	var state : Dictionary = economy.GetRebirthState(charID)
+	CheckEq(int(state.get("cap", -1)), 60, "state carries cap 60")
+	CheckEq(int(state.get("rebirths", -1)), 0, "state carries rebirth counter")
+	Check(state.get("costs", {}).has(RebirthData.UpgradeAttune), "state carries attune cost")
+	# --- C no topo: no cap o XP não se perde, vira essência ---------------------
+	# O char é levado ao cap pelo CAMINHO PÚBLICO (settle), não por escrita direta
+	# na stat: é o contrato real do AFK — 12h de zona 1 no cap convertem o bucket
+	# inteiro em essência dentro da MESMA transação do settle.
+	sql.SetCharacterFarmZone(charID, 1)
+	sql.UpdateStatDirect(charID, Experience.MAX_LEVEL, 0, 1000000)
+	economy.InvalidateRebirthCache(charID)
+	var essenceBefore : int = sql.GetCharacterEssence(charID)
+	var goldBefore : int = int(sql.GetStat(charID).get("gp", 0))
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 12 * 3600, 1.0)
+	var capped : Dictionary = OfflineSettle.SettlePending(charID)
+	if Check(not capped.is_empty(), "capped settle produced a report"):
+		var z1 : FarmZoneData = FarmZoneData.GetZone(1)
+		var xp : int = int(capped["xp_earned"])
+		# favor_xp = 1 comprado acima compõe o faucet offline (×1,05)
+		var expectedXp : int = roundi(float(z1.xpPerKill) * float(z1.parKillsPerHour) * 12.0 * 1.0 \
+			* OfflineSettle.OfflineFactor * float(capped["mods"]) * RebirthData.XpMult(1))
+		CheckEq(xp, expectedXp, "offline income carries the bought favor_xp (x1.05)")
+		var gain : int = int(capped.get("essence_earned", -1))
+		CheckEq(gain, xp / RebirthData.EssenceDivisor, "capped offline XP converts 1:100 into essence")
+		Check(gain > 0, "settle at the cap mints essence (%d)" % gain)
+		CheckEq(sql.GetCharacterEssence(charID), essenceBefore + gain, "essence landed on the character")
+		var st : Dictionary = sql.GetStat(charID)
+		CheckEq(int(st.get("level", -1)), Experience.MAX_LEVEL, "level stays frozen at the cap")
+		Check(int(st.get("experience", 0)) < RebirthData.EssenceDivisor, "sub-divisor XP keeps banking (%d)" % int(st.get("experience", 0)))
+		Check(int(st.get("gp", 0)) > goldBefore, "gold still accrues at the cap (%d -> %d)" % [goldBefore, int(st.get("gp", 0))])
+		var led : Array[Dictionary] = sql.QueryBindings(
+			"SELECT amount FROM ledger_transaction WHERE char_id = ? AND kind = 'essence' AND reason = 'offline_settle';", [charID])
+		CheckEq(led.size(), 1, "one essence ledger row for the capped settle")
+		if not led.is_empty():
+			CheckEq(int(led[0]["amount"]), gain, "essence ledger amount matches the report")
+
+	# --- attune_offline: o único bônus com cap (é o piso honesto, não o teto) ---
+	# Custos crescentes não são obstáculo para a suíte: credita essência e compra
+	# até a rejeição, exatamente a sequência que o jogador veria na UI.
+	economy.AddEssence(charID, 900000, "test")
+	var attuneBuys : int = 0
+	while attuneBuys < RebirthData.OfflineMaxLevels + 2:
+		if not bool(economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeAttune).get("ok", false)):
+			break
+		attuneBuys += 1
+	CheckEq(attuneBuys, RebirthData.OfflineMaxLevels, "attune stops at its 10-level cap")
+	CheckEq(int(sql.GetRebirthInfo(charID).get("attune_offline", -1)), RebirthData.OfflineMaxLevels, "attune parked at 10 in the DB")
+	var maxed : Dictionary = economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeAttune)
+	Check(not bool(maxed.get("ok", true)), "11th attune purchase rejected")
+	Check(str(maxed.get("reason", "")) == "maxed", "11th attune rejection reason is maxed")
+	# e o efeito é exatamente o documentado: 0,60 -> 0,80 de renda offline
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 12 * 3600, 1.0)
+	var attuned : OfflineSettle.SettleReport = OfflineSettle.BuildReport(charID, SQLCommons.Timestamp())
+	var expectedAttuned : int = int(capped.get("xp_earned", 0))
+	if expectedAttuned > 0:
+		CheckNear(float(attuned.xpEarned) / float(expectedAttuned), \
+			RebirthData.OfflineFactorWithBonus(OfflineSettle.OfflineFactor, RebirthData.OfflineMaxLevels) / OfflineSettle.OfflineFactor, \
+			0.5, "attune 10 lifts the offline factor 0.60 -> 0.80")
+
+	# --- B como motor: o renascimento em si (agente vivo no cap) ----------------
+	# O contador e os bônus são permanentes; o que reseta é nível/XP. Ouro,
+	# essência e favores têm de sobreviver — é a única coisa que paga o reset.
+	sql.UpdateStatDirect(charID, Experience.MAX_LEVEL, 0, 2000000)
+	var agent : PlayerAgent = await _SpawnSimAgent(charID, 980, 1)
+	if not Check(agent != null, "rebirth agent spawned at the cap"):
+		return
+	IdlePolicyService.StopIdleSession(agent)
+	CheckEq(agent.stat.level, Experience.MAX_LEVEL, "agent loaded at the cap")
+	# online: matar no cap também vira essência (mesma taxa do offline)
+	var onlineEssence : int = sql.GetCharacterEssence(charID)
+	agent.stat.AddExperience(RebirthData.EssenceDivisor * 12 + 5, false)
+	CheckEq(sql.GetCharacterEssence(charID) - onlineEssence, 12, "online overflow at the cap converts 1:100")
+	CheckEq(agent.stat.experience, 5, "online XP below the divisor keeps banking")
+	var rebGold : int = int(sql.GetStat(charID).get("gp", 0))
+	var rebEssence : int = sql.GetCharacterEssence(charID)
+	var reborn : Dictionary = economy.Rebirth(charID, agent)
+	Check(bool(reborn.get("ok", false)), "rebirth accepted for the live agent at the cap")
+	CheckEq(int(reborn.get("rebirths", -1)), 1, "cycle counter reports 1")
+	CheckEq(agent.stat.level, 1, "live agent mirrored the reset to L1")
+	CheckEq(agent.stat.experience, 0, "XP bucket cleared")
+	var after : Dictionary = sql.GetStat(charID)
+	CheckEq(int(after.get("level", -1)), 1, "reset persisted to the DB")
+	CheckEq(int(after.get("experience", -1)), 0, "XP reset persisted to the DB")
+	CheckEq(int(after.get("gp", 0)), rebGold, "gold survives the reset")
+	var keep : Dictionary = sql.GetRebirthInfo(charID)
+	CheckEq(int(keep.get("essence", -1)), rebEssence, "essence survives the reset")
+	CheckEq(int(keep.get("favor_xp", -1)), 1, "permanent favor survives the reset")
+	CheckEq(int(keep.get("rebirths", -1)), 1, "rebirths never resets")
+	CheckNear(float(economy.GetRebirthMults(charID).get("xp", 0.0)), RebirthData.XpMult(1), 0.000001, "multiplier cache survives the reset")
+	var again : Dictionary = economy.Rebirth(charID, agent)
+	Check(not bool(again.get("ok", true)), "second rebirth refused below the cap")
+	Check(str(again.get("reason", "")) == "below_cap", "refusal reason is below_cap")
+	# o faucet do boss obedece ao mesmo favor (compra do 2º nível muda o xp)
+	agent.stat.level = FarmZoneData.NewbieBoostMaxLevel + 5
+	var xpA : int = int(economy.SettleBossResult(charID, agent, 0, false).get("xp", 0))
+	Check(xpA > 0, "boss settlement pays xp after rebirth")
+	Check(bool(economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeXp).get("ok", false)), "second favor_xp bought")
+	agent.stat.level = FarmZoneData.NewbieBoostMaxLevel + 5
+	var xpB : int = int(economy.SettleBossResult(charID, agent, 0, false).get("xp", 0))
+	CheckNear(float(xpB) / float(maxi(1, xpA)), 1.05, 1.0, "boss faucet scales with favor_xp (differential)")
+	WorldAgent.RemoveAgent(agent)
+
+
 func SuiteLGPD(sql : SQLService):
 	print("[suite] lgpd consent + right-to-erasure")
 	var pw : String = "TestPass123"

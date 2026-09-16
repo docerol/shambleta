@@ -35,6 +35,7 @@ class SettleReport:
 	var drops : Dictionary[int, int] = {}
 	var chests : int = 0
 	var bossKeysEarned : int = 0
+	var essenceEarned : int = 0
 	var lastSettledAt : int = 0
 	var mods : float = 1.0
 
@@ -54,6 +55,7 @@ class SettleReport:
 			"drops": drops,
 			"chests": chests,
 			"boss_keys": bossKeysEarned,
+			"essence_earned": essenceEarned,
 			"last_settled_at": lastSettledAt,
 			"mods": mods,
 		}
@@ -154,14 +156,21 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport):
 	var h : float = report.hours
 	var eff : float = report.efficiency
 
+	# SOM-IDLE rebirth: favores compõem o faucet offline; attune eleva o fator de
+	# 0.60 até 0.80 (cap). attune 0 / favor 0 ⇒ identidade com o golden de settle.
+	var rebInfo : Dictionary = sql.GetRebirthInfo(report.charID)
+	var rebXp : float = RebirthData.XpMult(int(rebInfo.get("favor_xp", 0)))
+	var rebGold : float = RebirthData.GoldMult(int(rebInfo.get("favor_gold", 0)))
+	var offFactor : float = RebirthData.OfflineFactorWithBonus(OfflineFactor, int(rebInfo.get("attune_offline", 0)))
+
 	report.mods = GetModsForAccount(report.accountID, _now())
-	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * OfflineFactor * report.mods)
-	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * OfflineFactor * report.mods)
+	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp)
+	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold)
 	if eff < 1.0:
 		report.goldTaxed = roundi(float(report.goldEarned) * float(DeathTaxPct) / 100.0)
 
 	# Drops: rate_ppm * h * 3600 * eff * factor / 1e6 (expected value, deterministic in spike)
-	var dropExpected : float = float(zone.dropRatePPM) * h * 3600.0 * eff * OfflineFactor / 1000000.0
+	var dropExpected : float = float(zone.dropRatePPM) * h * 3600.0 * eff * offFactor / 1000000.0
 	var dropCount : int = floori(dropExpected)
 	var frac : float = dropExpected - float(dropCount)
 	# Deterministic fractional carry (no RNG in the golden path)
@@ -177,7 +186,7 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport):
 	# SOM-IDLE: chaves de boss também acumulam offline (idle-first) — kills
 	# equivalentes da sessão × KeyDropPPM, com o mesmo carry determinístico de
 	# fração (>=0.5) usado nos drops de item. Sem RNG no caminho golden.
-	var equivKills : float = float(zone.parKillsPerHour) * h * eff * OfflineFactor * report.mods
+	var equivKills : float = float(zone.parKillsPerHour) * h * eff * offFactor * report.mods
 	var keyExpected : float = float(BossService.KeyDropPPM) * equivKills / 1000000.0
 	var keyCount : int = floori(keyExpected)
 	if keyExpected - float(keyCount) >= 0.5:
@@ -212,6 +221,18 @@ static func _Apply(sql : SQLService, report : SettleReport) -> bool:
 		report.levelsGained = newLevel - level
 		report.newLevel = newLevel
 
+		# SOM-IDLE rebirth: XP que sobra no cap vira essência (1%) dentro da mesma
+		# transação; o resto (< 100 XP) fica acumulado no bucket para o próximo
+		# settle. Assim o jogador AFK nunca "perde" progresso por estar no cap.
+		var essenceGain : int = 0
+		if Experience.IsMaxLevel(newLevel) and progressXP >= RebirthData.EssenceDivisor:
+			essenceGain = progressXP / RebirthData.EssenceDivisor
+			if essenceGain > 0:
+				progressXP -= essenceGain * RebirthData.EssenceDivisor
+				if sqlNode.AddCharacterEssence(report.charID, essenceGain) < 0:
+					return false
+				report.essenceEarned = essenceGain
+
 		# 2) gold (5% tax when efficiency < 1.0)
 		var goldNet : int = report.goldEarned - report.goldTaxed
 		var newGold : int = _statInt(stat, "gp", 0) + goldNet
@@ -231,6 +252,8 @@ static func _Apply(sql : SQLService, report : SettleReport) -> bool:
 			if goldNet != 0 and not economy.LedgerAppend(report.charID, accountID, "gold", goldNet, newGold, "offline_settle"):
 				return false
 			if report.xpEarned > 0 and not economy.LedgerAppend(report.charID, accountID, "xp", report.xpEarned, progressXP, "offline_settle"):
+				return false
+			if report.essenceEarned > 0 and not economy.LedgerAppend(report.charID, accountID, "essence", report.essenceEarned, sqlNode.GetCharacterEssence(report.charID), "offline_settle"):
 				return false
 
 		# 5) chests (rows only; opening is F4 scope)

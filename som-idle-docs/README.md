@@ -11,7 +11,7 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
 | Documento | Conteúdo |
 |---|---|
 | [TECH_SPEC_CORE.md](TECH_SPEC_CORE.md) | Contrato técnico: arquitetura dos serviços idle, spawns/respawn por zona (§2), relógio de tick D1 (§3), banda de pacing (§4), invariantes de items/ledger (§5), infra e escala (§11) |
-| [XP_PROGRESSION.md](XP_PROGRESSION.md) | Curva de progressão: banda 30–200 kills/h (§4.1.1), fórmulas por zona (§4.1.2), boost de novato (§4.1.3), uso pelo OfflineSettle (§5) |
+| [XP_PROGRESSION.md](XP_PROGRESSION.md) | Curva de progressão: banda 30–200 kills/h (§4.1.1), fórmulas por zona (§4.1.2), boost de novato (§4.1.3), **renascimento cap L60 + essência (§4.2)**, uso pelo OfflineSettle (§5) |
 | [ECONOMY_STUDY.md](ECONOMY_STUDY.md) | Contrato de economia: moedas/ledger (§1), trade fee sink (§2), baús pity + provably-fair (§3), VIP (§4), liquidação offline (§5), boss economy (§6) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Arquitetura completa do pivô (componentes, RPCs, migrations, settle, guilds, trades, deploy web, escalabilidade) — citada por `WorldInstance.gd`/`EconomyService.gd` |
 | [MONETIZATION.md](MONETIZATION.md) | Modelo de monetização Brasil (Pix, escada de conversão, mix de receita) — citada por `SQL.gd`/`OfflineSettle.gd`/`EconomyService.gd` |
@@ -34,7 +34,8 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
 | [D1_GATE_REPORT.md](D1_GATE_REPORT.md) | Gate D1: forense do bug de dois relógios, normalização do tick, hotfixes produção (SyncWithDB, `_Attach`) |
 | [LGPD_CONSENT_VERSION_REPORT.md](LGPD_CONSENT_VERSION_REPORT.md) | Gate de consentimento por versão + fluxo de re-aceite (`AcceptConsent`) |
 | [I18N_PHASE1_REPORT.md](I18N_PHASE1_REPORT.md) | Fase 1 da tradução pt-BR: pipeline (`tools/extract_i18n.py` + `Localizer.gd` — Godot 4 não auto-traduz cena), UI 100%, conteúdo 730 chaves na fase 2; gap report em `data/i18n/coverage_report.md` |
-| [REBALANCE_XP_OPTIONS.md](REBALANCE_XP_OPTIONS.md) | Decisão de owner: quantificação das 3 recalibragens da parede de XP pós-L70 (treadmill / prestige / soft-cap+seasons) + híbrido canônico |
+| [REBALANCE_XP_OPTIONS.md](REBALANCE_XP_OPTIONS.md) | Decisão de owner: quantificação das 3 recalibragens da parede de XP pós-L70 (treadmill / prestige / soft-cap+seasons) + híbrido canônico — **decidido e implementado**, ver logo abaixo |
+| [REBIRTH_BC_REPORT.md](REBIRTH_BC_REPORT.md) | Entrega do híbrido B+C: cap L60, essência de overflow (online+offline, ledger 1ª classe), loja `1.7^n`, ato de renascimento com agente vivo, migração 021, bugs fechados no meio-do-caminho e re-rodagem dos gates D1 (651 checks / 0 falhas) |
 | [I18N_PHASE2_REPORT.md](I18N_PHASE2_REPORT.md) | Fase 2 da tradução: conteúdo pt-BR dos NPCs/quests (lotes 2A/2B/2C com mapas versionados), corpus 100%, regras editoriais + pendência de nomes de item (2D) |
 
 ## Onde está o resto

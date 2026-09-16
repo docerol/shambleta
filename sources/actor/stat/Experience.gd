@@ -2,12 +2,16 @@ extends RefCounted
 class_name Experience
 
 # SOM-IDLE: F2 idle progression — hardcoded table replaced by formula
-# Contract: TECH_SPEC_CORE.md §1 + XP_PROGRESSION.md §4
-# XP(L -> L+1) = round(XpBase * Growth^L); int64-safe up to ~L180 (margin to MAX_LEVEL 150)
+# Contract: TECH_SPEC_CORE.md §1 + XP_PROGRESSION.md §4/§4.2
+# XP(L -> L+1) = round(XpBase * Growth^L).
+# SOM-IDLE rebirth (2026-07, B+C): MAX_LEVEL is the REBIRTH CAP, not a number
+# to reach "someday" — income saturates at zone 24, so the only honest cap is
+# where the first cycle lasts ~3 weeks (L60). XP earned at cap converts to
+# essence (RebirthData), never vanishes. int64-safe to ~L180 >> 60.
 
 const MAX_LEVEL_REACHED : int = 0
 
-const MAX_LEVEL : int = 150
+const MAX_LEVEL : int = 60
 const XpBase : int = 8000
 const Growth : float = 1.22
 

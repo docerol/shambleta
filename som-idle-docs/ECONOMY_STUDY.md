@@ -14,10 +14,15 @@ repositório. Atualizar aqui sempre que uma constante de economia mudar.
 | XP (`xp`) | Kill de mob | Progressão de nível, não é moeda transacionável |
 | Gems | Compra real (Mercado Pago) via `grant_queue`, ou recompensas pontuais (boss, temporada) | **Moeda premium** — ligada a dinheiro real, sujeita a reembolso CDC |
 | Chave de boss (`boss_key`) | Drop em farm (`KeyDropPPM = 2000` partes por milhão) | Consumível, abre desafio de boss |
+| Essência (`essence`) | XP que excede o cap de renascimento: 100 XP : 1 essência, online e offline (`XP_PROGRESSION.md §4.2`) | Moeda de prestígio de longo prazo: financia a loja permanente de favores. **Não** é comprável nem transferível, e nunca volta a ser XP |
 
 Todo movimento de qualquer uma dessas moedas passa por `LedgerAppend` —
 não há alteração de saldo sem linha de ledger correspondente (auditável por
-conta e por personagem).
+conta e por personagem). O `kind` da essência é `essence`, com reasons
+`xp_overflow` (mint online), `offline_settle` (mint no mesmo transaction do
+settle) e `rebirth_upgrade:<id>` (burn na compra). O contador de renascimentos
+(`character.rebirths`) **não** é moeda e por isso não tem linha de ledger: é
+estatística de ciclo, incrementada dentro da transação do renascimento.
 
 ## §2. Sinks — trade fee (sink primário)
 
@@ -70,11 +75,14 @@ Parâmetros que convertem tempo desconectado em recompensa ao reconectar:
 | `MinEfficiency` | 0.5 | Piso de eficiência (nunca liquida abaixo de 50% do par) |
 | `VIPModFactor` | 1.2 | Multiplicador para contas com VIP ativo (ver §4) |
 | `GuildHookFactor` | 1.0 (neutro) | Gancho reservado para bônus de guilda — sem efeito hoje |
+| `RebirthData.XpStep`/`GoldStep` | 0.05^n | Favores comprados com essência compõem o faucet offline (`XP_PROGRESSION.md §4.2`) |
+| `RebirthData.OfflineStep` | +0.02/nível, cap 10 | `attune_offline` eleva o `OfflineFactor` de 0.60 até **0.80** — único bônus com cap |
 
 Fórmula base: `ganho = xpPerKill(zona) × parKillsPerHora(zona) × horas ×
-OfflineFactor × eficiência × [VIPModFactor se aplicável]`, com `horas`
-limitado por `BaseCapHours` e `eficiência` decaindo por morte até
-`MinEfficiency`.
+OfflineFactor(attach attune) × eficiência × [VIPModFactor se aplicável] ×
+[favor do renascimento]`, com `horas` limitado por `BaseCapHours` e
+`eficiência` decaindo por morte até `MinEfficiency`. Favor 0 / attune 0 é
+identidade — o golden de settle (§`TECH_SPEC_CORE.md §7`/suíte) não muda.
 
 **Nota anti-abuso**: o teto de `BaseCapHours` e o piso de `MinEfficiency`
 existem, mas não há, no código revisado, um sanity check contra manipulação

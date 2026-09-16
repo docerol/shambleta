@@ -62,7 +62,7 @@ Gaps herdados do [RELATORIO_AUDITORIA_sourceofmana.md](RELATORIO_AUDITORIA_sourc
 **Objetivo:** loop de farm completo offline+online, monetização mínima.
 1. `IdlePolicy` (online sim, instâncias de farm) + `session_efficiency`.
 2. `OfflineSettle` + AFK Report (fórmula §8, caps, idempotência).
-3. **Sistema de XP granular** ([XP_PROGRESSION.md](XP_PROGRESSION.md)): curva exponencial por fórmula (MAX_LEVEL 150), XP por zona com newbie boost ×5, formatter K/M/B/T, reset de progressão (migration 018).
+3. **Sistema de XP granular** ([XP_PROGRESSION.md](XP_PROGRESSION.md)): curva exponencial por fórmula, XP por zona com newbie boost ×5, formatter K/M/B/T, reset de progressão (migration 018). **Cap recalibrado para L60 com motor de renascimento** (decisão de dono em [REBALANCE_XP_OPTIONS.md](REBALANCE_XP_OPTIONS.md), contrato em `XP_PROGRESSION.md §4.2`, migração 021) — a parede pós-L60 virou essência + loja permanente em vez de treadmill.
 4. Formação (1 personagem MVP → 5 slots), Zone Map com gates, Power Score.
 5. Loja v1: **gems** (grant via companion), SKUs: chaves de baú, cosméticos, QoL. Baús com **odds públicas + provably-fair (server/client seed)**. *(Mecânica de baús/keys entra no jogo; a venda de gems por dinheiro real é ativada depois — prioridade atual: jogo funcionando.)*
 6. VIP v1 (ECONOMY §3): grant via companion; benefícios aplicados no settle/simulação. *(Estado/efeitos implementados; venda por dinheiro real ativada depois.)*
