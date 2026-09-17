@@ -17,7 +17,8 @@ func CallGlobal(scriptFunc : String):
 	if HasGlobal(scriptFunc):
 		npc.ownScript.call_deferred(scriptFunc)
 	else:
-		assert(false, "Could not retrieve this NPC global function: %s." % scriptFunc)
+		push_error("Could not retrieve this NPC global function: %s." % scriptFunc)
+		return
 
 func HasGlobal(scriptFunc : String) -> bool:
 	return npc and npc.ownScript and npc.ownScript.has_method(scriptFunc)
@@ -27,7 +28,7 @@ func GetGlobal(scriptFunc : String) -> Callable:
 		var callable = npc.ownScript.get(scriptFunc)
 		if callable is Callable:
 			return callable
-	assert(false, "Could not retrieve this NPC global function: %s." % scriptFunc)
+	push_error("Could not retrieve this NPC global function: %s." % scriptFunc)
 	return Callable()
 
 func GetNamedGlobalNPC(npcName : String) -> NpcAgent:
@@ -144,29 +145,24 @@ func AlivePlayerCount() -> int:
 
 # Warp
 func Warp(mapID : int, position : Vector2, direction : ActorCommons.Direction = ActorCommons.Direction.UNKNOWN):
-	assert(IsPlayer(), "Warp() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Warp() requires a player agent"); return
 	Action(NpcCommons.Warp.bind(own, mapID, position, direction))
 
 func WarpInstance(mapID : int, position : Vector2, direction : ActorCommons.Direction = ActorCommons.Direction.UNKNOWN):
-	assert(IsPlayer(), "WarpInstance() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("WarpInstance() requires a player agent"); return
 	Action(NpcCommons.WarpInstance.bind(own, mapID, position, direction))
 
 # Quest
 func SetQuest(questID : int, state : int):
-	assert(IsPlayer(), "SetQuest() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("SetQuest() requires a player agent"); return
 	Action(NpcCommons.SetQuest.bind(own, questID, state))
 
 func GetQuest(questID : int) -> int:
-	assert(IsPlayer(), "GetQuest() requires a player agent")
-	if not IsPlayer(): return ProgressCommons.UnknownProgress
+	if not IsPlayer(): push_error("GetQuest() requires a player agent"); return ProgressCommons.UnknownProgress
 	return own.progress.GetQuest(questID)
 
 func GetBestiary(monsterID : int) -> int:
-	assert(IsPlayer(), "GetBestiary() requires a player agent")
-	if not IsPlayer(): return 0
+	if not IsPlayer(): push_error("GetBestiary() requires a player agent"); return 0
 	return own.progress.GetBestiary(monsterID)
 
 func IsQuestStarted(questID : int) -> bool:
@@ -200,13 +196,11 @@ func ClearTracker():
 
 # Camera
 func LookAtPosition(pos : Vector2):
-	assert(IsPlayer(), "LookAtPosition() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("LookAtPosition() requires a player agent"); return
 	Action(NpcCommons.CameraLookAt.bind(own, pos))
 
 func LookAtNpc(npcName : String):
-	assert(IsPlayer(), "LookAtNpc() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("LookAtNpc() requires a player agent"); return
 
 	var npcAgent : NpcAgent = GetNamedGlobalNPC(npcName)
 	if npcAgent:
@@ -220,29 +214,24 @@ func TriggerNpc(agent : PlayerAgent, npcName : String):
 			agent.ownScript.ApplyStep()
 
 func ResetCamera():
-	assert(IsPlayer(), "ResetCamera() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("ResetCamera() requires a player agent"); return
 	Action(NpcCommons.CameraReset.bind(own))
 
 # Dialogue
 func Mes(mes : String):
-	assert(IsPlayer(), "Mes() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Mes() requires a player agent"); return
 	steps.append({"text": mes})
 
 func Think(mes : String):
-	assert(IsPlayer(), "Think() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Think() requires a player agent"); return
 	steps.append({"text": mes, "think": true})
 
 func Narrate(mes : String):
-	assert(IsPlayer(), "Narrate() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Narrate() requires a player agent"); return
 	steps.append({"text": mes, "think": true, "author": ""})
 
 func Choice(mes : String, callable : Callable = Callback.Empty):
-	assert(IsPlayer(), "Choice() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Choice() requires a player agent"); return
 	if steps.is_empty():
 		steps.append({"choices": []})
 
@@ -253,31 +242,26 @@ func Choice(mes : String, callable : Callable = Callback.Empty):
 	dialogueStep["choices"].append({"text": mes, "action": callable})
 
 func Action(callable : Callable):
-	assert(IsPlayer(), "Action() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Action() requires a player agent"); return
 	steps.append({"action": callable})
 
 func Emote(emoteID : int):
 	NpcCommons.Emote(npc, emoteID)
 
 func Express(mes : String):
-	assert(IsPlayer(), "Express() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Express() requires a player agent"); return
 	NpcCommons.Express(npc, own, mes)
 
 func Chat(mes : String):
-	assert(IsPlayer(), "Chat() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Chat() requires a player agent"); return
 	NpcCommons.Chat(npc, own, mes)
 
 func Greeting():
-	assert(IsPlayer(), "Greeting() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Greeting() requires a player agent"); return
 	NpcCommons.Chat(npc, own, NpcCommons.GetRandomGreeting(own.nick))
 
 func Farewell():
-	assert(IsPlayer(), "Farewell() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("Farewell() requires a player agent"); return
 	NpcCommons.Chat(npc, own, NpcCommons.GetRandomFarewell(own.nick))
 
 # Timer
@@ -312,28 +296,27 @@ func ClearTimer(timer : Timer):
 
 # Inventory
 func HasItem(itemID : int, count : int = 1) -> bool:
-	assert(IsPlayer(), "HasItem() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("HasItem() requires a player agent"); return false
 	var cell : ItemCell = DB.GetItem(itemID)
 	return own.inventory.HasItem(cell, count) if cell else false
 
 func HasItemsSpace(items : Array) -> bool:
-	assert(IsPlayer(), "HasItemsSpace() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("HasItemsSpace() requires a player agent"); return false
 	var totalCount : int = 0
 	for item in items:
 		var itemCount : int = 1
 		var cell : ItemCell = null
 		if item is Array:
-			assert(item.size() == 2, "Wrong format to check user inventory space")
-			if item.size() == 2:
+			if item.size() != 2:
+			push_error("Wrong format to check user inventory space")
+			return false
 				cell = DB.GetItem(item[0])
 				itemCount = item[1]
 		elif item is int:
 			cell = DB.GetItem(item)
 		else:
-			assert(false, "Argument given is not an item, could not verify if the inventory has enough space for this")
-			return false
+		push_error("Argument given is not an item, could not verify if the inventory has enough space for this")
+		return false
 
 		if cell:
 			if cell.stackable and HasItem(cell.id):
@@ -345,36 +328,30 @@ func HasItemsSpace(items : Array) -> bool:
 	return HasSpace(totalCount)
 
 func HasSpace(itemCount : int) -> bool:
-	assert(IsPlayer(), "HasSpace() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("HasSpace() requires a player agent"); return false
 	return own.inventory.HasSpace(itemCount)
 
 func AddItem(itemID : int, count : int = 1, customfield : String = ""):
-	assert(IsPlayer(), "AddItem() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("AddItem() requires a player agent"); return
 	Action(NpcCommons.AddItem.bind(own, itemID, count, customfield))
 
 func RemoveItem(itemID : int, count : int = 1, customfield : String = ""):
-	assert(IsPlayer(), "RemoveItem() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("RemoveItem() requires a player agent"); return
 	Action(NpcCommons.RemoveItem.bind(own, itemID, count, customfield))
 
 # Skills
 func HasSkill(skillID : int) -> bool:
-	assert(IsPlayer(), "HasSkill() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("HasSkill() requires a player agent"); return false
 	var cell : SkillCell = DB.GetSkill(skillID)
 	return own.progress.HasSkill(cell) if cell else false
 
 func GetSkillLevel(skillID : int) -> int:
-	assert(IsPlayer(), "GetSkillLevel() requires a player agent")
-	if not IsPlayer(): return false
+	if not IsPlayer(): push_error("GetSkillLevel() requires a player agent"); return 0
 	var cell : SkillCell = DB.GetSkill(skillID)
 	return own.progress.GetSkillLevel(cell) if cell else 0
 
 func TeachSkill(skillID : int, level : int = 1):
-	assert(IsPlayer(), "TeachSkill() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("TeachSkill() requires a player agent"); return
 	Action(NpcCommons.TeachSkill.bind(own, skillID, level))
 
 # Modifier
@@ -386,18 +363,17 @@ func RemoveModifier(modifier : StatModifier, agent : BaseAgent = null):
 
 # Karma
 func AddKarma(value : int):
-	assert(IsPlayer(), "AddKarma() requires a player agent")
-	if not IsPlayer(): return
+	if not IsPlayer(): push_error("AddKarma() requires a player agent"); return
 	Action(NpcCommons.AddKarma.bind(own, value))
 
 # Money & Experience
 func AddExp(value : int):
-	assert(IsPlayer(), "AddExp() requires a player agent")
+	if not IsPlayer(): push_error("AddExp() requires a player agent"); return
 	if not IsPlayer() or value <= 0: return
 	Action(NpcCommons.AddExp.bind(own, value))
 
 func AddGP(value : int):
-	assert(IsPlayer(), "AddGP() requires a player agent")
+	if not IsPlayer(): push_error("AddGP() requires a player agent"); return
 	if not IsPlayer() or value <= 0: return
 	Action(NpcCommons.AddGP.bind(own, value))
 
@@ -489,8 +465,9 @@ func IsPlayer() -> bool:
 
 # Default functions
 func _init(_npc : NpcAgent, _own : BaseAgent):
-	assert(_npc != null and _own != null, "Trying to init a NPC Script with a missing player or NPC")
-	if _npc and _own:
+	if _npc == null or _own == null:
+		push_error("Trying to init a NPC Script with a missing player or NPC")
+		return
 		own = _own
 		npc = _npc
 

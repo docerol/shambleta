@@ -23,11 +23,14 @@ RUN sed -i "s|^Server-Address=.*|Server-Address=\"${SHAMBLETA_SERVER_ADDRESS}\"|
 # do Sentry copia sentry-bundle.js no export_begin e aborta se o dir não existe).
 RUN godot --headless --editor --import --quit || true
 RUN mkdir -p /out/Web \
- && godot --headless --path . --export-release "Web" /out/Web/index.html
+  && godot --headless --path . --export-release "Web" /out/Web/index.html
 
 FROM nginx:1.27-alpine
 RUN rm /etc/nginx/conf.d/default.conf
 COPY deploy/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /out/Web/ /usr/share/nginx/html/
+# SOM-IDLE P1: música servida separadamente para não pesar no primeiro load.
+# Os arquivos .ogg ficam em /usr/share/nginx/music/ e são servidos por /music/.
+COPY data/music/ /usr/share/nginx/music/
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1

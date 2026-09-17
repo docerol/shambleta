@@ -129,6 +129,10 @@ func ShowCheckoutIntent(intent : Dictionary):
 		str(intent.get("label", "?")), float(intent.get("price", 0.0))]
 	paySandboxButton.disabled = false
 
+	# SOM-IDLE F2: web-only checkout dialog for paid items.
+	if LauncherCommons.isWeb and not bool(intent.get("sandbox", false)):
+		_show_web_checkout(intent)
+
 func _on_pay_sandbox_pressed():
 	if _pendingIntent.is_empty():
 		return
@@ -217,3 +221,15 @@ func _on_simulate_done(result : int, _code : int, _headers : PackedStringArray, 
 	_pendingIntent = {}
 	intentLabel.text = "Sandbox payment accepted %s — credit in ~30s (poll)." % str(parsed.get("items", []))
 	RefreshState()
+
+# SOM-IDLE F2: web-only checkout dialog.
+func _show_web_checkout(intent : Dictionary):
+	if not Launcher.GUI.checkoutWindow:
+		Launcher.GUI.checkoutWindow = Checkout.new()
+		Launcher.GUI.add_child(Launcher.GUI.checkoutWindow)
+	if Launcher.GUI.checkoutWindow:
+		Launcher.GUI.checkoutWindow.StartCheckout(
+			str(intent.get("sku", "")),
+			str(intent.get("label", "")),
+			float(intent.get("price", 0.0)),
+			str(intent.get("currency", "BRL")))

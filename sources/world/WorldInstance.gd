@@ -76,9 +76,9 @@ func _map_loaded():
 
 #
 static func Create(_map : WorldMap, instanceID : int = 0) -> WorldInstance:
-	assert(_map != null, "Could not create an instance on a non-valid map")
 	if _map == null:
-		return
+		push_error("Could not create an instance on a non-valid map")
+		return null
 
 	var inst : WorldInstance = WorldInstance.new()
 	inst.id = instanceID

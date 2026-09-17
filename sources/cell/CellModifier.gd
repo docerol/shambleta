@@ -25,7 +25,8 @@ func HasAny() -> bool:
 #
 func Apply(actor : Actor):
 	if not actor:
-		assert(false, "Actor not found, could not apply the cell modifier")
+		push_error("Actor not found, could not apply the cell modifier")
+		return
 
 	for modifier in _modifiers:
 		if modifier:

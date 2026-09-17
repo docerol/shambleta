@@ -11,6 +11,7 @@ func _ready():
 
 func _on_hide_button_pressed():
 	var ancestor : WindowPanel = UICommons.GetWindowPanelAncestor(self)
-	assert(ancestor, "Could not find a WindowPanel through ancestors of %s" % self.name)
+	if ancestor == null:
+		push_error("Could not find a WindowPanel through ancestors of %s" % self.name)
 	if ancestor:
 		Launcher.GUI.ToggleControl(ancestor)

@@ -26,8 +26,9 @@ func RefreshTileMap():
 			break
 
 func GetMapBoundaries() -> Vector2:
-	assert(currentMapNode != null, "Map node not found on the current scene")
-	return currentMapNode.get_meta("MapBoundaries", Vector2.ZERO) if currentMapNode else Vector2.ZERO
+	if currentMapNode == null:
+		push_error("Map node not found on the current scene")
+		return Vector2.ZERO
 
 func EmplaceMapNode(mapID : int, force : bool = false):
 	if not force and currentMapID == mapID:
@@ -56,8 +57,8 @@ func UnloadMapNode():
 func LoadMapNode(mapID : int):
 	currentMapNode = pool.LoadMapLayers(mapID)
 	currentMapID = mapID
-	assert(currentMapNode != null, "Map instance could not be created")
-	if currentMapNode:
+	if currentMapNode == null:
+		push_error("Map instance could not be created")
 		RefreshTileMap()
 		Launcher.add_child(currentMapNode)
 		MapLoaded.emit()
@@ -148,8 +149,9 @@ func RemoveChild(child : Node2D):
 			child.queue_free()
 
 func AddChild(child : Node2D):
-	assert(currentFringe != null, "Current fringe layer not found, could not add a new child")
-	if currentFringe:
+	if currentFringe == null:
+		push_error("Current fringe layer not found, could not add a new child")
+		return
 		currentFringe.add_child.call_deferred(child)
 
 # Entities

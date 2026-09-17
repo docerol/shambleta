@@ -10,5 +10,6 @@ func OnTopButtonPressed():
 		Launcher.GUI.ToggleControl(targetWindow)
 
 func _ready():
-	assert(targetWindow != null, "Invalid shortcut given for this window button")
+	if targetWindow == null:
+		push_error("Invalid shortcut given for this window button")
 	tooltip_text = tooltip_text + " " + name

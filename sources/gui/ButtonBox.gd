@@ -34,7 +34,7 @@ func Bind(side : UICommons.ButtonBox, buttonName : String, callable : Callable):
 		UICommons.ButtonBox.SECONDARY:	_bind(secondaryButton, buttonName, callable)
 		UICommons.ButtonBox.TERTIARY:	_bind(tertiaryButton, buttonName, callable)
 		UICommons.ButtonBox.CANCEL:		_bind(cancelButton, buttonName, callable)
-		_:								assert(false, "Unknown button box side")
+		_:								push_error("Unknown button box side")
 
 func Call(side : UICommons.ButtonBox):
 	match side:
@@ -42,7 +42,7 @@ func Call(side : UICommons.ButtonBox):
 		UICommons.ButtonBox.SECONDARY:	_call(secondaryButton)
 		UICommons.ButtonBox.TERTIARY:	_call(tertiaryButton)
 		UICommons.ButtonBox.CANCEL:		_call(cancelButton)
-		_:								assert(false, "Unknown button box side")
+		_:								push_error("Unknown button box side")
 
 func Rename(side : UICommons.ButtonBox, buttonName : String):
 	match side:
@@ -50,7 +50,7 @@ func Rename(side : UICommons.ButtonBox, buttonName : String):
 		UICommons.ButtonBox.SECONDARY:	_name(secondaryButton, buttonName)
 		UICommons.ButtonBox.TERTIARY:	_name(tertiaryButton, buttonName)
 		UICommons.ButtonBox.CANCEL:		_name(cancelButton, buttonName)
-		_:								assert(false, "Unknown button box side")
+		_:								push_error("Unknown button box side")
 
 func Clear(side : UICommons.ButtonBox):
 	match side:
@@ -58,7 +58,7 @@ func Clear(side : UICommons.ButtonBox):
 		UICommons.ButtonBox.SECONDARY:	_clear(secondaryButton)
 		UICommons.ButtonBox.TERTIARY:	_clear(tertiaryButton)
 		UICommons.ButtonBox.CANCEL:		_clear(cancelButton)
-		_:								assert(false, "Unknown button box side")
+		_:								push_error("Unknown button box side")
 
 func Focus(side : UICommons.ButtonBox):
 	match side:
@@ -66,7 +66,7 @@ func Focus(side : UICommons.ButtonBox):
 		UICommons.ButtonBox.SECONDARY:	_focus(secondaryButton)
 		UICommons.ButtonBox.TERTIARY:	_focus(tertiaryButton)
 		UICommons.ButtonBox.CANCEL:		_focus(cancelButton)
-		_:								assert(false, "Unknown button box side")
+		_:								push_error("Unknown button box side")
 
 func ClearAll():
 	_clear(primaryButton)

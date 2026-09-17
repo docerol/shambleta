@@ -85,13 +85,14 @@ func Cast(skillID : int):
 	if Launcher.GUI.IsDialogueContextOpened():
 		return
 
-	assert(skillID in DB.SkillsDB, "Skill ID %x not found within our skill db" % skillID)
-	if not skillID in DB.SkillsDB:
+	if skillID not in DB.SkillsDB:
+		push_error("Skill ID %x not found within our skill db" % skillID)
 		return
 
 	var skill : SkillCell = DB.SkillsDB[skillID]
-	assert(skill != null, "Skill ID is not found, can't cast it")
-	if skill == null or not skill.usable:
+	if skill == null:
+		push_error("Skill ID is not found, can't cast it")
+		return
 		return
 
 	var targetRID : int = 0

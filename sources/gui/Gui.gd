@@ -1,5 +1,10 @@
 extends ServiceBase
 
+# SOM-IDLE P2: minimal HUD for idle/farm sessions.
+var idleMode : bool = false
+var idleModeWindows : Array[WindowPanel] = []
+var fullModeWindows : Array[WindowPanel] = []
+
 @onready var background : TextureRect			= $Background
 
 # Overlay
@@ -49,6 +54,8 @@ extends ServiceBase
 @onready var seasonPassWindow : WindowPanel		= $Windows/Floating/SeasonPass
 @onready var cosmeticsWindow : WindowPanel		= $Windows/Floating/Cosmetics
 @onready var bossWindow : WindowPanel			= $Windows/Floating/Boss
+# SOM-IDLE F2: web-only checkout UI (runtime-created, no .tscn edit).
+var checkoutWindow : WindowPanel				= null
 
 @onready var chatContainer : ChatContainer		= $Windows/Floating/Chat/Margin/VBoxContainer
 @onready var emoteContainer : Container			= $Windows/Floating/Emote/Layout/ItemContainer/Grid
@@ -133,6 +140,13 @@ Shambleta is an idle auto battler: build your fighter, pick a farm zone and your
 """,
 			settingsWindow.set_sessionfirstlogin.bind(false), "OK",
 			OpenDiscord, "Join our Discord")
+
+	# SOM-IDLE U2: onboarding tutorial for new players.
+	if settingsWindow.get_sessionfirstlogin():
+		var onboarding : Onboarding = Onboarding.new()
+		onboarding.name = "Onboarding"
+		add_child(onboarding)
+		onboarding.Start()
 
 #
 func EnterLoginMenu():
@@ -227,6 +241,35 @@ func EnterGame():
 func ExitGame():
 	notificationLabel.ClearNotification()
 
+# SOM-IDLE P2: toggle minimal HUD for idle sessions.
+func ToggleIdleMode():
+	idleMode = not idleMode
+	if idleMode:
+		fullModeWindows.clear()
+		idleModeWindows.clear()
+		var essential : Array[WindowPanel] = [statWindow, chatWindow, minimapWindow, shopWindow, chestsWindow, bossWindow, seasonPassWindow]
+		var nonEssential : Array[WindowPanel] = [inventoryWindow, emoteWindow, socialWindow, formationWindow, skillWindow, progressWindow, respawnWindow, zoneWindow, cosmeticsWindow, leaderboardWindow]
+		for win in essential:
+			if win and not win.is_visible():
+				win.set_visible(true)
+				idleModeWindows.append(win)
+		for win in nonEssential:
+			if win and win.is_visible():
+				win.set_visible(false)
+				fullModeWindows.append(win)
+	else:
+		for win in idleModeWindows:
+			if win:
+				win.set_visible(false)
+		for win in fullModeWindows:
+			if win:
+				win.set_visible(true)
+		fullModeWindows.clear()
+		idleModeWindows.clear()
+
+func IsIdleMode() -> bool:
+	return idleMode
+
 func EnterPip():
 	Launcher.GUI.set_visible(false)
 	if Launcher.Camera:
@@ -283,6 +326,14 @@ func _notification(notif):
 			EnterPip()
 		NOTIFICATION_APPLICATION_PIP_MODE_EXITED:
 			ExitPip()
+
+# SOM-IDLE P2: F10 toggles minimal idle HUD (hide non-essential windows).
+func _input(event : InputEvent):
+	if not FSM.IsGameState():
+		return
+	if event.is_action_pressed("ui_f10", false, true):
+		ToggleIdleMode()
+		get_viewport().set_input_as_handled()
 
 func HighlightUI(target : UICommons.UITarget):
 	if highlight:

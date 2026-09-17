@@ -1,0 +1,15 @@
+services:
+  web:
+    environment:
+      - SHAMBLETA_SERVER_ADDRESS=staging.seudominio.com
+      - SHAMBLETA_SERVER_PORT=0
+  game:
+    environment:
+      - SHAMBLETA_ENV=staging
+  companion:
+    environment:
+      - SHAMBLETA_WEBHOOK_PROVIDER=shared
+      - SHAMBLETA_ALLOW_DEV_WEBHOOK=1
+      - SHAMBLETA_WEBHOOK_SECRET=${SHAMBLETA_WEBHOOK_SECRET:-staging-secret}
+volumes:
+  game-data-staging:

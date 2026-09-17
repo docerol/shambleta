@@ -62,12 +62,38 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 	return CallServer("LoginWithPassword", [accountName, password, rememberMe, platform], peerID, NetworkCommons.DelayLogin)
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
+func TwoFactorSetupResult(qrURL : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("TwoFactorSetupResult", [qrURL], peerID)
+
+@rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
+func TwoFactorRequired(peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("TwoFactorRequired", [], peerID)
+
+@rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func AuthError(err : NetworkCommons.AuthError, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("AuthError", [err], peerID)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func LoginWithToken(accountName : String, token : String, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
 	return CallServer("LoginWithToken", [accountName, token, platform], peerID, NetworkCommons.DelayLogin)
+
+# SOM-IDLE S4: 2FA login step (after password validation).
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func LoginWithTwoFactor(accountName : String, token : String, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("LoginWithTwoFactor", [accountName, token, platform], peerID, NetworkCommons.DelayLogin)
+
+# SOM-IDLE S4: 2FA setup for admin/GM accounts.
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func SetupTwoFactor(peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("SetupTwoFactor", [], peerID, NetworkCommons.DelayLogin)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func VerifyTwoFactorSetup(token : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("VerifyTwoFactorSetup", [token], peerID, NetworkCommons.DelayLogin)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func DisableTwoFactor(password : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("DisableTwoFactor", [password], peerID, NetworkCommons.DelayLogin)
 
 # SOM-IDLE LGPD: re-accept updated agreements at login (server re-verifies).
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
@@ -773,7 +799,7 @@ func Bulk(methodName : StringName, args : Array, peerID : int):
 # Notify peers
 func NotifyNeighbours(agent : BaseAgent, callbackName : StringName, args : Array, inclusive : bool = true, bulk : bool = false):
 	if not agent:
-		assert(false, "Agent is misintantiated, could not notify instance players with " + callbackName)
+		push_error("Agent is misintantiated, could not notify instance players with " + callbackName)
 		return
 
 	var currentagentRID : int = agent.get_rid().get_id()
@@ -803,7 +829,7 @@ func NotifyNeighbours(agent : BaseAgent, callbackName : StringName, args : Array
 
 func NotifyInstance(inst : WorldInstance, callbackName : StringName, args : Array, exclude : BaseAgent = null):
 	if not inst:
-		assert(false, "World instance is missing, could not notify instance players with " + callbackName)
+		push_error("World instance is missing, could not notify instance players with " + callbackName)
 		return
 
 	for player in inst.players:
@@ -867,7 +893,8 @@ func _ready():
 	NetworkCommons.ProtocolVersion = NetworkCommons.ComputeProtocolVersion(self)
 
 func _init():
-	assert(NetworkCommons.RtcChannelsConfig.size() == EChannel.COUNT - 1, "Mismatch RTC channel config count! Expected %d" % [EChannel.COUNT - 1])
+	if NetworkCommons.RtcChannelsConfig.size() != EChannel.COUNT - 1:
+		push_error("Mismatch RTC channel config count! Expected %d" % [EChannel.COUNT - 1])
 	online_player_connected.connect(OnlineList.OnPlayerConnected)
 	online_player_disconnected.connect(OnlineList.OnPlayerDisconnected)
 

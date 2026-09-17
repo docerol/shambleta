@@ -202,6 +202,8 @@ enum AuthError {
 	ERR_CONSENT_REQUIRED,
 	# SOM-IDLE F4 follow-up: email já cadastrado não é "nome indisponível".
 	ERR_EMAIL_TAKEN,
+	# SOM-IDLE S4: 2FA required for admin/GM accounts.
+	ERR_2FA_REQUIRED,
 }
 
 # SOM-IDLE LGPD: status da conta para o direito ao esquecimento (art. 18).

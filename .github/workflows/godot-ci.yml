@@ -137,6 +137,52 @@ jobs:
           timeout 300 godot --headless --path . -s tests/run_idle_tests.gd
           # Exit code = number of failed checks (0 = green)
 
+  # SOM-IDLE A2: backup restore probe — monthly gate (runs on every push for now).
+  backup-restore:
+    runs-on: ubuntu-latest
+    name: Backup Restore Probe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Godot
+        uses: liuyuzui/godot-action-setup@v1
+        with:
+          godot-version: ${{ env.GODOT_VERSION }}
+
+      - name: Import assets
+        run: |
+          cd "$PROJECT_PATH"
+          godot --headless --editor --import --quit
+
+      - name: Run backup restore probe
+        run: |
+          cd "$PROJECT_PATH"
+          timeout 120 godot --headless --path . -s tests/test_backup_restore.gd
+
+  # SOM-IDLE P2: performance benchmark gate
+  benchmarks:
+    runs-on: ubuntu-latest
+    name: Performance Benchmarks
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Godot
+        uses: liuyuzui/godot-action-setup@v1
+        with:
+          godot-version: ${{ env.GODOT_VERSION }}
+
+      - name: Import assets
+        run: |
+          cd "$PROJECT_PATH"
+          godot --headless --editor --import --quit
+
+      - name: Run performance benchmarks
+        run: |
+          cd "$PROJECT_PATH"
+          timeout 120 godot --headless --path . -s tests/benchmarks.gd
+
   # SOM-IDLE beta deploy: export Web (pivô idle é web-first). O artifact é
   # servido com COOP/COEP pelo nginx do deploy/web/Dockerfile (Coolify).
   web-export:

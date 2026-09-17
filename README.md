@@ -2,31 +2,33 @@
 
 ![screenshot](data/press/readme/header.png)
 
-**Shambleta** is a classic 2D MMORPG inspired by the golden era of pixel art RPGs. This game project is truly open source and welcomes contributions from around the globe.
-
-The game is still in early development but already offers a playable solo and multiplayer experience.
+**Shambleta** is a server-authoritative idle RPG with offline progression, built with Godot 4. The project is open source and welcomes contributions.
 
 ## About the Project
 
-**Engine:** Godot 4 (client and server)
+**Engine:** Godot 4.7.1 (client and server)
 
 **Design Tools:**
 - Game editor: [Godot 4.7.1](https://godotengine.org/)
 - Level editor: [Tiled 1.11.2](https://www.mapeditor.org/)
 
-**Origins:** A fork of [Source of Mana](https://github.com/docerol/sourceofmana) — itself built by veterans of *The Mana World*, improving upon its assets. Shambleta carries that lineage forward as its own game.
+**Origins:** A fork of [Source of Mana](https://github.com/docerol/sourceofmana). Shambleta has since pivoted to an idle-first design with commercial launch features.
 
-**Goal:** Become the go-to open source 2D MMORPG project
+**Goal:** A polished idle RPG with payment integration, cosmetics, seasons, and guild play.
 
-**Platforms:** Desktop (Windows, macOS, Linux), Mobile (Android) and Web (HTML5/WebAssembly) clients
+**Platforms:** Desktop (Windows, macOS, Linux), Mobile (Android), and Web (HTML5/WebAssembly)
 
 ## Gameplay Highlights
 
-- Explore a fantasy world crafted in charming pixel art
-- Interact with NPCs and other players in real-time
-- Battle monsters, complete quests, and collect loot
-- Dynamic server-authoritative design
-- Frequent updates and community-driven development
+- **Idle progression:** Your character farms gold and XP even when offline
+- **Offline settle:** Come back to accumulated rewards based on session efficiency
+- **Boss ladder:** Fight increasingly difficult bosses for chests and keys
+- **Rebirth system:** Prestige mechanic with permanent bonuses (essence + favours)
+- **Guild play:** Create or join guilds, deposit items, level up together
+- **Economy:** Gems (premium), gold, items with lot-tracking, trade, and auction house
+- **Season pass:** Daily/weekly missions with premium rewards
+- **VIP status:** Idle faucet multiplier and extended offline caps
+- **Combat:** Elemental weaknesses, auto-combat, skills, and equipment
 
 ## Screenshots
 
@@ -34,65 +36,57 @@ The game is still in early development but already offers a playable solo and mu
 ![combat](data/press/readme/combat.png)
 ![dialogue](data/press/readme/dialogue.png)
 
-## Controls
+## Quick Start
 
-### General Movement
-- **Move:** `WASD`
-- **Click to Move / Interact:** Left Mouse Button
-- **Interact:** `Ctrl`
-- **Target:** `E`
-- **Untarget:** `R`
-- **Run (Hold):** `Shift`
-- **Pickup Items:** `Q`
-- **Morph / Transformation:** `M`
-- **Sit:** `C`
+### Play (Web)
 
-### Camera
-- **Zoom In / Out:** Mouse Scroll
-- **Reset Zoom:** Middle Mouse Button
-- **Screenshot:** `P`
+No installation needed — play directly in your browser at the project's web domain.
 
-### UI Shortcuts (Keyboard Only)
-- **Menu Bar:** `F1`
-- **Open Stats:** `F2`
-- **Inventory:** `F3`
-- **Skills:** `F4`
-- **Quest Progress:** `F5`
-- **Minimap:** `F6`
-- **Chat:** `F7`
-- **Social:** `F8`
-- **Settings:** `F9`
-- **Toggle Fullscreen:** `F11`
-- **Emotes:** `F12`
+### Run Server (Docker)
 
-### Contextual Actions
-- **Confirm / Open Chat:** `Enter`
-- **Cancel / Close:** `Esc`
-- **Context Options:** `1`, `2`, `3`, `4`
+```bash
+docker compose up -d
+```
 
-## Community & Contribution
+See [deploy/COOLIFY.md](deploy/COOLIFY.md) for the full deployment guide.
 
-We’re always looking for contributors of all kinds:
-- Pixel artists
-- SFX makers
-- GDScript or general programmers
-- UI/UX designers
-- Writers and worldbuilders
+### Run Locally (Desktop)
 
-### Contact
+1. Open the project in Godot 4.7.1
+2. Import assets (`Project → Tools → Import`)
+3. Run the main scene (F5)
 
-If you’re interested in helping, join our community and check out our open issues.
+The server starts automatically in debug builds. Use `F1`–`F12` for UI shortcuts.
 
-- **Discord:** [Join here](https://discord.com/channels/581622549566193664/1013487216493854780)
-- **IRC:** `#sourceofmana` and `#sourceofmana-dev` on [Libera.Chat](https://web.libera.chat/#sourceofmana,#sourceofmana-dev)
+## Architecture
+
+- **Server-authoritative:** The server owns all state; the client is a thin renderer.
+- **SQLite WAL:** Single-file database with write-ahead logging for crash safety.
+- **Migrations:** Versioned schema migrations (no raw ALTER in production).
+- **Network:** ENet, WebSocket, and WebRTC transports with a unified RPC layer.
+- **Idle engine:** `IdlePolicy` ticks at physics FPS; offline settle is idempotent via `last_settled_at`.
+
+See [som-idle-docs/](som-idle-docs/) for detailed architecture, economy study, and roadmap.
+
+## Tests
+
+```bash
+# Idle test suite (XP curve, settle, ledger, guild, seasons, rebirth)
+godot --headless --path . -s tests/run_idle_tests.gd
+
+# Backup restore probe
+godot --headless --path . -s tests/test_backup_restore.gd
+```
+
+CI runs both on every push.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-For detailed information on the licensing of code, assets, and design, as well as credits for individual asset files, please refer to the [LICENSE.md](LICENSE.md) file.
+- **Code:** MIT License
+- **Art & Design:** CC BY-SA 4.0
 
-- **Code License:** MIT License
-- **Art & Design License:** CC BY-SA 4.0
-
----
-
-Shambleta is developed by volunteers in their free time. If you like retro RPGs & MMORPGs and want to help shape the future of open-source gaming, come say hi!
+See [LICENSE.md](LICENSE.md) for full details and asset credits.

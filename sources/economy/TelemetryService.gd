@@ -28,14 +28,17 @@ func _process(delta : float) -> void:
 		Flush()
 
 # kind: login | settle | levelup. value: xp (settle), níveis (levelup), 1 (login).
-func Record(kind : String, accountID : int = 0, charID : int = 0, value : int = 0, meta : String = "{}") -> void:
+func Record(kind : String, accountID : int = 0, charID : int = 0, value : int = 0, meta : String = "{}", fingerprint : Dictionary = {}) -> void:
 	if _buffer.size() >= BufferCap:
 		_buffer.pop_front()
-	_buffer.append({
+	var event : Dictionary = {
 		"created_at" = SQLCommons.Timestamp(),
 		"account_id" = accountID, "char_id" = charID,
 		"kind" = kind, "value" = value, "meta" = meta,
-	})
+	}
+	if not fingerprint.is_empty():
+		event["fingerprint"] = JSON.stringify(fingerprint)
+	_buffer.append(event)
 
 func BufferedCount() -> int:
 	return _buffer.size()
@@ -48,9 +51,10 @@ func Flush() -> int:
 	var count : int = 0
 	if Launcher.SQL.Transaction(func() -> bool:
 		for event in batch:
-			if not Launcher.SQL.db.query_with_bindings(
-				"INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value, meta) VALUES (?, ?, ?, ?, ?, ?);",
-				[int(event["created_at"]), int(event["account_id"]), int(event["char_id"]), str(event["kind"]), int(event["value"]), str(event["meta"])]):
+			var fp : String = str(event.get("fingerprint", ""))
+			var sql : String = "INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value, meta, fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?);"
+			var bindings : Array = [int(event["created_at"]), int(event["account_id"]), int(event["char_id"]), str(event["kind"]), int(event["value"]), str(event["meta"]), fp]
+			if not Launcher.SQL.db.query_with_bindings(sql, bindings):
 				return false
 		return true):
 		count = batch.size()

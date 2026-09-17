@@ -212,7 +212,7 @@ func SetButtonMode(mode : ButtonMode):
 		ButtonMode.DROP:
 			ResetDropButtons()
 			RefreshDropMode()
-		_: assert(false, "Unknown button mode within the inventory window")
+		_: push_error("Unknown button mode within the inventory window")
 
 func ResetDropButtons():
 	dropValue = 1

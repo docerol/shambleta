@@ -49,7 +49,9 @@ static func ParseEntitiesDB():
 		var resource = FileSystem.LoadResource(resourcePath, false)
 		if resource is EntityData:
 			var entity : EntityData = resource as EntityData
-			assert(entity._id == entity._name.hash(), "ID for entity %s is not set, add: %d" % [entity._name, entity._name.hash()])
+			if entity._id != entity._name.hash():
+				push_error("ID for entity %s is not set, add: %d" % [entity._name, entity._name.hash()])
+				return
 			if entity._parent:
 				entity = entity.GetMergedEntity()
 
@@ -65,7 +67,9 @@ static func ParseEntitiesDB():
 				entity._stats["gender"] = ActorCommons.GetGenderID(entity._stats["gender"])
 
 			if entity._id != UnknownHash:
-				assert(not EntitiesDB.has(entity._id), "Duplicated entity in EntitiesDB: " + entity._name)
+				if EntitiesDB.has(entity._id):
+					push_error("Duplicated entity in EntitiesDB: " + entity._name)
+					return
 				EntitiesDB[entity._id] = entity
 
 static func ParseCellDB(db : Dictionary, path : String):
@@ -89,7 +93,9 @@ static func HasCellHash(cellname : StringName) -> bool:
 static func SetCellHash(cellname : StringName, cellID : int = UnknownHash) -> int:
 	var hasHash : bool = HasCellHash(cellname)
 	var cellHash : int = UnknownHash
-	assert(not hasHash, "Cell hash already exists for %s" % cellname)
+	if hasHash:
+		push_error("Cell hash already exists for %s" % cellname)
+		return UnknownHash
 	if not hasHash:
 		var cellNameHash : int = cellname.hash()
 		cellHash = cellNameHash if cellID == UnknownHash else cellID
@@ -98,13 +104,17 @@ static func SetCellHash(cellname : StringName, cellID : int = UnknownHash) -> in
 
 static func GetCellHash(cellname : StringName) -> int:
 	var hasHash : bool = HasCellHash(cellname)
-	assert(hasHash, "Cell hash doesn't exist for " + cellname)
+	if not hasHash:
+		push_error("Cell hash doesn't exist for " + cellname)
+		return UnknownHash
 	return hashDB[cellname] if hasHash else UnknownHash
 
 #
 static func GetItem(cellHash : int, customfield : String = "") -> ItemCell:
 	var cell : ItemCell = ItemsDB.get(cellHash, null)
-	assert(cell != null, "Could not find the identifier %s in ItemsDB" % [cellHash])
+	if cell == null:
+		push_error("Could not find the identifier %s in ItemsDB" % [cellHash])
+		return null
 	if cell and customfield != cell.customfield:
 		var customCell = cell.duplicate()
 		customCell.customfield = customfield
@@ -121,37 +131,51 @@ static func GetItem(cellHash : int, customfield : String = "") -> ItemCell:
 
 static func GetEntity(entityHash : int) -> EntityData:
 	var data : EntityData = EntitiesDB.get(entityHash, null)
-	assert(data != null, "Could not find the identifier %s in EntitiesDB" % [entityHash])
+	if data == null:
+		push_error("Could not find the identifier %s in EntitiesDB" % [entityHash])
+		return null
 	return data
 
 static func GetEmote(cellHash : int) -> BaseCell:
 	var data : BaseCell = EmotesDB.get(cellHash, null)
-	assert(data != null, "Could not find the identifier %s in EmotesDB" % [cellHash])
+	if data == null:
+		push_error("Could not find the identifier %s in EmotesDB" % [cellHash])
+		return null
 	return data
 
 static func GetSkill(cellHash : int) -> SkillCell:
 	var data : SkillCell = SkillsDB.get(cellHash, null)
-	assert(data != null, "Could not find the identifier %s in SkillsDB" % [cellHash])
+	if data == null:
+		push_error("Could not find the identifier %s in SkillsDB" % [cellHash])
+		return null
 	return data
 
 static func GetRace(cellHash : int) -> RaceData:
 	var data : RaceData = RacesDB.get(cellHash, null)
-	assert(data != null, "Could not find the identifier %s in RacesDB" % [cellHash])
+	if data == null:
+		push_error("Could not find the identifier %s in RacesDB" % [cellHash])
+		return null
 	return data
 
 static func GetHairstyle(cellHash : int) -> HairstyleData:
 	var data : HairstyleData = HairstylesDB.get(cellHash, null)
-	assert(data != null, "Could not find the identifier %s in HairstylesDB" % [cellHash])
+	if data == null:
+		push_error("Could not find the identifier %s in HairstylesDB" % [cellHash])
+		return null
 	return data
 
 static func GetPalette(type : Palette, cellHash : int) -> FileData:
 	var data : FileData = PalettesDB[type].get(cellHash, null)
-	assert(data != null, "Could not find the identifier %s in PalettesDB" % [cellHash])
+	if data == null:
+		push_error("Could not find the identifier %s in PalettesDB" % [cellHash])
+		return null
 	return data
 
 static func GetQuest(questID : int) -> QuestData:
 	var data : QuestData = QuestsDB.get(questID, null)
-	assert(data != null, "Could not find the identifier %s in QuestsDB" % [questID])
+	if data == null:
+		push_error("Could not find the identifier %s in QuestsDB" % [questID])
+		return null
 	return data
 
 static func WarmShaders():

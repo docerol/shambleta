@@ -1,0 +1,88 @@
+extends SceneTree
+
+# SOM-IDLE A2: backup restore probe — CI gate.
+# Creates a backup, verifies it can be read back, and checks migration integrity.
+# Usage: godot --headless --path . -s tests/test_backup_restore.gd
+# Exit code: 0 = green, 1 = failure.
+
+func _initialize():
+    _run_probe()
+
+func _getAutoload(nodeName: String) -> Node:
+    return root.get_node_or_null(NodePath(nodeName))
+
+func _run_probe():
+    print("== Backup Restore Probe ==")
+
+    var launcher: Node = _getAutoload("Launcher")
+    if launcher == null:
+        print("FATAL: Launcher autoload missing")
+        quit(1)
+        return
+
+    var waited: int = 0
+    while waited < 30000:
+        await create_timer(0.25).timeout
+        waited += 250
+        var sqlNode: Node = launcher.SQL
+        if sqlNode != null and sqlNode.isInitialized:
+            break
+
+    if not sqlNode.isInitialized:
+        print("FATAL: SQL not initialized within timeout")
+        quit(1)
+        return
+
+    print("SQL initialized after %d ms" % waited)
+
+    var sql: SQLService = sqlNode
+    var backupPath: String = sql.CreateDailyBackup()
+
+    if backupPath.is_empty():
+        print("FATAL: Backup creation failed")
+        quit(1)
+        return
+
+    print("Backup created: %s" % backupPath)
+
+    if not SQLBackups.VerifyBackupRestorable(backupPath):
+        print("FATAL: Backup restore probe failed — backup is not readable")
+        quit(1)
+        return
+
+    print("Backup restore probe passed: migration version readable")
+
+    var probe: SQLite = SQLite.new()
+    probe.path = backupPath
+    probe.verbosity_level = SQLite.QUIET
+    if not probe.open_db():
+        print("FATAL: Cannot open backup database")
+        quit(1)
+        return
+
+    var versionResult: Array = []
+    if probe.query("SELECT version FROM migration LIMIT 1;"):
+        versionResult = probe.query_result
+    probe.close_db()
+
+    if versionResult.is_empty():
+        print("FATAL: Backup database has no migration version")
+        quit(1)
+        return
+
+    var version: int = int(versionResult[0].get("version", -1))
+    print("Backup migration version: %d" % version)
+
+    if version < 0:
+        print("FATAL: Invalid migration version in backup")
+        quit(1)
+        return
+
+    var liveVersion: int = sql.GetVersion()
+    print("Live migration version: %d" % liveVersion)
+
+    if version != liveVersion:
+        print("WARNING: Backup version (%d) differs from live (%d)" % [version, liveVersion])
+
+    print("== Backup Restore Probe: PASSED ==")
+    quit(0)

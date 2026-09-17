@@ -27,8 +27,10 @@ var targetMax : float						= 0.0
 
 # Common override
 func _ready():
-	assert(bar != null, "ProgressBar: Bar node is missing")
-	assert(label != null, "ProgressBar: Label node is missing")
+	if bar == null:
+		push_error("ProgressBar: Bar node is missing")
+	if label == null:
+		push_error("ProgressBar: Label node is missing")
 
 	bar.fill_mode = fillMode
 	if textureProgress:
@@ -53,7 +55,8 @@ func SetUnit(unit : String):
 	displayMax = unit != "%"
 
 func SetStat(value : float, maxValue : float):
-	assert(bar != null and label != null, "ProgressBar: children are missing")
+	if bar == null or label == null:
+		push_error("ProgressBar: children are missing")
 
 	var newPercent : float = value / maxValue * 100.0 if maxValue > 0.0 else 0.0
 	var duration : float = initDuration if currentPercent == 0.0 else fillDuration

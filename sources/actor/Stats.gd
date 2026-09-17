@@ -119,8 +119,9 @@ func SetMorphStats(newStats : Dictionary):
 
 #
 func Init(actorNode : Actor, data : EntityData):
-	assert(actorNode != null, "Caller actor node should never be null")
-	actor = actorNode
+	if actorNode == null:
+		push_error("Caller actor node should never be null")
+		return
 
 	var stats : Dictionary = data._stats
 	shape	= data._id

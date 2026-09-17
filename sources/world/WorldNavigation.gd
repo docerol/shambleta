@@ -38,14 +38,18 @@ static func GetDistanceSquaredSafe(agent : BaseAgent, pos : Vector2) -> float:
 
 # Utils
 static func GetRandomPosition(inst : WorldInstance) -> Vector2i:
-	assert(inst != null && inst.map.navPoly != null && inst.map.navPoly.get_polygon_count() > 0, "No triangulation available")
+	if inst == null or inst.map == null or inst.map.navPoly == null or inst.map.navPoly.get_polygon_count() == 0:
+		push_error("No triangulation available")
+		return Vector2i.ZERO
 	if inst != null && inst.map.navPoly != null && inst.map.navPoly.get_polygon_count() > 0:
 		return NavigationServer2D.region_get_random_point(inst.map.regionRID, 1, false)
-	assert(false, "Mob could not be spawned, no available point on the navigation mesh were found")
+	push_error("Mob could not be spawned, no available point on the navigation mesh were found")
 	return Vector2i.ZERO
 
 static func GetRandomPositionAABB(inst : WorldInstance, pos : Vector2i, offset : Vector2i) -> Vector2i:
-	assert(inst != null, "Could not create a random position for a non-initialized instance")
+	if inst == null:
+		push_error("Could not create a random position for a non-initialized instance")
+		return Vector2i.ZERO
 	if inst != null:
 		for i in NetworkCommons.NavigationSpawnTry:
 			var randPoint : Vector2i = Vector2i(randi_range(-offset.x, offset.x), randi_range(-offset.y, offset.y))
@@ -58,7 +62,9 @@ static func GetRandomPositionAABB(inst : WorldInstance, pos : Vector2i, offset :
 	return Vector2i.ZERO
 
 static func GetRandomPositionRing(inst : WorldInstance, pos : Vector2i, minRadius : float, maxRadius : float) -> Vector2i:
-	assert(inst != null, "Could not create a random position for a non-initialized instance")
+	if inst == null:
+		push_error("Could not create a random position for a non-initialized instance")
+		return Vector2i.ZERO
 	if inst != null:
 		for i in NetworkCommons.NavigationSpawnTry:
 			var angle : float = randf_range(0.0, TAU)
@@ -92,5 +98,7 @@ static func GetSpawnPosition(inst : WorldInstance, spawn : SpawnObject) -> Vecto
 		if position == Vector2i.ZERO:
 			position = WorldNavigation.GetRandomPosition(inst)
 
-	assert(position != Vector2i.ZERO, "Could not spawn the agent %s, no walkable position found" % spawn.id)
+	if position == Vector2i.ZERO:
+		push_error("Could not spawn the agent %s, no walkable position found" % spawn.id)
+		return Vector2i.ZERO
 	return position

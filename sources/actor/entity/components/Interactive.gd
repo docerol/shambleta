@@ -89,8 +89,9 @@ func DisplayTarget(type : ActorCommons.Target):
 			DisplaySelection(ActorCommons.MonsterColor)
 
 func DisplayEmote(emoteID : int):
-	assert(emoteFx != null, "No emote particle found, could not display emote")
-	if emoteFx:
+	if emoteFx == null:
+		push_error("No emote particle found, could not display emote")
+		return
 		if DB.EmotesDB and emoteID in DB.EmotesDB:
 			var emote : BaseCell = DB.EmotesDB[emoteID]
 			emoteFx.texture = emote.icon
@@ -196,8 +197,9 @@ func DisplayAlteration(target : Entity, emitter : Entity, value : int, alteratio
 
 # Speech
 func DisplaySpeech(speech : String):
-	assert(speechContainer != null, "No speech container found, could not display speech bubble")
-	if speechContainer:
+	if speechContainer == null:
+		push_error("No speech container found, could not display speech bubble")
+		return
 		var speechLabel : RichTextLabel = ActorCommons.SpeechLabel.instantiate()
 		speechLabel.set_text("[center]%s[/center]" % [speech])
 		speechLabel.set_visible_ratio(0)

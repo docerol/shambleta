@@ -167,6 +167,7 @@ func _ready():
 	concentrationValue = ActorCommons.DefaultAttributes["concentration"]
 	concentrationLabel.set_text(str(concentrationValue))
 	usedPoints = strengthValue + vitalityValue + agilityValue + enduranceValue + concentrationValue
-	assert(usedPoints == Formula.GetMaxAttributePoints(1), "Default attributes are using a wrong amount of attribute points")
+	if usedPoints != Formula.GetMaxAttributePoints(1):
+		push_error("Default attributes are using a wrong amount of attribute points")
 
 	RefreshDisabledButtons()

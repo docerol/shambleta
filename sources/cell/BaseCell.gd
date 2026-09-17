@@ -29,7 +29,7 @@ func Use():
 			CellCommons.Type.SKILL:
 				Launcher.Player.Cast(id)
 			_:
-				assert(false, "Cell type not recognized")
+				push_error("Cell type not recognized")
 
 func StripClient():
 	icon = null

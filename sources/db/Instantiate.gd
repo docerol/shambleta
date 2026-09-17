@@ -40,7 +40,7 @@ static func CreateAgent(spawn : SpawnObject, data : EntityData, nick : String = 
 			actor.spawnInfo = spawn
 		ActorCommons.Type.PLAYER:
 			actor = PlayerAgent.new(ActorCommons.Type.PLAYER, data, nick, true)
-		_: assert(false, "Trying to create an agent with a wrong type: " + str(spawn.type))
+		_: push_error("Trying to create an agent with a wrong type: " + str(spawn.type))
 	return actor
 
 # Drop

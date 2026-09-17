@@ -58,7 +58,9 @@ func LoadMapData():
 	if resource:
 		flags = resource.flags
 		for spawn in resource.spawns:
-			assert(spawn != null, "Spawn format is not supported")
+			if spawn == null:
+				push_error("Spawn format is not supported")
+				return
 			if spawn:
 				spawn.map = self
 				spawns.append(spawn)

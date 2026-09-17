@@ -64,7 +64,7 @@ static func AddContacts(container : VBoxContainer, entry : Dictionary):
 			elif "nick" in contact:
 				contactName = contact["nick"]
 			else:
-				assert(false, "No name for this contact information")
+				push_error("No name for this contact information")
 				continue
 			if "mailid" in contact and "mailprovider" in contact:
 				label.text += "[url=mailto:" + contact["mailid"] + "@" + contact["mailprovider"] + "]" + contactName + "[/url]\n"

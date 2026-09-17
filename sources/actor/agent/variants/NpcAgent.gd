@@ -43,8 +43,9 @@ func SubInteraction():
 		AI.Reset(self)
 
 func AddTrigger():
-	assert(!triggerObject, "Support only one trigger object per NPC (%s)" % nick)
 	if triggerObject:
+		push_error("Support only one trigger object per NPC (%s)" % nick)
+		return
 		return
 
 	triggerObject = TriggerObject.new()

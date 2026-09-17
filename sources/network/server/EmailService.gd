@@ -38,7 +38,9 @@ func IsConfigured() -> bool:
 	return not apiKey.is_empty() and not senderEmail.is_empty()
 
 func SendPasswordResetEmail(toEmail : String, code : String) -> void:
-	assert(IsConfigured(), "EmailService is not configured, can't send password reset email")
+	if not IsConfigured():
+		push_error("EmailService is not configured, can't send password reset email")
+		return
 
 
 	var headers : PackedStringArray = [

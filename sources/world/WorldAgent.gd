@@ -12,7 +12,9 @@ static func GetMapFromAgent(agent : BaseAgent) -> WorldMap:
 	var map : WorldMap = null
 	var inst : WorldInstance = GetInstanceFromAgent(agent)
 	if inst:
-		assert(inst.map != null, "Agent's base map is incorrect, instance is not referenced inside a map")
+		if inst == null or inst.map == null:
+			push_error("Agent's base map is incorrect, instance is not referenced inside a map")
+			return null
 		map = inst.map
 	return map
 
@@ -24,12 +26,16 @@ static func GetAgent(agentRID : int) -> BaseAgent:
 	return agent
 
 static func AddAgent(agent : BaseAgent):
-	assert(agent != null, "Agent is null, can't add it")
+	if agent == null:
+		push_error("Agent is null, can't add it")
+		return
 	if agent and not agents.has(agent.get_rid().get_id()):
 		agents[agent.get_rid().get_id()] = agent
 
 static func RemoveAgent(agent : BaseAgent):
-	assert(agent != null, "Agent is null, can't remove it")
+	if agent == null:
+		push_error("Agent is null, can't remove it")
+		return
 	if agent:
 		if agent is AIAgent:
 			var inst : WorldInstance = agent.get_parent()
@@ -43,7 +49,9 @@ static func RemoveAgent(agent : BaseAgent):
 		agent.queue_free()
 
 static func PopAgent(agent : BaseAgent):
-	assert(agent != null, "Agent is null, can't pop it")
+	if agent == null:
+		push_error("Agent is null, can't pop it")
+		return
 	if agent:
 		var inst : WorldInstance = GetInstanceFromAgent(agent)
 		if inst:
@@ -69,8 +77,12 @@ static func PopAgent(agent : BaseAgent):
 			inst.remove_child(agent)
 
 static func PushAgent(agent : BaseAgent, inst : WorldInstance):
-	assert(agent != null, "Agent is null, can't push it")
-	assert(inst != null, "Instance is null, can't push the agent in it")
+	if agent == null:
+		push_error("Agent is null, can't push it")
+		return
+	if inst == null:
+		push_error("Instance is null, can't push the agent in it")
+		return
 	if agent and inst:
 		agent.set_physics_process(true)
 		if agent is PlayerAgent:

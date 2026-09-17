@@ -482,6 +482,31 @@ class Store:
         return con.execute(
             "SELECT COUNT(*) FROM grant_queue WHERE status = 'pending';").fetchone()[0]
 
+    def multi_account_suspicions(self, con):
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS device_fingerprint (
+                fp TEXT PRIMARY KEY,
+                account_id INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL
+            );
+        """)
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_device_fp
+            ON device_fingerprint(fp, last_seen);
+        """)
+        con.commit()
+        now = int(time.time())
+        rows = con.execute("""
+            SELECT fp, COUNT(DISTINCT account_id) as acct_count
+            FROM telemetry_event
+            WHERE kind = 'login' AND created_at > ? AND fingerprint != ''
+            GROUP BY fp HAVING acct_count >= 3;
+        """, (now - 7 * DAY,)).fetchall()
+        suspicious = []
+        for fp, acct_count in rows:
+            suspicious.append({"fingerprint": fp, "account_count": acct_count})
+        return suspicious
+
     def metrics(self, con):
         # SOM-IDLE D2: dashboard mínimo — economia (ledger) x comportamento
         # (telemetry). Tudo derivado; nada é escrito aqui.
@@ -566,6 +591,7 @@ class Store:
             "season_active": season[0] if season else None,
             "sales_by_sku": sales,
             "starter_funnel": funnel,
+            "multi_account_suspicions": self.multi_account_suspicions(con),
         }
 
 

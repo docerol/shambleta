@@ -204,6 +204,9 @@ func _post_launch():
 	if Economy and not Economy.isInitialized:	Economy._post_launch()
 	# SOM-IDLE: D2 — telemetry after SQL
 	if Telemetry and not Telemetry.isInitialized:	Telemetry._post_launch()
+	# SOM-IDLE F3: web push after GUI
+	if LauncherCommons.isWeb:
+		WebPush.Initialize()
 
 func _quit():
 	Quit()

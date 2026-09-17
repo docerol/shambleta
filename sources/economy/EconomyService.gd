@@ -2159,8 +2159,11 @@ func _MissionProgress(accountID : int, missionID : String, periodStart : int, se
 			var chars : Array = _PassChars(accountID)
 			if chars.is_empty():
 				return 0
-			var qs : String = ",".join(PackedStringArray(chars.map(func(c : int) -> String: return str(c))))
-			return int(sql.QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE origin = 'boss' AND created_at >= ? AND char_id IN (%s);" % qs, [periodStart])[0]["n"])
+			var placeholders : String = ",".join(chars.map(func(_c : int) -> String: return "?"))
+			var query : String = "SELECT COUNT(*) AS n FROM chest_instance WHERE origin = 'boss' AND created_at >= ? AND char_id IN (%s);" % placeholders
+			var bindings : Array = [periodStart]
+			bindings.append_array(chars)
+			return int(sql.QueryBindings(query, bindings)[0]["n"])
 		"w_eff3":
 			return int(sql.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'settle' AND account_id = ? AND created_at >= ? AND CAST(json_extract(meta, '$.eff') AS REAL) >= 0.9;", [accountID, periodStart])[0]["n"])
 		"w_spend100":

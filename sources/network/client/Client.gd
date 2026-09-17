@@ -567,6 +567,15 @@ func AuthTokenResult(accountName : String, token : String, _peerID : int):
 	if Launcher.GUI:
 		Launcher.GUI.loginPanel.SaveToken(accountName, token)
 
+# SOM-IDLE S4: 2FA required — client should show the 2FA dialog.
+func TwoFactorRequired(_peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.loginPanel.OpenTwoFactorDialog()
+
+func TwoFactorSetupResult(qrURL : String, _peerID : int):
+	if Launcher.GUI and Launcher.GUI.settingsWindow:
+		Launcher.GUI.settingsWindow.show_two_factor_qr(qrURL)
+
 # SOM-IDLE LGPD: o servidor confirmou a exclusão/anonimização da conta; avisa o
 # jogador e a queda de sessão (DisconnectAccount) leva ao LOGIN_SCREEN.
 func AccountErased(_peerID : int):
@@ -721,7 +730,8 @@ func _enter_tree():
 		if ret == OK and not isLocal:
 			ret = currentPeer.host.dtls_client_setup(serverAddress, tlsOptions)
 
-	assert(ret == OK, "Client could not connect, please check the server adress %s and port number %d" % [serverAddress, serverPort])
+	if ret != OK:
+		push_error("Client could not connect, please check the server adress %s and port number %d" % [serverAddress, serverPort])
 	if ret == OK:
 		currentPeer.set_target_peer(MultiplayerPeer.TARGET_PEER_SERVER)
 		multiplayerAPI.multiplayer_peer = currentPeer

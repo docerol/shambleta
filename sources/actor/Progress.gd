@@ -53,12 +53,14 @@ func GetBestiary(monsterID : int) -> int:
 
 #
 func HasSkill(cell : SkillCell, level : int = 1) -> bool:
-	assert(cell != null, "Provided skill cell is null")
-	return skills.get(cell.id, 0) >= level
+	if cell == null:
+		push_error("Provided skill cell is null")
+		return false
 
 func AddSkill(cell : SkillCell, level : int):
-	assert(cell != null, "Provided skill cell is null")
-	if not cell:
+	if cell == null:
+		push_error("Provided skill cell is null")
+		return
 		return
 
 	if skills.get(cell.id, 0) == level:
@@ -73,8 +75,9 @@ func GetSkillLevel(cell : SkillCell) -> int:
 	return skills.get(cell.id, 0) if cell else 0
 
 func RemoveSkill(cell : SkillCell):
-	assert(cell != null, "Provided skill cell is null")
-	if not cell:
+	if cell == null:
+		push_error("Provided skill cell is null")
+		return
 		return
 
 	skills.erase(cell.id)

@@ -94,6 +94,7 @@ func _on_button_pressed():
 
 #
 func _ready():
-	assert(content != null and content.material != null and items != null, "Menu Indicator nodes are not set correctly")
+	if content == null or content.material == null or items == null:
+		push_error("Menu Indicator nodes are not set correctly")
 	content.material.set_shader_parameter("progress", 0.0)
 	items.set_visible(false)

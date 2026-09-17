@@ -29,8 +29,12 @@ var consentCheckBox : CheckBox				= null
 # attempt, replayed to AcceptConsent (server re-verifies before recording).
 var lastAuthAccount : String				= ""
 var lastAuthPassword : String				= ""
-var lastAuthToken : String				= ""
+var lastAuthToken : String					= ""
 var reconsentDialog : AcceptDialog			= null
+
+# SOM-IDLE S4: 2FA dialog state.
+var twoFactorDialog : AcceptDialog			= null
+var twoFactorCodeControl : LineEdit			= null
 
 var nameText : String						= ""
 var savedToken : String						= ""
@@ -69,6 +73,9 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 		NetworkCommons.AuthError.ERR_AUTH:
 			warn = "Invalid account name or password."
 			RequestFocus(passwordTextControl)
+		NetworkCommons.AuthError.ERR_2FA_REQUIRED:
+			warn = "Two-factor authentication required."
+			OpenTwoFactorDialog.call_deferred()
 		NetworkCommons.AuthError.ERR_PASSWORD_VALID:
 			warn = "Password should only include alpha-numeric characters and symbols."
 			RequestFocus(passwordTextControl)
@@ -98,8 +105,6 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 				warn = tr("You must read and accept the Terms of Use and Privacy Policy to register.")
 				RequestFocus(consentCheckBox)
 			else:
-				# SOM-IDLE LGPD: server version gate — agreements changed since
-				# this account's last acceptance; offer the re-accept dialog.
 				warn = tr("The Terms of Use and Privacy Policy were updated. Accept to continue.")
 				if not lastAuthAccount.is_empty():
 					OpenReconsentDialog.call_deferred()
@@ -325,6 +330,38 @@ func OpenReconsentDialog():
 	reconsentDialog.dialog_text = tr("A new version of the Terms of Use and the Privacy Policy is in effect. Please review them on the game website and accept to enter.")
 	if not reconsentDialog.visible:
 		reconsentDialog.popup_centered()
+
+func OpenTwoFactorDialog():
+	if twoFactorDialog == null:
+		twoFactorDialog = AcceptDialog.new()
+		twoFactorDialog.title = tr("Two-Factor Authentication")
+		twoFactorDialog.ok_button_text = tr("Verify")
+		twoFactorDialog.confirmed.connect(SubmitTwoFactor)
+		var vbox : VBoxContainer = VBoxContainer.new()
+		var label : Label = Label.new()
+		label.text = tr("Enter the 6-digit code from your authenticator app:")
+		twoFactorCodeControl = LineEdit.new()
+		twoFactorCodeControl.placeholder_text = "000000"
+		twoFactorCodeControl.max_length = 6
+		vbox.add_child(label)
+		vbox.add_child(twoFactorCodeControl)
+		twoFactorDialog.add_child(vbox)
+		add_child(twoFactorDialog)
+	if not twoFactorDialog.visible:
+		twoFactorDialog.popup_centered()
+		if twoFactorCodeControl:
+			twoFactorCodeControl.grab_focus()
+
+func SubmitTwoFactor():
+	if not twoFactorCodeControl or twoFactorCodeControl.text.is_empty():
+		return
+	var code : String = twoFactorCodeControl.text.strip_edges()
+	if code.length() != 6 or not code.is_valid_int():
+		return
+	if Network.LoginWithTwoFactor(lastAuthAccount, code, NetworkCommons.GetPlatform()):
+		FSM.EnterState(FSM.States.LOGIN_PROGRESS)
+		if Launcher.GUI.settingsWindow:
+			Launcher.GUI.settingsWindow.set_sessionaccountname(lastAuthAccount)
 
 func OnReconsentAccepted():
 	FSM.EnterState(FSM.States.LOGIN_PROGRESS)

@@ -90,7 +90,7 @@ func UpdateZoom():
 	zoomTimer = Callback.SelfDestructTimer(camera, ActorCommons.CameraZoomDelay / 2.0, ZoomTimerCompleted, [], "ZoomTimer")
 
 	if zoomLevel < ActorCommons.CameraZoomMin or zoomLevel >= ActorCommons.CameraZoomMax:
-		assert(false, "Trying to set a wrong zoom level to our camera(s)")
+		push_error("Trying to set a wrong zoom level to our camera(s)")
 		return
 
 	var zoomVector : Vector2 = ActorCommons.CameraZoomLevels[zoomLevel]

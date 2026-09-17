@@ -31,6 +31,8 @@ class Peer:
 	var primaryConnected : bool						= false
 	var rtcConnected : bool							= false
 	var rpcDeltas : Dictionary[StringName, int]		= {}
+	# SOM-IDLE S4: pending 2FA verification (stores accountName until token is validated).
+	var pendingTwoFactorAccount : String			= ""
 
 	func _init(id : int, peerTransport : Peers.TransportType):
 		peerID = id
@@ -187,6 +189,9 @@ static func GetPermission(peerID : int) -> ActorCommons.Permission:
 	var peer : Peers.Peer = GetPeer(peerID)
 	return peer.permission if peer else ActorCommons.Permission.NONE
 
+static func GetAccountName(accountID : int) -> String:
+	return Launcher.SQL.GetAccountEmail(accountID) if accountID != NetworkCommons.PeerUnknownID else ""
+
 # Auth validation
 static func FinalizeLogin(peer : Peer, accountName : String, accountData : AccountData, platform : int, rememberMe : bool) -> NetworkCommons.AuthError:
 	if IsBanned(accountData.accountID):
@@ -198,7 +203,8 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 	peer.SetAccount(accountData)
 	# SOM-IDLE D2: login telemetry (best-effort, nunca falha o login).
 	if Launcher.Telemetry:
-		Launcher.Telemetry.Record("login", accountData.accountID)
+		var fp : Dictionary = DeviceFingerprint.Collect()
+		Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}", fp)
 	if platform < 0 or platform >= NetworkCommons.Platform.COUNT:
 		platform = NetworkCommons.Platform.UNKNOWN
 	Launcher.SQL.UpdateAccount(peer.accountID, platform)

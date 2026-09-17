@@ -11,10 +11,11 @@ var _command : bool							= false
 func Parse(data : Array):
 	var arraySize : int = data.size()
 
-	assert(arraySize == 3, "Could not parse stat modifier from array, size mismatches")
-	if arraySize == 3:
-		assert(data[0] is CellCommons.Modifier, "Stat modifier first parameter is not a StringName, could not parse from array")
-		assert(data[2] is bool, "Stat modifier third parameter is not a bool, could not parse from array")
+	if arraySize != 3:
+		push_error("Could not parse stat modifier from array, size mismatches")
+		return
+		push_error("Stat modifier first parameter is not a StringName, could not parse from array")
+		push_error("Stat modifier third parameter is not a bool, could not parse from array")
 		if data[0] is not CellCommons.Modifier or data[2] is not bool:
 			return
 

@@ -15,6 +15,8 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
 | [ECONOMY_STUDY.md](ECONOMY_STUDY.md) | Contrato de economia: moedas/ledger (§1), trade fee sink (§2), baús pity + provably-fair (§3), VIP (§4), liquidação offline (§5), boss economy (§6) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Arquitetura completa do pivô (componentes, RPCs, migrations, settle, guilds, trades, deploy web, escalabilidade) — citada por `WorldInstance.gd`/`EconomyService.gd` |
 | [MONETIZATION.md](MONETIZATION.md) | Modelo de monetização Brasil (Pix, escada de conversão, mix de receita) — citada por `SQL.gd`/`OfflineSettle.gd`/`EconomyService.gd` |
+| [FEATURE_MATRIX.md](FEATURE_MATRIX.md) | Estado de cada feature (core, economia, monetização, social, segurança, deploy) — documento vivo para launch commercial |
+| [TLS.md](TLS.md) | Provisionamento de certificados TLS para game server (proxy vs direto) |
 
 ## Design e planejamento
 
@@ -45,7 +47,8 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
   arquivados fora do repo, em `shambleta/som-idle-docs/archive/`
   (não-versionados; o conteúdo vigente vive nos documentos canônicos acima).
 - Docs de operação: `deploy/LAUNCH_HANDOFF.md`, `deploy/WEB_SLIM.md`,
-  `deploy/COOLIFY.md`.
+  `deploy/COOLIFY.md`, `deploy/TLS.md`.
+- Matriz de features: `som-idle-docs/FEATURE_MATRIX.md`.
 - Docs upstream do jogo (não-nossas): `docs/` na raiz do repo.
 
 ## Pontas soltas conhecidas

@@ -21,7 +21,7 @@ static func GetCacheID(section : String, key : String, type : Type) -> String:
 
 static func GetVariant(section : String, key : String, type : Type, default = null):
 	if type >= Type.COUNT or not confFiles[type]:
-		assert(false, "Config type is not valid, returning default value")
+		push_error("Config type is not valid, returning default value")
 		return default
 
 	var value = default
@@ -54,8 +54,8 @@ static func GetString(section : String, key : String, type : Type = Type.NONE) -
 	return GetVariant(section, key, type, "")
 
 static func SetValue(section : String, key : String, type : Type, value):
-	assert(type < Type.COUNT and confFiles[type] != null, "Can't find %s within our loaded conf files")
 	if type >= Type.COUNT or not confFiles[type]:
+		push_error("Can't find %s within our loaded conf files" % type)
 		return
 
 	confFiles[type].set_value(section, key, value)
@@ -64,17 +64,25 @@ static func SetValue(section : String, key : String, type : Type, value):
 		cache[cacheID] = value
 
 static func HasSection(section : String, type : Type) -> bool:
-	assert(type < Type.COUNT, "Can't find %s within our loaded conf files")
-	return type < Type.COUNT and confFiles[type].has_section(section)
+	if type >= Type.COUNT:
+		push_error("Can't find %s within our loaded conf files" % type)
+		return false
+
+	return confFiles[type].has_section(section)
 
 static func HasSectionKey(section : String, key : String, type : Type) -> bool:
-	assert(type < Type.COUNT, "Can't find %s within our loaded conf files")
-	return type < Type.COUNT and confFiles[type].has_section_key(section, key)
+	if type >= Type.COUNT:
+		push_error("Can't find %s within our loaded conf files" % type)
+		return false
+
+	return confFiles[type].has_section_key(section, key)
 
 static func SaveType(fileName : String, type : Type):
-	assert(type < Type.COUNT, "Can't find %s within our loaded conf files")
-	if type < Type.COUNT:
-		FileSystem.SaveConfig(fileName, confFiles[type])
+	if type >= Type.COUNT:
+		push_error("Can't find %s within our loaded conf files" % type)
+		return
+
+	FileSystem.SaveConfig(fileName, confFiles[type])
 
 #
 static func Init():
@@ -83,4 +91,6 @@ static func Init():
 	confFiles[Type.USERSETTINGS] = FileSystem.LoadConfig("settings", true)
 	confFiles[Type.CREDENTIAL] = FileSystem.LoadConfig("credential", true)
 	confFiles[Type.AUTH_TOKEN] = FileSystem.LoadConfig("auth_token", true)
-	assert(confFiles.size() == Type.COUNT, "Config files count mismatch")
+	if confFiles.size() != Type.COUNT:
+		push_error("Config files count mismatch")
+		return

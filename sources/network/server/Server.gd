@@ -75,12 +75,31 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 				if not accountData:
 					err = NetworkCommons.AuthError.ERR_AUTH
 				elif not Launcher.SQL.IsConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
-					# SOM-IDLE LGPD: version gate — bumping the agreements above
-					# holds every existing account at the door until it accepts
-					# through the AcceptConsent RPC (dialog on the client).
 					err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
+				elif Launcher.SQL.IsTwoFactorEnabled(accountData.accountID):
+					peer.pendingTwoFactorAccount = accountName
+					err = NetworkCommons.AuthError.ERR_2FA_REQUIRED
 				else:
 					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
+	Network.AuthError(err, peerID)
+
+func LoginWithTwoFactor(accountName : String, token : String, platform : int, peerID : int):
+	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer or peer.pendingTwoFactorAccount.is_empty():
+		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
+	else:
+		var accountID : int = Launcher.SQL.GetAccountID(accountName)
+		if accountID == NetworkCommons.PeerUnknownID:
+			err = NetworkCommons.AuthError.ERR_AUTH
+		else:
+			var secret : String = Launcher.SQL.GetTwoFactorSecret(accountID)
+			if secret.is_empty() or not TwoFactorAuth.VerifyTOTP(secret, token):
+				err = NetworkCommons.AuthError.ERR_AUTH
+			else:
+				var accountData : Peers.AccountData = Peers.AccountData.new(accountID, Launcher.SQL.GetPermission(accountID))
+				err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
+				peer.pendingTwoFactorAccount = ""
 	Network.AuthError(err, peerID)
 
 func LoginWithToken(accountName : String, token : String, platform : int, peerID : int):
@@ -103,6 +122,30 @@ func LoginWithToken(accountName : String, token : String, platform : int, peerID
 			else:
 				err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
 				Launcher.SQL.RefreshAuthToken(peer.accountID, ipAddress)
+	Network.AuthError(err, peerID)
+
+func LoginWithPassword(accountName : String, password : String, rememberMe : bool, platform : int, peerID : int):
+	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer:
+		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
+	else:
+		err = NetworkCommons.CheckAuthInformation(accountName, password)
+		if err == NetworkCommons.AuthError.ERR_OK:
+			var accountID : int = Launcher.SQL.GetAccountID(accountName)
+			if accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
+				err = NetworkCommons.AuthError.ERR_AUTH
+			else:
+				var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
+				if not accountData:
+					err = NetworkCommons.AuthError.ERR_AUTH
+				elif not Launcher.SQL.IsConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
+					err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
+				elif Launcher.SQL.IsTwoFactorEnabled(accountData.accountID):
+					peer.pendingTwoFactorAccount = accountName
+					err = NetworkCommons.AuthError.ERR_2FA_REQUIRED
+				else:
+					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
 	Network.AuthError(err, peerID)
 
 # SOM-IDLE LGPD: re-acceptance after an agreements bump. Verifies a credential
@@ -1072,7 +1115,7 @@ func _enter_tree():
 	# TLS — o bind plain é intencional e o proxy é a borda criptográfica.
 	if NetworkCommons.RequiresTLS(LauncherCommons.IsTesting, isOffline, isLocal) and tlsOptions == null and not NetworkCommons.ProxyTLS:
 		Util.PrintLog("Server", "FATAL: missing %s/%s — refusing insecure public bind" % [NetworkCommons.ServerCertPath, NetworkCommons.ServerKeyPath])
-		assert(false, "TLS certificate required for public server (SOM-IDLE A2)")
+		push_error("TLS certificate required for public server (SOM-IDLE A2)")
 		return
 	if NetworkCommons.ProxyTLS:
 		Util.PrintLog("Server", "TLS terminated upstream (reverse proxy) — binding plain WebSocket")
@@ -1088,7 +1131,9 @@ func _enter_tree():
 		if ret == OK and tlsOptions:
 			ret = currentPeer.host.dtls_server_setup(tlsOptions)
 
-	assert(ret == OK, "Server could not be created, please check if your port %d is valid" % serverPort)
+	if ret != OK:
+		push_error("Server could not be created, please check if your port %d is valid" % serverPort)
+		return
 	if ret == OK:
 		multiplayerAPI.multiplayer_peer = currentPeer
 		interfaceID = multiplayerAPI.get_unique_id()

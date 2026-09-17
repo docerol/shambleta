@@ -1,0 +1,21 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Deploy to Coolify Staging
+        run: |
+          curl -X POST "${{ vars.COOLIFY_STAGING_URL }}/api/v1/deploy" \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_STAGING_TOKEN }}" \
+            -H "Content-Type: application/json"

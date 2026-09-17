@@ -54,5 +54,5 @@ static func CopyDatabase(targetPath : String) -> bool:
 	# Try to copy the template database
 	if FileSystem.CopyFile(Path.TemplateRsc + DBNameTemplate, targetPath):
 		return true
-	assert(false, "Could not find the default database template")
+	push_error("Could not find the default database template")
 	return false

@@ -48,7 +48,7 @@ static func Refresh(agent : AIAgent):
 			Callback.ClearTimer(agent.aiTimer)
 			return
 		_:
-			assert(false, "AI state not handled")
+			push_error("AI state not handled")
 
 	Callback.LoopTimer(agent.aiTimer, AICommons.MinRefreshDelay if agent.aiState == AICommons.State.ATTACK else agent.aiRefreshDelay)
 

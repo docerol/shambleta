@@ -9,8 +9,8 @@ var desyncDebug : bool						= false
 # Position mismatch
 func OnPlayerEnterGame():
 	if desyncDebug:
-		assert(Launcher.Player != null, "Debug: Player is not accessible")
-		if Launcher.Player:
+		if Launcher.Player == null:
+			push_error("Debug: Player is not accessible")
 			if Launcher.Player.sprite:
 				Launcher.Player.sprite.set_visible(false)
 

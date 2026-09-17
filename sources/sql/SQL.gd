@@ -171,7 +171,7 @@ func HasAccount(username : String) -> bool:
 
 func ValidateAuthPassword(username : String, triedPassword : String) -> Peers.AccountData:
 	var results : Array[Dictionary] = QueryBindings("SELECT account_id, password, password_salt, permission, hash_ver, failed_attempts, locked_until FROM account WHERE username = ?;", [username])
-	assert(results.size() <= 1, "Duplicated account row")
+	if results.size() > 1: push_error("Duplicated account row"); return null
 	if results.is_empty():
 		return null
 	var row : Dictionary = results[0]
@@ -321,13 +321,13 @@ func GetCharacters(accountID : int) -> PackedInt64Array:
 	return charIDs
 
 func GetCharacterInfo(charID : int) -> Dictionary:
-	var results : Array[Dictionary] = Query("SELECT * \
+	var results : Array[Dictionary] = QueryBindings("SELECT * \
 FROM character \
 INNER JOIN stat ON character.char_id = stat.char_id \
 INNER JOIN trait ON character.char_id = trait.char_id \
 INNER JOIN attribute ON character.char_id = attribute.char_id \
-WHERE character.char_id = %d;" % charID)
-	assert(results.size() == 1, "Character information tables are missing")
+WHERE character.char_id = ?;", [charID])
+	if results.size() != 1: push_error("Character information tables are missing"); return {}
 	return {} if results.is_empty() else results[0]
 
 func RefreshCharacter(player : PlayerAgent) -> bool:
@@ -362,12 +362,12 @@ func CharacterLogin(charID : int) -> bool:
 # Character
 func GetCharacterID(accountID : int, nickname : String) -> int:
 	var results : Array[Dictionary] = QueryBindings("SELECT char_id FROM character WHERE account_id = ? AND nickname = ?;", [accountID, nickname])
-	assert(results.size() <= 1, "Duplicated character row for account %d and nickname '%s'" % [accountID, nickname])
+	if results.size() > 1: push_error("Duplicated character row for account %d and nickname '%s'" % [accountID, nickname]); return NetworkCommons.PeerUnknownID
 	return NetworkCommons.PeerUnknownID if results.is_empty() else results[0]["char_id"]
 
 func GetCharacter(charID : int) -> Dictionary:
 	var results : Array[Dictionary] = db.select_rows("character", "char_id = %d" % charID, ["*"])
-	assert(results.size() <= 1, "Duplicated character row %d" % charID)
+	if results.size() > 1: push_error("Duplicated character row %d" % charID); return {}
 	return {} if results.is_empty() else results[0]
 
 func UpdateCharacter(player : PlayerAgent) -> bool:
@@ -407,7 +407,7 @@ func UpdateCharacter(player : PlayerAgent) -> bool:
 # Stats
 func GetAttribute(charID : int) -> Dictionary:
 	var results : Array[Dictionary] = db.select_rows("attribute", "char_id = %d" % charID, ["*"])
-	assert(results.size() == 1, "Character attribute row is missing")
+	if results.size() != 1: push_error("Character attribute row is missing"); return {}
 	return {} if results.is_empty() else results[0]
 
 func UpdateAttribute(charID : int, stats : ActorStats) -> bool:
@@ -425,7 +425,7 @@ func UpdateAttribute(charID : int, stats : ActorStats) -> bool:
 
 func GetTrait(charID : int) -> Dictionary:
 	var results : Array[Dictionary] = db.select_rows("trait", "char_id = %d" % charID, ["*"])
-	assert(results.size() == 1, "Character trait row is missing")
+	if results.size() != 1: push_error("Character trait row is missing"); return {}
 	return {} if results.is_empty() else results[0]
 
 func UpdateTrait(charID : int, stats : ActorStats) -> bool:
@@ -445,7 +445,7 @@ func UpdateTrait(charID : int, stats : ActorStats) -> bool:
 
 func GetStat(charID : int) -> Dictionary:
 	var results : Array[Dictionary] = db.select_rows("stat", "char_id = %d" % charID, ["*"])
-	assert(results.size() == 1, "Character stat row is missing")
+	if results.size() != 1: push_error("Character stat row is missing"); return {}
 	return {} if results.is_empty() else results[0]
 
 # SOM-IDLE: F2 settle — atomic transaction wrapper for OfflineSettle
@@ -795,7 +795,7 @@ func UpdateStat(charID : int, stats : ActorStats) -> bool:
 # Inventory
 func GetItem(charID : int, itemID : int, customfield : String, storageType : int = 0) -> Dictionary:
 	var results : Array[Dictionary] = QueryBindings("SELECT * FROM item WHERE item_id = ? AND char_id = ? AND storage = ? AND customfield = ?;", [itemID, charID, storageType, customfield])
-	assert(results.size() <= 1, "Duplicated item %d on character %d with storage %d" % [itemID, charID, storageType])
+	if results.size() > 1: push_error("Duplicated item %d on character %d with storage %d" % [itemID, charID, storageType]); return {}
 	return {} if results.is_empty() else results[0]
 
 func AddItem(charID : int, itemID : int, customfield : String, itemCount : int = 1, storageType : int = 0) -> bool:
@@ -841,7 +841,7 @@ func GetStorage(charID : int, storageType : int = 0) -> Array[Dictionary]:
 # Equipment
 func GetEquipment(charID : int) -> Dictionary:
 	var results : Array[Dictionary] = db.select_rows("equipment", "char_id = %d" % charID, ["*"])
-	assert(results.size() <= 1, "Duplicated equipment on character %d" % charID)
+	if results.size() > 1: push_error("Duplicated equipment on character %d" % charID); return {}
 	return {} if results.is_empty() else results[0]
 
 func UpdateEquipment(charID : int, data : Dictionary) -> bool:
@@ -867,7 +867,7 @@ func UpdateProgress(charID : int, progress : ActorProgress):
 # Skill
 func SetSkill(charID : int, skillID : int, value : int) -> bool:
 	var results : Array[Dictionary] = db.select_rows("skill", "char_id = %d AND skill_id = %d" % [charID, skillID], ["*"])
-	assert(results.size() <= 1, "Duplicated skill for %d on character %d" % [skillID, charID])
+	if results.size() > 1: push_error("Duplicated skill for %d on character %d" % [skillID, charID]); return false
 
 	if not results.is_empty():
 		results[0]["level"] = value
@@ -886,7 +886,7 @@ func GetSkills(charID : int) -> Array[Dictionary]:
 # Bestiary
 func SetBestiary(charID : int, mobID : int, value : int) -> bool:
 	var results : Array[Dictionary] = db.select_rows("bestiary", "char_id = %d AND mob_id = %d" % [charID, mobID], ["*"])
-	assert(results.size() <= 1, "Duplicated bestiary row for %d on character %d" % [mobID, charID])
+	if results.size() > 1: push_error("Duplicated bestiary row for %d on character %d" % [mobID, charID]); return false
 
 	if not results.is_empty():
 		results[0]["killed_count"] = value
@@ -905,7 +905,7 @@ func GetBestiaries(charID : int) -> Array[Dictionary]:
 # Quest
 func SetQuest(charID : int, questID : int, value : int) -> bool:
 	var results : Array[Dictionary] = db.select_rows("quest", "char_id = %d AND quest_id = %d" % [charID, questID], ["*"])
-	assert(results.size() <= 1, "Duplicated quest row for %d on character %d" % [questID, charID])
+	if results.size() > 1: push_error("Duplicated quest row for %d on character %d" % [questID, charID]); return false
 
 	if not results.is_empty():
 		results[0]["state"] = value
@@ -977,6 +977,21 @@ func UpdateAccountPassword(accountID : int, newPassword : String) -> bool:
 func RemoveAllAuthTokens(accountID : int) -> bool:
 	return ExecuteBindings("DELETE FROM auth_token WHERE account_id = ?;", [accountID])
 
+# SOM-IDLE S4: TOTP two-factor authentication for admin/GM accounts.
+func GetTwoFactorSecret(accountID : int) -> String:
+	var rows : Array[Dictionary] = QueryBindings("SELECT two_factor_secret FROM account WHERE account_id = ?;", [accountID])
+	return rows[0].get("two_factor_secret", "") if not rows.is_empty() else ""
+
+func IsTwoFactorEnabled(accountID : int) -> bool:
+	var rows : Array[Dictionary] = QueryBindings("SELECT two_factor_enabled FROM account WHERE account_id = ?;", [accountID])
+	return not rows.is_empty() and int(rows[0].get("two_factor_enabled", 0)) == 1
+
+func SetTwoFactorSecret(accountID : int, secret : String) -> bool:
+	return ExecuteBindings("UPDATE account SET two_factor_secret = ? WHERE account_id = ?;", [secret, accountID])
+
+func SetTwoFactorEnabled(accountID : int, enabled : bool) -> bool:
+	return ExecuteBindings("UPDATE account SET two_factor_enabled = ? WHERE account_id = ?;", [1 if enabled else 0, accountID])
+
 # Ban
 func BanAccount(accountID : int, unbanTimestamp : int, reason : String = "") -> bool:
 	var results : Array[Dictionary] = db.select_rows("ban", "account_id = %d" % accountID, ["*"])
@@ -996,7 +1011,7 @@ func UnbanAccount(accountID : int) -> bool:
 func LoadBans() -> Dictionary[int, int]:
 	var bans : Dictionary[int, int] = {}
 	var now : int = SQLCommons.Timestamp()
-	var results : Array[Dictionary] = Query("SELECT account_id, unban_timestamp FROM ban WHERE unban_timestamp > %d;" % now)
+	var results : Array[Dictionary] = QueryBindings("SELECT account_id, unban_timestamp FROM ban WHERE unban_timestamp > ?;", [now])
 	for row in results:
 		bans[row["account_id"]] = row["unban_timestamp"]
 	return bans
@@ -1004,13 +1019,14 @@ func LoadBans() -> Dictionary[int, int]:
 # IP Ban
 func BanIPRange(ipRange : String, reason : String = "") -> bool:
 	var results : Array[Dictionary] = QueryBindings("SELECT ip_range FROM ip_ban WHERE ip_range = ?;", [ipRange])
+	var now : int = SQLCommons.Timestamp()
 	var data : Dictionary = {
 		"ip_range": ipRange,
-		"banned_timestamp": SQLCommons.Timestamp(),
+		"banned_timestamp": now,
 		"reason": reason,
 	}
 	if not results.is_empty():
-		return db.update_rows("ip_ban", "ip_range = '%s'" % ipRange, data)
+		return ExecuteBindings("UPDATE ip_ban SET banned_timestamp = ?, reason = ? WHERE ip_range = ?;", [now, reason, ipRange])
 	return db.insert_row("ip_ban", data)
 
 func UnbanIPRange(ipRange : String) -> bool:
@@ -1034,6 +1050,12 @@ func GetAccountID(username : String) -> int:
 		return results[0].get("account_id", NetworkCommons.PeerUnknownID)
 	return NetworkCommons.PeerUnknownID
 
+func GetAccountName(accountID : int) -> String:
+	var results : Array[Dictionary] = QueryBindings("SELECT username FROM account WHERE account_id = ?;", [accountID])
+	if not results.is_empty():
+		return str(results[0].get("username", ""))
+	return ""
+
 func SetPermission(accountID : int, permission : int) -> bool:
 	var data : Dictionary = { "permission": permission }
 	return db.update_rows("account", "account_id = %d" % accountID, data)
@@ -1041,7 +1063,7 @@ func SetPermission(accountID : int, permission : int) -> bool:
 func GetBanList(filter : String = "") -> Array[Dictionary]:
 	var now : int = SQLCommons.Timestamp()
 	if filter.is_empty():
-		return Query("SELECT ban.account_id, account.username, ban.unban_timestamp, ban.reason FROM ban INNER JOIN account ON ban.account_id = account.account_id WHERE ban.unban_timestamp > %d;" % now)
+		return QueryBindings("SELECT ban.account_id, account.username, ban.unban_timestamp, ban.reason FROM ban INNER JOIN account ON ban.account_id = account.account_id WHERE ban.unban_timestamp > ?;", [now])
 	return QueryBindings("SELECT ban.account_id, account.username, ban.unban_timestamp, ban.reason FROM ban INNER JOIN account ON ban.account_id = account.account_id WHERE ban.unban_timestamp > ? AND account.username LIKE ?;", [now, "%" + filter + "%"])
 
 # Commons
@@ -1078,7 +1100,7 @@ func _post_launch():
 	db.verbosity_level = SQLCommons.Verbosity
 
 	if not db.open_db():
-		assert(false, "Failed to open database: "+ db.error_message)
+		push_error("Failed to open database: "+ db.error_message); return
 	else:
 		if OS.is_debug_build() and not LauncherCommons.isWeb:
 			Query("PRAGMA journal_mode=WAL;")

@@ -61,7 +61,7 @@ func SetValue(dealer : Entity, value : int, alteration : ActorCommons.Alteration
 			hue = ActorCommons.GPColor
 			set_text("%d GP" % value)
 		_:
-			assert(false, "Alteration type not handled: " + str(alteration))
+			push_error("Alteration type not handled: " + str(alteration))
 
 	HSVA = Vector4(hue, 0.8, 1.0, 1.0)
 

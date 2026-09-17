@@ -34,20 +34,25 @@ static func LoadFile(path : String) -> String:
 	var content : String		= ""
 
 	var pathExists : bool		= FileExists(fullPath)
-	assert(pathExists, "Content file not found " + path + " should be located at " + fullPath)
+	if not pathExists:
+		push_error("Content file not found " + path + " should be located at " + fullPath)
+		return
 
 	if pathExists:
 		var file : FileAccess = FileAccess.open(fullPath, FileAccess.READ)
-		assert(file != null, "File parsing issue on file " + fullPath)
-		if file:
-			content = file.get_as_text()
-			Util.PrintLog("File", "Loading file: " + fullPath)
-			file.close()
+		if file == null:
+			push_error("File parsing issue on file " + fullPath)
+			return
+		content = file.get_as_text()
+		Util.PrintLog("File", "Loading file: " + fullPath)
+		file.close()
 	return content
 
 static func SaveFile(fullPath : String, content : String):
 	var file : FileAccess		= FileAccess.open(fullPath, FileAccess.WRITE)
-	assert(file != null, "File parsing issue on file " + fullPath)
+	if file == null:
+		push_error("File parsing issue on file " + fullPath)
+		return
 	if file:
 		file.store_string(content)
 		file.close()
@@ -59,7 +64,9 @@ static func LoadDB(path : String) -> Dictionary:
 	var result : Dictionary		= {}
 
 	var pathExists : bool		= FileExists(fullPath)
-	assert(pathExists, "DB file not found " + path + " should be located at " + fullPath)
+	if not pathExists:
+		push_error("DB file not found " + path + " should be located at " + fullPath)
+		return
 
 	if pathExists:
 		var DBFile : FileAccess = FileAccess.open(fullPath, FileAccess.READ)
@@ -67,13 +74,15 @@ static func LoadDB(path : String) -> Dictionary:
 		var jsonInstance : JSON = JSON.new()
 		var err : int = jsonInstance.parse(DBFile.get_as_text())
 
-		assert(err == OK, "DB parsing issue on file " + fullPath \
-			+ " Line: " + str(jsonInstance.get_error_line()) \
-			+ " Error: " + jsonInstance.get_error_message() \
-		)
-		if err == OK:
-			result = jsonInstance.get_data()
-			Util.PrintLog("DB", "Loading file: " + fullPath)
+		if err != OK:
+			push_error("DB parsing issue on file " + fullPath \
+				+ " Line: " + str(jsonInstance.get_error_line()) \
+				+ " Error: " + jsonInstance.get_error_message() \
+			)
+			return
+
+		result = jsonInstance.get_data()
+		Util.PrintLog("DB", "Loading file: " + fullPath)
 
 	return result
 
@@ -90,25 +99,29 @@ static func LoadConfig(path : String, userDir : bool = false) -> ConfigFile:
 		cfgFile = ConfigFile.new()
 		if pathExists:
 			var err : Error = cfgFile.load(fullPath)
-			assert(err == OK, "Error loading the config file " + path + " located at " + fullPath)
-
 			if err != OK:
+				push_error("Error loading the config file " + path + " located at " + fullPath)
 				cfgFile.free()
 				cfgFile = null
 			else:
 				Util.PrintLog("Config", "Loading file: " + fullPath)
 	else:
-		assert(pathExists, "Config file not found " + path + " should be located at " + fullPath)
+		if not pathExists:
+			push_error("Config file not found " + path + " should be located at " + fullPath)
 
 	return cfgFile
 
 static func SaveConfig(path : String, cfgFile : ConfigFile):
-	assert(cfgFile != null, "Config file " + path + " not initialized")
+	if cfgFile == null:
+		push_error("Config file " + path + " not initialized")
+		return
 
 	if cfgFile:
 		var fullPath : String = Path.Local + path + Path.ConfExt
 		var err : Error = cfgFile.save(fullPath)
-		assert(err == OK, "Error saving the config file " + path + " located at " + fullPath)
+		if err != OK:
+			push_error("Error saving the config file " + path + " located at " + fullPath)
+			return
 		Util.PrintLog("Config", "Saving file: " + fullPath)
 
 # Resource
@@ -116,7 +129,8 @@ static func LoadResource(fullPath : String, instantiate : bool = true) -> Object
 	var rscInstance : Object	= null
 	var pathExists : bool		= ResourceExists(fullPath)
 
-	assert(pathExists, "Resource file not found at: " + fullPath)
+	if not pathExists:
+		push_error("Resource file not found at: " + fullPath)
 	if pathExists:
 		rscInstance = ResourceInstance(fullPath) if instantiate else ResourceLoader.load(fullPath)
 
@@ -142,7 +156,9 @@ static func SaveScreenshot():
 		return
 
 	var image : Image = Util.GetScreenCapture()
-	assert(image != null, "Could not get a viewport screenshot")
+	if image == null:
+		push_error("Could not get a viewport screenshot")
+		return
 	if not image:
 		return
 
@@ -158,7 +174,8 @@ static func SaveScreenshot():
 
 	if not dir.dir_exists(savePath):
 		var ret : Error = image.save_png(savePath)
-		assert(ret == OK, "Could not save the screenshot, error code: " + str(ret))
+		if ret != OK:
+			push_error("Could not save the screenshot, error code: " + str(ret))
 		if ret == OK:
 			Util.PrintInfo("FileSystem", "Saving capture: " + savePath)
 
@@ -202,7 +219,7 @@ static func ParseExtension(path : String, extension : String) -> PackedStringArr
 	var resources : PackedStringArray = []
 	var dir : DirAccess = DirAccess.open(path)
 	if dir == null:
-		assert(false, "File path \"%s\" is not accessible" % path)
+		push_error("File path \"%s\" is not accessible" % path)
 		return resources
 
 	for directory in dir.get_directories():

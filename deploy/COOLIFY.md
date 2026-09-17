@@ -17,17 +17,62 @@ Mercado Pago / Stripe / Pix sandbox ──webhook──▶ companion:8901 ──
   `seudominio.com` (client web) e `ws.seudominio.com` (WebSocket do jogo).
 - Um segredo para webhooks: `openssl rand -hex 32`.
 
+## 2. TLS (segurança da camada de transporte)
+
+### Modo recomendado: Proxy TLS (Coolify)
+
+O Coolify/Traefik termina o TLS na borda. O game server binda WebSocket
+plain em `:6108` — **não precisa de `server.crt`/`server.key`** no container.
+
+No ambiente do compose, defina:
+- `SHAMBLETA_PROXY_TLS=1`
+
+O server loga:
+```
+[TLS] TLS terminated upstream (reverse proxy) — binding plain WebSocket
+```
+
+### Modo alternativo: TLS direto
+
+Se o game server exposto diretamente (sem proxy), gere certificados:
+
+```bash
+# Gera self-signed para dev/test
+./tools/provision_tls.sh --self-signed --domain ws.seudominio.com
+
+# Ou use Let's Encrypt (produção)
+sudo certbot certonly --standalone -d ws.seudominio.com
+sudo cp /etc/letsencrypt/live/ws.seudominio.com/fullchain.pem \
+  /data/.local/share/godot/app_userdata/Shambleta/server.crt
+sudo cp /etc/letsencrypt/live/ws.seudominio.com/privkey.pem \
+  /data/.local/share/godot/app_userdata/Shambleta/server.key
+```
+
+Monte no compose:
+```yaml
+volumes:
+  - ./certs:/data/.local/share/godot/app_userdata/Shambleta
+```
+
+**Hard-stop**: se `SHAMBLETA_PROXY_TLS` não estiver setado e os certificados
+`user://server.crt`/`user://server.key` não existirem, o server recusa o bind
+e loga `FATAL: missing user://server.crt/user://server.key — refusing insecure
+public bind`. Veja `deploy/TLS.md` para o guia completo.
+
 ## 2. Criar o projeto
 
 1. New Resource → **Docker Compose** → aponte para o repositório (branch
    `master`), compose path: `deploy/docker-compose.yml`.
-2. No ambiente do compose, defina:
-   - `SHAMBLETA_WEBHOOK_PROVIDER` = `mercadopago` (padrão, produção), `stripe`
-     (alternativa) ou `shared` (só sandbox). O companion é **fail-closed**: com
-     `mercadopago` exige `SHAMBLETA_MP_WEBHOOK_SECRET`; com `stripe` exige
-     `SHAMBLETA_STRIPE_WEBHOOK_SECRET` (`whsec_...`); com `shared` exige
-     `SHAMBLETA_WEBHOOK_SECRET` **e** `SHAMBLETA_ALLOW_DEV_WEBHOOK=1` (este último
-     nunca ligado enquanto houver dinheiro real).
+ 2. No ambiente do compose, defina:
+    - `SHAMBLETA_PROXY_TLS` = `1` (padrão para Coolify). Quando setado, o proxy
+      do Coolify termina o TLS e o game server binda WebSocket plain. **Não**
+      precisa de certificados no container do game.
+    - `SHAMBLETA_WEBHOOK_PROVIDER` = `mercadopago` (padrão, produção), `stripe`
+      (alternativa) ou `shared` (só sandbox). O companion é **fail-closed**: com
+      `mercadopago` exige `SHAMBLETA_MP_WEBHOOK_SECRET`; com `stripe` exige
+      `SHAMBLETA_STRIPE_WEBHOOK_SECRET` (`whsec_...`); com `shared` exige
+      `SHAMBLETA_WEBHOOK_SECRET` **e** `SHAMBLETA_ALLOW_DEV_WEBHOOK=1` (este último
+      nunca ligado enquanto houver dinheiro real).
    - `SHAMBLETA_MP_WEBHOOK_SECRET` = a **credencial/secret** que você cadastra no
      endpoint de webhook do painel do Mercado Pago (o MP usa esse segredo para
      assinar o header `x-signature`). Antes do onboarding do MP estiver pronto,

@@ -45,7 +45,9 @@ func BulkPreload(agent : BaseAgent, agentRID : int, peerID : int):
 
 # Core functions
 func Warp(agent : BaseAgent, newMap : WorldMap, newPos : Vector2i, direction : ActorCommons.Direction, instanceID : int = 0):
-	assert(newMap != null and agent != null, "Warp could not proceed, agent or new map missing")
+	if newMap == null or agent == null:
+		push_error("Warp could not proceed, agent or new map missing")
+		return
 	if agent and newMap:
 		if agent is PlayerAgent:
 			var currentMap : WorldMap = WorldAgent.GetMapFromAgent(agent)
@@ -69,10 +71,14 @@ func Warp(agent : BaseAgent, newMap : WorldMap, newPos : Vector2i, direction : A
 		Spawn(newMap, agent, instanceID)
 
 func Spawn(map : WorldMap, agent : BaseAgent, instanceID : int = 0):
-	assert(map != null and map.instances.has(instanceID) and agent != null, "Spawn could not proceed, agent or map missing")
+	if map == null or not map.instances.has(instanceID) or agent == null:
+		push_error("Spawn could not proceed, agent or map missing")
+		return
 	if map and map.instances.has(instanceID) and agent:
 		var inst : WorldInstance = map.instances[instanceID]
-		assert(inst != null, "Spawn could not proceed, map instance missing")
+		if inst == null:
+			push_error("Spawn could not proceed, map instance missing")
+			return
 		if inst:
 			if agent.is_node_ready():
 				AgentCreated(agent, map.mapRID)

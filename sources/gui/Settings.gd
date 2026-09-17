@@ -9,6 +9,10 @@ const creditsJson : JSON						= preload("res://data/db/credits.json")
 @onready var creditsContainer : VBoxContainer	= $Layout/Margin/TabBar/Credits/Margin/VBox
 @onready var accountVBox : VBoxContainer		= $Layout/Margin/TabBar/Account/AccountVBox
 
+# SOM-IDLE S4: 2FA UI state.
+var _twoFactorButton : Button					= null
+var _twoFactorQRDialog : AcceptDialog			= null
+
 @onready var renderAccessors : Dictionary = {
 	"Render-MinWindowSize": [init_minwinsize, set_minwinsize, apply_minwinsize, null],
 	"Render-Fullscreen": [init_fullscreen, set_fullscreen, apply_fullscreen, $Layout/Margin/TabBar/Render/RenderVBox/VisualVBox/Fullscreen],
@@ -26,6 +30,7 @@ const creditsJson : JSON						= preload("res://data/db/credits.json")
 	"Session-FirstLogin": [init_sessionfirstlogin, set_sessionfirstlogin, apply_sessionfirstlogin, null],
 	"Session-Overlay": [init_sessionoverlay, set_sessionoverlay, apply_sessionoverlay, null],
 	"Session-ShortcutCells": [init_shortcutcells, set_shortcutcells, apply_shortcutcells, null],
+	"Web-PushEnabled": [init_webpush, set_webpush, apply_webpush, null],
 	"Input-Bindings": [init_inputbindings, null, null, null],
 	"Account-PasswordChange": [null, set_account_password, null, $Layout/Margin/TabBar/Account],
 	"Privacy-BugReports": [init_bugreports, set_bugreports, apply_bugreports, $Layout/Margin/TabBar/Privacy/PrivacyVBox/BugReports],
@@ -381,6 +386,21 @@ func init_inputbindings(apply : bool):
 	if apply:
 		InputBindings.LoadBindings()
 
+# SOM-IDLE F3: web push notifications
+func init_webpush(apply : bool):
+	if apply:
+		WebPush.Initialize()
+
+func set_webpush(enabled : bool):
+	WebPush.SetEnabled(enabled)
+	if enabled and WebPush.GetPermission() == "default":
+		var perm : String = WebPush.RequestPermission()
+		if perm != "granted":
+			WebPush.SetEnabled(false)
+
+func apply_webpush(enabled : bool):
+	pass
+
 # Account
 func set_account_password(err : NetworkCommons.AuthError):
 	renderAccessors["Account-PasswordChange"][ACC_TYPE.LABEL].OnPasswordChangeResult(err)
@@ -428,6 +448,24 @@ func _ready():
 
 	renderAccessors["Network-Local"][ACC_TYPE.LABEL].set_visible(OS.is_debug_build())
 
+	# SOM-IDLE F3: web push toggle (web-only, created at runtime).
+	if LauncherCommons.isWeb:
+		var pushBox : HBoxContainer = HBoxContainer.new()
+		pushBox.name = "WebPushRow"
+		var pushLabel : Label = Label.new()
+		pushLabel.name = "Text"
+		pushLabel.text = tr("Web push notifications")
+		var pushOption : OptionButton = OptionButton.new()
+		pushOption.name = "WebPushOption"
+		pushOption.add_item("Off")
+		pushOption.add_item("On")
+		pushOption.item_selected.connect(set_webpush)
+		pushBox.add_child(pushLabel)
+		pushBox.add_child(pushOption)
+		var visualVBox : Node = renderAccessors["Render-Scaling"][ACC_TYPE.LABEL].get_parent()
+		visualVBox.add_child(pushBox)
+		renderAccessors["Web-PushEnabled"] = [init_webpush, set_webpush, apply_webpush, pushOption]
+
 	# SOM-IDLE LGPD art.18: o titular exercita o direito ao esquecimento logado.
 	# Botão criado em runtime (não edita o .tscn); confirmação antes de enviar.
 	if accountVBox:
@@ -437,7 +475,89 @@ func _ready():
 		deleteButton.pressed.connect(_on_delete_account_pressed)
 		accountVBox.add_child(deleteButton)
 
-func _on_delete_account_pressed():
+	# SOM-IDLE S4: TOTP 2FA setup for admin/GM accounts.
+	if accountVBox:
+		var twoFactorButton : Button = Button.new()
+		twoFactorButton.name = "TwoFactorButton"
+		twoFactorButton.text = tr("Enable Two-Factor Authentication")
+		twoFactorButton.pressed.connect(_on_two_factor_pressed)
+		accountVBox.add_child(twoFactorButton)
+		_twoFactorButton = twoFactorButton
+		_twoFactorQRDialog = AcceptDialog.new()
+		_twoFactorQRDialog.title = tr("Two-Factor Authentication Setup")
+		_twoFactorQRDialog.ok_button_text = tr("I have saved the code")
+		_twoFactorQRDialog.confirmed.connect(_on_two_factor_qr_confirmed)
+		var qrVBox : VBoxContainer = VBoxContainer.new()
+		var qrLabel : Label = Label.new()
+		qrLabel.name = "QRLabel"
+		qrLabel.text = tr("Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.):")
+		var qrUrlLabel : Label = Label.new()
+		qrUrlLabel.name = "QRUrlLabel"
+		qrUrlLabel.autowrap = true
+		qrUrlLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		qrUrlLabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		qrVBox.add_child(qrLabel)
+		qrVBox.add_child(qrUrlLabel)
+		_twoFactorQRDialog.add_child(qrVBox)
+		add_child(_twoFactorQRDialog)
+
+func _on_two_factor_pressed():
+	if not _twoFactorButton:
+		return
+	if Launcher.SQL.IsTwoFactorEnabled(Launcher.Peer.accountID):
+		_confirm_disable_two_factor()
+	else:
+		Network.SetupTwoFactor(Launcher.Peer.peerID)
+
+func _confirm_disable_two_factor():
+	UICommons.MessageBox(
+		tr("Disabling two-factor authentication reduces your account security. Enter your password to confirm:"),
+		Callable(self, "_on_disable_two_factor_dialog"), "Disable 2FA")
+
+func _on_disable_two_factor_dialog():
+	var passwordControl : Control = $Layout/Margin/TabBar/Account/AccountVBox/CurrentPassword
+	var passwordText : String = ""
+	if passwordControl and passwordControl.has_node("Container/Text"):
+		passwordText = passwordControl.get_node("Container/Text").text
+	Network.DisableTwoFactor(passwordText, Launcher.Peer.peerID)
+
+func show_two_factor_qr(qrURL : String):
+	if not _twoFactorQRDialog:
+		return
+	var qrUrlLabel : Label = _twoFactorQRDialog.get_node_or_null("QRUrlLabel")
+	if qrUrlLabel:
+		qrUrlLabel.text = qrURL
+	_twoFactorQRDialog.popup_centered()
+
+func _on_two_factor_qr_confirmed():
+	# Prompt user to enter a TOTP code to verify setup.
+	var verifyDialog : AcceptDialog = AcceptDialog.new()
+	verifyDialog.title = tr("Verify Two-Factor Authentication")
+	verifyDialog.ok_button_text = tr("Verify")
+	verifyDialog.confirmed.connect(_on_verify_two_factor_setup)
+	var vbox : VBoxContainer = VBoxContainer.new()
+	var label : Label = Label.new()
+	label.text = tr("Enter the 6-digit code from your authenticator app to verify setup:")
+	var codeControl : LineEdit = LineEdit.new()
+	codeControl.name = "VerifyCode"
+	codeControl.placeholder_text = "000000"
+	codeControl.max_length = 6
+	vbox.add_child(label)
+	vbox.add_child(codeControl)
+	verifyDialog.add_child(vbox)
+	add_child(verifyDialog)
+	verifyDialog.popup_centered()
+	codeControl.grab_focus()
+
+func _on_verify_two_factor_setup():
+	var verifyDialog : AcceptDialog = get_child(get_child_count() - 1)
+	var codeControl : LineEdit = verifyDialog.get_node_or_null("VerifyCode")
+	if not codeControl:
+		return
+	var code : String = codeControl.text.strip_edges()
+	if code.length() != 6 or not code.is_valid_int():
+		return
+	Network.VerifyTwoFactorSetup(code, Launcher.Peer.peerID)
 	UICommons.MessageBox(
 		"This permanently deletes your account and erases your personal data (LGPD art. 18). Your characters and inventory are removed; financial ledger records are retained as required by law. This action cannot be undone.",
 		Callable(self, "_confirm_delete_account"), "Delete forever")

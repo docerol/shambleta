@@ -86,17 +86,17 @@ func AddCharacter(info : Dictionary, equipment : Dictionary, slotID : int = Acto
 
 	var availableSlot : int = NextAvailableSlot() if slotID == ActorCommons.InvalidCharacterSlot else slotID
 	if availableSlot == ActorCommons.InvalidCharacterSlot:
-		assert(false, "No free available placement")
+		push_error("No free available placement")
 		return
 
 	var entityData : EntityData = DB.EntitiesDB.get("Player".hash(), null)
 	if not entityData:
-		assert(false, "Could not retrieve the default entity database entry")
+		push_error("Could not retrieve the default entity database entry")
 		return
 
 	var entity : Entity = Instantiate.CreateEntity(ActorCommons.Type.PLAYER, entityData, info["nickname"], false)
 	if not entity:
-		assert(false, "Could not create character preview")
+		push_error("Could not create character preview")
 		return
 
 	entity.inventory.ImportEquipment(equipment)
@@ -310,7 +310,8 @@ func Close():
 
 #
 func _ready():
-	assert(ActorCommons.MaxCharacterCount + 1 == ActorCommons.CharacterScreenLocations.size(), "Character screen locations count mismatch with the max character count")
+	if ActorCommons.MaxCharacterCount + 1 != ActorCommons.CharacterScreenLocations.size():
+		push_error("Character screen locations count mismatch with the max character count")
 	charactersInfo.resize(ActorCommons.MaxCharacterCount + 1)
 	charactersNode.resize(ActorCommons.MaxCharacterCount + 1)
 	statsPanel.previousButton.pressed.connect(ChangeSelectedCharacter.bind(false))
