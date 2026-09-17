@@ -56,6 +56,26 @@ enum Modifier {
 	Attack,
 	Hide,
 	Invisible,
+	# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md). Instant elemental damage
+	# adds to a hit (Skill.GetDamage), mitigated by the matching *Resist on the
+	# target. Poison/Bleed/Burn are damage-over-time procs: *Chance/*Power are
+	# weapon-only stats (read straight off equipment modifiers, never cached in
+	# BaseStats.current — see ElementCommons.RollStatusProcs); Burn is mitigated
+	# by FireResist (it IS fire's DoT, no separate BurnResist).
+	FireDamage,
+	IceDamage,
+	LightningDamage,
+	FireResist,
+	IceResist,
+	LightningResist,
+	PoisonChance,
+	PoisonPower,
+	PoisonResist,
+	BleedChance,
+	BleedPower,
+	BleedResist,
+	BurnChance,
+	BurnPower,
 	Count
 }
 
@@ -81,6 +101,20 @@ static func GetModifierDisplayName(effect : Modifier) -> String:
 		Modifier.RegenStamina:	return "SP Regen"
 		Modifier.WalkSpeed:		return "Walk Speed"
 		Modifier.WeightCapacity: return "Carry Weight"
+		Modifier.FireDamage:		return "Fire Damage"
+		Modifier.IceDamage:		return "Ice Damage"
+		Modifier.LightningDamage: return "Lightning Damage"
+		Modifier.FireResist:		return "Fire Resist"
+		Modifier.IceResist:		return "Ice Resist"
+		Modifier.LightningResist: return "Lightning Resist"
+		Modifier.PoisonChance:	return "Poison Chance"
+		Modifier.PoisonPower:	return "Poison Power"
+		Modifier.PoisonResist:	return "Poison Resist"
+		Modifier.BleedChance:	return "Bleed Chance"
+		Modifier.BleedPower:	return "Bleed Power"
+		Modifier.BleedResist:	return "Bleed Resist"
+		Modifier.BurnChance:	return "Burn Chance"
+		Modifier.BurnPower:	return "Burn Power"
 		_:						return "Unknown"
 
 static func IsInverseModifier(effect : Modifier) -> bool:

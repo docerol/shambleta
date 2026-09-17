@@ -48,6 +48,12 @@ static func GetDamage(agent : BaseAgent, target : BaseAgent, skill : SkillCell, 
 	if floorDmg > info.value:
 		info.value = floorDmg
 
+	# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md) — flat Fire/Ice/Lightning
+	# bonus, already resist-mitigated, added before crit/dodge so it scales with
+	# both like the rest of the hit (a crit multiplies total damage, elemental
+	# included; a dodge zeroes it out same as physical).
+	info.value += ElementCommons.GetElementalDamage(agent, target)
+
 	var critMaster : bool = agent.stat.current.critRate > target.stat.current.dodgeRate
 	if critMaster and rng > 1.0 - agent.stat.current.critRate:
 		info.type = ActorCommons.Alteration.CRIT

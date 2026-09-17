@@ -1,9 +1,66 @@
 # Monetização — Catálogo, Brasil e Modelo Ideal
 
-**Versão:** 1.0 (2026-09-09) · Relacionados: [ARCHITECTURE.md](ARCHITECTURE.md) · [ROADMAP.md](ROADMAP.md) · [ECONOMY_STUDY.md](ECONOMY_STUDY.md)
+**Versão:** 1.1 (2026-09-16) · Relacionados: [ARCHITECTURE.md](ARCHITECTURE.md) · [ROADMAP.md](ROADMAP.md) · [ECONOMY_STUDY.md](ECONOMY_STUDY.md) · [XP_PROGRESSION.md §4.2](XP_PROGRESSION.md) · [REBIRTH_BC_REPORT.md](REBIRTH_BC_REPORT.md)
 **Contexto:** F2P idle auto battler web (browser-first), Brasil como mercado inicial, gems fechadas (não-cashable), VIP já desenhado (2 tiers), baús com odds públicas, seasons, guilds, AH com taxa em gems.
 
+**Changelog v1.1:** revisão pós-rebirth/essência e pós-i18n completo (100% UI + conteúdo pt-BR).
+Adiciona §0 (guardrails anti-P2W, com a essência/rebirth como caso concreto testado contra o
+catálogo), expande §2.5 (rewarded ads — implementação, não só conceito) e §2.7 (nova: vitrine
+de renascimento como monetização cosmética do sistema de prestígio). i18n sai da lista de
+pré-requisitos pendentes (§3) — já está em 100%.
+
 ---
+
+## 0. Guardrails anti-P2W — o que nunca vendemos
+
+Regra de decisão, para qualquer SKU novo daqui pra frente, inclusive os que ainda não existem
+neste documento: **se o efeito pode ser obtido apenas jogando, dá pra vender o atalho (tempo);
+se o efeito não é alcançável sem pagar, não vendemos (poder).** Todo item do catálogo em §1 foi
+testado contra essa regra antes de entrar na lista dos "6 que faremos" em §2.
+
+### 0.1 Teste aplicado ao sistema de renascimento (o caso mais arriscado do jogo hoje)
+
+O sistema de renascimento (`RebirthData.gd`, `XP_PROGRESSION.md §4.2`) é o ponto do jogo com
+maior risco estrutural de virar P2W, porque os favores (`favor_xp`, `favor_gold`) são
+multiplicadores reais de XP/ouro (`×1.05^n`, compostos) — ou seja, **é poder de verdade**, não
+cosmético. O que impede isso de ser pay-to-win hoje, por construção:
+
+- **Essência só nasce de excedente de XP** (farm no cap, online ou offline) — não existe, em
+  nenhum ponto do código revisado, um caminho de `gems → essência`. É tempo convertido em
+  progressão, não dinheiro convertido em progressão.
+- **`attune_offline` tem teto (10 níveis, 0,60→0,80)** — mesmo o jogador que farma essência sem
+  parar não ultrapassa 80% de eficiência offline. Isso é deliberadamente um **piso honesto de
+  AFK**, não um teto de poder competitivo — não é algo que separa pagante de não-pagante, porque
+  ninguém compra isso com dinheiro.
+- **Todo player, dado tempo suficiente, chega ao mesmo lugar.** Isso é exatamente a definição de
+  "não é P2W": diferença de investimento de **tempo**, não de **dinheiro**.
+
+**Regra travada a partir desta versão do documento:** essência, favores de renascimento e
+qualquer parâmetro futuro do sistema de prestígio **nunca** entram em SKU de gems, VIP, passe ou
+qualquer oferta paga — nem como bônus percentual, nem como "acelerador". Se um dia alguém propuser
+"VIP dá +X% de essência" ou "compre um booster de essência", isso é uma regressão desta regra e
+deve ser barrado aqui, não silenciosamente aprovado numa reunião de roadmap.
+
+### 0.2 A pendência de dono do rebirth não é uma porta para monetização
+
+`REBIRTH_BC_REPORT.md` registra que o **ato** de renascer ainda não paga nada — decisão em aberto
+entre (a) custo de essência proporcional ao ciclo, ou (b) travar upgrades a `rebirths ≥ n`. Do
+ponto de vista deste documento, isso é irrelevante para monetização **desde que o custo continue
+sendo pago em essência** (tempo), nunca em gems. Recomendação, sem substituir a decisão do dono:
+opção (a), porque mantém o ciclo simétrico entre F2P e pagante — o único jeito de essa decisão
+virar risco de P2W seria alguém propor pagar esse custo em gems "pra pular a fila", o que a regra
+de §0.1 já proíbe.
+
+### 0.3 Padrão geral (aplicar a qualquer sistema futuro)
+
+| Categoria | Pode vender? | Exemplo já no jogo |
+|---|---|---|
+| Tempo (atalho para algo que o F2P alcança jogando) | ✅ Sim | VIP (cap offline), claim instantâneo |
+| Identidade/status visível | ✅ Sim | Cosméticos, títulos, molduras, tags |
+| Conveniência que não afeta ranking/economia | ✅ Sim | Slots de AH, auto-venda de lixo |
+| Multiplicador de progressão permanente (XP/ouro/drop) | ❌ Nunca | — (é exatamente o que `favor_xp`/`favor_gold` são, por isso ficam fora de qualquer SKU) |
+| Acesso a conteúdo/zona | ❌ Nunca | Todas as 24 zonas já são F2P |
+| Vantagem em PvP/leaderboard competitivo | ❌ Nunca | Seasons/leaderboard premiam com cosméticos, não com poder de entrada |
 
 ## 1. Catálogo completo de opções aplicáveis
 
@@ -27,6 +84,7 @@
 | — | Venda direta de poder (stats) | — | — | Alto | ❌ **NÃO usar** (corrompe leaderboard/ah) |
 | — | Zonas atrás de paywall | — | — | Alto | ❌ **NÃO usar** (divide a comunidade) |
 | — | P2E/token | — | — | — | ❌ Decidido (ver ECONOMY_STUDY) |
+| — | Essência / favores de renascimento por gems | — | — | Alto | ❌ **NÃO usar** (ver §0.1 — é o único multiplicador de progressão real do jogo; vender isso é P2W por definição) |
 
 ## 2. As 6 que faremos — detalhe
 
@@ -47,14 +105,75 @@ Desenho completo em ECONOMY_STUDY §3. O gatilho de venda é o **cap de coleta o
 - Priorizar o que é **visível aos outros**: skins de formação (as formações são exibidas nas zonas e no perfil/guild), tags de guild, efeitos de drop raríssimo (o "rainbow effect" que os jogadores do AFK Heroes elogiaram espontaneamente nos reviews).
 - Sazonais: alguns **nunca retornam** (status de veterano), a maioria retorna com cooldown — escassez com dignidade, calendário anunciado.
 
-### 2.5 Rewarded ads (monetiza os 95% que não pagam)
-- Momentos: claim do AFK ("assistir e dobrar"), baú bônus 1×/dia, reroll da loja diária. **Nunca interstitial/banner dentro do jogo** (quebra a estética pixel e a confiança).
-- No BR o eCPM de rewarded é modesto, mas a adoção é altíssima; e cada visualização de "2× claim" é um ensaio do valor do VIP — converte watcher em payer.
-- Implementação: SDK do portal (se distribuir via CrazyGames/Poki) ou ad network própria no site. VIP2 pode dobrar o bônus de anúncio (não remover — anúncios continuam sendo faucet do F2P).
+### 2.5 Rewarded ads — o motor de receita do F2P (detalhado)
+
+Esta é a peça que faz o jogador que **nunca vai pagar** (a maioria — ver §4.3, 5–15% da receita
+mas cobrindo perto de 100% da base) ainda gerar receita e ainda sentir que o jogo é generoso com
+quem não paga. Regra de ouro: **anúncio é sempre um botão que o jogador aperta, nunca uma
+interrupção que o jogo empurra.**
+
+**Placements (pontos exatos, todos opt-in, todos com prévia clara do que ganha antes de assistir):**
+
+| Placement | Gatilho | Recompensa | Cooldown/cap |
+|---|---|---|---|
+| 2× no claim do AFK Report | Botão ao lado do claim normal, ao voltar de offline | Dobra XP/ouro/drops daquela liquidação específica | 1×/liquidação (não acumula com claims seguidos) |
+| Baú bônus diário | Botão na tela de baús, 1×/dia | +1 baú do tier da zona atual, sem custo de gems | 1×/dia (reseta 00h local) |
+| Reroll da loja diária | Botão na loja, quando o jogador não gostou do rotativo do dia | Novo sorteio dos SKUs do dia | 3×/dia (evita farm de reroll infinito) |
+| Chave de boss extra | Ao ficar sem chave e querer tentar de novo | +1 tentativa de duelo de boss | 2×/dia |
+
+**O que nunca entra como placement:** interstitial ao trocar de tela, banner fixo na UI do jogo,
+anúncio obrigatório para continuar jogando, anúncio em loop forçado. Um jogo com estética pixel
+art perde a confiança do jogador rapidíssimo com esse tipo de intrusão — e confiança é o ativo
+que este documento mais protege (§4.1, pilar 4).
+
+**Rede/SDK:** duas rotas, não mutuamente exclusivas —
+1. **Distribuição via portal** (CrazyGames/Poki/GameDistribution): o portal já entrega o SDK de
+   rewarded e faz o rev-share; menor esforço de integração, mas menor controle de preço.
+2. **Ad network própria no site** (AdSense for Games, ou um mediador tipo AppLovin/Unity Ads
+   version web): mais trabalho de integração, mas 100% da receita de ads fica com o produto —
+   vale a pena assim que o volume justificar a engenharia (não é bloqueante para o F2 do roadmap).
+
+**Frequência global (anti-fadiga):** cap agregado de ads/dia por jogador (sugestão: 6–8, somando
+todos os placements) — o objetivo é volume sustentável de longo prazo, não maximizar impressões
+de curto prazo às custas de churn.
+
+**Interação com VIP:** VIP **dobra o bônus do anúncio quando assistido** (ex.: 2× vira 4× no
+claim), mas **nunca remove a opção de assistir** — o anúncio continua sendo a via de faucet do
+F2P mesmo para quem tem VIP. Isso também funciona como funil: cada "assistir e dobrar" é uma
+prova de valor do que o VIP faria de graça, sem esperar — o mesmo padrão de conversão de watcher
+para payer já descrito na versão anterior deste documento.
+
+**Por que isso não é P2W:** nenhum placement acima libera essência, favor de renascimento, ou
+qualquer efeito coberto pela regra de §0.1 — só bônus pontual de XP/ouro/drop **na sessão**, o
+mesmo tipo de bônus que qualquer jogador engajado já tira jogando mais. Rewarded ads são tempo
+assistindo em troca de tempo de farm economizado — o mesmo eixo tempo-por-tempo do resto do
+catálogo, não um atalho de dinheiro.
 
 ### 2.6 Ofertas rotativas (a loja viva)
 - Loja diária com rotação (reroll por gems), pacote "nível" quando o jogador bate gate de zona nova (oferece build-up relevante), ofertas de fim de temporada.
 - É o multiplicador de ARPPU barato: mesmo catálogo, apresentação dinâmica.
+
+### 2.7 Vitrine de renascimento (novo — monetização cosmética do sistema de prestígio)
+
+O sistema de rebirth (§0.1) criou, de graça, o melhor gancho de identidade social que o jogo tem:
+o contador de `rebirths` é público na conta e não existe hoje nenhuma forma de exibi-lo com
+orgulho. `REBIRTH_BC_REPORT.md` já lista isso como pendência #3 ("compensação visível... domínio
+da fase de cosméticos/passe") — esta seção é essa fase.
+
+- **O que vendemos:** título de ciclo ("Renascido III"), moldura de avatar por marco de
+  `rebirths` (1º, 5º, 10º renascimento), efeito visual de partícula ao renascer (cosmético,
+  visível a outros jogadores na zona por alguns segundos). Nada disso altera `favor_xp`,
+  `favor_gold` ou `attune_offline` — é decoração do número que o jogador já ganhou jogando.
+- **O que continua de graça:** o contador em si e um título/moldura básica no 1º renascimento
+  (celebra o marco sem custo — a versão paga é sobre *estilo*, não sobre *existir*).
+- **Por que funciona:** quem chega ao rebirth já é, por definição, o jogador mais engajado do
+  jogo (17–21 dias de farm ativo por ciclo, `XP_PROGRESSION.md §4.2`) — é exatamente o perfil de
+  alto LTV que mais valoriza status visível sobre poder. Vender aqui não compete com o F2P: quem
+  ainda não chegou ao cap nem vê essa vitrine.
+- **Encaixe no catálogo:** entra como conteúdo do Passe de Temporada (§2.1, cosméticos sazonais)
+  quando o marco cai dentro de uma temporada, ou como SKU avulso de gems para quem quer a moldura
+  fora do ciclo do passe — de qualquer forma, sempre gems/passe, nunca essência (essência continua
+  fora do alcance de qualquer compra, por §0.1).
 
 ## 3. O que funciona no Brasil — e por quê
 
@@ -68,7 +187,7 @@ Desenho completo em ECONOMY_STUDY §3. O gatilho de venda é o **cap de coleta o
 | **Gacha/loot** | Mercado forte, mas sensível a odds injustas | Odds públicas + pity timer (já desenhado) é *vantagem competitiva* de confiança |
 | **Assinatura** | Mais difícil que passe; funciona com hábito diário | VIP vendido no momento do cap offline atingido (dor real), não no cadastro |
 | **eCPM de ads** | Abaixo de US/EU, adoção alta | Rewarded ads p/ volume, não p/ receita principal |
-| **Idioma/auditória** | Jogo em PT-BR primeiro | i18n PT-BR é pré-requisito de conversão (ROADMAP F5) |
+| **Idioma/auditória** | Jogo em PT-BR primeiro | ✅ Resolvido — i18n 100% (UI + 727 linhas de conteúdo NPC/quest, `I18N_PHASE1_REPORT.md`/`I18N_PHASE2_REPORT.md`); pré-requisito de conversão já não bloqueia mais o beta |
 
 **Regulação/compliance BR (rápido):** CDC art. 49 (arrependimento 7 dias — política de reembolso de gems não gastas), divulgação de odds de baús pagos, CLASSIND para distribuição comercial, NF/recolhimento (ME no Simples), LGPD já coberto na F1. Detalhes jurídicos = F0 com advogado (análise de arquitetura, não parecer).
 

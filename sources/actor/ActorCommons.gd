@@ -290,7 +290,12 @@ enum Alteration
 	SKILL_UP,
 	QUEST_COMPLETE,
 	QUEST_UPDATE,
-	WHISPER
+	WHISPER,
+	# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md) — DoT tick alteration types,
+	# so the client can show poison/bleed/burn numbers distinctly from a normal HIT.
+	POISON,
+	BLEED,
+	BURN
 }
 
 # Colors

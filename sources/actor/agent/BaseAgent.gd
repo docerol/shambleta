@@ -14,6 +14,11 @@ var agent : NavigationAgent2D			= null
 var actionTimer : Timer					= null
 var cooldownTimers : Dictionary[int, bool]	= {}
 
+# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md) — active DoT state, keyed by
+# ElementCommons.StatusType. One Timer child per active effect (named nodes,
+# same self-managing pattern as cooldownTimers/actionTimer above).
+var activeStatusEffects : Dictionary		= {}
+
 var hasCurrentGoal : bool				= false
 var isRelativeMode : bool				= false
 var lastPositions : PackedFloat32Array	= []
@@ -203,6 +208,7 @@ func Killed():
 	agent_killed.emit(self)
 	SetSkillCastID(DB.UnknownHash)
 	SetState(ActorCommons.State.DEATH)
+	ElementCommons.ClearAllStatus(self)
 
 func Kill():
 	stat.SetHealth(-stat.current.maxHealth)

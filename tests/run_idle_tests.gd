@@ -54,8 +54,15 @@ func _run_tests():
 	sql.ExecuteBindings("DELETE FROM guild_vault_log WHERE guild_id IN (SELECT guild_id FROM guild WHERE leader_account NOT IN (SELECT account_id FROM account));", [])
 	sql.ExecuteBindings("DELETE FROM guild WHERE leader_account NOT IN (SELECT account_id FROM account);", [])
 	sql.ExecuteBindings("DELETE FROM auction_listing WHERE status = 'open' AND seller_char NOT IN (SELECT char_id FROM character);", [])
+	# SOM-IDLE Fase H: crafting submissions orphaned by stale fixtures
+	sql.ExecuteBindings("DELETE FROM craft_name_blocklist;", [])
+	sql.ExecuteBindings("DELETE FROM craft_submission WHERE char_id NOT IN (SELECT char_id FROM character);", [])
+	sql.ExecuteBindings("DELETE FROM craft_item_template WHERE creator_account_id NOT IN (SELECT account_id FROM account);", [])
 
 	# Load suites dynamically (post-boot, so project classes compile fine)
+	# SOM-IDLE: elemental combat — pre-load ElementCommons so the class_name
+	# is registered before IdleTests.gd parses (it uses ElementCommons directly).
+	load("res://sources/combat/ElementCommons.gd")
 	var suitesScript : GDScript = load("res://tests/IdleTests.gd")
 	var suites : RefCounted = suitesScript.new()
 
@@ -80,6 +87,7 @@ func _run_tests():
 		suites.SuiteItemTiers()
 		suites.SuiteFarmSpawnTable()
 		suites.SuiteBossService()
+		suites.SuiteElementalCombat()
 		var f3char : int = suites.CreateFixture(sql, "idle_f3_account", "IdleF3Tester")
 		if suites.Check(f3char != 0, "F3 fixture created (charID %d)" % f3char):
 			suites.SuiteVIPMods(sql, f3char, sql.GetAccountIDForCharacter(f3char))
@@ -94,11 +102,26 @@ func _run_tests():
 			var acctB : int = sql.GetAccountIDForCharacter(f4b)
 			suites.SuiteTrade(sql, f4a, f4b, acctA, acctB)
 			suites.SuiteChests(sql, f4a, acctA)
+			# SOM-IDLE Fase H: crafting submission (fee sink + validation + cap)
+			suites.SuiteCrafting(sql, f4a, acctA)
+			suites.SuiteCraftDrops(sql, f4a, acctA)
+			suites.SuiteCraftFee(sql, f4a, acctA)
 			suites.SuiteVIPCheckout(sql, f4a, acctA)
 			# SOM-IDLE beta GUI: shop (BuyChests + consolidated economy state)
 			var guiChar : int = suites.CreateFixture(sql, "idle_gui_account", "IdleGuiTester")
 			if suites.Check(guiChar != 0, "GUI economy fixture created (charID %d)" % guiChar):
 				suites.SuiteEconomyShop(sql, guiChar, sql.GetAccountIDForCharacter(guiChar))
+				# Fase A: checkout sandbox (catalogo, starter, intents, bundles)
+				var coChar : int = suites.CreateFixture(sql, "idle_co_account", "IdleCoTester")
+				if suites.Check(coChar != 0, "checkout fixture created (charID %d)" % coChar):
+					suites.SuiteCheckout(sql, coChar, sql.GetAccountIDForCharacter(coChar))
+				# Fase B: VIP cap 12/24/36h + loja diária/ofertas
+				var capChar : int = suites.CreateFixture(sql, "idle_cap_account", "IdleCapTester")
+				if suites.Check(capChar != 0, "vip cap fixture created (charID %d)" % capChar):
+					suites.SuiteVIPCap(sql, capChar, sql.GetAccountIDForCharacter(capChar))
+				var dsChar : int = suites.CreateFixture(sql, "idle_ds_account", "IdleDsTester")
+				if suites.Check(dsChar != 0, "daily shop fixture created (charID %d)" % dsChar):
+					suites.SuiteDailyShop(sql, dsChar, sql.GetAccountIDForCharacter(dsChar))
 			# SOM-IDLE: B1 item lots + B2 chest odds + B3 wipe baseline + C1 grants + D2 telemetry
 			suites.SuiteItemLots(sql)
 			suites.SuiteChestOdds(sql)
@@ -110,6 +133,19 @@ func _run_tests():
 			suites.SuiteGuilds(sql)
 			suites.SuiteSeasonAH(sql)
 			suites.SuiteSeasonPayout(sql)
+			# Fase C: passe de temporada S1 (PT, missões, premium, skip, auto-claim)
+			suites.SuiteSeasonPass(sql)
+			# Follow-up Deluxe: premium + 10 níveis + emote + 150 gems
+			suites.SuitePassDeluxe(sql)
+			# Fase D: cosméticos (catálogo, vitrine, backfill, títulos)
+			suites.SuiteCosmetics(sql)
+			# Fase E: rewarded ads (tokens, caps, 4 placements, 2×/4×)
+			suites.SuiteAds(sql)
+			# Fase F: guild premium + AH premium + 4 corridas + torneios
+			suites.SuiteGuildPremium(sql)
+			suites.SuiteMarketplace(sql)
+			suites.SuiteSeasonRaces(sql)
+			suites.SuiteTournamentDonation(sql)
 			# SOM-IDLE: rebirth (híbrido B+C, XP_PROGRESSION §4.2) — awaited: a
 			# metade B exige agente vivo no cap (o motor de renascimento é async).
 			var rebChar : int = suites.CreateFixture(sql, "idle_rebirth_account", "IdleRebirth")

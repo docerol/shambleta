@@ -22,3 +22,16 @@ var maxMana : int						= 50
 var regenHealth : int					= 1
 var regenStamina : int					= 1
 var regenMana : int						= 1
+
+# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md). Flat elemental damage and
+# resist %, mirror attack/defense (base value + gear, via Formula.Get*).
+# Poison/Bleed/Burn chance+power live on equipment only, read straight off
+# StatModifier at hit time — not cached here (see CellCommons.Modifier).
+var fireDamage : int						= 0
+var iceDamage : int						= 0
+var lightningDamage : int				= 0
+var fireResist : float					= 0.0
+var iceResist : float					= 0.0
+var lightningResist : float				= 0.0
+var poisonResist : float					= 0.0
+var bleedResist : float					= 0.0

@@ -111,6 +111,13 @@ static func Damaged(agent : BaseAgent, target : BaseAgent, skill : SkillCell, rn
 	target.agent_damaged.emit(target, info.value)
 	Network.NotifyNeighbours(agent, "TargetAlteration", [agent.get_rid().get_id(), target.get_rid().get_id(), info.value, info.type, skill.id, true], true, true)
 
+	# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md) — poison/bleed/burn only
+	# proc off a hit that actually landed (a DODGE already zeroed info.value and
+	# should not also start a DoT) and only on a target still alive after the
+	# hit above.
+	if info.type != ActorCommons.Alteration.DODGE and ActorCommons.IsAlive(target):
+		ElementCommons.RollStatusProcs(agent, target, rng)
+
 static func Healed(agent : BaseAgent, target : BaseAgent, skill : SkillCell, rng : float):
 	var heal : int = SkillCommons.GetHeal(agent, target, skill, rng)
 	target.stat.SetHealth(heal)

@@ -109,6 +109,36 @@ static func GetWeightCapacity(stat : ActorStats) -> float:
 static func GetAttack(stat : ActorStats) -> int:
 	return stat.morphStat.attack + F(stat.strength * coefAttackPerAttribute) + F(stat.level * coefAttackPerLevel) + stat.modifiers.Get(CellCommons.Modifier.Attack, true)
 
+# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md). Flat base + gear, no
+# attribute/level scaling in v1 (deliberately simple; see doc §3 for why).
+# Resists are capped so no element can ever be fully negated (immunity stacking
+# would make whole damage types irrelevant against a tuned-up target).
+const ResistCap : float						= 0.75
+
+static func GetFireDamage(stat : ActorStats) -> int:
+	return stat.morphStat.fireDamage + stat.modifiers.Get(CellCommons.Modifier.FireDamage, true)
+
+static func GetIceDamage(stat : ActorStats) -> int:
+	return stat.morphStat.iceDamage + stat.modifiers.Get(CellCommons.Modifier.IceDamage, true)
+
+static func GetLightningDamage(stat : ActorStats) -> int:
+	return stat.morphStat.lightningDamage + stat.modifiers.Get(CellCommons.Modifier.LightningDamage, true)
+
+static func GetFireResist(stat : ActorStats) -> float:
+	return clampf(stat.morphStat.fireResist + stat.modifiers.Get(CellCommons.Modifier.FireResist, true), 0.0, ResistCap)
+
+static func GetIceResist(stat : ActorStats) -> float:
+	return clampf(stat.morphStat.iceResist + stat.modifiers.Get(CellCommons.Modifier.IceResist, true), 0.0, ResistCap)
+
+static func GetLightningResist(stat : ActorStats) -> float:
+	return clampf(stat.morphStat.lightningResist + stat.modifiers.Get(CellCommons.Modifier.LightningResist, true), 0.0, ResistCap)
+
+static func GetPoisonResist(stat : ActorStats) -> float:
+	return clampf(stat.morphStat.poisonResist + stat.modifiers.Get(CellCommons.Modifier.PoisonResist, true), 0.0, ResistCap)
+
+static func GetBleedResist(stat : ActorStats) -> float:
+	return clampf(stat.morphStat.bleedResist + stat.modifiers.Get(CellCommons.Modifier.BleedResist, true), 0.0, ResistCap)
+
 # GM modifiers
 static func IsHidden(stat : ActorStats) -> bool:
 	return stat.modifiers.Get(CellCommons.Modifier.Hide, true) > 0

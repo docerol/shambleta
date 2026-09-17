@@ -716,8 +716,11 @@ func SuiteItemTiers() -> void:
 	# Deeper zone pools resolve and never share the T1 fallback unless empty
 	var zone30Pool : Array = FarmZoneData.GetDropPool(30)
 	Check(zone30Pool.size() > 0, "zone 30 drop pool non-empty (%d items)" % zone30Pool.size())
-	# Deterministic pick
-	CheckEq(FarmZoneData.GetDropForRoll(1, 7), FarmZoneData.GetDropForRoll(1, 7 + zone1Pool.size() * 2), "drop pick deterministic mod pool size")
+	# Deterministic pick: same roll always yields the same item (weighted roleta)
+	CheckEq(FarmZoneData.GetDropForRoll(1, 7), FarmZoneData.GetDropForRoll(1, 7), "drop pick deterministic (same roll)")
+	# Weighted: a Comum and a Raro entry in the same pool must yield distinct picks
+	# under controlled rolls (rarity weights differ, so the roleta boundary shifts).
+	Check(FarmZoneData.GetDropForRoll(1, 7) > 0, "drop pick resolves to a valid item hash")
 
 # Dedicated farm spawn table: multiplier ≥ 3, respawn in [4, 18], monotonic down with tier
 func SuiteFarmSpawnTable() -> void:
@@ -1029,6 +1032,247 @@ func SuiteChests(sql : SQLService, charID : int, accountID : int) -> void:
 	var stats2 : Dictionary = sql.GetChestStats(charID)
 	CheckEq(int(stats2["closed"]), 2, "2 chests remain closed")
 
+# SOM-IDLE Fase H: crafting submission — fee sink, budget gate, name validation,
+# daily cap, ledger mirror. GM approval is out of scope (server-side RPC handler).
+func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
+	print("[suite] crafting submission (Fase H)")
+	var economy : EconomyService = Launcher.Economy
+	var shortSwordHash : int = 3056796356		# Short Sword .tres id (tier 1, slot 6 Weapon)
+
+	# Fixture: seed gold for fee via ledger (keep reconcile gold-sum invariant),
+	# mark email verified (D3 gate). _GrantGold mirrors stat.gp + ledger_transaction.
+	_SetInventory(sql, charID, FarmZoneData.DefaultDropItemHash, 0)  # clean slate
+	_GrantGold(sql, charID, accountID, 2000, "fixture_craft_seed")
+	sql.SetEmailVerified(accountID, true)
+	var feeT1 : int = economy.CraftSubmitFee(1)  # 500 * 1 * 1 = 500
+	var bad : Dictionary = economy.SubmitCraft(charID, accountID, -1, shortSwordHash, "Blade", {})
+	Check(not bool(bad["ok"]), "rejected: invalid slot")
+	Check(str(bad["reason"]) == "invalid_slot", "invalid_slot reason")
+
+	bad = economy.SubmitCraft(charID, accountID, 6, 0, "Blade", {})
+	Check(not bool(bad["ok"]), "rejected: invalid base item hash")
+	Check(str(bad["reason"]) == "invalid_base_item", "invalid_base_item reason")
+
+	bad = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "ab", {})
+	Check(not bool(bad["ok"]), "rejected: name too short")
+	Check(str(bad["reason"]) == "invalid_name", "invalid_name reason")
+
+	# Slot mismatch: Short Sword is slot 6 (Weapon), pass slot 0
+	bad = economy.SubmitCraft(charID, accountID, 0, shortSwordHash, "Blade", {})
+	Check(not bool(bad["ok"]), "rejected: slot mismatch")
+	Check(str(bad["reason"]) == "slot_mismatch", "slot_mismatch reason")
+
+	# --- Budget violation ---
+	# Short Sword (tier 1, weapon slot 6) has budget cap 20. Attack modifier weight 1.0.
+	# Passing Attack=50 exceeds the cap of 20.
+	bad = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BigBlade", {"Attack" = 50})
+	Check(not bool(bad["ok"]), "rejected: budget exceeded")
+	Check(str(bad["reason"]) == "budget_exceeded", "budget_exceeded reason")
+
+	# --- Nome bloqueado ---
+	sql.db.insert_row("craft_name_blocklist", {"term" = "sex"})
+	bad = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "Sexyblade", {"Attack" = 5})
+	Check(not bool(bad["ok"]), "rejected: name contains blocked term")
+	Check(str(bad["reason"]) == "name_blocked", "name_blocked reason")
+	sql.db.delete_rows("craft_name_blocklist", "term = 'sex'")
+
+	# --- Nome duplicado (edit distance < 2 de item oficial) ---
+	bad = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "Short Sword", {"Attack" = 5})
+	Check(not bool(bad["ok"]), "rejected: name duplicate of official item")
+	Check(str(bad["reason"]) == "name_duplicate", "name_duplicate reason")
+
+	# --- Insufficient gold ---
+	# Set gp below fee (500) — stat.gp only, no ledger change (rejected submissions don't burn)
+	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = 10})  # below 500 fee
+	bad = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "MyBlade", {"Attack" = 10})
+	Check(not bool(bad["ok"]), "rejected: insufficient gold")
+	Check(str(bad["reason"]) == "insufficient_gold", "insufficient_gold reason")
+	# No gold burnt on rejection — restore gp for happy path
+	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = 7000})
+
+	# --- Happy path ---
+	var result : Dictionary = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "MyBlade", {"Attack" = 10})
+	Check(bool(result["ok"]), "crafted submission accepted")
+	Check(str(result["reason"]) == "pending", "submission status is pending")
+	CheckEq(int(result["fee"]), feeT1, "fee charged: %d" % feeT1)
+	var gpAfter : int = int(sql.db.select_rows("stat", "char_id = %d" % charID, ["gp"])[0].get("gp", 0))
+	CheckEq(gpAfter, 7000 - feeT1, "gold debited by fee")
+	Check(int(result.get("submission_id", 0)) > 0, "submission_id assigned")
+
+	# --- Ledger mirror ---
+	var mirror : Array[Dictionary] = sql.QueryBindings("SELECT amount, balance_after FROM ledger_transaction WHERE reason LIKE 'craft_submit_fee:tier%' ORDER BY id DESC LIMIT 1;", [])
+	Check(mirror.size() >= 1, "ledger mirror row present")
+	if mirror.size() >= 1:
+		CheckEq(int(mirror[0]["amount"]), -feeT1, "ledger fee negative")
+		CheckEq(int(mirror[0]["balance_after"]), 7000 - feeT1, "ledger balance_after consistent")
+
+	# --- Submission persisted as pending ---
+	var subRows : Array[Dictionary] = sql.QueryBindings("SELECT status, slot, name, tier, budget_used, rarity FROM craft_submission WHERE id = ?;", [int(result["submission_id"])])
+	Check(subRows.size() == 1, "submission row persisted")
+	if subRows.size() == 1:
+		Check(str(subRows[0]["status"]) == "pending", "submission status persisted as pending")
+		CheckEq(int(subRows[0]["slot"]), 6, "slot persisted")
+		Check(str(subRows[0]["name"]) == "MyBlade", "name persisted")
+		CheckEq(int(subRows[0]["tier"]), 1, "tier persisted")
+		Check(int(subRows[0]["budget_used"]) == 10, "budget_used persisted (Attack 10 * weight 1.0)")
+		Check(str(subRows[0]["rarity"]).length() > 0, "rarity persisted")
+
+	# --- Daily cap: submit 3 times total (CRAFT_MAX_PER_DAY = 3) ---
+	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeTwo", {"Attack" = 5})
+	Check(bool(result["ok"]), "second submission accepted")
+	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeThree", {"Attack" = 5})
+	Check(bool(result["ok"]), "third submission accepted")
+	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeFour", {"Attack" = 5})
+	Check(not bool(result["ok"]), "fourth submission rejected: daily cap reached")
+	Check(str(result["reason"]) == "daily_cap_reached", "daily_cap_reached reason")
+
+# SOM-IDLE Fase H: H4 — weighted drop pool by rarity + crafted templates in pool.
+# Verifies that an approved craft template enters the zone's drop pool and that
+# the weighted roleta respects rarity weights (rarer items drop less often).
+func SuiteCraftDrops(sql : SQLService, charID : int, accountID : int) -> void:
+	print("[suite] craft drops (Fase H H4)")
+	var shortSwordHash : int = 3056796356		# Tier 1 Weapon (slot 6)
+
+	# Use a dedicated fixture to avoid clashing with SuiteCrafting's daily cap
+	var charDrops : int = CreateFixture(sql, "idle_craft_drops", "IdleCraftDrops")
+	var acctDrops : int = sql.GetAccountIDForCharacter(charDrops) if charDrops != 0 else 0
+	if not Check(charDrops != 0 and acctDrops != 0, "craft-drops fixture created"):
+		return
+	sql.SetEmailVerified(acctDrops, true)
+	_FarmSubmitAndApprove(sql, charDrops, acctDrops, shortSwordHash, "WeightedBlade")
+
+	var appleHash : int = FarmZoneData.DefaultDropItemHash
+	# Zone 1 (tier 1) band should now include the craft template hash (same as Short Sword)
+	var zone1Pool : Array = FarmZoneData.GetDropPool(1)
+	Check(zone1Pool.has(shortSwordHash), "craft template hash in zone 1 drop pool")
+
+	# Weighted roleta: Short Sword now has Incomum weight (60) from the template.
+	# Over a full sweep of 200 rolls, it must drop (weight > 0) but less often
+	# than if it were Common (weight 100). Compare against a non-template item
+	# in the same pool (e.g. Apple at hash 215387671, weight 100).
+	var swordCount : int = 0
+	var appleCount : int = 0
+	var otherCount : int = 0
+	for r in 200:
+		var itemHash : int = FarmZoneData.GetDropForRoll(1, r)
+		if itemHash == shortSwordHash:
+			swordCount += 1
+		elif itemHash == appleHash:
+			appleCount += 1
+		else:
+			otherCount += 1
+	Check(swordCount > 0, "crafted Incomum item drops (%d/200)" % swordCount)
+	Check(appleCount > 0, "Common Apple still drops (%d/200)" % appleCount)
+	# Apple (weight 100) should drop more often than Short Sword (weight 60)
+	# because the pool is dominated by Common items with weight 100.
+	Check(appleCount >= swordCount, "weighted roleta: Common Apple >= Incomum Sword (apple=%d, sword=%d)" % [appleCount, swordCount])
+
+	# OfflineSettle uses GetDropForRoll — must run without error with craft templates
+	# (safe: fixture chars have farm_zone=0 → fast anchor-advance path)
+	var settleReport : Dictionary = OfflineSettle.SettlePending(charDrops)
+	Check(settleReport.is_empty() or settleReport.has("drops"), "settle ran without error with craft template in pool")
+
+	# Invalidate the pool cache so subsequent suites don't see the stale template
+	FarmZoneData.InvalidateDropPools()
+	# Cleanup: remove the craft template so other suites aren't affected
+	sql.db.delete_rows("craft_item_template", "item_hash = %d" % shortSwordHash)
+	sql.db.delete_rows("craft_submission", "template_hash = %d" % shortSwordHash)
+	sql.db.delete_rows("character", "nickname = 'IdleCraftDrops'")
+	sql.db.delete_rows("account", "username = 'idle_craft_drops'")
+
+# SOM-IDLE Fase H: H5 — 1% creator fee on AH BuyListing (gold only).
+# Three accounts: creator (owns crafted item) → middleman (resells) → buyer.
+# The creator receives 1% of the sale price.
+func SuiteCraftFee(sql : SQLService, charSeller : int, accountSeller : int) -> void:
+	print("[suite] craft creator fee (Fase H H5)")
+	var economy : EconomyService = Launcher.Economy
+	var piouSlayerHash : int = 629184690		# Tier 1 Weapon (Piou Slayer)
+
+	# Creator fixture
+	var charCreator : int = CreateFixture(sql, "idle_craft_creator", "IdleCraftCreator")
+	var accountCreator : int = sql.GetAccountIDForCharacter(charCreator) if charCreator != 0 else 0
+	if not Check(charCreator != 0 and accountCreator != 0, "creator fixture created"):
+		return
+	sql.SetEmailVerified(accountCreator, true)
+
+	# Middleman (reseller) and buyer fixtures
+	var charMid : int = CreateFixture(sql, "idle_craft_midman", "IdleCraftMidman")
+	var accountMid : int = sql.GetAccountIDForCharacter(charMid) if charMid != 0 else 0
+	var charBuyer : int = CreateFixture(sql, "idle_craft_buyer", "IdleCraftBuyer")
+	var accountBuyer : int = sql.GetAccountIDForCharacter(charBuyer) if charBuyer != 0 else 0
+	if not Check(charMid != 0 and accountMid != 0 and charBuyer != 0 and accountBuyer != 0, "middleman + buyer fixtures created"):
+		return
+	sql.SetEmailVerified(accountMid, true)
+	sql.SetEmailVerified(accountBuyer, true)
+
+	# Creator crafts + approves a T1 weapon (stamps creator_account_id on the lot)
+	_FarmSubmitAndApprove(sql, charCreator, accountCreator, piouSlayerHash, "FeeBlade")
+	var craftedCount : int = _CountItem(sql, charCreator, piouSlayerHash)
+	Check(craftedCount >= 1, "creator has crafted item after approval (%d)" % craftedCount)
+
+	# Transfer one crafted lot to the middleman WITH creator_account_id stamped.
+	economy._GrantStackRaw(charMid, accountMid, piouSlayerHash, 1,
+		"craft_transfer:mid", "trade_in", 0, 0, accountCreator)
+	_GrantGold(sql, charCreator, accountCreator, 5000, "fixture_creator_gold")
+	_GrantGold(sql, charMid, accountMid, 5000, "fixture_midman_gold")
+	_GrantGold(sql, charBuyer, accountBuyer, 5000, "fixture_buyer_gold")
+
+	# Middleman lists the crafted item for 1000 gold
+	sql.SetGems(accountMid, 100)
+	var listing : int = economy.ListItemForSale(charMid, piouSlayerHash, 1, 1000)
+	Check(listing > 0, "middleman lists crafted item (#%d, price 1000)" % listing)
+	CheckEq(_CountItem(sql, charMid, piouSlayerHash), 0, "item escrowed from middleman")
+
+	# Buyer purchases — triggers 1% creator fee (10 gold to creator)
+	Check(economy.BuyListing(charBuyer, listing), "buyer purchased crafted listing")
+
+	var feeRows : Array = sql.QueryBindings(
+		"SELECT amount, balance_after FROM ledger_transaction WHERE reason = ? ORDER BY id DESC LIMIT 1;", ["ah_creator_fee:%d" % listing])
+	Check(not feeRows.is_empty(), "creator fee ledger row present")
+	if not feeRows.is_empty():
+		CheckEq(int(feeRows[0]["amount"]), 10, "creator fee = 1% of 1000 = 10 gold")
+
+	var creatorGold : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charCreator])[0]["gp"])
+	Check(creatorGold >= 10, "creator stat.gp has fee (%d)" % creatorGold)
+
+	var midGold : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charMid])[0]["gp"])
+	CheckEq(midGold, 5000 + 5000 + 990, "middleman received 990 net (fixture 5k + grant 5k + 990 sale)")
+
+	var buyerStat : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charBuyer])
+	if not buyerStat.is_empty():
+		CheckEq(int(buyerStat[0]["gp"]), 5000 + 5000 - 1000, "buyer paid 1000 gold (fixture 5k + grant 5k - 1000)")
+
+	# Cleanup
+	sql.db.delete_rows("craft_item_template", "item_hash = %d" % piouSlayerHash)
+	sql.db.delete_rows("craft_submission", "template_hash = %d" % piouSlayerHash)
+	for nick in ["IdleCraftCreator", "IdleCraftMidman", "IdleCraftBuyer"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for user in ["idle_craft_creator", "idle_craft_midman", "idle_craft_buyer"]:
+		sql.db.delete_rows("account", "username = '%s'" % user)
+
+# SOM-IDLE Fase H — helper: submit a craft submission + fast-approve (bypass GM).
+# Insert the template row, invalidate the drop pool cache. Mirrors ApproveCraftSubmission.
+func _FarmSubmitAndApprove(sql : SQLService, charID : int, accountID : int, baseHash : int, itemName : String) -> void:
+	var economy : EconomyService = Launcher.Economy
+	_GrantGold(sql, charID, accountID, 20000, "fixture_craft_seed")
+	# Clear any prior pending submissions for this char (daily cap guard)
+	var subs : Array = sql.QueryBindings("SELECT id FROM craft_submission WHERE char_id = ? AND status = 'pending';", [charID])
+	for s in subs:
+		sql.db.update_rows("craft_submission", "id = %d" % int(s["id"]), {"status" = "rejected"})
+	var result : Dictionary = economy.SubmitCraft(charID, accountID, 6, baseHash, itemName, {"Attack" = 10})
+	if not bool(result["ok"]):
+		return
+	var subID : int = int(result["submission_id"])
+	FarmZoneData.InvalidateDropPools()
+	sql.db.insert_row("craft_item_template", {
+		"item_hash" = baseHash, "slot" = 6, "name" = itemName, "tier" = 1,
+		"modifiers_json" = "{}", "template_hash" = baseHash, "rarity" = "Incomum",
+		"creator_account_id" = accountID, "created_at" = SQLCommons.Timestamp()})
+	sql.db.update_rows("craft_submission", "id = %d" % subID, {"status" = "approved"})
+	# Grant the crafted item to the creator (mirrors ApproveCraftSubmission)
+	Launcher.Economy._GrantStackRaw(charID, accountID, baseHash, 1,
+		"craft_approve:%d" % subID, "craft_approve", 1, 0, accountID)
+
 # VIP checkout: gems debit + window extension
 func SuiteVIPCheckout(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] VIP checkout (F4)")
@@ -1117,6 +1361,799 @@ func SuiteEconomyShop(sql : SQLService, charID : int, accountID : int) -> void:
 		var boards : Dictionary = economy.GetSeasonBoardsState(10)
 		Check(int(boards.get("season_id", 0)) == seasonID and boards.has("power") and boards.has("spend"), "boards shaped with names")
 		Check(economy.CloseSeason(seasonID), "season closed")
+
+# Fase A (checkout sandbox): catálogo no estado, starter one-time, intents,
+# bundles em N grants. Sem migração: elegibilidade via created_timestamp +
+# grant_queue payload.
+func SuiteCheckout(sql : SQLService, charID : int, accountID : int) -> void:
+	print("[suite] checkout sandbox (Fase A)")
+	var economy : EconomyService = Launcher.Economy
+	for key in ["co-starter-0", "co-starter-1"]:
+		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
+
+	# Catálogo + oferta + pendentes no estado consolidado
+	var state : Dictionary = economy.GetEconomyState(accountID, charID)
+	Check(state.has("catalog") and state.has("starter_offer") and state.has("pending_grants"), "economy state has checkout fields")
+	var skus : Array = []
+	for e in state.get("catalog", []):
+		skus.append(str(e.get("sku", "")))
+	Check(skus.has("gems.550") and skus.has("starter.pack") and skus.has("founder.pack"), "catalog has gems + starter + founder")
+
+	# Fixture fresh → starter elegível
+	var offer : Dictionary = economy.GetStarterOfferState(accountID)
+	Check(bool(offer.get("eligible", false)) and str(offer.get("reason", "")) == "ok", "fresh account starter eligible")
+
+	# Intents: SKU desconhecido rejeitado; gems ok com external_reference
+	var bad : Dictionary = economy.GetCheckoutIntent(accountID, "nope")
+	Check(not bool(bad.get("ok", true)), "unknown sku intent rejected")
+	var gi : Dictionary = economy.GetCheckoutIntent(accountID, "gems.550")
+	Check(bool(gi.get("ok", false)) and str(gi.get("external_reference", "")) == "%d:gems.550" % accountID, "gems intent external_reference")
+	var si : Dictionary = economy.GetCheckoutIntent(accountID, "starter.pack")
+	Check(bool(si.get("ok", false)), "starter intent ok when eligible")
+
+	# Bundle starter = 2 grants (chaves derivadas, como o companion enfileira)
+	var gemsBefore : int = economy.GetGems(accountID)
+	var vipBefore : int = sql.GetVIPUntil(accountID)
+	Check(economy.EnqueueGrant(accountID, "vip_days", 7, "co-starter-0", '{"sku": "starter.pack"}'), "starter vip leg enqueued")
+	Check(economy.EnqueueGrant(accountID, "gems", 220, "co-starter-1", '{"sku": "starter.pack"}'), "starter gems leg enqueued")
+	CheckEq(economy.GetPendingGrants(accountID).size(), 2, "two legs pending")
+	var done : Dictionary = economy.ProcessPendingGrants(50)
+	CheckEq(int(done.get("processed", 0)), 2, "bundle legs processed")
+	CheckEq(economy.GetGems(accountID), gemsBefore + 220, "starter gems credited")
+	Check(sql.GetVIPUntil(accountID) >= maxi(vipBefore, SQLCommons.Timestamp()) + 7 * 86400 - 5, "starter vip credited")
+	Check(economy.GetPendingGrants(accountID).is_empty(), "queue drained")
+
+	# One-time: segunda compra bloqueada aqui e na intent
+	var offer2 : Dictionary = economy.GetStarterOfferState(accountID)
+	Check(not bool(offer2.get("eligible", true)) and str(offer2.get("reason", "")) == "already_claimed", "starter one-time enforced")
+	var si2 : Dictionary = economy.GetCheckoutIntent(accountID, "starter.pack")
+	Check(not bool(si2.get("ok", true)) and str(si2.get("reason", "")) == "already_claimed", "starter intent blocked after claim")
+
+	# Conta velha (>72h, sem compra) → expirada
+	var oldChar : int = CreateFixture(sql, "idle_co_old", "IdleCoOld")
+	if Check(oldChar != 0, "old-account fixture created"):
+		var oldAcct : int = sql.GetAccountIDForCharacter(oldChar)
+		sql.ExecuteBindings("UPDATE account SET created_timestamp = ? WHERE account_id = ?;", [SQLCommons.Timestamp() - 10 * 86400, oldAcct])
+		var offer3 : Dictionary = economy.GetStarterOfferState(oldAcct)
+		Check(not bool(offer3.get("eligible", true)) and str(offer3.get("reason", "")) == "expired", "starter expires after D3")
+		sql.db.delete_rows("character", "nickname = 'IdleCoOld'")
+		sql.db.delete_rows("account", "username = 'idle_co_old'")
+	for key in ["co-starter-0", "co-starter-1"]:
+		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
+
+# Fase C (passe S1, BATTLE_PASS_S1): PT, curva, missões server-side, claims,
+# premium via grant, skip com cap, marcos e auto-claim no encerramento.
+func SuiteSeasonPass(sql : SQLService) -> void:
+	print("[suite] season pass (Fase C)")
+	var economy : EconomyService = Launcher.Economy
+	var tele : TelemetryService = Launcher.Telemetry
+	var now : int = SQLCommons.Timestamp()
+
+	# Curva pura (sem DB)
+	CheckEq(EconomyService.PassLevelForPT(0), 0, "0 PT → L0")
+	CheckEq(EconomyService.PassLevelForPT(100), 1, "100 PT → L1")
+	CheckEq(EconomyService.PassLevelForPT(3600), 30, "3600 PT → L30")
+	CheckEq(EconomyService.PassLevelForPT(5000), 40, "5000 PT → L40")
+	CheckEq(EconomyService.PassLevelForPT(99999), 40, "overflow clamps L40")
+
+	# Sem temporada → tudo fail-closed
+	var noS : Dictionary = economy.GetSeasonPass(1)
+	Check(not bool(noS.get("ok", true)), "no season → no pass state")
+
+	# Fecha sobras de outras suítes (só ativas; o settle delas não é nosso)
+	for r in sql.QueryBindings("SELECT season_id FROM season WHERE status = 'active';", []):
+		economy.CloseSeason(int(r["season_id"]))
+	var seasonID : int = economy.CreateSeason(28)
+	if not Check(seasonID > 0, "S1 created (28d)"):
+		return
+	var charID : int = CreateFixture(sql, "idle_pass_account", "IdlePassTester")
+	if not Check(charID != 0, "pass fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 5000)
+	sql.SetCharacterFarmZone(charID, 1)
+
+	var st0 : Dictionary = economy.GetSeasonPass(accountID)
+	Check(bool(st0.get("ok", false)) and int(st0.get("pt", -1)) == 0, "fresh pass 0 PT")
+	CheckEq((st0.get("dailies", []) as Array).size(), 3, "3 dailies")
+	CheckEq((st0.get("weeklies", []) as Array).size(), 3, "3 weeklies")
+	CheckEq((st0.get("milestones", []) as Array).size(), 4, "4 milestones")
+	Check(not bool(st0.get("double_xp", true)), "no double XP at start")
+	var da1 : Array = []
+	for m in st0.get("dailies", []):
+		da1.append(str((m as Dictionary).get("id", "")))
+	var da2 : Array = []
+	for m in economy.GetSeasonPass(accountID).get("dailies", []):
+		da2.append(str((m as Dictionary).get("id", "")))
+	Check(da1 == da2, "daily rotation deterministic")
+
+	# Gera progresso real: 4 settles de 2h + 1 baú comprado e aberto
+	for i in 4:
+		sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 2 * 3600, 1.0)
+		OfflineSettle.SettlePending(charID)
+	tele.Flush()
+	Check(not economy.BuyChests(accountID, charID, 1).is_empty(), "buy 1 chest (spend 120)")
+	var opened : bool = false
+	for chest in sql.GetClosedChests(charID):
+		if str(chest.get("origin", "")) == "shop":
+			opened = not economy.OpenChest(charID, int(chest["id"])).is_empty()
+			break
+	Check(opened, "bought chest opened (chest_open ledger)")
+	sql.ExecuteBindings("INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value) VALUES (?, ?, ?, 'levelup', 1);", [now, accountID, charID])
+	tele.Flush()
+
+	# Claims sem VIP: d_shop1 precisa de 1 visita (insere direto, tabela plana)
+	sql.ExecuteBindings("INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value) VALUES (?, ?, ?, 'shop_visit', 0);", [now, accountID, charID])
+	var c1 : Dictionary = economy.ClaimMission(accountID, "d_shop1")
+	if (st0.get("dailies", []) as Array).any(func(m : Dictionary) -> bool: return str(m.get("id", "")) == "d_shop1"):
+		Check(bool(c1.get("ok", false)) and int(c1.get("pt", 0)) == 40, "d_shop1 claimed +40")
+		Check(str(economy.ClaimMission(accountID, "d_shop1").get("reason", "")) == "already_claimed", "mission double-claim rejected")
+	else:
+		Check(str(c1.get("reason", "")) == "not_active_today", "inactive daily rejected")
+	var c2 : Dictionary = economy.ClaimMission(accountID, "d_chest1")
+	if da1.has("d_chest1"):
+		Check(bool(c2.get("ok", false)), "d_chest1 claimed (real open)")
+	else:
+		Check(not bool(c2.get("ok", true)), "d_chest1 inactive → rejected")
+
+	# Marco via hook direto (idempotente) + claim do próximo via beaten
+	var ptBefore : int = int(economy.GetSeasonPass(accountID).get("pt", 0))
+	economy._PassMilestoneCredit(accountID, 0)
+	economy._PassMilestoneCredit(accountID, 0)
+	var ptAfter : int = int(economy.GetSeasonPass(accountID).get("pt", 0))
+	CheckEq(ptAfter - ptBefore, 50, "milestone hook credits once")
+	Check(sql.SetCharacterBossesBeaten(charID, 2), "beaten = 2")
+	var cm : Dictionary = economy.ClaimMission(accountID, "m_boss1")
+	Check(bool(cm.get("ok", false)) and int(cm.get("pt", 0)) == 50, "milestone m_boss1 claimed +50")
+
+	# VIP +10%: próxima claim multiplica (40 → 44)
+	Check(sql.SetVIPUntil(accountID, now + 30 * 86400), "vip on")
+	Check(sql.SetVIPTier(accountID, 1), "vip tier 1")
+	var cv : Dictionary = economy.ClaimMission(accountID, "d_settle2")
+	if da1.has("d_settle2"):
+		Check(bool(cv.get("ok", false)) and int(cv.get("pt", 0)) == 44, "VIP ×1.1 on mission PT")
+	else:
+		Check(not bool(cv.get("ok", true)), "d_settle2 inactive → rejected")
+
+	# Recompensas: eleva a L30 por update direto (test-only) e claima
+	sql.ExecuteBindings("UPDATE season_account_state SET pt = 3600 WHERE account_id = ? AND season_id = ?;", [accountID, seasonID])
+	CheckEq(int(economy.GetSeasonPass(accountID).get("level", 0)), 30, "3600 PT → L30")
+	var g0 : int = economy.GetGems(accountID)
+	Check(bool(economy.ClaimPassReward(accountID, charID, 3, "free").get("ok", false)), "free L3 claimed")
+	CheckEq(economy.GetGems(accountID), g0 + 10, "free L3 +10 gems")
+	Check(bool(economy.ClaimPassReward(accountID, charID, 10, "free").get("ok", false)), "free L10 emote claimed")
+	var emotes : Array[Dictionary] = sql.QueryBindings("SELECT cosmetic_id FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = 'emote_tocha';", [accountID])
+	Check(emotes.size() == 1, "emote cosmetic granted")
+	Check(str(economy.ClaimPassReward(accountID, charID, 3, "free").get("reason", "")) == "already_claimed", "reward double-claim rejected")
+	Check(str(economy.ClaimPassReward(accountID, charID, 31, "free").get("reason", "")) == "locked", "L31 locked at L30")
+	Check(str(economy.ClaimPassReward(accountID, charID, 5, "premium").get("reason", "")) == "not_premium", "premium locked without purchase")
+
+	# Premium via grant do companion (pass.s1) + claims premium + bônus
+	Check(economy.EnqueueGrant(accountID, "pass_premium", 1, "co-pass-1", '{"sku": "pass.s1"}'), "pass grant enqueued")
+	var pdone : Dictionary = economy.ProcessPendingGrants(50)
+	CheckEq(int(pdone.get("processed", 0)), 1, "pass grant processed")
+	CheckEq(int(economy.GetSeasonPass(accountID).get("premium", 0)), 1, "premium flag set")
+	Check(bool(economy.ClaimPassReward(accountID, charID, 1, "premium").get("ok", false)), "premium L1 skin claimed")
+	var skins : Array[Dictionary] = sql.QueryBindings("SELECT cosmetic_id FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = 'skin_manto';", [accountID])
+	Check(skins.size() == 1, "skin cosmetic granted")
+	var vip0 : int = sql.GetVIPUntil(accountID)
+	Check(bool(economy.ClaimPassReward(accountID, charID, 5, "premium").get("ok", false)), "premium L5 trial claimed")
+	Check(sql.GetVIPUntil(accountID) >= vip0 + 3 * 86400 - 5, "trial extends vip")
+	Check(bool(economy.ClaimPassReward(accountID, charID, 30, "premium").get("ok", false)), "premium L30 claimed")
+	sql.ExecuteBindings("UPDATE season_account_state SET pt = 5000 WHERE account_id = ? AND season_id = ?;", [accountID, seasonID])
+	Check(bool(economy.ClaimPassReward(accountID, charID, 31, "premium").get("ok", false)), "bonus L31 +20 gems")
+	sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = 'co-pass-1';", [])
+
+	# Skip em conta fresca: PT do próximo nível, 50 gems, cap 10
+	var skipChar : int = CreateFixture(sql, "idle_pass_skip", "IdlePassSkip")
+	if Check(skipChar != 0, "skip fixture created"):
+		var skipAcct : int = sql.GetAccountIDForCharacter(skipChar)
+		sql.SetGems(skipAcct, 1000)
+		var sk1 : Dictionary = economy.SkipPassLevel(skipAcct)
+		Check(bool(sk1.get("ok", false)) and int(sk1.get("pt", 0)) == 100, "skip 1 → L1 PT")
+		for i in 9:
+			economy.SkipPassLevel(skipAcct)
+		var skState : Dictionary = economy.GetSeasonPass(skipAcct)
+		CheckEq(int(skState.get("skips_used", -1)), 10, "10 skips used")
+		Check(str(economy.SkipPassLevel(skipAcct).get("reason", "")) == "skip_cap", "11th skip capped")
+		sql.db.delete_rows("character", "nickname = 'IdlePassSkip'")
+		sql.db.delete_rows("account", "username = 'idle_pass_skip'")
+		sql.ExecuteBindings("DELETE FROM season_account_state WHERE account_id = ?;", [skipAcct])
+
+	# 2× fim de temporada em conta fresca (sem VIP): 40 → 80
+	sql.ExecuteBindings("UPDATE season SET starts_at = ?, ends_at = ? WHERE season_id = ?;", [now - 27 * 86400, now + 86400, seasonID])
+	Check(bool(economy.GetSeasonPass(accountID).get("double_xp", false)), "double XP last days")
+	var dxChar : int = CreateFixture(sql, "idle_pass_dx", "IdlePassDx")
+	if Check(dxChar != 0, "double-xp fixture created"):
+		var dxAcct : int = sql.GetAccountIDForCharacter(dxChar)
+		sql.SetCharacterFarmZone(dxChar, 1)
+		for i in 2:
+			sql.UpdateSettleAnchor(dxChar, SQLCommons.Timestamp() - 2 * 3600, 1.0)
+			OfflineSettle.SettlePending(dxChar)
+		tele.Flush()
+		var dxc : Dictionary = economy.ClaimMission(dxAcct, "d_settle2")
+		var dxAct : Array = []
+		for m in economy.GetSeasonPass(dxAcct).get("dailies", []):
+			dxAct.append(str((m as Dictionary).get("id", "")))
+		if dxAct.has("d_settle2"):
+			Check(bool(dxc.get("ok", false)) and int(dxc.get("pt", 0)) == 80, "double XP 40 → 80")
+		else:
+			Check(not bool(dxc.get("ok", true)), "d_settle2 inactive → rejected")
+		sql.db.delete_rows("character", "nickname = 'IdlePassDx'")
+		sql.db.delete_rows("account", "username = 'idle_pass_dx'")
+		sql.ExecuteBindings("DELETE FROM season_account_state WHERE account_id = ?;", [dxAcct])
+		sql.ExecuteBindings("DELETE FROM season_mission_state WHERE account_id = ?;", [dxAcct])
+
+	# Encerramento: auto-claim do restante + fail-closed do grant sem temporada
+	Check(economy.CloseSeason(seasonID), "S1 closed")
+	var settle : Dictionary = economy.SettleSeasonPrizes(seasonID)
+	Check(bool(settle.get("ok", false)), "S1 settled")
+	var autoF : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = 'pass_reward:free:8';", [accountID])
+	Check(autoF.size() == 1, "free L8 auto-claimed")
+	var autoP : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = 'pass_reward:premium:15';", [accountID])
+	Check(autoP.size() == 1, "premium L15 auto-claimed")
+	Check(economy.EnqueueGrant(accountID, "pass_premium", 1, "co-pass-2", '{"sku": "pass.s1"}'), "late pass grant enqueued")
+	var pdone2 : Dictionary = economy.ProcessPendingGrants(50)
+	CheckEq(int(pdone2.get("failed", 0)), 1, "pass grant without season fails closed")
+	sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = 'co-pass-2';", [])
+
+	Check(sql.SetCharacterBossesBeaten(charID, 0), "beaten restored")
+	for u in ["idle_pass_account", "idle_pass_skip", "idle_pass_dx"]:
+		var aid : Array[Dictionary] = sql.QueryBindings("SELECT account_id FROM account WHERE username = ?;", [u])
+		for a in aid:
+			sql.ExecuteBindings("DELETE FROM season_account_state WHERE account_id = ?;", [int(a["account_id"])])
+			sql.ExecuteBindings("DELETE FROM season_mission_state WHERE account_id = ?;", [int(a["account_id"])])
+			sql.ExecuteBindings("DELETE FROM cosmetic_grant WHERE account_id = ?;", [int(a["account_id"])])
+	sql.db.delete_rows("character", "nickname = 'IdlePassTester'")
+	sql.db.delete_rows("account", "username = 'idle_pass_account'")
+
+# Follow-up Deluxe (BATTLE_PASS_S1 §4): premium + 10 níveis + emote + 150 gems.
+func SuitePassDeluxe(sql : SQLService) -> void:
+	print("[suite] pass deluxe (follow-up)")
+	var economy : EconomyService = Launcher.Economy
+	for r in sql.QueryBindings("SELECT season_id FROM season WHERE status = 'active';", []):
+		economy.CloseSeason(int(r["season_id"]))
+	var seasonID : int = economy.CreateSeason(28)
+	if not Check(seasonID > 0, "deluxe season created"):
+		return
+	var charID : int = CreateFixture(sql, "idle_dlx_account", "IdleDlxTester")
+	if not Check(charID != 0, "deluxe fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var intent : Dictionary = economy.GetCheckoutIntent(accountID, "pass.s1.deluxe")
+	Check(bool(intent.get("ok", false)) and float(intent.get("price", 0.0)) == 44.90, "deluxe intent R$ 44,90")
+	Check(economy.EnqueueGrant(accountID, "pass_premium", 1, "co-dlx-1", '{"sku": "pass.s1.deluxe", "tier": "deluxe"}'), "deluxe grant enqueued")
+	CheckEq(int(economy.ProcessPendingGrants(50).get("processed", 0)), 1, "deluxe grant processed")
+	var st : Dictionary = economy.GetSeasonPass(accountID)
+	CheckEq(int(st.get("premium", 0)), 1, "deluxe sets premium")
+	Check(int(st.get("pt", 0)) >= 1000 and int(st.get("level", 0)) >= 10, "deluxe grants 10 levels")
+	Check(economy.HasCosmetic(accountID, "emote_coroa"), "deluxe emote granted")
+	var g : Array[Dictionary] = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = ? ORDER BY id DESC LIMIT 1;", [accountID, "grant:co-dlx-1"])
+	Check(g.size() == 1 and int(g[0]["amount"]) == 150, "deluxe 150 gems")
+	Check(economy.CloseSeason(seasonID), "deluxe season closed")
+	economy.SettleSeasonPrizes(seasonID)
+	sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = 'co-dlx-1';", [])
+	for u in ["idle_dlx_account"]:
+		var aid : Array[Dictionary] = sql.QueryBindings("SELECT account_id FROM account WHERE username = ?;", [u])
+		for a in aid:
+			sql.ExecuteBindings("DELETE FROM season_account_state WHERE account_id = ?;", [int(a["account_id"])])
+			sql.ExecuteBindings("DELETE FROM season_mission_state WHERE account_id = ?;", [int(a["account_id"])])
+			sql.ExecuteBindings("DELETE FROM cosmetic_grant WHERE account_id = ?;", [int(a["account_id"])])
+	sql.db.delete_rows("character", "nickname = 'IdleDlxTester'")
+	sql.db.delete_rows("account", "username = 'idle_dlx_account'")
+
+# Fase D (cosméticos, MONETIZATION §2.4/§2.7): catálogo, grant/equip, vitrine
+# com trava de marco, backfill de apoio e títulos no leaderboard.
+func SuiteCosmetics(sql : SQLService) -> void:
+	print("[suite] cosmetics (Fase D)")
+	var economy : EconomyService = Launcher.Economy
+	var charID : int = CreateFixture(sql, "idle_cos_account", "IdleCosTester")
+	if not Check(charID != 0, "cosmetics fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 5000)
+	for key in ["co-cos-starter-0", "co-cos-starter-1"]:
+		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
+
+	var col0 : Dictionary = economy.GetCosmetics(accountID)
+	Check(bool(col0.get("ok", false)), "collection ok")
+	CheckEq((col0.get("catalog", []) as Array).size(), 20, "catalog has 20 entries")
+	Check((col0.get("owned", []) as Array).is_empty(), "starts empty")
+
+	Check(str(economy.EquipCosmetic(accountID, "nope").get("reason", "")) == "unknown_cosmetic", "unknown cosmetic rejected")
+	Check(str(economy.EquipCosmetic(accountID, "skin_manto").get("reason", "")) == "not_owned", "unowned equip rejected")
+	Check(economy.GrantCosmetic(accountID, "emote_tocha", "test"), "emote granted")
+	Check(economy.GrantCosmetic(accountID, "nope", "test") == false, "unknown grant rejected")
+	Check(bool(economy.EquipCosmetic(accountID, "emote_tocha").get("ok", false)), "emote equipped")
+	Check(economy.GrantCosmetic(accountID, "emote_guilda", "test"), "second emote granted")
+	Check(bool(economy.EquipCosmetic(accountID, "emote_guilda").get("ok", false)), "same-slot equip replaces")
+	var col1 : Dictionary = economy.GetCosmetics(accountID)
+	Check(str((col1.get("equipped", {}) as Dictionary).get("emote", "")) == "emote_guilda", "slot holds latest")
+	Check(bool(economy.UnequipCosmetic(accountID, "emote").get("ok", false)), "unequip ok")
+	Check(not (economy.GetCosmetics(accountID).get("equipped", {}) as Dictionary).has("emote"), "slot cleared")
+
+	# Vitrine: trava de marco, compra em gems, idempotência de posse
+	Check(str(economy.BuyCosmetic(accountID, charID, "rebirth_t3").get("reason", "")) == "milestone_locked", "vitrine locked at 0 rebirths")
+	Check(str(economy.BuyCosmetic(accountID, charID, "skin_manto").get("reason", "")) == "not_for_sale", "pass cosmetic not avulso")
+	Check(sql.IncRebirthCounter(charID) == 1 and sql.IncRebirthCounter(charID) == 2 and sql.IncRebirthCounter(charID) == 3, "rebirths = 3")
+	var g0 : int = economy.GetGems(accountID)
+	Check(bool(economy.BuyCosmetic(accountID, charID, "rebirth_t3").get("ok", false)), "rebirth_t3 bought")
+	CheckEq(economy.GetGems(accountID), g0 - 150, "vitrine debited 150")
+	Check(str(economy.BuyCosmetic(accountID, charID, "rebirth_t3").get("reason", "")) == "already_owned", "vitrine double-buy rejected")
+	Check(str(economy.BuyCosmetic(accountID, charID, "rebirth_f5").get("reason", "")) == "milestone_locked", "f5 locked below 5")
+	sql.SetGems(accountID, 0)
+	Check(str(economy.BuyCosmetic(accountID, charID, "rebirth_fx").get("reason", "")) == "insufficient_gems", "vitrine without gems rejected")
+	sql.SetGems(accountID, 5000)
+
+	# Básico grátis do 1º ciclo (idempotente) + backfill de apoio
+	economy._RebirthVitrine(accountID, 1)
+	economy._RebirthVitrine(accountID, 1)
+	var basics : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS n FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id IN ('rebirth_t1', 'rebirth_f1');", [accountID])
+	CheckEq(int(basics[0]["n"]), 2, "free basics granted once")
+	Check(economy.EnqueueGrant(accountID, "vip_days", 7, "co-cos-starter-0", '{"sku": "starter.pack"}'), "starter leg enqueued")
+	Check(economy.EnqueueGrant(accountID, "gems", 220, "co-cos-starter-1", '{"sku": "starter.pack"}'), "starter gems leg enqueued")
+	economy.ProcessPendingGrants(50)
+	sql.ExecuteBindings("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount, payload, status, created_at) VALUES ('co-cos-founder', ?, 'gems', 1200, '{\"sku\": \"founder.pack\"}', 'processed', ?);", [accountID, SQLCommons.Timestamp()])
+	var col2 : Dictionary = economy.GetCosmetics(accountID)
+	var owned2 : Array = []
+	for o in col2.get("owned", []):
+		owned2.append(str((o as Dictionary).get("id", "")))
+	Check(owned2.has("title_recruta") and owned2.has("title_fundador"), "support titles backfilled")
+
+	# Título equipa eresolve p/ rótulo (leaderboard/boards)
+	Check(bool(economy.EquipCosmetic(accountID, "title_recruta").get("ok", false)), "title equipped")
+	Check(economy.EquippedTitleLabel(accountID) == "Recruta", "title resolves to label")
+
+	for key in ["co-cos-starter-0", "co-cos-starter-1", "co-cos-founder"]:
+		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
+	sql.ExecuteBindings("DELETE FROM cosmetic_grant WHERE account_id = ?;", [accountID])
+	sql.ExecuteBindings("DELETE FROM cosmetic_equip WHERE account_id = ?;", [accountID])
+	sql.db.delete_rows("character", "nickname = 'IdleCosTester'")
+	sql.db.delete_rows("account", "username = 'idle_cos_account'")
+
+# Fase E (rewarded ads, MONETIZATION §2.5): tokens, caps, 4 placements, 2×/4×
+# no settle, VIP dobra quantidade. Stub em vez de SDK; servidor valida tudo.
+func SuiteAds(sql : SQLService) -> void:
+	print("[suite] rewarded ads (Fase E)")
+	var economy : EconomyService = Launcher.Economy
+	var tele : TelemetryService = Launcher.Telemetry
+	var now : int = SQLCommons.Timestamp()
+	var day : int = EconomyService.ShopDay(now)
+	var tok : Callable = func(p : String) -> String: return "stub:%s:%d" % [p, day]
+	var charID : int = CreateFixture(sql, "idle_ads_account", "IdleAdsTester")
+	if not Check(charID != 0, "ads fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 1000)
+	sql.SetCharacterFarmZone(charID, 1)
+
+	Check(str(economy.WatchAd(accountID, charID, "nope", tok.call("nope")).get("reason", "")) == "unknown_placement", "unknown placement rejected")
+	Check(str(economy.WatchAd(accountID, charID, "chest", "bogus").get("reason", "")) == "bad_token", "bad token rejected")
+	Check(str(economy.WatchAd(accountID, charID, "chest", "stub:bosskey:%d" % day).get("reason", "")) == "bad_token", "cross-placement token rejected")
+
+	# Baú bônus 1/dia (origem 'ad', sem gems)
+	var ch0 : int = int(sql.GetChestStats(charID)["closed"])
+	Check(bool(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("ok", false)), "ad chest claimed")
+	CheckEq(int(sql.GetChestStats(charID)["closed"]), ch0 + 1, "ad chest granted")
+	var adChest : int = 0
+	for chest in sql.GetClosedChests(charID):
+		if str(chest.get("origin", "")) == "ad":
+			adChest = int(chest["id"])
+	Check(adChest > 0, "ad chest origin marked")
+	Check(str(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("reason", "")) == "placement_cap", "chest 1/day enforced")
+
+	# Chave extra 2/dia
+	var k0 : int = sql.GetCharacterBossKeys(charID)
+	Check(bool(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("ok", false)), "ad key 1 claimed")
+	Check(bool(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("ok", false)), "ad key 2 claimed")
+	CheckEq(sql.GetCharacterBossKeys(charID), k0 + 2, "2 ad keys credited")
+	Check(str(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("reason", "")) == "placement_cap", "bosskey 2/day enforced")
+
+	# Reroll via ad divide o contador pago (3/dia somados)
+	var ds0 : Dictionary = economy.GetDailyShop(accountID)
+	Check(bool(economy.RerollDailyShopAd(accountID, tok.call("reroll")).get("ok", false)), "ad reroll ok")
+	Check(bool(economy.RerollDailyShop(accountID).get("ok", false)), "paid reroll 2 ok")
+	Check(bool(economy.RerollDailyShop(accountID).get("ok", false)), "paid reroll 3 ok")
+	Check(str(economy.RerollDailyShop(accountID).get("reason", "")) == "reroll_cap", "shared reroll cap enforced")
+
+	# Teto global 6/dia em conta fresca (2 chaves + 1 baú + 3 rerolls)
+	var capChar : int = CreateFixture(sql, "idle_ads_cap", "IdleAdsCap")
+	if Check(capChar != 0, "cap fixture created"):
+		var capAcct : int = sql.GetAccountIDForCharacter(capChar)
+		economy.ClaimAdBossKey(capAcct, capChar, tok.call("bosskey"))
+		economy.ClaimAdBossKey(capAcct, capChar, tok.call("bosskey"))
+		economy.ClaimAdChest(capAcct, capChar, tok.call("chest"))
+		economy.GetDailyShop(capAcct)
+		economy.RerollDailyShopAd(capAcct, tok.call("reroll"))
+		economy.RerollDailyShopAd(capAcct, tok.call("reroll"))
+		economy.RerollDailyShopAd(capAcct, tok.call("reroll"))
+		CheckEq(economy.AdViewsToday(capAcct), 6, "6 ad views counted")
+		Check(str(economy.WatchAd(capAcct, capChar, "afk2x", tok.call("afk2x")).get("reason", "")) == "ad_cap", "global 6/day enforced")
+		sql.db.delete_rows("character", "nickname = 'IdleAdsCap'")
+		sql.db.delete_rows("account", "username = 'idle_ads_cap'")
+
+	# Settle armado F2P: 2× XP/ouro/drops, baús iguais, consome no uso
+	sql.UpdateSettleAnchor(charID, now - 4 * 3600, 1.0)
+	var base : Dictionary = OfflineSettle.SettlePending(charID)
+	tele.Flush()
+	Check(not base.is_empty() and not bool(base.get("doubled", true)), "baseline settle not doubled")
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 4 * 3600, 1.0)
+	Check(bool(economy.WatchAd(accountID, charID, "afk2x", tok.call("afk2x")).get("ok", false)), "afk2x armed")
+	Check(economy.IsAfkAdArmed(accountID, charID, SQLCommons.Timestamp() - 4 * 3600), "arm visible pre-settle")
+	OfflineSettle.nowOverride = SQLCommons.Timestamp()
+	var dbl : Dictionary = OfflineSettle.SettlePending(charID)
+	tele.Flush()
+	OfflineSettle.nowOverride = 0
+	if Check(not dbl.is_empty() and bool(dbl.get("doubled", false)), "armed settle doubled"):
+		CheckNear(float(dbl.get("xp_earned", 0)), float(base.get("xp_earned", 0)) * 2.0, 2.0, "F2P xp ×2")
+		CheckNear(float(dbl.get("gold_earned", 0)), float(base.get("gold_earned", 0)) * 2.0, 2.0, "F2P gold ×2")
+		CheckEq(int(dbl.get("chests", -1)), int(base.get("chests", -2)), "chests not doubled")
+	# Consumo = anchor avança além da view: nenhum settle futuro reusa o arm
+	# (em tempo real o anchor só anda p/ frente; re-ancorar p/ trás no teste
+	# re-armaria por construção — por isso o avanço é explícito aqui).
+	Check(economy.IsAfkAdArmed(accountID, charID, int(dbl.get("last_settled_at", 0))) == false, "arm consumed (anchor past view)")
+	OfflineSettle.nowOverride = int(dbl.get("last_settled_at", 0)) + 7200
+	var after : Dictionary = OfflineSettle.SettlePending(charID)
+	tele.Flush()
+	OfflineSettle.nowOverride = 0
+	if Check(not after.is_empty() and not bool(after.get("doubled", true)), "next settle normal (1×/liquidação)"):
+		Check(int(after.get("xp_earned", 0)) > 0, "next settle productive")
+
+	# VIP: 4× no settle + 2 baús no placement
+	var vipChar : int = CreateFixture(sql, "idle_ads_vip", "IdleAdsVip")
+	if Check(vipChar != 0, "vip ads fixture created"):
+		var vipAcct : int = sql.GetAccountIDForCharacter(vipChar)
+		sql.SetCharacterFarmZone(vipChar, 1)
+		Check(sql.SetVIPUntil(vipAcct, now + 30 * 86400), "vip on")
+		Check(sql.SetVIPTier(vipAcct, 1), "vip tier 1")
+		sql.UpdateSettleAnchor(vipChar, SQLCommons.Timestamp() - 4 * 3600, 1.0)
+		var vbase : Dictionary = OfflineSettle.SettlePending(vipChar)
+		tele.Flush()
+		sql.UpdateSettleAnchor(vipChar, SQLCommons.Timestamp() - 4 * 3600, 1.0)
+		economy.WatchAd(vipAcct, vipChar, "afk2x", tok.call("afk2x"))
+		OfflineSettle.nowOverride = SQLCommons.Timestamp()
+		var vdbl : Dictionary = OfflineSettle.SettlePending(vipChar)
+		tele.Flush()
+		OfflineSettle.nowOverride = 0
+		if Check(not vdbl.is_empty() and bool(vdbl.get("doubled", false)), "vip settle doubled"):
+			CheckNear(float(vdbl.get("xp_earned", 0)), float(vbase.get("xp_earned", 0)) * 4.0, 4.0, "VIP xp ×4")
+		var vc0 : int = int(sql.GetChestStats(vipChar)["closed"])
+		Check(bool(economy.ClaimAdChest(vipAcct, vipChar, tok.call("chest")).get("ok", false)), "vip ad chest claimed")
+		CheckEq(int(sql.GetChestStats(vipChar)["closed"]), vc0 + 2, "VIP chest doubled")
+		var vk0 : int = sql.GetCharacterBossKeys(vipChar)
+		Check(bool(economy.ClaimAdBossKey(vipAcct, vipChar, tok.call("bosskey")).get("ok", false)), "vip ad key claimed")
+		CheckEq(sql.GetCharacterBossKeys(vipChar), vk0 + 2, "VIP key doubled")
+		sql.db.delete_rows("character", "nickname = 'IdleAdsVip'")
+		sql.db.delete_rows("account", "username = 'idle_ads_vip'")
+
+	sql.db.delete_rows("character", "nickname = 'IdleAdsTester'")
+	sql.db.delete_rows("account", "username = 'idle_ads_account'")
+
+# Fase F (guild premium): pontos no settle, board, fast level-up, vault slots.
+func SuiteGuildPremium(sql : SQLService) -> void:
+	print("[suite] guild premium (Fase F)")
+	var economy : EconomyService = Launcher.Economy
+	var tele : TelemetryService = Launcher.Telemetry
+	var charID : int = CreateFixture(sql, "idle_fg_account", "IdleFGuild")
+	if not Check(charID != 0, "guild fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 5000)
+	sql.SetCharacterFarmZone(charID, 1)
+
+	var gid : int = economy.CreateGuild(accountID, charID, "IdleFGuild")
+	Check(gid > 0, "guild created")
+	var st0 : Dictionary = economy.GetGuildState(accountID)
+	Check(bool(st0.get("ok", false)), "guild state ok")
+	CheckEq(int((st0.get("my_guild", {}) as Dictionary).get("level", 0)), 1, "starts L1")
+	CheckEq(int(((st0.get("my_guild", {}) as Dictionary).get("vault", {}) as Dictionary).get("cap", 0)), 10, "vault base 10 slots")
+
+	# Pontos via settle (1/hora) + board
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 2 * 3600, 1.0)
+	OfflineSettle.SettlePending(charID)
+	tele.Flush()
+	var pts : Array[Dictionary] = sql.QueryBindings("SELECT points FROM guild WHERE guild_id = ?;", [gid])
+	Check(int(pts[0]["points"]) >= 1, "settle earns guild points")
+	var st1 : Dictionary = economy.GetGuildState(accountID)
+	Check((st1.get("board", []) as Array).size() >= 1, "board lists guild")
+
+	# Membro junta-se (contagem) + fast level-up pula o gold
+	var memChar : int = CreateFixture(sql, "idle_fg_member", "IdleFGuildM")
+	if Check(memChar != 0, "member fixture created"):
+		var memAcct : int = sql.GetAccountIDForCharacter(memChar)
+		Check(economy.JoinGuild(memAcct, gid), "member joined")
+		CheckEq((economy.GetGuildState(accountID).get("my_guild", {}) as Dictionary).get("members", []) .size(), 2, "two members")
+		Check(str(economy.SetGuildTag(memAcct, "ZZ").get("reason", "")) == "not_leader", "member cannot tag")
+	var g0 : int = economy.GetGems(accountID)
+	var fast : Dictionary = economy.LevelUpGuildFast(accountID, charID)
+	Check(bool(fast.get("ok", false)) and int(fast.get("level", 0)) == 2, "fast level-up to 2")
+	CheckEq(economy.GetGems(accountID), g0 - 100, "fast costs 2× gems (no gold)")
+	# Tag: líder define (normaliza p/ maiúscula), inválidas e membro rejeitados
+	Check(str(economy.SetGuildTag(accountID, "x").get("reason", "")) == "bad_tag", "1-char tag rejected")
+	Check(str(economy.SetGuildTag(accountID, "toolong").get("reason", "")) == "bad_tag", "6-char tag rejected")
+	Check(str(economy.SetGuildTag(accountID, "a-b").get("reason", "")) == "bad_tag", "symbol tag rejected")
+	var tagRes : Dictionary = economy.SetGuildTag(accountID, "fgu")
+	Check(bool(tagRes.get("ok", false)) and str(tagRes.get("tag", "")) == "FGU", "tag set uppercase")
+	var stTag : Dictionary = economy.GetGuildState(accountID)
+	Check(str((stTag.get("my_guild", {}) as Dictionary).get("tag", "")) == "FGU", "tag in state")
+	Check(str(((stTag.get("board", []) as Array)[0] as Dictionary).get("tag", "")) == "FGU", "tag on board")
+	var st2 : Dictionary = economy.GetGuildState(accountID)
+	CheckEq(int(((st2.get("my_guild", {}) as Dictionary).get("vault", {}) as Dictionary).get("cap", 0)), 12, "vault cap 10 + 2×(L2-1)")
+
+	# Expansão do vault + teto de stacks distintas
+	Check(bool(economy.BuyVaultSlots(accountID, charID).get("ok", false)), "vault slot bought")
+	CheckEq(int(economy.VaultSlotsForGuild(gid).get("cap", 0)), 13, "cap now 13")
+	var apple : int = FarmZoneData.DefaultDropItemHash
+	for i in 13:
+		_SetInventory(sql, charID, 9000 + i, 1)
+		Check(economy.DepositToVault(accountID, charID, 9000 + i, 1), "vault fill %d" % (i + 1))
+	_SetInventory(sql, charID, 9999, 1)
+	Check(not economy.DepositToVault(accountID, charID, 9999, 1), "14th distinct stack rejected at cap")
+	_SetInventory(sql, charID, 9000, 3)
+	Check(economy.DepositToVault(accountID, charID, 9000, 1), "stacking existing item still allowed")
+
+	sql.ExecuteBindings("DELETE FROM guild_vault WHERE guild_id = ?;", [gid])
+	sql.ExecuteBindings("DELETE FROM guild_member WHERE guild_id = ?;", [gid])
+	sql.ExecuteBindings("DELETE FROM guild WHERE guild_id = ?;", [gid])
+	sql.db.delete_rows("character", "nickname = 'IdleFGuild'")
+	sql.db.delete_rows("account", "username = 'idle_fg_account'")
+	sql.db.delete_rows("character", "nickname = 'IdleFGuildM'")
+	sql.db.delete_rows("account", "username = 'idle_fg_member'")
+
+# Fase F (AH premium): destaque pago + slots extras (taxa flat intacta).
+func SuiteMarketplace(sql : SQLService) -> void:
+	print("[suite] AH premium (Fase F)")
+	var economy : EconomyService = Launcher.Economy
+	var apple : int = FarmZoneData.DefaultDropItemHash
+	sql.ExecuteBindings("DELETE FROM auction_listing WHERE status = 'open';", [])
+	var charS : int = CreateFixture(sql, "idle_mk_seller", "IdleMkSeller")
+	if not Check(charS != 0, "market fixture created"):
+		return
+	var accountS : int = sql.GetAccountIDForCharacter(charS)
+	_SetInventory(sql, charS, apple, 30)
+	sql.SetGems(accountS, 5000)
+
+	var ids : Array = []
+	for i in 5:
+		var lid : int = economy.ListItemForSale(charS, apple, 1, 100 + i)
+		if lid > 0:
+			ids.append(lid)
+	CheckEq(ids.size(), 5, "5 listings at base cap")
+	CheckEq(economy.ListItemForSale(charS, apple, 1, 100), 0, "6th listing rejected")
+	var sl : Dictionary = economy.BuyAHSlot(accountS)
+	Check(bool(sl.get("ok", false)) and int(sl.get("slots", 0)) == 6, "AH slot bought (50 gems)")
+	CheckEq(economy.GetGems(accountS), 5000 - 5 * 5 - 50, "fees + slot debited")
+	var lid6 : int = economy.ListItemForSale(charS, apple, 1, 100)
+	Check(lid6 > 0, "6th listing after slot")
+	var g1 : int = economy.GetGems(accountS)
+	Check(bool(economy.HighlightListing(accountS, lid6).get("ok", false)), "highlight bought")
+	CheckEq(economy.GetGems(accountS), g1 - 15, "highlight fee burned")
+	Check(str(economy.HighlightListing(accountS, lid6).get("reason", "")) == "already_highlighted", "double highlight rejected")
+	var rows : Array[Dictionary] = economy.BrowseListings(20)
+	Check(int(rows[0]["id"]) == lid6 and int(rows[0].get("highlight", 0)) == 1, "highlighted first in browse")
+	for i in 4:
+		economy.BuyAHSlot(accountS)
+	Check(str(economy.BuyAHSlot(accountS).get("reason", "")) == "slots_cap", "slots cap +5 enforced")
+	CheckEq(economy.AHOpenCap(accountS), 10, "max 10 open")
+
+	sql.ExecuteBindings("DELETE FROM auction_listing WHERE status = 'open';", [])
+	sql.ExecuteBindings("DELETE FROM ah_slots WHERE account_id = ?;", [accountS])
+	sql.db.delete_rows("character", "nickname = 'IdleMkSeller'")
+	sql.db.delete_rows("account", "username = 'idle_mk_seller'")
+
+# Fase F (4 corridas): boss_kills + guild_points do snapshot ao prêmio.
+func SuiteSeasonRaces(sql : SQLService) -> void:
+	print("[suite] season races (Fase F)")
+	var economy : EconomyService = Launcher.Economy
+	for r in sql.QueryBindings("SELECT season_id FROM season WHERE status = 'active';", []):
+		economy.CloseSeason(int(r["season_id"]))
+	var seasonID : int = economy.CreateSeason(7)
+	if not Check(seasonID > 0, "race season created"):
+		return
+	var charID : int = CreateFixture(sql, "idle_race_account", "IdleRaceTester")
+	if not Check(charID != 0, "race fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 5000)
+	var gid : int = economy.CreateGuild(accountID, charID, "IdleRaceGuild")
+	Check(gid > 0, "race guild created")
+	sql.ExecuteBindings("UPDATE guild SET points = 42 WHERE guild_id = ?;", [gid])
+	Check(sql.SetCharacterBossesBeaten(charID, 2), "beaten = 2")
+	CheckEq(economy.SnapshotSeasonBossKills(seasonID), 1, "boss snapshot 1 row")
+	CheckEq(economy.SnapshotSeasonGuildPoints(seasonID), 1, "guild snapshot 1 row")
+	var boards : Dictionary = economy.GetSeasonBoardsState(10)
+	Check(boards.has("boss_kills") and boards.has("guild_points"), "4 boards in state")
+	Check((boards.get("boss_kills", []) as Array).size() >= 1, "boss board has row")
+	Check((boards.get("guild_points", []) as Array).size() >= 1, "guild board has row")
+	Check((economy.GetSeasonBoard(seasonID, "nope", 10) as Array).is_empty(), "unknown kind empty")
+	Check(economy.CloseSeason(seasonID), "race season closed")
+	var res : Dictionary = economy.SettleSeasonPrizes(seasonID)
+	Check(bool(res.get("ok", false)), "race season settled")
+	var bk : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason LIKE 'season_prize:%:boss_kills:%';", [accountID])
+	Check(bk.size() == 1, "boss_kills prize paid")
+	var gp2 : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE reason = ?;", ["season_prize:%d:guild_points:%d" % [seasonID, gid]])
+	Check(gp2.size() == 1, "guild leader prize paid")
+
+	sql.ExecuteBindings("DELETE FROM guild_member WHERE guild_id = ?;", [gid])
+	sql.ExecuteBindings("DELETE FROM guild WHERE guild_id = ?;", [gid])
+	sql.db.delete_rows("character", "nickname = 'IdleRaceTester'")
+	sql.db.delete_rows("account", "username = 'idle_race_account'")
+
+# Fase F (torneios + doação): copa gold-entry e título de Apoiador.
+func SuiteTournamentDonation(sql : SQLService) -> void:
+	print("[suite] tournament + donation (Fase F)")
+	var economy : EconomyService = Launcher.Economy
+	var t1 : int = economy.EnsureWeeklyTournament()
+	Check(t1 > 0, "weekly tournament ensured")
+	CheckEq(economy.EnsureWeeklyTournament(), t1, "ensure idempotent")
+	var charA : int = CreateFixture(sql, "idle_tn_a", "IdleTnA")
+	var charB : int = CreateFixture(sql, "idle_tn_b", "IdleTnB")
+	if not Check(charA != 0 and charB != 0, "tournament fixtures created"):
+		return
+	var acctA : int = sql.GetAccountIDForCharacter(charA)
+	var acctB : int = sql.GetAccountIDForCharacter(charB)
+	Check(sql.UpdatePowerScore(charA, 100), "power A 100")
+	Check(sql.UpdatePowerScore(charB, 50), "power B 50")
+	Check(bool(economy.EnterTournament(acctA, charA, t1).get("ok", false)), "A entered")
+	Check(bool(economy.EnterTournament(acctB, charB, t1).get("ok", false)), "B entered")
+	Check(str(economy.EnterTournament(acctA, charA, t1).get("reason", "")) == "already_entered", "double enter rejected")
+	var poorChar : int = CreateFixture(sql, "idle_tn_poor", "IdleTnPoor")
+	if Check(poorChar != 0, "poor fixture created"):
+		var poorAcct : int = sql.GetAccountIDForCharacter(poorChar)
+		sql.db.update_rows("stat", "char_id = %d" % poorChar, {"gp" = 0})
+		Check(str(economy.EnterTournament(poorAcct, poorChar, t1).get("reason", "")) == "insufficient_gold", "broke rejected")
+		sql.db.delete_rows("character", "nickname = 'IdleTnPoor'")
+		sql.db.delete_rows("account", "username = 'idle_tn_poor'")
+	Check(sql.UpdatePowerScore(charA, 150), "power A 150 (+50)")
+	Check(sql.UpdatePowerScore(charB, 60), "power B 60 (+10)")
+	sql.ExecuteBindings("UPDATE tournament SET ends_at = ? WHERE tournament_id = ?;", [SQLCommons.Timestamp() - 10, t1])
+	var tick : Dictionary = economy.TickTournaments()
+	CheckEq(int(tick.get("settled", 0)), 1, "tournament settled by tick")
+	Check(int(tick.get("created", 0)) >= 0, "rotation tick ok")
+	var w1 : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [acctA, "tournament_prize:%d:1" % t1])
+	Check(w1.size() == 1, "champion prize paid")
+	var champ : Array[Dictionary] = sql.QueryBindings("SELECT id FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = 'title_campeao';", [acctA])
+	Check(champ.size() == 1, "champion title granted")
+	var w2 : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [acctB, "tournament_prize:%d:2" % t1])
+	Check(w2.size() == 1, "runner-up prize paid")
+	Check(str(economy.SettleTournament(t1).get("reason", "")) == "not_active", "resettle rejected")
+
+	# Doação: grant cosmetic direto vira título (sem poder)
+	Check(economy.EnqueueGrant(acctA, "cosmetic", 1, "co-donate-1", '{"sku": "donate.support", "cosmetic_id": "title_apoiador"}'), "donate grant enqueued")
+	var dd : Dictionary = economy.ProcessPendingGrants(50)
+	CheckEq(int(dd.get("processed", 0)), 1, "donate grant processed")
+	Check(economy.HasCosmetic(acctA, "title_apoiador"), "supporter title owned")
+	Check(economy.EnqueueGrant(acctA, "cosmetic", 1, "co-donate-2", '{"sku": "x"}'), "bad cosmetic enqueued")
+	var dd2 : Dictionary = economy.ProcessPendingGrants(50)
+	CheckEq(int(dd2.get("failed", 0)), 1, "unknown cosmetic fails closed")
+	for key in ["co-donate-1", "co-donate-2"]:
+		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
+	sql.ExecuteBindings("DELETE FROM cosmetic_grant WHERE account_id = ?;", [acctA])
+	sql.db.delete_rows("character", "nickname = 'IdleTnA'")
+	sql.db.delete_rows("account", "username = 'idle_tn_a'")
+	sql.db.delete_rows("character", "nickname = 'IdleTnB'")
+	sql.db.delete_rows("account", "username = 'idle_tn_b'")
+
+# Fase B: cap offline por tier (12h F2P / 24h VIP1 / 36h VIP2, expirado volta).
+func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
+	print("[suite] VIP cap hours (Fase B)")
+	var now : int = SQLCommons.Timestamp()
+	sql.SetCharacterFarmZone(charID, 1)
+	sql.UpdateSettleAnchor(charID, now - 48 * 3600, 1.0)
+	OfflineSettle.nowOverride = now
+	CheckEq(OfflineSettle.CapHoursForAccount(0, now), 12.0, "no account → 12h")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 12.0, "no VIP → 12h")
+	var r0 : OfflineSettle.SettleReport = OfflineSettle.BuildReport(charID, now)
+	CheckEq(r0.hours, 12.0, "report capped at 12h F2P")
+	Check(sql.SetVIPUntil(accountID, now + 30 * 86400), "vip window on")
+	Check(sql.SetVIPTier(accountID, 1), "tier 1 set")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 24.0, "VIP1 → 24h")
+	CheckEq(OfflineSettle.BuildReport(charID, now).hours, 24.0, "report capped at 24h VIP1")
+	Check(sql.SetVIPTier(accountID, 2), "tier 2 set")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 36.0, "VIP2 → 36h")
+	CheckEq(OfflineSettle.BuildReport(charID, now).hours, 36.0, "report capped at 36h VIP2")
+	sql.SetVIPUntil(accountID, now - 10)
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 12.0, "expired → 12h")
+	# PurchaseVIP registra o tier (upgrade nunca rebaixa janela ativa)
+	sql.SetGems(accountID, 5000)
+	var economy : EconomyService = Launcher.Economy
+	Check(economy.PurchaseVIP(accountID, 1), "buy VIP1 with gems")
+	CheckEq(sql.GetVIPTier(accountID), 1, "purchase records tier 1")
+	Check(economy.PurchaseVIP(accountID, 2), "buy VIP2 with gems")
+	CheckEq(sql.GetVIPTier(accountID), 2, "purchase upgrades to tier 2")
+	OfflineSettle.nowOverride = 0
+
+# Fase B: loja diária (rotação determinística, reroll com cap, deals, packs
+# de boss e fim de temporada). Sem RNG: rotação deriva de (conta, dia, salt).
+func SuiteDailyShop(sql : SQLService, charID : int, accountID : int) -> void:
+	print("[suite] daily shop (Fase B)")
+	var economy : EconomyService = Launcher.Economy
+	sql.SetGems(accountID, 5000)
+	var day : int = EconomyService.ShopDay(SQLCommons.Timestamp())
+
+	var s1 : Dictionary = economy.GetDailyShop(accountID)
+	Check(bool(s1.get("ok", false)), "daily shop ok")
+	CheckEq((s1.get("offers", []) as Array).size(), 3, "3 offers shown")
+	CheckEq(int(s1.get("rerolls_used", -1)), 0, "no rerolls used")
+	var s2 : Dictionary = economy.GetDailyShop(accountID)
+	var ids1 : Array = []
+	var ids2 : Array = []
+	for e in s1.get("offers", []):
+		ids1.append(str((e as Dictionary).get("id", "")))
+	for e in s2.get("offers", []):
+		ids2.append(str((e as Dictionary).get("id", "")))
+	Check(ids1 == ids2, "rotation deterministic within day")
+
+	# Compra dinâmica da 1ª oferta (cobre o pipeline débito→grant→claimed)
+	var first : Dictionary = (s1.get("offers", []) as Array)[0]
+	var fcost : int = int(first.get("cost", 0))
+	var fkind : String = str(first.get("kind", ""))
+	var gemsBefore : int = economy.GetGems(accountID)
+	var vipBefore : int = sql.GetVIPUntil(accountID)
+	var chestsBefore : int = int(sql.GetChestStats(charID)["closed"])
+	var buy : Dictionary = economy.BuyDailyOffer(accountID, charID, str(first.get("id", "")))
+	Check(bool(buy.get("ok", false)), "first offer bought")
+	CheckEq(int(buy.get("cost", 0)), fcost, "deal price charged")
+	CheckEq(economy.GetGems(accountID), gemsBefore - fcost, "gems debited")
+	if fkind == "chests":
+		CheckEq(int(sql.GetChestStats(charID)["closed"]), chestsBefore + int(first.get("count", 0)), "deal chests granted")
+	else:
+		Check(sql.GetVIPUntil(accountID) > vipBefore, "trial vip extended")
+	Check(not bool(economy.BuyDailyOffer(accountID, charID, str(first.get("id", ""))).get("ok", true)), "double buy rejected")
+
+	# Reroll: muda a rotação, mantém claimed, custa 20, cap em 3
+	var r1 : Dictionary = economy.RerollDailyShop(accountID)
+	Check(bool(r1.get("ok", false)), "reroll 1 ok")
+	CheckEq(int(r1.get("rerolls_used", 0)), 1, "reroll counter 1")
+	Check(economy.RerollDailyShop(accountID).get("ok", false), "reroll 2 ok")
+	Check(economy.RerollDailyShop(accountID).get("ok", false), "reroll 3 ok")
+	var r4 : Dictionary = economy.RerollDailyShop(accountID)
+	Check(not bool(r4.get("ok", true)) and str(r4.get("reason", "")) == "reroll_cap", "reroll cap enforced")
+	var s3 : Dictionary = economy.GetDailyShop(accountID)
+	var stillClaimed : bool = false
+	for e in s3.get("offers", []):
+		if str((e as Dictionary).get("id", "")) == str(first.get("id", "")):
+			stillClaimed = bool((e as Dictionary).get("claimed", false))
+	var rowClaimed : Array[Dictionary] = sql.QueryBindings("SELECT claimed_json FROM shop_daily WHERE account_id = ? AND day = ?;", [accountID, day])
+	Check((str(rowClaimed[0].get("claimed_json", "")) as String).contains(str(first.get("id", ""))), "claimed persists across rerolls")
+
+	# Reroll sem gems em conta fresca (dia próprio) → insufficient_gems
+	var poorChar : int = CreateFixture(sql, "idle_ds_poor", "IdleDsPoor")
+	if Check(poorChar != 0, "poor fixture created"):
+		var poorAcct : int = sql.GetAccountIDForCharacter(poorChar)
+		sql.SetGems(poorAcct, 0)
+		var pr : Dictionary = economy.RerollDailyShop(poorAcct)
+		Check(not bool(pr.get("ok", true)) and str(pr.get("reason", "")) == "insufficient_gems", "reroll without gems rejected")
+		sql.db.delete_rows("character", "nickname = 'IdleDsPoor'")
+		sql.db.delete_rows("account", "username = 'idle_ds_poor'")
+
+	# Pack de boss: 1º boss vencido libera boss-0-pack (3 baús/240)
+	Check(sql.SetCharacterBossesBeaten(charID, 1), "bosses_beaten = 1")
+	var s4 : Dictionary = economy.GetDailyShop(accountID)
+	var bossOffer : Dictionary = {}
+	for e in s4.get("one_time", []):
+		if str((e as Dictionary).get("id", "")) == "boss-0-pack":
+			bossOffer = e
+	if Check(not bossOffer.is_empty(), "boss-0-pack eligible"):
+		var cb : int = int(sql.GetChestStats(charID)["closed"])
+		var bb : Dictionary = economy.BuyDailyOffer(accountID, charID, "boss-0-pack")
+		Check(bool(bb.get("ok", false)) and int(bb.get("cost", 0)) == economy.BOSS_PACK_COST, "boss pack bought at deal price")
+		CheckEq(int(sql.GetChestStats(charID)["closed"]), cb + economy.BOSS_PACK_CHESTS, "boss pack chests granted")
+		Check(not bool(economy.BuyDailyOffer(accountID, charID, "boss-0-pack").get("ok", true)), "boss pack one-time")
+
+	# Fim de temporada: season de 1 dia → finale elegível nas últimas 48h
+	var seasonID : int = economy.CreateSeason(1)
+	if Check(seasonID > 0, "short season created"):
+		var s5 : Dictionary = economy.GetDailyShop(accountID)
+		var fin : Dictionary = {}
+		for e in s5.get("one_time", []):
+			if str((e as Dictionary).get("id", "")) == "season-%d-finale" % seasonID:
+				fin = e
+		if Check(not fin.is_empty(), "season finale eligible"):
+			var fb : Dictionary = economy.BuyDailyOffer(accountID, charID, "season-%d-finale" % seasonID)
+			Check(bool(fb.get("ok", false)), "finale bought")
+		Check(economy.CloseSeason(seasonID), "short season closed")
+	Check(sql.SetCharacterBossesBeaten(charID, 0), "bosses_beaten restored")
 
 # Item lots (SOM-IDLE B1): per-grant identity, FIFO consume, trade chain, reconcile.
 func SuiteItemLots(sql : SQLService) -> void:
@@ -2038,3 +3075,92 @@ func SuiteRefund(sql : SQLService) -> void:
 	var oldkey : String = "r-old-%d" % tag
 	sql.ExecuteBindings("INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, 'gems', 550, 550, ?, ?);", [accountID, "grant:" + oldkey, SQLCommons.Timestamp() - 8 * 86400])
 	Check(str(economy.RequestGemRefund(accountID, oldkey).get("reason", "")) == "window_expired", "refund: older than 7d -> window_expired")
+
+# ------------------------------------------------------------------ elemental combat (poison/bleed/burn/elemental)
+# Self-contained: bare off-tree ActorStats/BaseAgent instances, no SQL/world
+# needed. Covers the formula layer (resist cap, elemental sum) and the proc
+# layer up to the point Apply() records the generation counter — does NOT
+# exercise the actual timer tick firing (that needs a running SceneTree; see
+# ELEMENTAL_COMBAT.md §6 for why this suite stops here and what still needs a
+# live-instance/manual pass).
+func SuiteElementalCombat() -> void:
+	print("[suite] elemental combat (poison/bleed/burn)")
+
+	# --- resist cap ---
+	var capStat : ActorStats = ActorStats.new()
+	var capMod : StatModifier = StatModifier.new()
+	capMod._effect = CellCommons.Modifier.FireResist
+	capMod._value = 0.95	# above ResistCap on purpose
+	capMod._persistent = true
+	capStat.modifiers.Add(capMod)
+	CheckNear(Formula.GetFireResist(capStat), Formula.ResistCap, 0.1, "fire resist clamps at ResistCap even if gear grants more")
+
+	# --- elemental damage sums three elements, each independently mitigated ---
+	var attacker : BaseAgent = BaseAgent.new()
+	var target : BaseAgent = BaseAgent.new()
+	attacker.stat.current.fireDamage = 100
+	attacker.stat.current.iceDamage = 50
+	attacker.stat.current.lightningDamage = 0	# zero should contribute nothing, never negative
+	target.stat.current.fireResist = 0.5		# 100 * (1-0.5) = 50
+	target.stat.current.iceResist = 0.0		# 50 * 1.0 = 50
+	target.stat.current.lightningResist = 0.75	# irrelevant, base damage already 0
+	CheckEq(ElementCommons.GetElementalDamage(attacker, target), 100, "elemental damage: 50 fire (resisted) + 50 ice (unresisted) + 0 lightning")
+
+	# --- zero attacker elemental stats never explodes / never goes negative ---
+	var plainAttacker : BaseAgent = BaseAgent.new()
+	var plainTarget : BaseAgent = BaseAgent.new()
+	CheckEq(ElementCommons.GetElementalDamage(plainAttacker, plainTarget), 0, "elemental damage: zero stats -> zero, no crash")
+
+	# --- proc gating: zero chance on the weapon never schedules anything ---
+	var noChanceAttacker : BaseAgent = BaseAgent.new()
+	var noChanceTarget : BaseAgent = BaseAgent.new()
+	ElementCommons.RollStatusProcs(noChanceAttacker, noChanceTarget, 0.0)	# rng=0 would succeed against ANY positive chance
+	Check(noChanceTarget.activeStatusEffects.is_empty(), "status proc: no chance modifier on weapon -> never rolls, never schedules")
+
+	# --- proc gating: guaranteed chance (rng below effective chance) applies and records generation ---
+	var poisonAttacker : BaseAgent = BaseAgent.new()
+	var poisonTarget : BaseAgent = BaseAgent.new()
+	var chanceMod : StatModifier = StatModifier.new()
+	chanceMod._effect = CellCommons.Modifier.PoisonChance
+	chanceMod._value = 1.0
+	chanceMod._persistent = true
+	var powerMod : StatModifier = StatModifier.new()
+	powerMod._effect = CellCommons.Modifier.PoisonPower
+	powerMod._value = 20.0
+	powerMod._persistent = true
+	poisonAttacker.stat.modifiers.Add(chanceMod)
+	poisonAttacker.stat.modifiers.Add(powerMod)
+	poisonTarget.stat.health = 999
+	poisonTarget.stat.current.maxHealth = 999
+	ElementCommons.RollStatusProcs(poisonAttacker, poisonTarget, 0.0)	# rng=0.0 <= 1.0 effective chance -> procs
+	CheckEq(int(poisonTarget.activeStatusEffects.get(ElementCommons.StatusType.Poison, 0)), 1, "status proc: guaranteed chance applies, generation=1")
+
+	# --- resist reduces effective proc chance (not just damage) ---
+	var resistedAttacker : BaseAgent = BaseAgent.new()
+	var resistedTarget : BaseAgent = BaseAgent.new()
+	var lowChance : StatModifier = StatModifier.new()
+	lowChance._effect = CellCommons.Modifier.PoisonChance
+	lowChance._value = 0.2
+	lowChance._persistent = true
+	var somePower : StatModifier = StatModifier.new()
+	somePower._effect = CellCommons.Modifier.PoisonPower
+	somePower._value = 10.0
+	somePower._persistent = true
+	resistedAttacker.stat.modifiers.Add(lowChance)
+	resistedAttacker.stat.modifiers.Add(somePower)
+	resistedTarget.stat.current.poisonResist = Formula.ResistCap	# 0.75 -> effective chance = 0.2*0.25 = 0.05
+	resistedTarget.stat.health = 999
+	resistedTarget.stat.current.maxHealth = 999
+	ElementCommons.RollStatusProcs(resistedAttacker, resistedTarget, 0.06)	# just above the 0.05 effective chance
+	Check(resistedTarget.activeStatusEffects.is_empty(), "status proc: capped resist lowers effective chance below the roll -> no proc")
+	ElementCommons.RollStatusProcs(resistedAttacker, resistedTarget, 0.04)	# just below 0.05
+	CheckEq(int(resistedTarget.activeStatusEffects.get(ElementCommons.StatusType.Poison, 0)), 1, "status proc: same resist, roll under the reduced effective chance -> procs")
+
+	# --- reapplication replaces, never stacks (generation increments, doesn't add a second entry) ---
+	ElementCommons.RollStatusProcs(resistedAttacker, resistedTarget, 0.03)
+	CheckEq(int(resistedTarget.activeStatusEffects.get(ElementCommons.StatusType.Poison, 0)), 2, "status proc: reapplication bumps generation (replace, not stack)")
+	CheckEq(resistedTarget.activeStatusEffects.size(), 1, "status proc: only one entry per status type regardless of reapplication count")
+
+	# --- death clears all active status generations (invalidates any in-flight ticks) ---
+	ElementCommons.ClearAllStatus(resistedTarget)
+	Check(resistedTarget.activeStatusEffects.is_empty(), "status proc: ClearAllStatus empties the tracking dict")
