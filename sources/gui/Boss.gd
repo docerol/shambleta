@@ -5,10 +5,12 @@ extends WindowPanel
 # "fica sempre difícil"). Ao desafiar, a janela some pra você VER a luta animada
 # do seu char contra o boss; ela volta quando o resultado chega. Dados por
 # BossState; o resultado chega por BossResult (push assíncrono na morte do boss).
+const AdProvider = preload("res://sources/ads/AdProvider.gd")
 @onready var keysLabel : Label			= $Layout/Keys
 @onready var resultLabel : Label		= $Layout/Result
 @onready var bossList : VBoxContainer	= $Layout/BossScroll/BossList
 @onready var hintLabel : Label			= $Layout/Hint
+@onready var keyAdButton : Button		= $Layout/KeyAd
 
 var _watchingFight : bool = false
 
@@ -34,6 +36,7 @@ func ShowState(state : Dictionary):
 	var beaten : int = int(state.get("beaten", 0))
 	var count : int = int(state.get("count", 0))
 	keysLabel.text = tr("Boss keys: %d    •    Bosses defeated: %d/%d") % [keys, beaten, count]
+	keyAdButton.disabled = false
 	for child in bossList.get_children():
 		child.queue_free()
 	for boss in state.get("bosses", []):
@@ -87,3 +90,10 @@ func ExitSpectate():
 
 func _on_challenge_pressed():
 	Network.ChallengeBoss()
+
+# Fase E: chave extra via rewarded ad (2×/dia, VIP ganha 2).
+func _on_key_ad_pressed():
+	if not AdProvider.IsReady("bosskey"):
+		return
+	keyAdButton.disabled = true
+	Network.ClaimAdBossKey(AdProvider.ShowStub("bosskey"))

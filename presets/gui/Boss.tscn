@@ -42,3 +42,9 @@ size_flags_horizontal = 3
 layout_mode = 2
 text = "Each boss scales to your level — gear decides the outcome."
 autowrap_mode = 3
+
+[node name="KeyAd" type="Button" parent="Layout"]
+layout_mode = 2
+text = "+1 boss key (ad, 2/day)"
+
+[connection signal="pressed" from="Layout/KeyAd" to="." method="_on_key_ad_pressed"]

@@ -3,10 +3,12 @@ extends WindowPanel
 # SOM-IDLE beta GUI: Chests — baús fechados + odds públicas (compliance loot
 # box) + último drop. Dados chegam pela RPC EconomyState (estado consolidado);
 # abrir um baú devolve EconomyState fresco e esta janela se redesenha sozinha.
+const AdProvider = preload("res://sources/ads/AdProvider.gd")
 @onready var lastDropLabel : Label		= $Layout/LastDrop
 @onready var oddsLabel : Label			= $Layout/Odds
 @onready var chestList : VBoxContainer	= $Layout/ChestScroll/ChestList
 @onready var hintLabel : Label			= $Layout/Hint
+@onready var bonusAdButton : Button		= $Layout/BonusChestAd
 
 #
 func _ready():
@@ -28,6 +30,7 @@ func ShowState(state : Dictionary):
 	if state.is_empty():
 		return
 	oddsLabel.text = "Odds: %s" % str(state.get("odds_text", "—"))
+	bonusAdButton.disabled = false
 	for child in chestList.get_children():
 		child.queue_free()
 	var chests : Array = state.get("chests", [])
@@ -48,3 +51,10 @@ func ShowLastDrop(result : Dictionary):
 
 func _on_chest_pressed(chestID : int):
 	Network.OpenChest(chestID)
+
+# Fase E: baú bônus via rewarded ad (1×/dia, VIP ganha 2).
+func _on_bonus_chest_ad_pressed():
+	if not AdProvider.IsReady("chest"):
+		return
+	bonusAdButton.disabled = true
+	Network.ClaimAdChest(AdProvider.ShowStub("chest"))

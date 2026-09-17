@@ -387,8 +387,197 @@ func GetAFKReport(peerID : int):
 	Network.AFKReport(OfflineSettle.BuildReport(charID).to_dictionary(), peerID)
 
 func GetSeasonPass(peerID : int):
-	# Spike stub: season pass mods are pinned to 1.0 (F3/F4 scope)
-	Network.SeasonPassState({"active": false, "mods": 1.0}, peerID)
+	# Fase C: estado real do passe (era stub fixo em {active:false}).
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.SeasonPassState({"ok": false, "reason": "not_logged_in"}, peerID)
+		return
+	Network.SeasonPassState(Launcher.Economy.GetSeasonPass(accountID), peerID)
+
+func ClaimPassReward(level : int, track : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.PassFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ClaimPassReward(accountID, charID, level, track)
+	Network.PassFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.SeasonPassState(Launcher.Economy.GetSeasonPass(accountID), peerID)
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+# Fase C: compra do premium = intent do companion (sku pass.s1, R$ 24,90).
+# Follow-up Deluxe (BATTLE_PASS_S1 §4): sku pass.s1.deluxe (R$ 44,90 —
+# preço sugerido no doc, dono confirma).
+func BuyPass(tier : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.PassFeedback(false, "not_logged_in", peerID)
+		return
+	if tier != "standard" and tier != "deluxe":
+		Network.PassFeedback(false, "bad_tier", peerID)
+		return
+	Network.CheckoutIntent(Launcher.Economy.GetCheckoutIntent(accountID, "pass.s1" if tier == "standard" else "pass.s1.deluxe"), peerID)
+
+func SkipPassLevel(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.PassFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.SkipPassLevel(accountID)
+	Network.PassFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.SeasonPassState(Launcher.Economy.GetSeasonPass(accountID), peerID)
+		var charID : int = Peers.GetCharacter(peerID)
+		if charID != NetworkCommons.PeerUnknownID:
+			Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+func ClaimMission(missionID : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.PassFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ClaimMission(accountID, missionID)
+	Network.PassFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.SeasonPassState(Launcher.Economy.GetSeasonPass(accountID), peerID)
+
+# Fase D (cosméticos): leitura, equipar/desequipar e compra avulsa em gems.
+func GetCosmetics(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.Cosmetics({"ok": false, "reason": "not_logged_in"}, peerID)
+		return
+	Network.Cosmetics(Launcher.Economy.GetCosmetics(accountID), peerID)
+
+func EquipCosmetic(cosmeticID : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CosmeticFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.EquipCosmetic(accountID, cosmeticID)
+	Network.CosmeticFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.Cosmetics(Launcher.Economy.GetCosmetics(accountID), peerID)
+
+func UnequipCosmetic(slot : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CosmeticFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.UnequipCosmetic(accountID, slot)
+	Network.CosmeticFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.Cosmetics(Launcher.Economy.GetCosmetics(accountID), peerID)
+
+func BuyCosmetic(cosmeticID : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.CosmeticFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyCosmetic(accountID, charID, cosmeticID)
+	Network.CosmeticFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.Cosmetics(Launcher.Economy.GetCosmetics(accountID), peerID)
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+# Fase E (rewarded ads): arma 2× do AFK, baú bônus, reroll grátis e chave de
+# boss. Sucessos empurram o estado fresco da janela correspondente.
+func WatchAd(placement : String, token : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.AdFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.WatchAd(accountID, charID, placement, token)
+	Network.AdFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)) and placement == Launcher.Economy.AD_AFK2X:
+		Network.AFKReport(OfflineSettle.BuildReport(charID).to_dictionary(), peerID)
+
+func ClaimAdChest(token : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.AdFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ClaimAdChest(accountID, charID, token)
+	Network.AdFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+func RerollDailyShopAd(token : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.AdFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.RerollDailyShopAd(accountID, token)
+	Network.AdFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.DailyShop(result, peerID)
+
+func ClaimAdBossKey(token : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.AdFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ClaimAdBossKey(accountID, charID, token)
+	Network.AdFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		var player : PlayerAgent = Peers.GetAgent(peerID)
+		var level : int = player.stat.level if player != null else 1
+		Network.BossState(Launcher.Economy.GetBossState(charID, level), peerID)
+
+# Fase F (guild premium + torneios).
+func GetGuildState(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.GuildState({"ok": false, "reason": "not_logged_in"}, peerID)
+		return
+	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
+func LevelUpGuildFast(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.LevelUpGuildFast(accountID, charID)
+	Network.GuildFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+func BuyVaultSlots(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyVaultSlots(accountID, charID)
+	Network.GuildFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+func GetTournaments(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.Tournaments({"ok": false, "reason": "not_logged_in"}, peerID)
+		return
+	Network.Tournaments(Launcher.Economy.GetTournaments(accountID), peerID)
+
+func EnterTournament(tournamentID : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.TournamentFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.EnterTournament(accountID, charID, tournamentID)
+	Network.TournamentFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.Tournaments(Launcher.Economy.GetTournaments(accountID), peerID)
 
 # SOM-IDLE: F3 — VIP window state for the requesting account
 func GetVIPState(peerID : int):
@@ -401,8 +590,13 @@ func GetVIPState(peerID : int):
 	Network.VIPState({"active": until > now, "until": until, "mods": OfflineSettle.VIPModFactor if until > now else 1.0}, peerID)
 
 # SOM-IDLE: F3 — global power-score leaderboard (cached column, offline-friendly)
+# Fase D: enriquece com o título equipado (rótulo via catálogo, sem query extra
+# além do JOIN já embutido em SQL.GetLeaderboard).
 func GetLeaderboard(peerID : int):
-	Network.Leaderboard(Launcher.SQL.GetLeaderboard(50), peerID)
+	var entries : Array = Launcher.SQL.GetLeaderboard(50)
+	for e in entries:
+		(e as Dictionary)["title"] = Launcher.Economy.CosmeticLabel(str((e as Dictionary).get("title_cosmetic", "")))
+	Network.Leaderboard(entries, peerID)
 
 # SOM-IDLE: F3 — active formation slot selector (0..MaxFormationSlots-1)
 func SetFormationSlot(slot : int, peerID : int):
@@ -421,6 +615,8 @@ func GetEconomyState(peerID : int):
 	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
 		Network.EconomyState({}, peerID)
 		return
+	# Fase C: visita à loja alimenta a missão substituta do rewarded ad (D8).
+	Launcher.Telemetry.Record("shop_visit", accountID, charID)
 	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
 func OpenChest(chestID : int, peerID : int):
@@ -461,6 +657,51 @@ func PurchaseVIP(tier : int, peerID : int):
 	if charID != NetworkCommons.PeerUnknownID:
 		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
+# Fase A (checkout sandbox): intenção de compra p/ um SKU do catálogo.
+func GetCheckoutIntent(sku : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CheckoutIntent({"ok": false, "reason": "not_logged_in"}, peerID)
+		return
+	Network.CheckoutIntent(Launcher.Economy.GetCheckoutIntent(accountID, sku), peerID)
+
+# Fase B (loja diária): leitura, compra e reroll. Compras devolvem
+# ShopFeedback + EconomyState fresco (mesmo padrão das demais ações).
+func GetDailyShop(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.DailyShop({"ok": false, "reason": "not_logged_in"}, peerID)
+		return
+	Network.DailyShop(Launcher.Economy.GetDailyShop(accountID), peerID)
+
+func BuyDailyOffer(offerID : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.ShopFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyDailyOffer(accountID, charID, offerID)
+	if not bool(result.get("ok", false)):
+		Network.ShopFeedback(false, "daily offer rejected (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	Network.ShopFeedback(true, "daily offer %s for %d gems" % [offerID, int(result.get("cost", 0))], peerID)
+	Network.DailyShop(Launcher.Economy.GetDailyShop(accountID), peerID)
+	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+func RerollDailyShop(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.ShopFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.RerollDailyShop(accountID)
+	if not bool(result.get("ok", false)):
+		Network.ShopFeedback(false, "reroll rejected (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	Network.DailyShop(result, peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID != NetworkCommons.PeerUnknownID:
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
 func GetSeasonBoards(peerID : int):
 	Network.SeasonBoards(Launcher.Economy.GetSeasonBoardsState(10), peerID)
 
@@ -492,6 +733,19 @@ func GetRebirthState(peerID : int):
 	if charID == NetworkCommons.PeerUnknownID:
 		return
 	Network.RebirthState(Launcher.Economy.GetRebirthState(charID), peerID)
+
+# SOM-IDLE Fase H: criação de itens — roteamento peers→charID/accountID para a
+# camada de economia (validação de orçamento, taxa, nome, capa diária).
+func SubmitCraft(slot : int, baseItemHash : int, name : String, modifiers : Dictionary, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.CraftSubmitFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.SubmitCraft(charID, accountID, slot, baseItemHash, name, modifiers)
+	Network.CraftSubmitFeedback(bool(result.get("ok", false)), str(result.get("reason", "rejected")), peerID)
+	if bool(result.get("ok", false)):
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
 func RebirthRequest(peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)

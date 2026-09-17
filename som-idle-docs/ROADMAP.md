@@ -91,6 +91,20 @@ Gaps herdados do [RELATORIO_AUDITORIA_sourceofmana.md](RELATORIO_AUDITORIA_sourc
 ### Pós-lançamento (backlog priorizado)
 Expansões de heróis/classes · Co-op: boss de guild semanal · Prestige/rebirth · Mini-games (feedback AFK Heroes) · Eventos temáticos · Torneios PvP assíncronos (defesa de formação) · App mobile nativo (IAP) · Integração Discord Activity.
 
+### Follow-ups de monetização — bloqueados fora da esteira (não executáveis aqui)
+Itens que a implementação (Fases A–F + follow-ups G1–G3) deixou preparados mas
+que exigem decisão do dono, terceiros ou arte. Cada um lista o pré-requisito
+e o que já está pronto no código.
+
+| Item | Bloqueado por | Pronto no código |
+|---|---|---|
+| Sprites/partículas dos cosméticos (skins, molduras, Faísca de Mana, partícula do renascimento) | Artista pixel-art (fora do escopo de engenharia) | Catálogo, posse, equip, vitrine, títulos/skin visíveis em texto (`EconomyService.COSMETIC_CATALOG`, janela Coleção) |
+| SDK real de rewarded ads (CrazyGames/Poki ou AdSense for Games) | Conta no portal/rede + decisão de canal | `AdProvider` (troca de 1 função), 4 placements, caps, validação fail-closed (`sources/ads/AdProvider.gd`) |
+| Portais web (distribuição + rev-share) | Decisão de negócio + contas nos portais | Nada pendente de código além do SDK acima |
+| `Claim reset` do VIP2 (MONETIZATION §2.2 cita, sem definir) | Decisão de design do dono (o que "reseta"?) | Cap 36h + resto do VIP implementados |
+| Conta MP PJ + `SHAMBLETA_MP_REFUNDS=1` p/ estornos | Onboarding de gateway (handoff §2) | `refund-sweep --dry-run` + chamada de refund fail-closed (`companion/server.py`) |
+| Preço Deluxe R$ 44,90 | Confirmação do dono (sugerido em BATTLE_PASS_S1 §4) | Mecânica completa atrás do SKU `pass.s1.deluxe` |
+
 ---
 
 ## 2. Linha do tempo visual

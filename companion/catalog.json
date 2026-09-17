@@ -1,0 +1,27 @@
+{
+  "_note": "SHAMBLETA_CATALOG_FILE — catálogo real (Pix + cartão via Mercado Pago). Preço anunciado = preço cobrado (CDC); o grant usa kind/contents. Bundles decompõem em N grants. starter/founder one-time; cosmético do starter entra como entitlement na Fase D. pass.s1 = premium da temporada ativa (Fase C). donate.support = título Apoiador (Fase F).",
+  "gems.550": {"kind": "gems", "amount": 550, "currency": "BRL", "price": 19.90},
+  "gems.1200": {"kind": "gems", "amount": 1200, "currency": "BRL", "price": 39.90},
+  "gems.3000": {"kind": "gems", "amount": 3000, "currency": "BRL", "price": 79.90},
+  "vip.1mo": {"kind": "vip_days", "amount": 30, "currency": "BRL", "price": 24.90},
+  "vip.3mo": {"kind": "vip_days", "amount": 90, "currency": "BRL", "price": 59.90},
+  "pass.s1": {"kind": "pass_premium", "amount": 1, "currency": "BRL", "price": 24.90},
+  "pass.s1.deluxe": {"kind": "pass_premium", "amount": 1, "currency": "BRL", "price": 44.90,
+    "tier": "deluxe"},
+  "donate.support": {"kind": "cosmetic", "amount": 1, "currency": "BRL", "price": 4.90,
+    "cosmetic_id": "title_apoiador"},
+  "starter.pack": {
+    "kind": "bundle",
+    "contents": [{"kind": "vip_days", "amount": 7}, {"kind": "gems", "amount": 220}],
+    "currency": "BRL", "price": 9.90,
+    "one_time": true, "max_account_age": 259200,
+    "title": "Recruta (pending entitlements)"
+  },
+  "founder.pack": {
+    "kind": "bundle",
+    "contents": [{"kind": "gems", "amount": 1200}, {"kind": "vip_days", "amount": 30}],
+    "currency": "BRL", "price": 39.90,
+    "one_time": true,
+    "title": "Fundador (pending entitlements)"
+  }
+}

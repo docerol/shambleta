@@ -49,7 +49,70 @@ text = "VIP 1 — 440 gems / 30 days (+20% AFK)"
 layout_mode = 2
 text = "VIP 2 — 880 gems / 30 days (+20% AFK)"
 
+[node name="Spacer2" type="Control" parent="Layout"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="SandboxTitle" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Buy gems (sandbox)"
+autowrap_mode = 3
+
+[node name="StarterOffer" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Starter pack: —"
+autowrap_mode = 3
+
+[node name="CatalogBox" type="VBoxContainer" parent="Layout"]
+layout_mode = 2
+
+[node name="PendingGrants" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Pending purchases: —"
+autowrap_mode = 3
+
+[node name="IntentStatus" type="Label" parent="Layout"]
+layout_mode = 2
+text = ""
+autowrap_mode = 3
+
+[node name="PaySandbox" type="Button" parent="Layout"]
+layout_mode = 2
+disabled = true
+text = "Pay (sandbox)"
+
+[node name="Spacer3" type="Control" parent="Layout"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="DailyTitle" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Daily shop (resets 03:00 BRT)"
+autowrap_mode = 3
+
+[node name="DailyBox" type="VBoxContainer" parent="Layout"]
+layout_mode = 2
+
+[node name="RerollDaily" type="Button" parent="Layout"]
+layout_mode = 2
+text = "Reroll daily shop"
+
+[node name="RerollDailyAd" type="Button" parent="Layout"]
+layout_mode = 2
+text = "Free reroll (ad)"
+
+[node name="OneTimeTitle" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Special offers (one-time)"
+autowrap_mode = 3
+
+[node name="OneTimeBox" type="VBoxContainer" parent="Layout"]
+layout_mode = 2
+
 [connection signal="pressed" from="Layout/BuyChest1" to="." method="_on_buy_chest_pressed" binds=[1]]
 [connection signal="pressed" from="Layout/BuyChest5" to="." method="_on_buy_chest_pressed" binds=[5]]
 [connection signal="pressed" from="Layout/BuyVip1" to="." method="_on_buy_vip_pressed" binds=[1]]
 [connection signal="pressed" from="Layout/BuyVip2" to="." method="_on_buy_vip_pressed" binds=[2]]
+[connection signal="pressed" from="Layout/PaySandbox" to="." method="_on_pay_sandbox_pressed"]
+[connection signal="pressed" from="Layout/RerollDaily" to="." method="_on_reroll_daily_pressed"]
+[connection signal="pressed" from="Layout/RerollDailyAd" to="." method="_on_reroll_daily_ad_pressed"]

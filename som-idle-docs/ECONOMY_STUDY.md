@@ -55,6 +55,11 @@ estatística de ciclo, incrementada dentro da transação do renascimento.
 - `VIPModFactor = 1.2` — multiplicador aplicado ao ganho de `OfflineSettle`
   quando `GetVIPUntil(accountID) > agora` (conta com VIP ativo).
 - VIP também multiplica a recompensa de boss (ver §6).
+- **Tiers e cap offline (Fase B, MONETIZATION §2.2):** `account.vip_tier`
+  (migration 022) — 1 = VIP1 (**24h** de cap), 2 = VIP2 (**36h** de cap); F2P
+  fica em 12h (`OfflineSettle.CapHoursForAccount`). Upgrade nunca rebaixa tier
+  ativo; expirado volta a 12h. Grants `vip_days` carregam tier pelo SKU
+  (`vip.3mo` → 2, demais → 1); trial (starter, deal diária) entra como tier 1.
 - **Gap conhecido**: não há, no código revisado, detalhe do preço/duração do
   pacote de VIP à venda — só o efeito do status. Preço e duração do SKU de
   VIP devem ser especificados no catálogo (`SHAMBLETA_CATALOG_FILE`, ver
@@ -67,7 +72,7 @@ Parâmetros que convertem tempo desconectado em recompensa ao reconectar:
 | Constante | Valor | Efeito |
 |---|---|---|
 | `OfflineFactor` | 0.6 | Ganho offline é 60% do ganho equivalente online (par da zona) |
-| `BaseCapHours` | 12.0 | Teto de horas offline liquidáveis por sessão |
+| `BaseCapHours` | 12.0 | Teto F2P de horas offline liquidáveis por sessão (VIP1 = 24h, VIP2 = 36h — `CapHoursForAccount`) |
 | `DeathTaxPct` | 5% | Penalidade aplicada por morte durante a janela liquidada |
 | `MaxChests` | 3 | Máximo de baús gerados por liquidação |
 | `ChestHoursPerChest` | 4 | 1 baú a cada 4h offline liquidadas (até o teto de 3) |

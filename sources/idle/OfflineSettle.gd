@@ -8,6 +8,10 @@ class_name OfflineSettle
 
 const OfflineFactor : float = 0.6
 const BaseCapHours : float = 12.0
+# SOM-IDLE Fase B: cap diferenciado por tier (MONETIZATION §2.2) — F2P sente o
+# teto de 12h; VIP1 estende a 24h; VIP2 a 36h. Expirado volta a 12h.
+const CapHoursVIP1 : float = 24.0
+const CapHoursVIP2 : float = 36.0
 const DeathTaxPct : int = 5
 const MaxChests : int = 3
 const ChestHoursPerChest : int = 4
@@ -38,6 +42,11 @@ class SettleReport:
 	var essenceEarned : int = 0
 	var lastSettledAt : int = 0
 	var mods : float = 1.0
+	# Fase E: rewarded ad no claim (2× F2P, 4× VIP). `armed` = preview (vale no
+	# próximo Collect); `doubled` = aplicado. Só XP/ouro/drops dobram — baús,
+	# chaves e favores nunca (MONETIZATION §2.5/§0.1).
+	var armed : bool = false
+	var doubled : bool = false
 
 	func to_dictionary() -> Dictionary:
 		return {
@@ -58,6 +67,8 @@ class SettleReport:
 			"essence_earned": essenceEarned,
 			"last_settled_at": lastSettledAt,
 			"mods": mods,
+			"armed": armed,
+			"doubled": doubled,
 		}
 
 # Test seams (headless `-s` runs have no Launcher/SQL autoload context)
@@ -93,9 +104,9 @@ static func BuildReport(charID : int, now : int = 0) -> SettleReport:
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = _statInt(char, "farm_zone", 0)
 	report.lastSettledAt = _statInt(char, "last_settled_at", 0)
-	report.hours = minf(float(elapsed) / 3600.0, BaseCapHours)
+	report.hours = minf(float(elapsed) / 3600.0, CapHoursForAccount(report.accountID))
 	report.efficiency = clampf(float(char.get("session_efficiency", 1.0) if char.get("session_efficiency", 1.0) != null else 1.0), MinEfficiency, 1.0)
-	_ApplyFormula(sql, report)
+	_ApplyFormula(sql, report, _AdMult(report.accountID, charID, report.lastSettledAt))
 	return report
 
 # Applies a pending settle for charID. Returns empty dict when nothing to settle.
@@ -121,17 +132,44 @@ static func SettlePending(charID : int) -> Dictionary:
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = zoneID
 	report.lastSettledAt = now
-	report.hours = minf(float(now - lastSettled) / 3600.0, BaseCapHours)
+	report.hours = minf(float(now - lastSettled) / 3600.0, CapHoursForAccount(report.accountID))
 	report.efficiency = clampf(float(char.get("session_efficiency", 1.0)), MinEfficiency, 1.0)
 	# NOTE: session deaths are already baked into session_efficiency on disconnect
 	# (NetServer SOM-IDLE hook); the spike does not track a separate death count.
 
-	_ApplyFormula(sql, report)
+	_ApplyFormula(sql, report, _AdMult(report.accountID, charID, lastSettled))
 	if not _Apply(sql, report):
 		return {}
 	return report.to_dictionary()
 
+# Fase E: multiplicador do ad armado (0/2/4). VIP dobra o bônus (2×→4×) no
+# momento do settle. Puro p/ seams; null-safe sem Economy (retorna 1).
+static func _AdMult(accountID : int, charID : int, anchorTs : int) -> int:
+	var eco : EconomyService = _economy()
+	if eco == null or not eco.IsAfkAdArmed(accountID, charID, anchorTs):
+		return 1
+	var sql : SQLService = _sql()
+	if sql.GetVIPUntil(accountID) > _now():
+		return 4
+	return 2
+
 # ------------------------------------------------------------------ formula
+
+# SOM-IDLE Fase B: teto de horas liquidáveis por conta — 12h F2P / 24h VIP1 /
+# 36h VIP2 (válido só com janela ativa; expirado volta ao base). Pura p/ seams.
+static func CapHoursForAccount(accountID : int, now : int = 0) -> float:
+	if accountID <= 0:
+		return BaseCapHours
+	var t : int = now if now > 0 else _now()
+	var sql : SQLService = _sql()
+	if sql.GetVIPUntil(accountID) <= t:
+		return BaseCapHours
+	match sql.GetVIPTier(accountID):
+		1:
+			return CapHoursVIP1
+		2:
+			return CapHoursVIP2
+	return BaseCapHours
 
 # SOM-IDLE: F3 — settle mods by account: VIP window (+20% idle faucet),
 # guild hook reserved (F4). Kept as a pure function for test seams.
@@ -148,7 +186,7 @@ static func GetModsForAccount(accountID : int, now : int = 0) -> float:
 			mods *= eco.GuildBuffForAccount(accountID)
 	return mods
 
-static func _ApplyFormula(sql : SQLService, report : SettleReport):
+static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int = 1):
 	var zone : FarmZoneData = FarmZoneData.GetZone(report.zoneID)
 	if zone == null:
 		return
@@ -164,8 +202,12 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport):
 	var offFactor : float = RebirthData.OfflineFactorWithBonus(OfflineFactor, int(rebInfo.get("attune_offline", 0)))
 
 	report.mods = GetModsForAccount(report.accountID, _now())
-	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp)
-	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold)
+	# Fase E: ad armado dobra XP/ouro/drops da liquidação (4× com VIP). Baús,
+	# chaves e favores intactos. Essência de overflow acompanha o XP dobrado
+	# (mesmo eixo tempo-por-tempo do VIP 1.2× — §2.5, não é faucet de essência).
+	report.doubled = adMult > 1
+	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp * float(adMult))
+	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold * float(adMult))
 	if eff < 1.0:
 		report.goldTaxed = roundi(float(report.goldEarned) * float(DeathTaxPct) / 100.0)
 
@@ -176,6 +218,8 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport):
 	# Deterministic fractional carry (no RNG in the golden path)
 	if frac >= 0.5:
 		dropCount += 1
+	dropCount *= adMult
+	report.armed = adMult > 1
 	if dropCount > 0:
 		# SOM-IDLE: F3 — tier-banded drop pool (deterministic pick per char+zone)
 		var itemHash : int = FarmZoneData.GetDropForRoll(report.zoneID, report.charID + report.zoneID)
@@ -274,6 +318,12 @@ static func _Apply(sql : SQLService, report : SettleReport) -> bool:
 		# 6) anchor update
 		if not sqlNode.UpdateSettleAnchor(report.charID, report.lastSettledAt, 1.0):
 			return false
+
+		# Fase F: pontos de guild (1/hora liquidada) — alimenta a corrida
+		# guild_points. Dentro da transação: sem settle, sem ponto.
+		var economy2 : EconomyService = _economy()
+		if economy2 != null:
+			economy2.GuildSettlePoints(accountID, maxi(1, floori(report.hours)))
 
 		return true):
 		applied = true

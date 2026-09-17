@@ -41,3 +41,16 @@ size_flags_vertical = 3
 [node name="SeasonList" type="VBoxContainer" parent="Layout/SeasonScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="TournamentLabel" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Tournament: —"
+
+[node name="TournamentScroll" type="ScrollContainer" parent="Layout"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="TournamentList" type="VBoxContainer" parent="Layout/TournamentScroll"]
+layout_mode = 2
+size_flags_horizontal = 3

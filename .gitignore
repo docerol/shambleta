@@ -25,3 +25,6 @@ presets/maps/*
 # Python bytecode (companion)
 __pycache__/
 *.pyc
+
+# graphify tool output
+graphify-out/

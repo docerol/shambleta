@@ -495,13 +495,14 @@ func LastInsertRowIDRaw() -> int:
 # lotes zerados. Invariante: soma dos lotes ativos == stack agregada em item.
 # Raw (db direto, sem mutex): chamável dentro de Transaction() e em paths com
 # mutex próprio. Retorna o uid ou 0.
-func GrantItemLotRaw(charID : int, itemID : int, count : int, reason : String, bound : int = 0, customfield : String = "", parentUID : int = 0) -> int:
+func GrantItemLotRaw(charID : int, itemID : int, count : int, reason : String, bound : int = 0, customfield : String = "", parentUID : int = 0, creatorAccountID : int = 0) -> int:
 	if count <= 0:
 		return 0
 	if not db.insert_row("item_instance", {
 		"char_id" = charID, "item_id" = itemID, "count" = count,
 		"storage" = 0, "bound" = bound, "customfield" = customfield,
 		"reason" = reason, "parent_uid" = parentUID,
+		"creator_account_id" = creatorAccountID,
 		"created_at" = SQLCommons.Timestamp()}):
 		return 0
 	if not db.query("SELECT last_insert_rowid() AS uid;"):
@@ -720,12 +721,23 @@ func GetVIPUntil(accountID : int) -> int:
 func SetVIPUntil(accountID : int, untilTimestamp : int) -> bool:
 	return db.update_rows("account", "account_id = %d" % accountID, {"vip_until" = untilTimestamp})
 
+# SOM-IDLE Fase B: tier do VIP (migration 022) — 0 = sem tier, 1 = VIP1 (24h
+# cap), 2 = VIP2 (36h cap). Null-safe (conta antiga sem a coluna ⇒ 0).
+func GetVIPTier(accountID : int) -> int:
+	var rows : Array[Dictionary] = QueryBindings("SELECT vip_tier FROM account WHERE account_id = ?;", [accountID])
+	var value : Variant = rows[0].get("vip_tier", 0) if not rows.is_empty() else 0
+	return 0 if value == null else int(value)
+
+func SetVIPTier(accountID : int, tier : int) -> bool:
+	return db.update_rows("account", "account_id = %d" % accountID, {"vip_tier" = clampi(tier, 0, 2)})
+
 # SOM-IDLE: F3 — cached power score for the offline leaderboard
 func UpdatePowerScore(charID : int, score : int) -> bool:
 	return db.update_rows("character", "char_id = %d" % charID, {"power_score" = score})
 
 func GetLeaderboard(limit : int = 50) -> Array[Dictionary]:
-	return QueryBindings("SELECT c.char_id, c.nickname, s.level, c.power_score, a.username \
+	return QueryBindings("SELECT c.char_id, c.nickname, s.level, c.power_score, a.username, \
+(SELECT ce.cosmetic_id FROM cosmetic_equip AS ce WHERE ce.account_id = a.account_id AND ce.slot = 'title') AS title_cosmetic \
 FROM character AS c INNER JOIN account AS a ON c.account_id = a.account_id \
 INNER JOIN stat AS s ON s.char_id = c.char_id \
 ORDER BY c.power_score DESC, c.char_id ASC LIMIT ?;", [limit])

@@ -45,6 +45,19 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "?"
 
+[node name="SkinRow" type="HBoxContainer" parent="Layout"]
+layout_mode = 2
+
+[node name="SkinLabel" type="Label" parent="Layout/SkinRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Skin"
+
+[node name="Skin" type="Label" parent="Layout/SkinRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Default"
+
 [node name="SkillRow" type="HBoxContainer" parent="Layout"]
 layout_mode = 2
 

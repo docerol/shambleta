@@ -1,0 +1,50 @@
+{
+  "_note": "S1 'Era da Redescoberta' — espelho de presets p/ analytics/clientes (BATTLE_PASS_S1.md). Fonte de verdade do servidor: PASS_* em sources/economy/EconomyService.gd. Regras congeladas no D0.",
+  "season": "S1",
+  "duration_days": 28,
+  "levels": 40,
+  "curve": {"1-10": 100, "11-20": 120, "21-40": 140, "total": 5000},
+  "price": {"standard": {"sku": "pass.s1", "brl": 24.90}, "deluxe": {"sku": "pass.s1.deluxe", "brl": 44.90, "note": "preço sugerido, dono confirma; inclui premium + 10 níveis + emote_coroa + 150 gems"}},
+  "multipliers": {"vip": 1.1, "final_days_2x": 3},
+  "skip": {"cost_gems": 50, "max_per_season": 10},
+  "free": {
+    "3": {"gems": 10}, "5": {"chests": 1}, "8": {"gems": 10},
+    "10": {"cosmetics": ["emote_tocha"]}, "13": {"gems": 15}, "16": {"chests": 1},
+    "20": {"gems": 15}, "24": {"chests": 2}, "27": {"gems": 20},
+    "30": {"gems": 30, "cosmetics": ["title_redescobridor"]}
+  },
+  "premium": {
+    "1": {"cosmetics": ["skin_manto"]}, "3": {"gems": 25}, "5": {"vip_days": 3},
+    "6": {"gems": 25}, "8": {"cosmetics": ["fx_faisca"]}, "9": {"gems": 25},
+    "11": {"chests": 2}, "12": {"gems": 25}, "14": {"cosmetics": ["frame_sazonal"]},
+    "15": {"gems": 50}, "17": {"cosmetics": ["skin_mascara"]}, "18": {"gems": 25},
+    "21": {"chests": 3}, "22": {"gems": 25}, "24": {"cosmetics": ["emote_guilda"]},
+    "26": {"gems": 25}, "28": {"gems": 50},
+    "30": {"gems": 100, "cosmetics": ["title_veterano", "banner_guilda"]},
+    "31-40": {"gems": 20, "note": "faixa bônus, exige premium"}
+  },
+  "dailies": [
+    {"id": "d_settle2", "label": "Collect AFK 2×", "goal": 2, "pt": 40},
+    {"id": "d_chest1", "label": "Open 1 chest", "goal": 1, "pt": 40},
+    {"id": "d_level1", "label": "Gain 1 level (SUB equip)", "goal": 1, "pt": 40},
+    {"id": "d_farm2h", "label": "Settle 2h (SUB kills)", "goal": 2, "pt": 40},
+    {"id": "d_vault1", "label": "Deposit 1 item in guild vault", "goal": 1, "pt": 40},
+    {"id": "d_trade1", "label": "Complete 1 trade", "goal": 1, "pt": 40},
+    {"id": "d_ahlist1", "label": "List 1 item on AH (SUB reforge)", "goal": 1, "pt": 40},
+    {"id": "d_shop1", "label": "Open the shop (SUB ad)", "goal": 1, "pt": 40}
+  ],
+  "weeklies": [
+    {"id": "w_boss1", "label": "Defeat 1 zone boss", "goal": 1, "pt": 120},
+    {"id": "w_eff3", "label": "3 sessions ≥ 90% efficiency", "goal": 3, "pt": 120},
+    {"id": "w_spend100", "label": "Spend 100 gems", "goal": 100, "pt": 120},
+    {"id": "w_dailies15", "label": "Claim 15 dailies", "goal": 15, "pt": 120},
+    {"id": "w_guild1", "label": "Guild level-up or 3 vault deposits", "goal": 1, "pt": 120},
+    {"id": "w_farm8h", "label": "Settle 8h", "goal": 8, "pt": 120}
+  ],
+  "milestones": [
+    {"id": "m_boss0", "label": "Defeat Dorian (first)", "pt": 50},
+    {"id": "m_boss1", "label": "Defeat Gabriel (first)", "pt": 50},
+    {"id": "m_boss2", "label": "Defeat Marvin (first)", "pt": 50},
+    {"id": "m_boss3", "label": "Defeat Splatyna (first)", "pt": 50}
+  ]
+}

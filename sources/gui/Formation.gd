@@ -8,6 +8,7 @@ extends WindowPanel
 @onready var skillOption : OptionButton = $Layout/SkillRow/Skill
 @onready var potionSlider : HSlider = $Layout/PotionRow/Potion
 @onready var potionLabel : Label = $Layout/PotionRow/PotionPct
+@onready var skinLabel : Label = $Layout/SkinRow/Skin
 
 func _ready():
 	visibility_changed.connect(_on_visibility_changed)
@@ -27,6 +28,21 @@ func _on_potion_changed(value : float):
 func RefreshFormation():
 	if Launcher.Player:
 		charLabel.text = str(Launcher.Player.nick) if str(Launcher.Player.nick) != "" else "?"
+	ShowSkin(NetClient.LastCosmetics)
+	Network.GetCosmetics()
+
+# Fase D: skin de formação equipada (rótulo; o sprite é follow-up de arte).
+func ShowSkin(data : Dictionary):
+	var equipped : Dictionary = data.get("equipped", {})
+	var skin : String = str(equipped.get("formation_skin", ""))
+	if skin.is_empty():
+		skinLabel.text = "Default"
+		return
+	var label : String = skin
+	for e in data.get("catalog", []):
+		if str((e as Dictionary).get("id", "")) == skin:
+			label = str((e as Dictionary).get("label", skin))
+	skinLabel.text = label
 	skillOption.clear()
 	if Launcher.Player and Launcher.Player.progress:
 		for skillID in Launcher.Player.progress.skills:

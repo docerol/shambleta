@@ -14,6 +14,12 @@ static var LastLeaderboard : Array = []
 # SOM-IDLE: estado do ladder de bosses + último resultado de desafio (janela Boss).
 static var LastBossState : Dictionary = {}
 static var LastBossResult : Dictionary = {}
+static var LastCheckoutIntent : Dictionary = {}
+static var LastDailyShop : Dictionary = {}
+static var LastSeasonPass : Dictionary = {}
+static var LastCosmetics : Dictionary = {}
+static var LastGuildState : Dictionary = {}
+static var LastTournaments : Dictionary = {}
 # SOM-IDLE: rebirth
 static var LastRebirthState : Dictionary = {}
 static var LastRebirthResult : Dictionary = {}
@@ -355,9 +361,12 @@ func FarmZoneFeedback(zoneID : int, ok : bool, reason : String, _peerID : int):
 		Launcher.GUI.notificationLabel.AddNotification("Farm zone %d rejected: %s" % [zoneID, reason])
 
 func SeasonPassState(state : Dictionary, _peerID : int):
-	# Spike stub — F3/F4 will surface the pass in the GUI
-	if Launcher.GUI and bool(state.get("active", false)):
-		Launcher.GUI.notificationLabel.AddNotification("Season pass active")
+	# Fase C: estado real do passe — guarda e empurra p/ a janela.
+	LastSeasonPass = state
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.seasonPassWindow and Launcher.GUI.seasonPassWindow.is_visible():
+		Launcher.GUI.seasonPassWindow.ShowSeasonPass(state)
 
 # SOM-IDLE: F3 — leaderboard and VIP status surfaced as notifications (F2 convention)
 func Leaderboard(entries : Array, _peerID : int):
@@ -414,6 +423,74 @@ func ChestOpened(result : Dictionary, _peerID : int):
 func ShopFeedback(ok : bool, reason : String, _peerID : int):
 	if Launcher.GUI:
 		Launcher.GUI.notificationLabel.AddNotification(("Shop: " if ok else "Shop rejected: ") + reason)
+
+# Fase A (checkout sandbox): intenção de compra — a Shop usa o
+# external_reference p/ simular o pagamento no companion (sandbox) ou pagar
+# no MP (prod). Ver Shop._on_checkout_intent.
+func CheckoutIntent(intent : Dictionary, _peerID : int):
+	LastCheckoutIntent = intent
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.shopWindow and Launcher.GUI.shopWindow.is_visible():
+		Launcher.GUI.shopWindow.ShowCheckoutIntent(intent)
+
+# Fase B (loja diária): rotação + reroll + one-time — redesenha a seção
+# diária da Shop quando visível.
+func DailyShop(shop : Dictionary, _peerID : int):
+	LastDailyShop = shop
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.shopWindow and Launcher.GUI.shopWindow.is_visible():
+		Launcher.GUI.shopWindow.ShowDailyShop(shop)
+
+func PassFeedback(ok : bool, reason : String, _peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification(("Season pass: " if ok else "Season pass rejected: ") + reason)
+
+# Fase D (cosméticos): coleção consolidada + feedback das ações.
+func Cosmetics(data : Dictionary, _peerID : int):
+	LastCosmetics = data
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.cosmeticsWindow and Launcher.GUI.cosmeticsWindow.is_visible():
+		Launcher.GUI.cosmeticsWindow.ShowCosmetics(data)
+	if Launcher.GUI.formationWindow and Launcher.GUI.formationWindow.has_method("ShowSkin"):
+		Launcher.GUI.formationWindow.ShowSkin(data)
+
+func CosmeticFeedback(ok : bool, reason : String, _peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification(("Cosmetics: " if ok else "Cosmetics rejected: ") + reason)
+
+# Fase E (rewarded ads): feedback + re-puxa o AFK Report (o armamento muda o
+# preview) quando a janela está visível.
+func AdFeedback(ok : bool, reason : String, _peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification(("Ad reward: " if ok else "Ad rejected: ") + reason)
+		if ok and Launcher.GUI.afkWindow and Launcher.GUI.afkWindow.is_visible():
+			Network.GetAFKReport()
+
+# Fase F (guild premium + torneios).
+func GuildState(state : Dictionary, _peerID : int):
+	LastGuildState = state
+	if Launcher.GUI and Launcher.GUI.socialWindow and Launcher.GUI.socialWindow.has_method("ShowGuildState"):
+		Launcher.GUI.socialWindow.ShowGuildState(state)
+
+func GuildFeedback(ok : bool, reason : String, _peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification(("Guild: " if ok else "Guild rejected: ") + reason)
+		if ok and Launcher.GUI.socialWindow and Launcher.GUI.socialWindow.has_method("RefreshGuild"):
+			Launcher.GUI.socialWindow.RefreshGuild()
+
+func Tournaments(data : Dictionary, _peerID : int):
+	LastTournaments = data
+	if Launcher.GUI and Launcher.GUI.leaderboardWindow and Launcher.GUI.leaderboardWindow.has_method("ShowTournaments"):
+		Launcher.GUI.leaderboardWindow.ShowTournaments(data)
+
+func TournamentFeedback(ok : bool, reason : String, _peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification(("Tournament: " if ok else "Tournament rejected: ") + reason)
+		if ok:
+			Network.GetTournaments()
 
 func SeasonBoards(data : Dictionary, _peerID : int):
 	LastSeasonBoards = data

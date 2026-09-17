@@ -466,6 +466,140 @@ func PurchaseVIP(tier : int, peerID : int = NetworkCommons.PeerAuthorityID):
 func ShopFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("ShopFeedback", [ok, reason], peerID)
 
+# Fase A (checkout sandbox): a loja pede a intenção p/ um SKU e recebe o
+# external_reference + preço. O pagamento (sandbox simulate / MP prod) usa
+# essa referência; o grant entra pelo grant_queue.
+# Fase B (loja diária): rotação do dia + reroll pago + ofertas one-time.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetDailyShop", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func DailyShop(shop : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("DailyShop", [shop], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyDailyOffer", [offerID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func RerollDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("RerollDailyShop", [], peerID, NetworkCommons.DelayConfig)
+
+# Fase C (passe S1, BATTLE_PASS_S1 §7): estado, claim de recompensa/missão,
+# compra do premium via intent do companion e skip de nível.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func ClaimPassReward(level : int, track : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ClaimPassReward", [level, track], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyPass(tier : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyPass", [tier], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func SkipPassLevel(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("SkipPassLevel", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func ClaimMission(missionID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ClaimMission", [missionID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func PassFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("PassFeedback", [ok, reason], peerID)
+
+# Fase D (cosméticos, MONETIZATION §2.4/§2.7): coleção, equipar e vitrine.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetCosmetics(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetCosmetics", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func Cosmetics(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("Cosmetics", [data], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func EquipCosmetic(cosmeticID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("EquipCosmetic", [cosmeticID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func UnequipCosmetic(slot : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("UnequipCosmetic", [slot], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyCosmetic(cosmeticID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyCosmetic", [cosmeticID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func CosmeticFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("CosmeticFeedback", [ok, reason], peerID)
+
+# Fase E (rewarded ads, MONETIZATION §2.5): 4 placements opt-in. O token vem
+# do AdProvider (stub agora, SDK depois); o servidor valida e credita.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func WatchAd(placement : String, token : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("WatchAd", [placement, token], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func ClaimAdChest(token : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ClaimAdChest", [token], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func RerollDailyShopAd(token : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("RerollDailyShopAd", [token], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func ClaimAdBossKey(token : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ClaimAdBossKey", [token], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func AdFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("AdFeedback", [ok, reason], peerID)
+
+# Fase F (guild premium + torneios): estado da guild, level-up fast, vault
+# slots, copas semanais.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetGuildState(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetGuildState", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func GuildState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("GuildState", [state], peerID)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func GuildFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("GuildFeedback", [ok, reason], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func LevelUpGuildFast(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("LevelUpGuildFast", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyVaultSlots(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyVaultSlots", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetTournaments(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetTournaments", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func Tournaments(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("Tournaments", [data], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func EnterTournament(tournamentID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("EnterTournament", [tournamentID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func TournamentFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("TournamentFeedback", [ok, reason], peerID)
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetCheckoutIntent(sku : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetCheckoutIntent", [sku], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func CheckoutIntent(intent : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("CheckoutIntent", [intent], peerID)
+
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetSeasonBoards(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("GetSeasonBoards", [], peerID, NetworkCommons.DelayMinute)
@@ -514,6 +648,18 @@ func BuyRebirthUpgrade(upgradeID : String, peerID : int = NetworkCommons.PeerAut
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func RebirthResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("RebirthResult", [result], peerID)
+
+# SOM-IDLE Fase H: criação de itens (ITEM_CRAFTING.md §2). Cliente submette o
+# item + nome + modifiers; o servidor valida orçamento, taxa em gold, nome e
+# daily cap, grava a submissão como pending. Aprovação/rejeição é feita por GM
+# (WorldCommands SubmitCraftReview) — fora do escopo deste RPC.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func SubmitCraft(slot : int, baseItemHash : int, name : String, modifiers : Dictionary, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("SubmitCraft", [slot, baseItemHash, name, modifiers], peerID, 1500)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func CraftSubmitFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("CraftSubmitFeedback", [ok, reason], peerID)
 
 # Inventory
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)

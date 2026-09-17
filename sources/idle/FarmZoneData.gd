@@ -247,13 +247,73 @@ static func GetDropPool(zoneID : int) -> Array:
 		if candidates.is_empty():
 			candidates = [DefaultDropItemHash]
 
+	# SOM-IDLE Fase H §6: approved craft templates enter the shared drop pool.
+	# The template_hash is the ItemsDB cell hash (visual base); rarity from the
+	# submission is stored on craft_item_template and read via DB query at boot
+	# of the cache (runtime-approved items join here without restart).
+	var craftRows : Array = []
+	if Launcher and Launcher.SQL:
+		craftRows = Launcher.SQL.QueryBindings(
+			"SELECT item_hash, rarity FROM craft_item_template WHERE tier >= ? AND tier <= ?;",
+			[zone.tier, tierMax])
+	for row in craftRows:
+		var itemHash : int = int(row.get("item_hash", 0))
+		if itemHash > 0:
+			candidates.append(itemHash)
+	candidates.sort()
+
+	# Deduplicate (a craft template may reuse a real cell hash as base)
+	var seen : Dictionary = {}
+	var unique : Array[int] = []
+	for h in candidates:
+		if not seen.has(h):
+			seen[h] = true
+			unique.append(h)
+	candidates = unique
+
 	_dropPoolCache[zoneID] = candidates
 	return candidates
 
-# Deterministic pick for a zone drop roll (caller supplies a stable roll input)
+# Rarity weight for a drop pool entry. Reads craft_item_template rarity; real
+# ItemsDB items have no stored rarity column, so they default to "Comum".
+static func _RarityWeight(itemHash : int) -> int:
+	if Launcher and Launcher.SQL:
+		var rows : Array = Launcher.SQL.QueryBindings(
+			"SELECT rarity FROM craft_item_template WHERE item_hash = ?;", [itemHash])
+		if not rows.is_empty():
+			var r : String = str(rows[0].get("rarity", "Comum"))
+			if r == "Comum":
+				return 100
+			elif r == "Incomum":
+				return 60
+			elif r == "Raro":
+				return 30
+			elif r == "Épico":
+				return 12
+			elif r == "Lendário":
+				return 5
+	return 100
+
+# Deterministic weighted pick for a zone drop roll (caller supplies a stable
+# roll input). Uses cumulative-rarity roleta so rarer items drop less often —
+# preserves determinism (same roll → same item) while honoring rarity weights.
+# Multiplicative hash spreads small roll values across the weight space so
+# every pool entry is reachable (raw roll % totalWeight would bias to early
+# entries when roll << totalWeight).
 static func GetDropForRoll(zoneID : int, roll : int) -> int:
 	var pool : Array = GetDropPool(zoneID)
-	return pool[roll % pool.size()] if not pool.is_empty() else DefaultDropItemHash
+	if pool.is_empty():
+		return DefaultDropItemHash
+	var cumulative : Array[int] = []
+	var totalWeight : int = 0
+	for itemHash in pool:
+		totalWeight += _RarityWeight(int(itemHash))
+		cumulative.append(totalWeight)
+	var target : int = (roll * 2654435761) % totalWeight
+	for i in range(cumulative.size()):
+		if target < cumulative[i]:
+			return int(pool[i])
+	return int(pool[0])
 
 static func InvalidateDropPools():
 	_dropPoolCache.clear()

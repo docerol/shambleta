@@ -46,6 +46,8 @@ extends ServiceBase
 @onready var shopWindow : WindowPanel			= $Windows/Floating/Shop
 @onready var chestsWindow : WindowPanel			= $Windows/Floating/Chests
 @onready var leaderboardWindow : WindowPanel	= $Windows/Floating/Leaderboard
+@onready var seasonPassWindow : WindowPanel		= $Windows/Floating/SeasonPass
+@onready var cosmeticsWindow : WindowPanel		= $Windows/Floating/Cosmetics
 @onready var bossWindow : WindowPanel			= $Windows/Floating/Boss
 
 @onready var chatContainer : ChatContainer		= $Windows/Floating/Chat/Margin/VBoxContainer
