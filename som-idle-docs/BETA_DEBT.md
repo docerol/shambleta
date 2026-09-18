@@ -17,6 +17,9 @@ escopo novo antes de quitar: a regra do beta é estabilizar o existente.
 | 8 | Smoke interativo client/browser (display + navegador real; coberto só via headless nesta rodada) | QA manual | checklist T11 todo PASS em navegador | relatório da rodada (seção C) |
 | 9 | Observabilidade (métricas além do `/metrics` local, alertas, Sentry com DSN) | eng/ops | dashboard + alerta de grant_queue presa | `LAUNCH_HANDOFF.md` §3 |
 | 10 | Release signing (builds desktop assinados) | eng/ops | artefatos assinados no CI de release | — |
+| 11 | Trilha de auditoria de ações GM (`admin_action` append-only: quem/o quê/quando/result) — hoje só `PrintLog` | eng | migration + escrita em cada comando privilegiado + leitura no painel/CS | `CommandManager.Handle` (`sources/debug/CommandManager.gd:43`) |
+| 12 | 2FA obrigatório p/ staff (`permission >= MODERATOR`) — hoje opcional (`FEATURE_MATRIX.md:181`) | eng (+ política imediata: exigir 2FA em toda conta staff, uma por humano) | login staff sem 2FA recusado; suíte | `sources/auth/TwoFactorAuth.gd`, migração 029 |
+| 13 | Painel ops fora do jogo, leitura primeiro (dashboard sobre `/metrics` do companion atrás de auth/reverse-proxy; ações depois, sempre via caminhos transacionais — nunca escrita crua em economia) | eng/ops | dashboard readonly no ar; zero escrita direta em `wallet`/`stat`/`guild` | `companion/server.py` (`/metrics`), `EconomyService` |
 
 ## Notas que não são débito (registro p/ não re-auditar à toa)
 
