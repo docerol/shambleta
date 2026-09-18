@@ -1715,6 +1715,8 @@ func SuiteCosmetics(sql : SQLService) -> void:
 # no settle, VIP dobra quantidade. Stub em vez de SDK; servidor valida tudo.
 func SuiteAds(sql : SQLService) -> void:
 	print("[suite] rewarded ads (Fase E)")
+	# SOM-IDLE beta fechado (T7): stub explícito; reais fora de escopo.
+	Check(EconomyService.AdStubEnabled, "ads: beta roda em stub explícito")
 	var economy : EconomyService = Launcher.Economy
 	var tele : TelemetryService = Launcher.Telemetry
 	var now : int = SQLCommons.Timestamp()
@@ -2041,6 +2043,30 @@ func SuiteTournamentDonation(sql : SQLService) -> void:
 	sql.db.delete_rows("account", "username = 'idle_tn_a'")
 	sql.db.delete_rows("character", "nickname = 'IdleTnB'")
 	sql.db.delete_rows("account", "username = 'idle_tn_b'")
+
+# SOM-IDLE beta fechado (T5): Seasons travadas por padrão — criação e ciclo
+# de vida viram no-op sem SHAMBLETA_ENABLE_SEASONS=1 (o runner seta; o beta
+# real nunca seta). Não remove código; só impede ativação acidental.
+func SuiteSeasonLock(sql : SQLService) -> void:
+	print("[suite] season beta lock (T5)")
+	var economy : EconomyService = Launcher.Economy
+	Check(EconomyService.SeasonsEnabled(), "tests run with seasons explicitly enabled")
+	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "")
+	Check(not EconomyService.SeasonsEnabled(), "lock engages without the env")
+	CheckEq(economy.CreateSeason(7), -1, "locked CreateSeason refuses (-1)")
+	var expired : int = economy.CreateSeason(1)
+	Check(expired <= 0, "no season created while locked")
+	# Ciclo diário com trava: nada fecha/liquida, mesmo com vencida pendente
+	sql.ExecuteBindings("INSERT INTO season (starts_at, ends_at, rules_frozen, status) VALUES (?, ?, '{}', 'active');",
+		[SQLCommons.Timestamp() - 10 * 86400, SQLCommons.Timestamp() - 86400])
+	var planted : int = sql.LastInsertRowIDRaw()
+	var tick : Dictionary = economy.TickSeasonLifecycle()
+	Check(int(tick.get("closed", -1)) == 0 and int(tick.get("settled", -1)) == 0, "locked lifecycle is a no-op")
+	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "1")
+	Check(EconomyService.SeasonsEnabled(), "lock releases with the env")
+	if planted > 0:
+		sql.ExecuteBindings("DELETE FROM season_score WHERE season_id = ?;", [planted])
+		sql.ExecuteBindings("DELETE FROM season WHERE season_id = ?;", [planted])
 
 # Fase B: cap offline por tier (12h F2P / 24h VIP1 / 36h VIP2, expirado volta).
 func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
@@ -2841,6 +2867,21 @@ func SuiteAuthHardening(sql : SQLService) -> void:
 	sql.ExecuteBindings("UPDATE account SET failed_attempts = 0, locked_until = 0 WHERE account_id = ?;", [a1])
 	Check(sql.ValidateAuthPassword("idle_a1_user", "legacypass") != null, "login succeeds after unlock")
 
+	# SOM-IDLE beta (T11 smoke): ciclo de sessão login→logout→login na API
+	# (sem GUI/rede; FinalizeLogin é o ponto que liga peer↔conta).
+	var sessPeer : int = 424243
+	Peers.AddPeer(sessPeer, Peers.TransportType.OFFLINE)
+	var sessPeerObj : Peers.Peer = Peers.GetPeer(sessPeer)
+	Check(sessPeerObj != null, "session peer registered")
+	var sessData : Peers.AccountData = Peers.AccountData.new(a1, sql.GetAccountPermission(a1))
+	CheckEq(int(Peers.FinalizeLogin(sessPeerObj, "idle_a1_user", sessData, 0, false)), int(NetworkCommons.AuthError.ERR_OK), "login binds peer to account")
+	CheckEq(Peers.GetAccount(sessPeer), a1, "peer resolves to account (logged in)")
+	sessPeerObj.SetAccount(Peers.DisconnectedAccount)
+	CheckEq(Peers.GetAccount(sessPeer), NetworkCommons.PeerUnknownID, "logout unbinds peer")
+	CheckEq(int(Peers.FinalizeLogin(sessPeerObj, "idle_a1_user", sessData, 0, false)), int(NetworkCommons.AuthError.ERR_OK), "re-login ok")
+	CheckEq(Peers.GetAccount(sessPeer), a1, "peer resolves again after re-login")
+	Peers.RemovePeer(sessPeer)
+
 	# E-mail verification flag + LGPD anonymization
 	Check(not sql.IsEmailVerified(a1), "e-mail starts unverified")
 	Check(sql.SetEmailVerified(a1, true), "verify flag set")
@@ -2852,6 +2893,53 @@ func SuiteAuthHardening(sql : SQLService) -> void:
 
 	sql.db.delete_rows("account", "username = 'idle_a1_other'")
 	sql.db.delete_rows("account", "account_id = %d" % a1)
+
+# SOM-IDLE beta (T9): desafio 2FA vinculado ao peer — binding conta/desafio,
+# expiração, consumo e replay. Sem Network/GUI (helper puro).
+func SuiteTwoFactor(sql : SQLService) -> void:
+	print("[suite] 2FA challenge binding (T9)")
+	var now : int = int(Time.get_unix_time_from_system())
+	for uname in ["idle_2fa_a", "idle_2fa_b"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+	Check(sql.AddAccount("idle_2fa_a", "CorrectHorse123!", "idle_2fa_a@test.local"), "2fa fixture A created")
+	Check(sql.AddAccount("idle_2fa_b", "CorrectHorse123!", "idle_2fa_b@test.local"), "2fa fixture B created")
+	var secA : String = TwoFactorAuth.GenerateSecret()
+	var secB : String = TwoFactorAuth.GenerateSecret()
+	Check(int(sql.GetAccountPermission(sql.GetAccountID("idle_2fa_a"))) >= 0, "permission helper resolves")
+	Check(sql.SetTwoFactorSecret(sql.GetAccountID("idle_2fa_a"), secA), "A secret stored")
+	Check(sql.SetTwoFactorEnabled(sql.GetAccountID("idle_2fa_a"), true), "A 2fa enabled")
+	Check(sql.SetTwoFactorSecret(sql.GetAccountID("idle_2fa_b"), secB), "B secret stored")
+	Check(sql.SetTwoFactorEnabled(sql.GetAccountID("idle_2fa_b"), true), "B 2fa enabled")
+	var codeA : String = TwoFactorAuth.GenerateTOTP(secA, now)
+	var codeB : String = TwoFactorAuth.GenerateTOTP(secB, now)
+	Check(not codeA.is_empty() and not codeB.is_empty(), "codes minted")
+	var peerID : int = 424242
+	Peers.AddPeer(peerID, Peers.TransportType.OFFLINE)
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	Check(peer != null, "test peer registered")
+	# Sem desafio → NO_PEER_DATA
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_NO_PEER_DATA), "no challenge → NO_PEER_DATA")
+	# Código errado → AUTH, desafio segue (retry)
+	peer.pendingTwoFactorAccount = "idle_2fa_a"
+	peer.pendingTwoFactorAt = now
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", "000000")), int(NetworkCommons.AuthError.ERR_AUTH), "wrong code → AUTH")
+	Check(peer.pendingTwoFactorAccount == "idle_2fa_a", "wrong code keeps challenge (retry)")
+	# Código válido de B no desafio de A → AUTH (binding conta/desafio)
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_b", codeB)), int(NetworkCommons.AuthError.ERR_AUTH), "B code on A challenge → AUTH")
+	Check(peer.pendingTwoFactorAccount == "idle_2fa_a", "mismatch keeps original challenge")
+	# Desafio expirado → AUTH + consome
+	peer.pendingTwoFactorAt = now - NetworkCommons.TwoFactorChallengeSec - 60
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_AUTH), "expired challenge → AUTH")
+	Check(peer.pendingTwoFactorAccount.is_empty(), "expired challenge consumed")
+	# Sucesso consome; replay do mesmo código cai em NO_PEER_DATA
+	peer.pendingTwoFactorAccount = "idle_2fa_a"
+	peer.pendingTwoFactorAt = now
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_OK), "valid code → OK")
+	Check(peer.pendingTwoFactorAccount.is_empty(), "success consumes challenge")
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_NO_PEER_DATA), "replay → NO_PEER_DATA")
+	Peers.RemovePeer(peerID)
+	sql.db.delete_rows("account", "username = 'idle_2fa_a'")
+	sql.db.delete_rows("account", "username = 'idle_2fa_b'")
 
 # Ops hardening (SOM-IDLE A2): TLS enforcement matrix + offsite round-trip.
 func SuiteOpsA2(sql : SQLService) -> void:
@@ -2985,6 +3073,13 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 	agent.stat.AddExperience(RebirthData.EssenceDivisor * 12 + 5, false)
 	CheckEq(sql.GetCharacterEssence(charID) - onlineEssence, 12, "online overflow at the cap converts 1:100")
 	CheckEq(agent.stat.experience, 5, "online XP below the divisor keeps banking")
+	# SOM-IDLE beta (T10): persistência logout/login (memória → DB → leitura)
+	# + sem duplicação em ação repetida (cada chunk converte uma vez só).
+	Check(sql.UpdateStat(charID, agent.stat), "online stat persists to DB")
+	CheckEq(int(sql.GetStat(charID).get("experience", -1)), 5, "persisted XP reads back (login)")
+	agent.stat.AddExperience(RebirthData.EssenceDivisor * 12 + 5, false)
+	CheckEq(sql.GetCharacterEssence(charID) - onlineEssence, 24, "repeated action converts new chunks only (12+12, no dup)")
+	CheckEq(agent.stat.experience, 10, "remainder banked after repeat (5+1205-1200)")
 	var rebGold : int = int(sql.GetStat(charID).get("gp", 0))
 	var rebEssence : int = sql.GetCharacterEssence(charID)
 	var reborn : Dictionary = economy.Rebirth(charID, agent)
@@ -3123,6 +3218,89 @@ func SuiteRefund(sql : SQLService) -> void:
 	var oldkey : String = "r-old-%d" % tag
 	sql.ExecuteBindings("INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, 'gems', 550, 550, ?, ?);", [accountID, "grant:" + oldkey, SQLCommons.Timestamp() - 8 * 86400])
 	Check(str(economy.RequestGemRefund(accountID, oldkey).get("reason", "")) == "window_expired", "refund: older than 7d -> window_expired")
+
+# SOM-IDLE beta (T11/T12): concorrência econômica intercalada (engine
+# single-thread: duas tentativas "simultâneas" = segunda chamada antes de
+# qualquer estado externo mudar). Alvo: sem duplicação, sem saldo negativo,
+# idempotência em retry/replay. Webhook replay coberto em
+# companion/test_security.py (A5).
+func SuiteConcurrency(sql : SQLService) -> void:
+	print("[suite] economic concurrency (T11/T12)")
+	var economy : EconomyService = Launcher.Economy
+	var apple : int = FarmZoneData.DefaultDropItemHash
+	var charA : int = CreateFixture(sql, "idle_conc_a", "IdleConcA")
+	var charB : int = CreateFixture(sql, "idle_conc_b", "IdleConcB")
+	if not Check(charA != 0 and charB != 0, "concurrency fixtures created"):
+		return
+	var accountA : int = sql.GetAccountIDForCharacter(charA)
+	var accountB : int = sql.GetAccountIDForCharacter(charB)
+	sql.SetEmailVerified(accountA, true)
+	sql.SetEmailVerified(accountB, true)
+	# 1. gasto duplo de gems (reroll 20, saldo 30): 1º ok, 2º sem saldo
+	sql.SetGems(accountA, 30)
+	Check(bool(economy.RerollDailyShop(accountA).get("ok", false)), "1st reroll ok")
+	Check(not bool(economy.RerollDailyShop(accountA).get("ok", true)), "2nd reroll rejected (insufficient)")
+	CheckEq(economy.GetGems(accountA), 10, "balance debited once, never negative")
+	# 2. mesma oferta diária duas vezes: debita uma vez só
+	sql.SetGems(accountA, 5000)
+	var shop : Dictionary = economy.GetDailyShop(accountA)
+	var oid : String = str((shop.get("offers", []) as Array)[0].get("id", ""))
+	var g0 : int = economy.GetGems(accountA)
+	Check(bool(economy.BuyDailyOffer(accountA, charA, oid).get("ok", false)), "1st daily offer ok")
+	Check(str(economy.BuyDailyOffer(accountA, charA, oid).get("reason", "")) == "already_claimed", "2nd daily offer rejected")
+	var cost : int = 0
+	for e in shop.get("offers", []):
+		if str((e as Dictionary).get("id", "")) == oid:
+			cost = int((e as Dictionary).get("cost", 0))
+	CheckEq(g0 - economy.GetGems(accountA), cost, "offer cost debited exactly once")
+	# 3. mesmo lote do AH duas vezes: vende uma vez só
+	_SetInventory(sql, charA, apple, 10)
+	_SetInventory(sql, charB, apple, 0)
+	sql.SetGems(accountA, 5000)
+	_GrantGold(sql, charB, accountB, 5000, "conc_buyer_gold")
+	var lid : int = economy.ListItemForSale(charA, apple, 2, 500)
+	Check(lid > 0, "listing created")
+	Check(economy.BuyListing(charB, lid), "1st buy ok")
+	Check(not economy.BuyListing(charB, lid), "2nd buy rejected (not open)")
+	CheckEq(_CountItem(sql, charB, apple), 2, "buyer got exactly 2 apples")
+	# 4. reprocessamento da fila: retry não re-credita
+	sql.SetGems(accountA, 0)
+	Check(economy.EnqueueGrant(accountA, "gems", 100, "conc-key-1"), "grant enqueued")
+	var p1 : Dictionary = economy.ProcessPendingGrants(50)
+	Check(int(p1.get("processed", 0)) >= 1, "grant processed")
+	var p2 : Dictionary = economy.ProcessPendingGrants(50)
+	CheckEq(int(p2.get("processed", 0)), 0, "reprocess grants nothing")
+	CheckEq(economy.GetGems(accountA), 100, "credited exactly once")
+	sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", ["conc-key-1"])
+	# 5. gasto duplo de chave de boss: 1 chave, 2 spends
+	sql.AddCharacterBossKeys(charA, 1 - sql.GetCharacterBossKeys(charA))
+	Check(economy.SpendBossKey(charA, 1, "conc:t1"), "1st key spend ok")
+	Check(not economy.SpendBossKey(charA, 1, "conc:t2"), "2nd key spend rejected")
+	CheckEq(sql.GetCharacterBossKeys(charA), 0, "keys never negative")
+	# 6. conservação em trade repetido: 2º falha no cooldown, estoque confere.
+	# Fixtures próprias: o buy do AH (passo 3) grava trade_*/ledger e armaria
+	# o cooldown deste passo (poluição entre passos, não bug do produto).
+	var charC : int = CreateFixture(sql, "idle_conc_c", "IdleConcC")
+	var charD : int = CreateFixture(sql, "idle_conc_d", "IdleConcD")
+	if not Check(charC != 0 and charD != 0, "trade fixtures created"):
+		return
+	var accountC : int = sql.GetAccountIDForCharacter(charC)
+	var accountD : int = sql.GetAccountIDForCharacter(charD)
+	sql.SetEmailVerified(accountC, true)
+	sql.SetEmailVerified(accountD, true)
+	_SetInventory(sql, charC, apple, 10)
+	_SetInventory(sql, charD, apple, 0)
+	sql.SetGems(accountC, 5000)
+	sql.SetGems(accountD, 5000)
+	Check(economy.ExecuteTrade(charC, charD, [{"item_id" = apple, "count" = 6}], []), "1st trade ok")
+	Check(not economy.ExecuteTrade(charC, charD, [{"item_id" = apple, "count" = 6}], []), "2nd trade rejected")
+	CheckEq(_CountItem(sql, charC, apple), 4, "seller conserved (10-6)")
+	CheckEq(_CountItem(sql, charD, apple), 6, "buyer conserved (+6)")
+	sql.ExecuteBindings("DELETE FROM auction_listing WHERE status = 'open';", [])
+	for nick in ["IdleConcA", "IdleConcB", "IdleConcC", "IdleConcD"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_conc_a", "idle_conc_b", "idle_conc_c", "idle_conc_d"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
 
 # ------------------------------------------------------------------ elemental combat (poison/bleed/burn/elemental)
 # Self-contained: bare off-tree ActorStats/BaseAgent instances, no SQL/world

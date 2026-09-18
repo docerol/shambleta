@@ -24,30 +24,50 @@ func _run_benchmarks():
         return
 
     var waited: int = 0
+    var sqlNode: Node = null
+    var worldNode: Node = null
     while waited < 30000:
         await create_timer(0.25).timeout
         waited += 250
-        var sqlNode: Node = launcher.SQL
-        var worldNode: Node = launcher.World
+        sqlNode = launcher.SQL
+        worldNode = launcher.World
         if sqlNode != null and sqlNode.isInitialized and worldNode != null and worldNode.isInitialized:
             break
 
-    if not sqlNode.isInitialized or not worldNode.isInitialized:
+    if sqlNode == null or worldNode == null or not sqlNode.isInitialized or not worldNode.isInitialized:
         print("FATAL: Services not initialized within timeout")
         quit(1)
         return
 
     print("Services initialized after %d ms" % waited)
 
-    var sql: SQLService = sqlNode
+    # Beta fechado: duck-typed (ver run_idle_tests.gd) — sem refs estáticas.
+    var sql: Node = sqlNode
     var economy: Node = launcher.Economy
     var failures: int = 0
 
-    # Benchmark: settle (single character)
+    # Benchmark: settle (single character) — caminho real OfflineSettle.
+    # (Antes chamava EconomyService.SettleCharacter, que não existe: o
+    # benchmark nunca rodou. Beta fechado: usa SettlePending duck-typed.)
+    var settleScript: GDScript = load("res://sources/idle/OfflineSettle.gd")
+    sql.AddAccount("bench_settle", "testpass", "bench_settle@test.local")
+    var benchAcct: int = sql.GetAccountID("bench_settle")
+    # ActorCommons via load() em runtime (ref estática no -s quebra o compile
+    # antes dos autoloads — mesma regra de run_idle_tests.gd).
+    var commons: GDScript = load("res://sources/actor/ActorCommons.gd")
+    sql.AddCharacter(benchAcct, "BenchSettle", commons.DefaultStats, commons.DefaultTraits, commons.DefaultAttributes)
+    var benchChar: int = sql.GetCharacterID(benchAcct, "BenchSettle")
+    sql.SetCharacterFarmZone(benchChar, 1)
+    sql.UpdateSettleAnchor(benchChar, 1750000000, 1.0)
     var settleStart: int = Time.get_ticks_msec()
-    var settleResult: Dictionary = economy.SettleCharacter(1, 3600, 0.9)
+    var settleResult: Dictionary = settleScript.SettlePending(benchChar)
     var settleMs: int = Time.get_ticks_msec() - settleStart
+    sql.db.delete_rows("character", "nickname = 'BenchSettle'")
+    sql.db.delete_rows("account", "username = 'bench_settle'")
     print("Settle benchmark: %d ms (budget: %d ms)" % [settleMs, BudgetSettleMs])
+    if settleResult.is_empty():
+        print("FAIL: settle returned empty")
+        failures += 1
     if settleMs > BudgetSettleMs:
         print("FAIL: settle exceeded budget")
         failures += 1
@@ -55,8 +75,9 @@ func _run_benchmarks():
     # Benchmark: zone catalog
     var catalogStart: int = Time.get_ticks_msec()
     var zoneCount: int = 0
+    var farmZones: GDScript = load("res://sources/idle/FarmZoneData.gd")
     for zoneID in range(1, 41):
-        var zone = FarmZoneData.GetZone(zoneID)
+        var zone = farmZones.GetZone(zoneID)
         if zone:
             zoneCount += 1
     var catalogMs: int = Time.get_ticks_msec() - catalogStart

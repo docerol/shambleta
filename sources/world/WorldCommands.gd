@@ -577,6 +577,9 @@ func CommandSeason(caller : PlayerAgent, arg : String = "") -> bool:
 					Network.CommandFeedback("Usage: /season create <days>", caller.peerID)
 					return false
 				var seasonID : int = Launcher.Economy.CreateSeason(parts[1].to_int())
+				if seasonID == -1:
+					Network.CommandFeedback("Seasons disabled in beta (SOM-IDLE T5)", caller.peerID)
+					return false
 				Network.CommandFeedback("Season #%d started" % seasonID if seasonID > 0 else "Could not create (one already active?)", caller.peerID)
 				return seasonID > 0
 			var season3 : Dictionary = Launcher.Economy.ActiveSeason()

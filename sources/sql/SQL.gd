@@ -949,6 +949,14 @@ func ValidateAuthToken(accountID : int, tokenHash : String, ipAddress : String) 
 func RefreshAuthToken(accountID : int, ipAddress : String) -> bool:
 	return ExecuteBindings("UPDATE auth_token SET expires_timestamp = ? WHERE account_id = ? AND ip_address = ?;", [SQLCommons.Timestamp() + NetworkCommons.TokenExpirySec, accountID, ipAddress])
 
+# SOM-IDLE beta (T9): Server.LoginWithTwoFactor chamava GetPermission(), que
+# não existe (o login 2FA quebraria em runtime). Helper com fallback NONE.
+func GetAccountPermission(accountID : int) -> ActorCommons.Permission:
+	var rows : Array[Dictionary] = QueryBindings("SELECT permission FROM account WHERE account_id = ?;", [accountID])
+	if rows.is_empty() or rows[0].get("permission", null) == null:
+		return ActorCommons.Permission.NONE
+	return int(rows[0]["permission"]) as ActorCommons.Permission
+
 func RemoveAuthToken(accountID : int, tokenHash : String) -> bool:
 	return ExecuteBindings("DELETE FROM auth_token WHERE account_id = ? AND token_hash = ?;", [accountID, tokenHash])
 

@@ -1578,7 +1578,23 @@ func ActiveSeason() -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT season_id, starts_at, ends_at, rules_frozen, status FROM season WHERE status = 'active' ORDER BY season_id DESC LIMIT 1;", [])
 	return {} if rows.is_empty() else rows[0]
 
+# SOM-IDLE beta fechado (T5): Seasons é pós-lançamento — criação e ciclo de
+# vida ficam TRAVADOS por padrão (qualquer chamada normal, GM ou job, vira
+# no-op com aviso). Testes habilitam explicitamente via env
+# SHAMBLETA_ENABLE_SEASONS=1 (run_idle_tests.gd). Remover a trava só na
+# ativação, após a auditoria do ciclo ACTIVE→CLOSING→CLOSED→SETTLED
+# (som-idle-docs/SEASON_ACTIVATION_NOTE.md).
+const SeasonsBetaLock : bool = true
+
+static func SeasonsEnabled() -> bool:
+	if not SeasonsBetaLock:
+		return true
+	return OS.get_environment("SHAMBLETA_ENABLE_SEASONS") == "1"
+
 func CreateSeason(days : int, rules : String = "{}") -> int:
+	if not SeasonsEnabled():
+		push_warning("SOM-IDLE Seasons: criação bloqueada no beta (T5)")
+		return -1
 	if days <= 0 or not ActiveSeason().is_empty():
 		return 0
 	var out : Dictionary = {"id" = 0}
@@ -1647,6 +1663,8 @@ const SeasonPrizeGems : Array[int] = [3000, 1800, 1200, 700, 500, 400, 300, 300,
 # Rodado no job diário (e chamável a qualquer momento): fecha temporadas vencidas
 # e liquida as fechadas. Idempotente — uma temporada só paga uma vez.
 func TickSeasonLifecycle() -> Dictionary:
+	if not SeasonsEnabled():
+		return {"closed" = 0, "settled" = 0, "disabled" = true}
 	var closed : int = 0
 	var settled : int = 0
 	var now : int = SQLCommons.Timestamp()
@@ -1732,6 +1750,11 @@ const AD_REROLL : String = "reroll"
 const AD_BOSSKEY : String = "bosskey"
 const AD_PLACEMENTS : Array[String] = ["afk2x", "chest", "reroll", "bosskey"]
 const AD_PLACEMENT_CAPS : Dictionary = {"chest": 1, "bosskey": 2}
+# SOM-IDLE beta fechado (T7): stub é EXPLÍCITO e próprio do beta — produção
+# com SDK real exigirá formato próprio (nunca "stub:*"). O stub é mintável
+# pelo client por construção; o teto de abuso são os caps server-side
+# (6/dia global + caps por placement), sem dinheiro envolvido no beta.
+const AdStubEnabled : bool = true
 const AD_DAILY_CAP : int = 6
 
 func _AdDayStart() -> int:
@@ -1743,8 +1766,11 @@ func AdViewsToday(accountID : int, placement : String = "") -> int:
 	return int(Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND created_at >= ? AND json_extract(meta, '$.placement') = ?;", [accountID, _AdDayStart(), placement])[0]["n"])
 
 func _ValidAdToken(token : String, placement : String) -> bool:
-	# Stub: "stub:<placement>:<dia UTC-3>". Produção exige callback assinado
-	# do SDK (fail-closed aqui: formato errado nunca credita).
+	# Stub: "stub:<placement>:<dia UTC-3>" — aceito SOMENTE com AdStubEnabled
+	# (beta). Produção exige callback assinado do SDK (fail-closed aqui:
+	# formato errado nunca credita).
+	if not AdStubEnabled:
+		return false
 	var parts : PackedStringArray = token.split(":")
 	return parts.size() == 3 and parts[0] == "stub" and parts[1] == placement and parts[2] == str(ShopDay(SQLCommons.Timestamp()))
 

@@ -1,5 +1,20 @@
 # Backup offsite — estado, cobertura e procedimento de restore (SOM-IDLE A2)
 
+## 0. Drill local executado (beta fechado, 2026-09-18)
+
+`tests/test_backup_full_restore.gd` — `== FULL RESTORE: PASSED ==`:
+
+| Item | Observado |
+|---|---|
+| Backup criado (via `backup_to`, mesmo mecanismo de produção) | `/tmp/shambleta_restore_test/backup.db`, **1.925.120 bytes** |
+| Base de trabalho (snapshot do live de teste) | 70 contas, 40 chars, 11.138 linhas ledger |
+| Perda simulada | original removido + lixo gravado no caminho (rejeitado: não abre íntegro) |
+| Restauração | em base **separada** (`restored.db`), live de teste intocado |
+| Integridade (`PRAGMA integrity_check`) | ok no original e na restaurada |
+| Dados verificados | migration version, contas, personagens, ledger (linhas + soma gems/gold), wallet gems, level/gp do jogador — todos conferem |
+| Abertura pela aplicação | `VerifyBackupRestorable` aceita a restaurada; abre em handle separado |
+| Limitações | drill local (mesmo disco), não mede RPO/RTO contra objeto remoto; restore S3 real segue pendente (§2–3 deste relatório) |
+
 **Data:** 2026-09-18 · **Base:** `SQLBackups.PushOffsite` + `VerifyBackupRestorable`
 **Testes:** `== RESULT: 1015 checks, 0 failures ==` (inclui `SuiteOpsA2`, que cobre
 o round-trip offsite contra diretório local) + `tests/test_backup_restore.gd`

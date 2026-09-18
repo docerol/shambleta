@@ -128,6 +128,8 @@ const EmailValidRegex : String			= "^[\\w\\.\\+\\-]+@[a-zA-Z0-9\\.\\-]+\\.[a-zA-
 
 # Token
 const TokenExpirySec : int				= 30 * 24 * 60 * 60
+# SOM-IDLE beta (T9): janela do desafio 2FA pós-senha (pendingTwoFactorAccount).
+const TwoFactorChallengeSec : int			= 5 * 60
 
 # Password Reset
 const ResetCodeExpiryMinutes : int		= 15

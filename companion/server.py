@@ -33,9 +33,11 @@ Uso:
         -d '{"idempotency_key":"tx1","username":"Hero","sku":"gems.550"}'
 
     # Fase A — checkout sandbox (sem credencial MP): a loja pede a intenção e
-    # simula o pagamento aprovado; o grant entra pela mesma fila idempotente:
+    # simula o pagamento aprovado; o grant entra pela mesma fila idempotente.
+    # Beta fechado: intents/preference exigem auth_token do login (prova de
+    # sessão; account_id do cliente só vale se igual ao dono do token):
     curl -X POST localhost:8901/checkout/intents \
-      -d '{"username":"Hero","sku":"starter.pack"}'
+      -d '{"auth_token":"<token do login>","sku":"starter.pack"}'
       # → {external_reference: "<account_id>:starter.pack", items, price}
     curl -X POST localhost:8901/checkout/simulate \
       -H 'X-Signature: <hmac do body>' \
@@ -389,6 +391,57 @@ def build_preference_payload(catalog, sku, external_reference, back_urls_base=""
     return payload, None
 
 
+def check_payment_amount(catalog, sku, payment):
+    """Cross-checkProdução (CDC: anunciado = cobrado): o valor pago
+    (transaction_amount do payment re-buscado) deve bater com o preço do
+    catálogo. Sem transaction_amount (sandbox explícito) → True (nada a
+    conferir). Tolera centavos de representação float."""
+    if payment is None or "transaction_amount" not in payment:
+        return True
+    entry = catalog.get(sku) or {}
+    try:
+        paid = float(payment.get("transaction_amount"))
+        expected = float(entry.get("price", 0.0))
+    except (TypeError, ValueError):
+        return False
+    return abs(paid - expected) < 0.005
+
+
+def verify_session_token(con, account_id, auth_token, now=None):
+    """Prova de sessão p/ checkout (beta fechado, sem migração): o client
+    apresenta o auth_token recebido no login (remember-me); o companion
+    confere sha256(token) contra a tabela auth_token do game server
+    (account_id + expiração). Retorna o account_id DONO do token ou None.
+
+    Regras: sem token → None; token inválido/expirado → None; account_id do
+    cliente divergindo do dono do token → None (bloqueia cross-account).
+    Tabela ausente (schema antigo) → None (fail-closed)."""
+    import hashlib as _hl
+    if not auth_token:
+        return None
+    if now is None:
+        now = int(time.time())
+    digest = _hl.sha256(str(auth_token).encode()).hexdigest()
+    try:
+        row = con.execute(
+            "SELECT account_id FROM auth_token WHERE token_hash = ? "
+            "AND expires_timestamp > ?;",
+            (digest, now)).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    owner = int(row[0])
+    if account_id is not None:
+        try:
+            claimed = int(account_id)
+        except (TypeError, ValueError):
+            return None
+        if claimed != owner:
+            return None
+    return owner
+
+
 def mp_create_preference(payload, access_token):
     """Cria a preferência real na API do Mercado Pago (Checkout Pro).
 
@@ -699,6 +752,9 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length > 0 else b""
         provider = self.server.provider
+        # True só quando o payment foi re-buscado na API do provedor (dado
+        # autoritativo p/ o cross-check de valor; corpo plano nunca é).
+        payload_verified = False
         # (1c) autentica a ORIGEM pelo esquema do provedor, não por segredo único.
         if provider == "mercadopago":
             # MP assina sobre o QUERY param data.id (não o corpo); o corpo do
@@ -727,12 +783,21 @@ class Handler(BaseHTTPRequestHandler):
                 payload_data = mp_fetch_payment(data_id, self.server.mp_access_token)
                 if payload_data is None:
                     return self._send(502, {"error": "refetch_failed"})  # MP reenvia
-            else:
-                # sandbox/teste sem token: corpo plano já traz account_id/sku.
+                payload_verified = True
+            elif getattr(self.server, "allow_unverified", False):
+                # Sandbox EXPLÍCITO (só com SHAMBLETA_MP_ALLOW_UNVERIFIED=1):
+                # corpo plano já traz account_id/sku. NUNCA em produção.
                 try:
                     payload_data = json.loads(raw.decode()) if raw else {}
                 except (ValueError, UnicodeDecodeError):
                     return self._send(400, {"error": "bad_json"})
+                payload_verified = False
+            else:
+                # Fail-closed: provider real sem access token → o corpo NÃO é
+                # confiável; nenhum grant sai de payload não verificado.
+                # O MP reenvia; o operador configura o token e o próximo
+                # webhook processa normalmente (idempotente por payment id).
+                return self._send(503, {"error": "checkout_unavailable"})
         else:
             if provider == "stripe":
                 ok = verify_stripe_signature(self.server.stripe_secret,
@@ -762,6 +827,12 @@ class Handler(BaseHTTPRequestHandler):
         except CatalogError as e:
             alert("webhook grant rejected (%s) sku=%r" % (str(e), norm.get("sku")))
             return self._send(400, {"error": str(e)})
+        # Beta fechado: pagamento verificado com valor divergente do catálogo
+        # (anunciado = cobrado, CDC) não concede — operador investiga.
+        if payload_verified and not check_payment_amount(
+                self.server.catalog, norm["sku"], payload_data):
+            alert("webhook amount mismatch sku=%r" % (norm.get("sku"),))
+            return self._send(400, {"error": "amount_mismatch"})
         key = norm["idempotency_key"]
         if not key:
             return self._send(400, {"error": "bad_grant"})
@@ -808,11 +879,34 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return None, raw
 
+    def _resolve_checkout_account(self, con, data):
+        """Identidade da conta p/ checkout, a partir da SESSÃO (beta fechado):
+        o client apresenta o auth_token do login; o dono do token é a conta —
+        account_id do cliente só é aceito se igual ao dono (anti cross-account).
+        Retorna (account_id, None) ou (None, motivo): 'missing_token'/'expired'
+        → 401; 'mismatch' (token válido, conta alheia) → 403. Exceção explícita
+        de dev: allow_dev_checkout (curl de staging) resolve por username."""
+        token = data.get("auth_token")
+        if not token:
+            if getattr(self.server, "allow_dev_checkout", False):
+                legacy = self.server.store.account_id(
+                    con, data.get("account_id"), data.get("username"))
+                if legacy is not None:
+                    return legacy, None
+            return None, "missing_token"
+        owner = verify_session_token(con, data.get("account_id"), token)
+        if owner is not None:
+            return owner, None
+        if data.get("account_id") and verify_session_token(con, None, token):
+            return None, "mismatch"
+        return None, "expired"
+
     def _checkout_intent(self):
-        """Fase A (sandbox): a loja pede {account_id|username, sku} e recebe o
-        external_reference + preço do catálogo. O pagamento real (MP checkout
-        pro, onboarding pendente — handoff §2) usa esse external_reference; o
-        grant entra pelo webhook idempotente. Sem chamada ao MP aqui."""
+        """Fase A (sandbox): a loja pede {auth_token, sku} (+ account_id
+        opcional p/ conferência) e recebe o external_reference + preço do
+        catálogo. O pagamento real (MP checkout pro) usa esse
+        external_reference; o grant entra pelo webhook idempotente. Sem
+        chamada ao MP aqui. Conta sem prova de sessão → 401/403."""
         data, _raw = self._read_json()
         if data is None:
             return self._send(400, {"error": "bad_json"})
@@ -825,10 +919,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": str(e)})
         try:
             with self.server.store.connect() as con:
-                account_id = self.server.store.account_id(
-                    con, data.get("account_id"), data.get("username"))
+                account_id, auth_err = self._resolve_checkout_account(con, data)
                 if account_id is None:
-                    return self._send(404, {"error": "unknown_account"})
+                    code = 403 if auth_err == "mismatch" else 401
+                    return self._send(code, {"error": auth_err})
                 offer = starter_offer_status(con, self.server.catalog,
                                              account_id, sku)
                 if not offer["eligible"] and (self.server.catalog[sku].get("one_time")):
@@ -865,10 +959,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "unknown_sku"})
         try:
             with self.server.store.connect() as con:
-                account_id = self.server.store.account_id(
-                    con, data.get("account_id"), data.get("username"))
+                account_id, auth_err = self._resolve_checkout_account(con, data)
                 if account_id is None:
-                    return self._send(404, {"error": "unknown_account"})
+                    code = 403 if auth_err == "mismatch" else 401
+                    return self._send(code, {"error": auth_err})
                 offer = starter_offer_status(con, self.server.catalog,
                                              account_id, sku)
                 if not offer["eligible"] and (self.server.catalog[sku].get("one_time")):
@@ -993,6 +1087,13 @@ def main():
                     help="permitir POST /checkout/simulate em staging/teste "
                          "(padrão: só com --allow-dev + provider=shared); "
                          "NUNCA em produção")
+    ap.add_argument("--mp-allow-unverified",
+                    default=(os.environ.get("SHAMBLETA_MP_ALLOW_UNVERIFIED", "") == "1"),
+                    action="store_true",
+                    help="SANDBOX EXPLÍCITO: aceitar corpo plano no webhook "
+                         "mercadopago sem re-fetch (sem access token). NUNCA em "
+                         "produção — sem ele, provider real sem token responde "
+                         "503 e nenhum grant sai de payload não verificado")
     ap.add_argument("--mp-back-urls-base",
                     default=os.environ.get("SHAMBLETA_MP_BACK_URLS_BASE", ""),
                     help="base pública da página de retorno do checkout "
@@ -1050,6 +1151,7 @@ def main():
     server.stripe_secret = args.stripe_secret
     server.mp_secret = args.mp_secret
     server.mp_access_token = args.mp_access_token
+    server.allow_unverified = bool(args.mp_allow_unverified)
     server.mp_back_urls_base = args.mp_back_urls_base
     server.catalog = catalog
     server.tolerance = args.tolerance

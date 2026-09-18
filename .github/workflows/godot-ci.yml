@@ -114,17 +114,19 @@ jobs:
           path: build/${{ matrix.name }}
 
   # SOM-IDLE: F2 idle-spike headless test suite (XP curve, zones, settle, ledger)
+  # Beta fechado (2026-09-18): sem liuyuzui/godot-action-setup (setup quebrava
+  # antes dos testes) — mesmo container barichello/godot-ci:4.7.1 dos jobs de
+  # export, sem action externa. CI remoto não executado nesta rodada (sem
+  # créditos); validado localmente: YAML parse + jobs de teste rodando no
+  # Godot 4.7.2 headless local.
   idle-tests:
     runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.1
     name: SOM-IDLE Idle Tests
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Godot
-        uses: liuyuzui/godot-action-setup@v1
-        with:
-          godot-version: ${{ env.GODOT_VERSION }}
 
       - name: Import assets
         run: |
@@ -143,15 +145,12 @@ jobs:
   # SOM-IDLE A2: backup restore probe — monthly gate (runs on every push for now).
   backup-restore:
     runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.1
     name: Backup Restore Probe
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Godot
-        uses: liuyuzui/godot-action-setup@v1
-        with:
-          godot-version: ${{ env.GODOT_VERSION }}
 
       - name: Import assets
         run: |
@@ -166,15 +165,12 @@ jobs:
   # SOM-IDLE P2: performance benchmark gate
   benchmarks:
     runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.1
     name: Performance Benchmarks
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Godot
-        uses: liuyuzui/godot-action-setup@v1
-        with:
-          godot-version: ${{ env.GODOT_VERSION }}
 
       - name: Import assets
         run: |

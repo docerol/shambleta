@@ -125,11 +125,18 @@ func _request_preference():
 	if sku.is_empty():
 		_statusLabel.text = tr("Payment URL not available")
 		return
+	# Beta fechado: o companion vincula o checkout à sessão (auth_token do
+	# login remember-me); sem ele, o servidor rejeita (anti cross-account).
+	var token : String = _get_auth_token()
+	if token.is_empty():
+		_statusLabel.text = tr("Log in with remember-me to enable checkout")
+		_payButton.disabled = false
+		return
 	_statusLabel.text = tr("Creating secure payment...")
 	_payButton.disabled = true
 	_awaitingPreference = true
 	var body : Dictionary = {
-		"username": _get_username(),
+		"auth_token": token,
 		"account_id": int(_pendingIntent.get("account_id", 0)),
 		"sku": sku,
 		"external_reference": str(_pendingIntent.get("external_reference", "")),
@@ -200,5 +207,10 @@ func _companion_url() -> String:
 func _get_username() -> String:
 	if Launcher.nPanel:
 		return str(Launcher.nPanel.nameText)
+	return ""
+
+func _get_auth_token() -> String:
+	if Launcher.nPanel and "savedToken" in Launcher.nPanel:
+		return str(Launcher.nPanel.savedToken)
 	return ""
 

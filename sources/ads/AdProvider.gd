@@ -53,17 +53,23 @@ static func ShowStub(placement : String) -> String:
 
 # Caminho de produção: exibe o rewarded e chama on_token(token) na conclusão.
 # token vazio = anúncio pulado/fechado antes do fim (nada a creditar).
+# Beta fechado: modo portal SEM ponte nunca faz downgrade silencioso p/ stub
+# (stub explícito só quando Provider() == stub) — sem recompensa falsificável
+# por confusão de provider. Ads reais seguem fora do escopo do beta.
 static func ShowRewarded(placement : String, on_token : Callable) -> void:
-	if Provider() == PROVIDER_PORTAL and LauncherCommons.isWeb:
-		var js = _PortalBridge()
-		if js and js.has_method("show_rewarded"):
-			js.show_rewarded(placement, func(completed : bool) -> void:
-				if bool(completed):
-					on_token.call(_MintStub(placement))
-				else:
-					on_token.call(""))
-			return
-	# Sem portal (desktop, staging, SDK ausente): stub imediato.
+	if Provider() == PROVIDER_PORTAL:
+		if LauncherCommons.isWeb:
+			var js = _PortalBridge()
+			if js and js.has_method("show_rewarded"):
+				js.show_rewarded(placement, func(completed : bool) -> void:
+					if bool(completed):
+						on_token.call(_MintStub(placement))
+					else:
+						on_token.call(""))
+				return
+		on_token.call("")
+		return
+	# Stub explícito (beta/dev): minta na hora, com caps server-side.
 	on_token.call(_MintStub(placement))
 
 static func _PortalBridge():

@@ -40,6 +40,9 @@ func _run_tests():
 
 	print("== boot wait done (waited %d ms) ==" % waited)
 
+	# SOM-IDLE beta fechado (T5): Seasons travadas por padrão; os testes
+	# habilitam explicitamente aqui (o beta real nunca seta esta env).
+	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "1")
 	var sql : Node = launcher.SQL
 	var economy : Node = launcher.Economy
 
@@ -146,6 +149,7 @@ func _run_tests():
 			suites.SuiteMarketplace(sql)
 			suites.SuiteSeasonRaces(sql)
 			suites.SuiteTournamentDonation(sql)
+			suites.SuiteSeasonLock(sql)
 			# SOM-IDLE: rebirth (híbrido B+C, XP_PROGRESSION §4.2) — awaited: a
 			# metade B exige agente vivo no cap (o motor de renascimento é async).
 			var rebChar : int = suites.CreateFixture(sql, "idle_rebirth_account", "IdleRebirth")
@@ -156,8 +160,10 @@ func _run_tests():
 
 		# SOM-IDLE: A1 auth hardening + A2 ops hardening
 		suites.SuiteAuthHardening(sql)
+		suites.SuiteTwoFactor(sql)
 		suites.SuiteLGPD(sql)
 		suites.SuiteRefund(sql)
+		suites.SuiteConcurrency(sql)
 		suites.SuiteOpsA2(sql)
 
 		# §7.4 deterministic live farm sim (zone 1) — after the DB suites so the

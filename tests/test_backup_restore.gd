@@ -21,22 +21,30 @@ func _run_probe():
         return
 
     var waited: int = 0
+    var sqlNode: Node = null
     while waited < 30000:
         await create_timer(0.25).timeout
         waited += 250
-        var sqlNode: Node = launcher.SQL
+        sqlNode = launcher.SQL
         if sqlNode != null and sqlNode.isInitialized:
             break
 
-    if not sqlNode.isInitialized:
+    if sqlNode == null or not sqlNode.isInitialized:
         print("FATAL: SQL not initialized within timeout")
         quit(1)
         return
 
     print("SQL initialized after %d ms" % waited)
 
-    var sql: SQLService = sqlNode
-    var backupPath: String = sql.CreateDailyBackup()
+    # Beta fechado: script -s deve ser duck-typed (ver run_idle_tests.gd) —
+    # refs estáticas a classes do projeto forçam compile antes dos autoloads.
+    var sql: Node = sqlNode
+    var backupsScript: GDScript = load("res://sources/sql/SQLBackups.gd")
+    # O serviço sql.backups só sobe sem client-debug; no probe instanciamos
+    # SQLBackups diretamente (mesmo code path de produção).
+    var backupsService: Node = backupsScript.new()
+    root.add_child(backupsService)
+    var backupPath: String = backupsService.CreateDailyBackup()
 
     if backupPath.is_empty():
         print("FATAL: Backup creation failed")
@@ -45,7 +53,7 @@ func _run_probe():
 
     print("Backup created: %s" % backupPath)
 
-    if not SQLBackups.VerifyBackupRestorable(backupPath):
+    if not backupsScript.VerifyBackupRestorable(backupPath):
         print("FATAL: Backup restore probe failed — backup is not readable")
         quit(1)
         return

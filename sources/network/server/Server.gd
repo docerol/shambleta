@@ -78,6 +78,7 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 					err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
 				elif Launcher.SQL.IsTwoFactorEnabled(accountData.accountID):
 					peer.pendingTwoFactorAccount = accountName
+					peer.pendingTwoFactorAt = int(Time.get_unix_time_from_system())
 					err = NetworkCommons.AuthError.ERR_2FA_REQUIRED
 				else:
 					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
@@ -86,20 +87,13 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 func LoginWithTwoFactor(accountName : String, token : String, platform : int, peerID : int):
 	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
 	var peer : Peers.Peer = Peers.GetPeer(peerID)
-	if not peer or peer.pendingTwoFactorAccount.is_empty():
-		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
-	else:
+	# SOM-IDLE beta (T9): decisão no helper testável (binding + expiração +
+	# consumo); aqui só finaliza o login no sucesso.
+	err = Peers.ValidateTwoFactorChallenge(peer, accountName, token)
+	if err == NetworkCommons.AuthError.ERR_OK:
 		var accountID : int = Launcher.SQL.GetAccountID(accountName)
-		if accountID == NetworkCommons.PeerUnknownID:
-			err = NetworkCommons.AuthError.ERR_AUTH
-		else:
-			var secret : String = Launcher.SQL.GetTwoFactorSecret(accountID)
-			if secret.is_empty() or not TwoFactorAuth.VerifyTOTP(secret, token):
-				err = NetworkCommons.AuthError.ERR_AUTH
-			else:
-				var accountData : Peers.AccountData = Peers.AccountData.new(accountID, Launcher.SQL.GetPermission(accountID))
-				err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
-				peer.pendingTwoFactorAccount = ""
+		var accountData : Peers.AccountData = Peers.AccountData.new(accountID, Launcher.SQL.GetAccountPermission(accountID))
+		err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
 	Network.AuthError(err, peerID)
 
 func LoginWithToken(accountName : String, token : String, platform : int, peerID : int):

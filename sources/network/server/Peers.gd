@@ -33,6 +33,8 @@ class Peer:
 	var rpcDeltas : Dictionary[StringName, int]		= {}
 	# SOM-IDLE S4: pending 2FA verification (stores accountName until token is validated).
 	var pendingTwoFactorAccount : String			= ""
+	# SOM-IDLE beta (T9): carimbo do desafio (expiração TwoFactorChallengeSec).
+	var pendingTwoFactorAt : int				= 0
 
 	func _init(id : int, peerTransport : Peers.TransportType):
 		peerID = id
@@ -188,6 +190,31 @@ static func GetAgent(peerID : int) -> PlayerAgent:
 static func GetPermission(peerID : int) -> ActorCommons.Permission:
 	var peer : Peers.Peer = GetPeer(peerID)
 	return peer.permission if peer else ActorCommons.Permission.NONE
+
+# SOM-IDLE beta (T9): valida o desafio 2FA vinculado ao peer. Retorna o
+# AuthError; o SUCESSO não finaliza o login (o chamador faz FinalizeLogin).
+# Regras: sem desafio → NO_PEER_DATA; accountName != dono do desafio → AUTH
+# (código válido p/ A nunca autentica B); desafio expirado → AUTH + consome;
+# código errado → AUTH (desafio segue p/ retry rate-limited); código certo →
+# OK + consome (replay posterior cai em NO_PEER_DATA).
+static func ValidateTwoFactorChallenge(peer : Peer, accountName : String, token : String) -> NetworkCommons.AuthError:
+	if peer == null or peer.pendingTwoFactorAccount.is_empty():
+		return NetworkCommons.AuthError.ERR_NO_PEER_DATA
+	if accountName != peer.pendingTwoFactorAccount:
+		return NetworkCommons.AuthError.ERR_AUTH
+	if peer.pendingTwoFactorAt > 0 and int(Time.get_unix_time_from_system()) - peer.pendingTwoFactorAt > NetworkCommons.TwoFactorChallengeSec:
+		peer.pendingTwoFactorAccount = ""
+		peer.pendingTwoFactorAt = 0
+		return NetworkCommons.AuthError.ERR_AUTH
+	var accountID : int = Launcher.SQL.GetAccountID(accountName)
+	if accountID == NetworkCommons.PeerUnknownID:
+		return NetworkCommons.AuthError.ERR_AUTH
+	var secret : String = Launcher.SQL.GetTwoFactorSecret(accountID)
+	if secret.is_empty() or not TwoFactorAuth.VerifyTOTP(secret, token):
+		return NetworkCommons.AuthError.ERR_AUTH
+	peer.pendingTwoFactorAccount = ""
+	peer.pendingTwoFactorAt = 0
+	return NetworkCommons.AuthError.ERR_OK
 
 static func GetAccountName(accountID : int) -> String:
 	return Launcher.SQL.GetAccountEmail(accountID) if accountID != NetworkCommons.PeerUnknownID else ""

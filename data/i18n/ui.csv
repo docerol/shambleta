@@ -925,3 +925,4 @@ keys,en,pt_BR
 "Awaiting payment confirmation — items credit automatically when approved.","Awaiting payment confirmation — items credit automatically when approved.","Aguardando confirmação do pagamento — os itens creditam automaticamente ao aprovar."
 "Checkout unavailable — try again later (%s)","Checkout unavailable — try again later (%s)","Checkout indisponível — tente novamente mais tarde (%s)"
 "UI Scale","UI Scale","Escala da interface"
+"Log in with remember-me to enable checkout","Log in with remember-me to enable checkout","Entre com lembrar-me para ativar o checkout"
