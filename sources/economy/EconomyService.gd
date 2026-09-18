@@ -2911,7 +2911,95 @@ func RunReconcileJob() -> int:
 	var tours : Dictionary = TickTournaments()
 	if int(tours.get("settled", 0)) > 0 or int(tours.get("created", 0)) > 0:
 		Util.PrintLog("Economy", "Tournaments: settled %d, created %d" % [int(tours.get("settled", 0)), int(tours.get("created", 0))])
+	# R1: bônus de referral por marco (job diário; idempotente por ledger+flag).
+	var ref : int = GrantReferralBonuses()
+	if ref > 0:
+		Util.PrintLog("Economy", "Referral bonuses paid: %d" % ref)
 	return divergences
+
+# ------------------------------------------------------------------ R1: referral (COMMUNITY_ROADMAP)
+# Código por conta, recompensa por marco (L10 + e-mail verificado), anti-farma
+# via marco + teto semanal + auto-referral bloqueado (fingerprint cai no
+# fraud_flag existente). Valores são proposta (dono confirma).
+const REFERRAL_BONUS_GEMS : int = 200
+const REFERRAL_MIN_LEVEL : int = 10
+const REFERRAL_WINDOW_SEC : int = 3 * 86400
+const REFERRAL_WEEKLY_CAP : int = 10
+
+static func ReferralCodeFor(accountID : int, username : String) -> String:
+	return "%s#%04d" % [username, accountID % 10000]
+
+func GetReferralState(accountID : int) -> Dictionary:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT username, referral_code, referred_by FROM account WHERE account_id = ?;", [accountID])
+	if rows.is_empty():
+		return {"ok" = false, "reason" = "unknown_account"}
+	var code : String = str(rows[0].get("referral_code", ""))
+	if code.is_empty():
+		code = ReferralCodeFor(accountID, str(rows[0].get("username", "?")))
+		Launcher.SQL.ExecuteBindings("UPDATE account SET referral_code = ? WHERE account_id = ?;", [code, accountID])
+	var invited : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM account WHERE referred_by = ?;", [accountID])
+	var paid : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason LIKE ?;", [accountID, "referral_bonus:%"])
+	return {"ok" = true, "code" = code,
+		"referred_by" = int(rows[0].get("referred_by", 0)),
+		"invited" = int(invited[0].get("n", 0)) if not invited.is_empty() else 0,
+		"bonuses" = int(paid[0].get("n", 0)) if not paid.is_empty() else 0,
+		"bonus_gems" = REFERRAL_BONUS_GEMS, "min_level" = REFERRAL_MIN_LEVEL}
+
+func SetReferralCode(accountID : int, code : String) -> Dictionary:
+	var clean : String = code.strip_edges()
+	if clean.is_empty():
+		return {"ok" = false, "reason" = "bad_code"}
+	var me : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT username, created_timestamp, referred_by, referral_code FROM account WHERE account_id = ?;", [accountID])
+	if me.is_empty():
+		return {"ok" = false, "reason" = "unknown_account"}
+	if int(me[0].get("referred_by", 0)) != 0:
+		return {"ok" = false, "reason" = "already_referred"}
+	if SQLCommons.Timestamp() - int(me[0].get("created_timestamp", 0)) > REFERRAL_WINDOW_SEC:
+		return {"ok" = false, "reason" = "window_expired"}
+	if clean == str(me[0].get("referral_code", "")) and not clean.is_empty():
+		return {"ok" = false, "reason" = "self_referral"}
+	var inv : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, username FROM account WHERE referral_code = ?;", [clean])
+	if inv.is_empty():
+		return {"ok" = false, "reason" = "unknown_code"}
+	var inviter : int = int(inv[0]["account_id"])
+	if inviter == accountID:
+		return {"ok" = false, "reason" = "self_referral"}
+	if not Launcher.SQL.ExecuteBindings("UPDATE account SET referred_by = ? WHERE account_id = ? AND referred_by = 0;", [inviter, accountID]):
+		return {"ok" = false, "reason" = "db_error"}
+	return {"ok" = true, "reason" = "ok", "inviter" = str(inv[0].get("username", "?"))}
+
+func _ReferralMaxLevel(accountID : int) -> int:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT MAX(s.level) AS m FROM stat s INNER JOIN character c ON c.char_id = s.char_id WHERE c.account_id = ?;", [accountID])
+	if rows.is_empty() or rows[0].get("m", null) == null:
+		return 0
+	return int(rows[0]["m"])
+
+# Job diário: paga bônus de marco (inviter + invitee). Idempotente por flag +
+# reason do ledger; teto semanal por inviter. Retorna pares pagos.
+func GrantReferralBonuses() -> int:
+	var paid : int = 0
+	var now : int = SQLCommons.Timestamp()
+	var weekAgo : int = now - 7 * 86400
+	for row in Launcher.SQL.QueryBindings("SELECT account_id, referred_by FROM account WHERE referred_by > 0 AND referral_bonus_claimed == 0;", []):
+		var invitee : int = int(row["account_id"])
+		var inviter : int = int(row["referred_by"])
+		if not Launcher.SQL.IsEmailVerifiedRaw(invitee):
+			continue
+		if _ReferralMaxLevel(invitee) < REFERRAL_MIN_LEVEL:
+			continue
+		var week : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason LIKE 'referral_bonus:%' AND created_at >= ?;", [inviter, weekAgo])
+		if not week.is_empty() and int(week[0].get("n", 0)) >= REFERRAL_WEEKLY_CAP:
+			continue
+		if not Launcher.SQL.QueryBindings("SELECT id FROM ledger_transaction WHERE reason = ? LIMIT 1;", ["referral_bonus:%d:%d" % [inviter, invitee]]).is_empty():
+			Launcher.SQL.ExecuteBindings("UPDATE account SET referral_bonus_claimed = 1 WHERE account_id = ?;", [invitee])
+			continue
+		if not AddGems(inviter, REFERRAL_BONUS_GEMS, "referral_bonus:%d:%d" % [inviter, invitee]):
+			continue
+		if not AddGems(invitee, REFERRAL_BONUS_GEMS, "referral_welcome:%d" % inviter):
+			continue
+		Launcher.SQL.ExecuteBindings("UPDATE account SET referral_bonus_claimed = 1 WHERE account_id = ?;", [invitee])
+		paid += 1
+	return paid
 
 # SOM-IDLE D3: heuristic fraud scan (roda no job diário; revisão é manual via
 # /cs_flags). Heurísticas v1: rajada de trades, velocidade de level impossível,

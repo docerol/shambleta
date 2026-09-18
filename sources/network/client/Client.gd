@@ -16,6 +16,7 @@ static var LastBossState : Dictionary = {}
 static var LastBossResult : Dictionary = {}
 static var LastCheckoutIntent : Dictionary = {}
 static var LastDailyShop : Dictionary = {}
+static var LastReferralState : Dictionary = {}
 static var LastSeasonPass : Dictionary = {}
 static var LastCosmetics : Dictionary = {}
 static var LastGuildState : Dictionary = {}
@@ -442,6 +443,14 @@ func DailyShop(shop : Dictionary, _peerID : int):
 		return
 	if Launcher.GUI.shopWindow and Launcher.GUI.shopWindow.is_visible():
 		Launcher.GUI.shopWindow.ShowDailyShop(shop)
+
+# R1 referral: guarda o estado e atualiza a seção da conta se visível.
+func ReferralState(state : Dictionary, _peerID : int):
+	LastReferralState = state
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.settingsWindow and Launcher.GUI.settingsWindow.is_visible():
+		Launcher.GUI.settingsWindow.RefreshReferral(state)
 
 func PassFeedback(ok : bool, reason : String, _peerID : int):
 	if Launcher.GUI:

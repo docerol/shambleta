@@ -504,6 +504,19 @@ func GetDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
 func DailyShop(shop : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("DailyShop", [shop], peerID)
 
+# R1 referral: estado do código + vínculo (conta da sessão; 72h p/ informar).
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetReferralState(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetReferralState", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func ReferralState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("ReferralState", [state], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func SetReferralCode(code : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("SetReferralCode", [code], peerID, NetworkCommons.DelayConfig)
+
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyDailyOffer", [offerID], peerID, NetworkCommons.DelayConfig)

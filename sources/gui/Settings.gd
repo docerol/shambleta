@@ -429,6 +429,56 @@ func set_account_password(err : NetworkCommons.AuthError):
 #
 func _on_visibility_changed():
 	RefreshSettings(false)
+	if is_visible():
+		Network.GetReferralState()
+
+# R1 referral UI (runtime, sem .tscn): código próprio, campo p/ informar o
+# código do convidador, status. Refresh via Client.ReferralState.
+var _referralCodeLabel : Label = null
+var _referralInput : LineEdit = null
+var _referralStatus : Label = null
+
+func _build_referral_row():
+	if not accountVBox or _referralCodeLabel:
+		return
+	_referralCodeLabel = Label.new()
+	_referralCodeLabel.name = "ReferralCodeLabel"
+	_referralInput = LineEdit.new()
+	_referralInput.name = "ReferralInput"
+	_referralInput.placeholder_text = tr("Friend's invite code")
+	var applyButton : Button = Button.new()
+	applyButton.name = "ReferralApplyButton"
+	applyButton.text = tr("Use invite code")
+	applyButton.pressed.connect(_on_referral_apply_pressed)
+	_referralStatus = Label.new()
+	_referralStatus.name = "ReferralStatusLabel"
+	accountVBox.add_child(_referralCodeLabel)
+	accountVBox.add_child(_referralInput)
+	accountVBox.add_child(applyButton)
+	accountVBox.add_child(_referralStatus)
+	RefreshReferral(NetClient.LastReferralState)
+
+func _on_referral_apply_pressed():
+	if _referralInput == null:
+		return
+	Network.SetReferralCode(_referralInput.text)
+
+func RefreshReferral(state : Dictionary):
+	_build_referral_row()
+	if _referralCodeLabel == null:
+		return
+	if state.is_empty() or not bool(state.get("ok", false)):
+		_referralStatus.text = tr("Invite rejected: %s") % str(state.get("reason", "?"))
+		return
+	if not state.has("code"):
+		# Resposta do apply (sem estado): mostra e relê o estado completo.
+		_referralStatus.text = tr("Invite code accepted")
+		Network.GetReferralState()
+		return
+	_referralCodeLabel.text = tr("Your invite code: %s (%d invited, %d bonuses)") % [
+		str(state.get("code", "?")), int(state.get("invited", 0)), int(state.get("bonuses", 0))]
+	if int(state.get("referred_by", 0)) > 0:
+		_referralStatus.text = tr("Invite code accepted — bonus at level %d") % int(state.get("min_level", 10))
 
 func PopulateCredits():
 	Scrollable.AddCategories(creditsContainer, creditsJson.get_data())

@@ -2068,6 +2068,59 @@ func SuiteSeasonLock(sql : SQLService) -> void:
 		sql.ExecuteBindings("DELETE FROM season_score WHERE season_id = ?;", [planted])
 		sql.ExecuteBindings("DELETE FROM season WHERE season_id = ?;", [planted])
 
+# R1 referral (COMMUNITY_ROADMAP): código, vínculo 72h, bônus por marco L10 +
+# e-mail, idempotência, teto semanal, anti auto-referral.
+func SuiteReferral(sql : SQLService) -> void:
+	print("[suite] referral (R1)")
+	var economy : EconomyService = Launcher.Economy
+	var charA : int = CreateFixture(sql, "idle_ref_a", "IdleRefA")
+	var charB : int = CreateFixture(sql, "idle_ref_b", "IdleRefB")
+	if not Check(charA != 0 and charB != 0, "referral fixtures created"):
+		return
+	var accountA : int = sql.GetAccountIDForCharacter(charA)
+	var accountB : int = sql.GetAccountIDForCharacter(charB)
+	# Estado: código próprio deriva do username
+	var stA : Dictionary = economy.GetReferralState(accountA)
+	Check(bool(stA.get("ok", false)), "referrer state ok")
+	Check(str(stA.get("code", "")).begins_with("idle_ref_a#"), "code derives from username")
+	Check(str(economy.GetReferralState(999999999).get("reason", "")) == "unknown_account", "unknown account rejected")
+	# Vínculo: código inexistente, depois válido, depois duplicado
+	Check(str(economy.SetReferralCode(accountB, "nobody#0000").get("reason", "")) == "unknown_code", "unknown code rejected")
+	var link : Dictionary = economy.SetReferralCode(accountB, str(stA["code"]))
+	Check(bool(link.get("ok", false)), "valid code linked")
+	Check(str(economy.SetReferralCode(accountB, str(stA["code"])).get("reason", "")) == "already_referred", "double link rejected")
+	Check(str(economy.SetReferralCode(accountA, str(stA["code"])).get("reason", "")) == "self_referral", "self referral rejected")
+	# Janela 72h: conta antiga não vincula
+	var charOld : int = CreateFixture(sql, "idle_ref_old", "IdleRefOld")
+	var accountOld : int = sql.GetAccountIDForCharacter(charOld)
+	sql.ExecuteBindings("UPDATE account SET created_timestamp = ? WHERE account_id = ?;", [SQLCommons.Timestamp() - 10 * 86400, accountOld])
+	Check(str(economy.SetReferralCode(accountOld, str(stA["code"])).get("reason", "")) == "window_expired", "72h window enforced")
+	# Marcos: sem nível/sem e-mail não paga
+	sql.SetGems(accountA, 0)
+	sql.SetGems(accountB, 0)
+	CheckEq(economy.GrantReferralBonuses(), 0, "no milestone → no payout")
+	sql.SetEmailVerified(accountB, true)
+	CheckEq(economy.GrantReferralBonuses(), 0, "verified but low level → no payout")
+	sql.UpdateStatDirect(charB, 10, 0, 5000)
+	Check(economy.GrantReferralBonuses() >= 1, "milestone pays")
+	CheckEq(economy.GetGems(accountA), 200, "inviter +200")
+	CheckEq(economy.GetGems(accountB), 200, "invitee +200")
+	CheckEq(economy.GrantReferralBonuses(), 0, "replay pays nothing (idempotent)")
+	CheckEq(economy.GetGems(accountA), 200, "no double pay")
+	# Teto semanal: 10 bônus recentes bloqueiam o 11º
+	var charC : int = CreateFixture(sql, "idle_ref_c", "IdleRefC")
+	var accountC : int = sql.GetAccountIDForCharacter(charC)
+	Check(bool(economy.SetReferralCode(accountC, str(stA["code"])).get("ok", false)), "second invitee linked")
+	sql.SetEmailVerified(accountC, true)
+	sql.UpdateStatDirect(charC, 10, 0, 5000)
+	for i in 10:
+		sql.ExecuteBindings("INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, 'gems', 200, 200, ?, ?);", [accountA, "referral_bonus:%d:9%03d" % [accountA, i], SQLCommons.Timestamp()])
+	CheckEq(economy.GrantReferralBonuses(), 0, "weekly cap blocks 11th payout")
+	for nick in ["IdleRefA", "IdleRefB", "IdleRefC", "IdleRefOld"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_ref_a", "idle_ref_b", "idle_ref_c", "idle_ref_old"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+
 # Fase B: cap offline por tier (12h F2P / 24h VIP1 / 36h VIP2, expirado volta).
 func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] VIP cap hours (Fase B)")

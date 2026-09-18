@@ -687,6 +687,21 @@ func GetDailyShop(peerID : int):
 		return
 	Network.DailyShop(Launcher.Economy.GetDailyShop(accountID), peerID)
 
+# R1 referral: conta sempre da sessão (anti cross-account, padrão do arquivo).
+func GetReferralState(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.ReferralState({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	Network.ReferralState(Launcher.Economy.GetReferralState(accountID), peerID)
+
+func SetReferralCode(code : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.ReferralState({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	Network.ReferralState(Launcher.Economy.SetReferralCode(accountID, code), peerID)
+
 func BuyDailyOffer(offerID : String, peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
 	var accountID : int = Peers.GetAccount(peerID)
