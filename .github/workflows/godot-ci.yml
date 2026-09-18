@@ -134,7 +134,10 @@ jobs:
       - name: Run SOM-IDLE idle tests
         run: |
           cd "$PROJECT_PATH"
-          timeout 300 godot --headless --path . -s tests/run_idle_tests.gd
+          # SOM-IDLE launch gaps: a suíte tem 1015+ checks com sims reais
+          # (onboarding, boss ladder, probe realtime 300s); 300s matava o job
+          # no meio (timeout, não falha). 1200s dá margem em runners lentos.
+          timeout 1200 godot --headless --path . -s tests/run_idle_tests.gd
           # Exit code = number of failed checks (0 = green)
 
   # SOM-IDLE A2: backup restore probe — monthly gate (runs on every push for now).

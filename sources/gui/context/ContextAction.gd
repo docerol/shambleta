@@ -21,7 +21,7 @@ func SetInputLabel():
 				DeviceManager.DeviceType.JOYSTICK:
 					_icon.set_theme_type_variation("ButtonTip")
 				_:
-				push_error("Device Type not recognized")
+					push_error("Device Type not recognized")
 			_icon.set_text(actionInfo[DeviceManager.ActionInfo.NAME])
 
 #

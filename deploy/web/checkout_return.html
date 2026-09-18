@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shambleta — Retornando ao jogo…</title>
+<style>
+  body { background: #0b0b12; color: #e8e8f0; font-family: sans-serif;
+         display: flex; align-items: center; justify-content: center;
+         min-height: 100vh; margin: 0; text-align: center; }
+  .box { max-width: 28rem; padding: 2rem; }
+  h1 { font-size: 1.4rem; }
+  p { color: #a8a8c0; }
+  a { color: #7fd08a; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1 id="title">Retornando ao jogo…</h1>
+  <p id="desc">Seu pagamento foi registrado. Os itens creditam automaticamente
+  no jogo em alguns segundos — não é preciso fazer mais nada nesta aba.</p>
+  <p><a href="#" id="close">Fechar esta aba e voltar ao jogo</a></p>
+</div>
+<script>
+(function () {
+  var q = new URLSearchParams(window.location.search);
+  var status = q.get("status") || q.get("collection_status") || "";
+  var title = document.getElementById("title");
+  var desc = document.getElementById("desc");
+  if (status === "approved") {
+    title.textContent = "Pagamento aprovado!";
+  } else if (status === "pending" || status === "in_process") {
+    title.textContent = "Pagamento em processamento";
+    desc.textContent = "O pagamento está pendente (ex.: Pix aguardando " +
+      "compensação). Assim que for aprovado, os itens creditam sozinhos no jogo.";
+  } else if (status === "rejected" || status === "cancelled" || status === "failure") {
+    title.textContent = "Pagamento não concluído";
+    desc.textContent = "O pagamento não foi aprovado. Nenhum valor foi " +
+      "creditado no jogo — você pode tentar novamente quando quiser.";
+  }
+  document.getElementById("close").addEventListener("click", function (ev) {
+    ev.preventDefault();
+    window.close();
+  });
+  // Tenta avisar a aba do jogo (mesma origem) e se fecha em 30s se o
+  // jogador não interagir — nunca deixa ninguém preso aqui.
+  try {
+    if (window.opener && !window.opener.closed) { window.opener.focus(); }
+  } catch (e) {}
+  setTimeout(function () { window.close(); }, 30000);
+})();
+</script>
+</body>
+</html>

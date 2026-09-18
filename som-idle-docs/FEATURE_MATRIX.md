@@ -85,7 +85,7 @@
 | Rebirth upgrades | Implementado | XP/gold/attune offline |
 | Season pass | Implementado | Missões, board, premium track |
 | Tournament | Implementado | Semanal, inscrição em gold |
-| Seasons (snapshot + 4 corridas) | **Gap técnico** | `FEATURE_MATRIX.md` e `ROADMAP.md` (§F4) documentam; código (`GetSeasonBoardsState`) existe mas snapshot/learderboards semanais (Power/Boss/Spend/Guild) não implementados no build atual |
+| Seasons (snapshot + 4 corridas) | Implementado (aguardando ativação) | Snapshots Power/Spend/BossKills/GuildPoints + boards + premiação automática + `TickSeasonLifecycle` (`EconomyService.gd`, suítes `SeasonRaces`/`SeasonPayout`); ver `SEASONS_GAP.md`. **Decisão do dono (2026-09-18): pós-lançamento** — ativar depois com regras congeladas + changelog público |
 
 ---
 
@@ -101,7 +101,7 @@
 | Anti-enumeração login | Implementado | Resposta genérica |
 | Ban por conta+IP | Implementado | IP ban com wildcard |
 | Ledger antifraud | Implementado | Trade burst, level jump, RMT heuristics |
-| Multi-conta detection | Planejado | Heurísticas IP/device fingerprint |
+| Multi-conta detection | Implementado (parcial — heurística + fila de revisão) | `DeviceFingerprint.gd` (coleta) + `Peers.gd:FinalizeLogin` (heurística 7d, não-bloqueante) + `EconomyService.FlagMultiAccount` (abre `fraud_flag` kind `multi_account`, revisão manual, sem ban automático) |
 
 ---
 
@@ -131,7 +131,7 @@
 | CI/CD (GitHub Actions) | Implementado | Multi-plataforma |
 | Sentry error tracking | Implementado | Opt-out de privacidade |
 | Backup diário local | Implementado | SQLite WAL, restore probe |
-| Backup offsite | Planejado | Configurável, não testado |
+| Backup offsite | Parcial | Mecanismo testado (`PushOffsite` + restore probe, `SuiteOpsA2` + job CI); restore contra bucket S3 real não executado — procedimento em `archive/reports/OFFSITE_RESTORE_REPORT.md`, execução pendente de infra (dono) |
 | Staging environment | Implementado (docs/config) | `STAGING.md`, `docker-compose.staging.yml`, `.github/workflows/staging.yml` existem; ambiente ainda precisa ser provisionado no Coolify (P5 — infra) |
 
 ---
@@ -179,4 +179,4 @@
 2. Adicionar checkout UI real (Mercado Pago/Stripe)?
 3. Onboarding básico implementado — melhorar highlights e conteúdo dos passos (U2 parcial).
 4. Adicionar 2FA obrigatório para admin? (S4 implementado, opcional — decidir se obrigatório).
-5. Implementar detecção de multi-conta? (S5 — heurísticas no código de fingerprint; código de coleta existe, heurísticas pendentes).
+5. Detecção de multi-conta: **decisão do dono (2026-09-18): fica só como sinal** (heurística + `fraud_flag`, revisão manual, sem ban automático) — item 13-residual da auditoria comercial encerrado.

@@ -29,6 +29,7 @@ func GetMapBoundaries() -> Vector2:
 	if currentMapNode == null:
 		push_error("Map node not found on the current scene")
 		return Vector2.ZERO
+	return currentMapNode.get_meta("MapBoundaries", Vector2.ZERO)
 
 func EmplaceMapNode(mapID : int, force : bool = false):
 	if not force and currentMapID == mapID:

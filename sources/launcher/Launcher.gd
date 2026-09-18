@@ -206,7 +206,7 @@ func _post_launch():
 	if Telemetry and not Telemetry.isInitialized:	Telemetry._post_launch()
 	# SOM-IDLE F3: web push after GUI
 	if LauncherCommons.isWeb:
-		WebPush.Initialize()
+		WebPushService.Initialize()
 
 func _quit():
 	Quit()

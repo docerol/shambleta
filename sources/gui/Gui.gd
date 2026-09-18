@@ -241,21 +241,35 @@ func EnterGame():
 func ExitGame():
 	notificationLabel.ClearNotification()
 
-# SOM-IDLE P2: toggle minimal HUD for idle sessions.
+# SOM-IDLE UI scale: ÚNICO mecanismo de escala de fonte/janelas (era
+# mobile/web-only; agora também manual no Desktop via Settings
+# "General-UIScale"). Fator 1.0 = tamanho de design (viewport 1280×720,
+# fonte base do tema). Chamadas são absolutas (não acumulam): a fonte base
+# é capturada uma vez e toda chamada reaplica base × fator.
+const UIScaleMobileDefault : float = 1.2
+const UIScaleMin : float = 1.0
+const UIScaleMax : float = 2.0
+var uiScaleFactor : float = 1.0
+var _baseUIFontSize : int = -1
+
+func ApplyUIScale(factor : float) -> void:
+	uiScaleFactor = clampf(factor, UIScaleMin, UIScaleMax)
+	# SOM-IDLE parser: get_viewport().gui_theme_default_font_size não existe
+	# neste build (erro em runtime) — ThemeDB.fallback_font_size é a API
+	# correta p/ escalar a fonte de TODA a UI globalmente.
+	if _baseUIFontSize < 0:
+		_baseUIFontSize = ThemeDB.fallback_font_size
+	ThemeDB.fallback_font_size = int(float(_baseUIFontSize) * uiScaleFactor)
+	# Janelas principais acompanham (toque no mobile, leitura no Desktop HiDPI).
+	for win in [statWindow, chatWindow, shopWindow]:
+		if win and win is WindowPanel:
+			(win as WindowPanel).scale = Vector2(uiScaleFactor, uiScaleFactor)
+
 # P-A4: ajuste responsivo mínimo para mobile/web (não redesign).
 func _adjust_for_mobile_web():
 	if LauncherCommons.isMobile or LauncherCommons.isWeb:
 		# P-A4 (polimento): responsivo completo — fontes maiores, botões maiores, margens reduzidas.
-		var font_scale : float = 1.2
-		var scale_factor : float = 1.2
-		get_viewport().gui_theme_default_font_size = int(get_viewport().gui_theme_default_font_size * font_scale)
-		# Aumentar botões principais (menu, stats, chat, shop) para toque.
-		if statWindow and statWindow is WindowPanel:
-			statWindow.scale = Vector2(scale_factor, scale_factor)
-		if chatWindow and chatWindow is WindowPanel:
-			chatWindow.scale = Vector2(scale_factor, scale_factor)
-		if shopWindow and shopWindow is WindowPanel:
-			shopWindow.scale = Vector2(scale_factor, scale_factor)
+		ApplyUIScale(UIScaleMobileDefault)
 		# Reduzir margens das janelas para caber em telas pequenas.
 		if windows and windows is Control:
 			for win in windows.get_children():
@@ -407,6 +421,13 @@ func _ready():
 	var i18n : Localizer = Localizer.new()
 	i18n.name = "I18N"
 	add_child(i18n)
+	# SOM-IDLE UI scale: auto 1.2x em mobile/web só quando o jogador nunca
+	# escolheu (Settings "General-UIScale" persiste a escolha e vence o auto).
+	# No Desktop sem pref salva, fica 1.0 (design 1280×720).
+	if LauncherCommons.isMobile or LauncherCommons.isWeb:
+		var saved = Conf.GetVariant("User", "General-UIScale", Conf.Type.USERSETTINGS, null)
+		if saved == null:
+			_adjust_for_mobile_web()
 	DB.WarmShaders()
 
 func _on_ui_margin_resized():

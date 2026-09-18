@@ -122,6 +122,11 @@ func Init(actorNode : Actor, data : EntityData):
 	if actorNode == null:
 		push_error("Caller actor node should never be null")
 		return
+	# SOM-IDLE launch gaps: o 0c5cb56 trocou o assert por guard mas apagou o
+	# `actor = actorNode` junto — Stats.actor ficou sempre null, IsAlive()
+	# sempre falso e AddExperience/AddGP viravam no-op p/ TODO agente vivo
+	# (só a suíte de essência, com deltas exatos, pegava). Restaurado.
+	actor = actorNode
 
 	var stats : Dictionary = data._stats
 	shape	= data._id

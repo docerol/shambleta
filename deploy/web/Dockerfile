@@ -30,6 +30,10 @@ RUN rm /etc/nginx/conf.d/default.conf
 COPY deploy/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /out/Web/ /usr/share/nginx/html/
 COPY deploy/web/landing/ /usr/share/nginx/html/landing/
+# SOM-IDLE checkout: página de retorno do Mercado Pago (back_urls do
+# companion apontam p/ <base>/checkout_return.html — o grant chega pelo
+# webhook, esta página é só UX para não prender o jogador).
+COPY deploy/web/checkout_return.html /usr/share/nginx/html/checkout_return.html
 # SOM-IDLE P1: música servida separadamente para não pesar no primeiro load.
 # Os arquivos .ogg ficam em /usr/share/nginx/music/ e são servidos por /music/.
 COPY data/music/ /usr/share/nginx/music/

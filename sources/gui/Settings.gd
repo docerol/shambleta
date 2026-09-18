@@ -147,6 +147,27 @@ func apply_scaling(mode : int):
 	Launcher.Root.set_content_scale_factor(mode + 1)
 	init_actionoverlay(true)
 
+# SOM-IDLE UI scale: escala de interface controlável (Desktop QHD/4K).
+# Passos persistidos como índice em "General-UIScale" (USERSETTINGS);
+# o fator vai ao Gui.ApplyUIScale() — o mesmo mecanismo do auto mobile/web.
+const UIScaleOptions : Array[String] = ["100%", "125%", "150%"]
+const UIScaleFactors : Array[float] = [1.0, 1.25, 1.5]
+func init_uiscale(apply : bool):
+	# SOM-IDLE parser: int(null) não existe neste build — default 100%.
+	var raw = GetVal("General-UIScale")
+	var idx : int = clampi(int(raw) if raw != null else 0, 0, UIScaleOptions.size() - 1)
+	renderAccessors["General-UIScale"][ACC_TYPE.LABEL].selected = idx
+	if apply:
+		apply_uiscale(idx)
+func set_uiscale(idx : int):
+	idx = clampi(idx, 0, UIScaleOptions.size() - 1)
+	SetVal("General-UIScale", idx)
+	apply_uiscale(idx)
+func apply_uiscale(idx : int):
+	idx = clampi(idx, 0, UIScaleFactors.size() - 1)
+	if Launcher.GUI and Launcher.GUI.has_method("ApplyUIScale"):
+		Launcher.GUI.ApplyUIScale(UIScaleFactors[idx])
+
 # Language (SOM-IDLE i18n)
 const LanguageOptions : Array[String] = ["auto", "en", "pt_BR"]
 func init_language(apply : bool):
@@ -389,14 +410,14 @@ func init_inputbindings(apply : bool):
 # SOM-IDLE F3: web push notifications
 func init_webpush(apply : bool):
 	if apply:
-		WebPush.Initialize()
+		WebPushService.Initialize()
 
 func set_webpush(enabled : bool):
-	WebPush.SetEnabled(enabled)
-	if enabled and WebPush.GetPermission() == "default":
-		var perm : String = WebPush.RequestPermission()
+	WebPushService.SetEnabled(enabled)
+	if enabled and WebPushService.GetPermission() == "default":
+		var perm : String = WebPushService.RequestPermission()
 		if perm != "granted":
-			WebPush.SetEnabled(false)
+			WebPushService.SetEnabled(false)
 
 func apply_webpush(enabled : bool):
 	pass
@@ -438,6 +459,22 @@ func _ready():
 	visualVBox.add_child(langBox)
 	visualVBox.move_child(langBox, 0)
 	renderAccessors["General-Language"] = [init_language, null, apply_language, langOption]
+	# SOM-IDLE UI scale: linha "Escala da interface" (runtime, sem editar .tscn).
+	var scaleBox : HBoxContainer = HBoxContainer.new()
+	scaleBox.name = "UIScaleRow"
+	var scaleLabel : Label = Label.new()
+	scaleLabel.name = "Text"
+	scaleLabel.text = "UI Scale"
+	var scaleOption : OptionButton = OptionButton.new()
+	scaleOption.name = "UIScaleOption"
+	for opt in UIScaleOptions:
+		scaleOption.add_item(opt)
+	scaleOption.item_selected.connect(set_uiscale)
+	scaleBox.add_child(scaleLabel)
+	scaleBox.add_child(scaleOption)
+	visualVBox.add_child(scaleBox)
+	visualVBox.move_child(scaleBox, 1)
+	renderAccessors["General-UIScale"] = [init_uiscale, null, apply_uiscale, scaleOption]
 	RefreshSettings(true)
 	FSM.enter_game.connect(RefreshSettings.bind(true))
 	FSM.exit_game.connect(SaveSettings.bind())
@@ -467,7 +504,6 @@ func _ready():
 		pushOption.item_selected.connect(set_webpush)
 		pushBox.add_child(pushLabel)
 		pushBox.add_child(pushOption)
-		var visualVBox : Node = renderAccessors["Render-Scaling"][ACC_TYPE.LABEL].get_parent()
 		visualVBox.add_child(pushBox)
 		renderAccessors["Web-PushEnabled"] = [init_webpush, set_webpush, apply_webpush, pushOption]
 
@@ -563,6 +599,11 @@ func _on_verify_two_factor_setup():
 	if code.length() != 6 or not code.is_valid_int():
 		return
 	Network.VerifyTwoFactorSetup(code, Launcher.Peer.peerID)
+
+# SOM-IDLE parser (S4): o botão LGPD conectava _on_delete_account_pressed, que
+# nunca foi declarado (o diálogo de confirmação estava perdido no fim do
+# fluxo de 2FA). Restaurado no fluxo certo: botão → confirmação → _confirm.
+func _on_delete_account_pressed():
 	UICommons.MessageBox(
 		"This permanently deletes your account and erases your personal data (LGPD art. 18). Your characters and inventory are removed; financial ledger records are retained as required by law. This action cannot be undone.",
 		Callable(self, "_confirm_delete_account"), "Delete forever")

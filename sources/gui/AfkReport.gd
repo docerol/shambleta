@@ -58,4 +58,8 @@ func _on_double_ad_pressed():
 	if not AdProvider.IsReady("afk2x"):
 		return
 	doubleAdButton.disabled = true
-	Network.WatchAd("afk2x", AdProvider.ShowStub("afk2x"))
+	AdProvider.ShowRewarded("afk2x", func(token : String) -> void:
+		if token.is_empty():
+			doubleAdButton.disabled = false
+			return
+		Network.WatchAd("afk2x", token))

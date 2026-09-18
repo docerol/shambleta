@@ -2908,6 +2908,14 @@ func _FlagOpen(accountID : int, charID : int, kind : String, detail : String) ->
 		return false
 	return Launcher.SQL.ExecuteBindings("INSERT INTO fraud_flag (created_at, account_id, char_id, kind, detail, status) VALUES (?, ?, ?, ?, ?, 'open');", [SQLCommons.Timestamp(), accountID, charID, kind, detail])
 
+# SOM-IDLE S5: a heurística de multi-conta (Peers.FinalizeLogin, não-bloqueante)
+# abre flag na MESMA fila de revisão manual das outras heurísticas — antes só
+# logava um alerta separado. Sem ban automático por design: punição é manual.
+func FlagMultiAccount(accountID : int, detail : String) -> bool:
+	if accountID <= 0 or detail.is_empty():
+		return false
+	return _FlagOpen(accountID, 0, "multi_account", detail)
+
 func _FlagTradeBursts(now : int) -> int:
 	var opened : int = 0
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, COUNT(*) AS n FROM ledger_transaction WHERE reason LIKE 'trade_out:%' AND created_at >= ? GROUP BY account_id HAVING n > ?;", [now - 86400, FraudTradeBurstPerDay])

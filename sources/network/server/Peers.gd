@@ -208,17 +208,27 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		var fp_hash : String = str(fp.get("hash", ""))
 		if not fp_hash.is_empty():
 			Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}", fp)
-		# S5: heurística multi-account (fail-safe: nunca falha o login, só alerta se houver duplicatas).
-		try:
-			var fp_for_heuristic : String = fp_hash if not fp_hash.is_empty() else str(fp.get("hash", ""))
-			if not fp_for_heuristic.is_empty():
-				var duplicate_rows : Array = Launcher.SQL.QueryBindings(
-					"SELECT DISTINCT account_id FROM telemetry_event WHERE fingerprint LIKE ? AND account_id != ? AND created_at > ?;",
-					["%\"hash\":\"" + fp_for_heuristic + "%", accountData.accountID, int(Time.get_unix_time_from_system()) - 86400 * 7])
-				if duplicate_rows.size() > 1:
-					push_warning("[S5 MultiAccount] Fingerprint hash=%s encontrado com %d outras contas (últimos 7d)" % [fp_for_heuristic, duplicate_rows.size()])
-		except:
-			push_warning("[S5 MultiAccount] Falha na consulta de heurística (não bloqueante)")
+		# S5: heurística multi-account (fail-safe: nunca falha o login; abre flag
+		# na fila de revisão manual via EconomyService.FlagMultiAccount — o mesmo
+		# fraud_flag das outras heurísticas, sem ban automático por design).
+		# Sem try/except (GDScript não tem exceções): guards explícitos; a
+		# heurística é best-effort e nunca bloqueia o login.
+		var fp_for_heuristic : String = fp_hash if not fp_hash.is_empty() else str(fp.get("hash", ""))
+		if not fp_for_heuristic.is_empty() and Launcher.SQL != null:
+			var duplicate_rows : Array = Launcher.SQL.QueryBindings(
+				"SELECT DISTINCT account_id FROM telemetry_event WHERE fingerprint LIKE ? AND account_id != ? AND created_at > ?;",
+				["%\"hash\":\"" + fp_for_heuristic + "%", accountData.accountID, int(Time.get_unix_time_from_system()) - 86400 * 7])
+			if duplicate_rows.size() > 1:
+				push_warning("[S5 MultiAccount] Fingerprint hash=%s encontrado com %d outras contas (últimos 7d)" % [fp_for_heuristic, duplicate_rows.size()])
+				if Launcher.Economy != null and Launcher.Economy.has_method("FlagMultiAccount"):
+					var detail : String = "shared_fp:%s" % fp_for_heuristic
+					Launcher.Economy.FlagMultiAccount(accountData.accountID, detail)
+					var flagged : int = 0
+					for dup in duplicate_rows:
+						if flagged >= 10:
+							break
+						if dup is Dictionary and Launcher.Economy.FlagMultiAccount(int((dup as Dictionary).get("account_id", 0)), detail):
+							flagged += 1
 	if platform < 0 or platform >= NetworkCommons.Platform.COUNT:
 		platform = NetworkCommons.Platform.UNKNOWN
 	Launcher.SQL.UpdateAccount(peer.accountID, platform)

@@ -40,7 +40,9 @@ Uso:
     curl -X POST localhost:8901/checkout/simulate \
       -H 'X-Signature: <hmac do body>' \
       -d '{"username":"Hero","sku":"starter.pack","idempotency_key":"1:starter.pack:pay1"}'
-    # Produção troca o simulate pelo webhook do provedor (mesma semântica).
+    # Produção troca o simulate pelo checkout MP (mesma external_reference):
+    # POST /checkout/preference {username|account_id, sku} → {payment_url}
+    # (Checkout Pro, valor do catálogo) + grant pelo webhook do provedor.
 
 Contrato de promoção: reescrever em Go/Node + Postgres quando o CCU exigir
 (ARCHITECTURE §11). A tabela grant_queue e a semântica de idempotência não mudam.
@@ -363,6 +365,53 @@ def mp_refund_payment(payment_id, access_token):
         return False
 
 
+def build_preference_payload(catalog, sku, external_reference, back_urls_base=""):
+    """Monta o corpo da preferência Checkout Pro (puro, testável sem rede).
+
+    O valor vem do CATÁLOGO (nunca do cliente). Retorna (payload, error):
+    payload é o dict p/ POST /checkout/preferences; error é None em sucesso
+    ou 'unknown_sku' quando o SKU não existe no catálogo."""
+    if not sku or sku not in catalog:
+        return None, "unknown_sku"
+    entry = catalog[sku]
+    title = str(entry.get("title") or entry.get("label") or sku)
+    price = float(entry.get("price", 0.0))
+    currency = str(entry.get("currency", "BRL"))
+    item = {"title": "%s (%s)" % (title, sku), "quantity": 1,
+            "unit_price": price, "currency_id": currency}
+    payload = {"items": [item], "external_reference": external_reference}
+    base = (back_urls_base or "").strip().rstrip("/")
+    if base:
+        ret = base + "/checkout_return.html"
+        payload["back_urls"] = {"success": ret, "pending": ret,
+                                "failure": ret}
+        payload["auto_return"] = "approved"
+    return payload, None
+
+
+def mp_create_preference(payload, access_token):
+    """Cria a preferência real na API do Mercado Pago (Checkout Pro).
+
+    Retorna o dict da resposta (com init_point/sandbox_init_point) ou None
+    em falha (o chamador responde 502; o MP/webhook re-tenta do lado cliente).
+    Fail-closed sem token; nunca levanta."""
+    if not payload or not access_token:
+        return None
+    import urllib.request
+    url = "https://api.mercadopago.com/checkout/preferences"
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + access_token},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        alert("mercadopago preference failed: %s" % e)
+        return None
+
+
 def refund_sweep(db_path, access_token, dry_run=False):
     """Uma passada de estornos: grants 'refunded' (CDC, jogo já reverteu as
     gems) ainda não notificados ao MP. Retorna {pending, notified, skipped}.
@@ -641,6 +690,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/checkout/intents":
             return self._checkout_intent()
+        if parsed.path == "/checkout/preference":
+            return self._checkout_preference()
         if parsed.path == "/checkout/simulate":
             return self._checkout_simulate()
         if parsed.path != "/webhooks/payments":
@@ -797,10 +848,71 @@ class Handler(BaseHTTPRequestHandler):
                        "idempotency_key=<external_reference>:<payment_id>",
         })
 
+    def _checkout_preference(self):
+        """Produção (Checkout Pro): dado {account_id|username, sku} (+
+        external_reference opcional p/ conferência), cria uma preferência real
+        na API do Mercado Pago e devolve a URL de pagamento (init_point).
+
+        O valor vem do CATÁLOGO (nunca do cliente). O grant continua entrando
+        pelo webhook idempotente (grant_queue, chave = payment id) — esta rota
+        nunca credita nada. Fail-closed sem SHAMBLETA_MP_ACCESS_TOKEN (503).
+        Sandbox continua em POST /checkout/simulate (allow_dev)."""
+        data, _raw = self._read_json()
+        if data is None:
+            return self._send(400, {"error": "bad_json"})
+        sku = data.get("sku")
+        if not sku or sku not in self.server.catalog:
+            return self._send(400, {"error": "unknown_sku"})
+        try:
+            with self.server.store.connect() as con:
+                account_id = self.server.store.account_id(
+                    con, data.get("account_id"), data.get("username"))
+                if account_id is None:
+                    return self._send(404, {"error": "unknown_account"})
+                offer = starter_offer_status(con, self.server.catalog,
+                                             account_id, sku)
+                if not offer["eligible"] and (self.server.catalog[sku].get("one_time")):
+                    return self._send(409, {"error": offer["reason"],
+                                            "starter_offer": offer})
+        except sqlite3.Error as e:
+            return self._send(500, {"error": "db_error", "detail": str(e)})
+        external_reference = "%d:%s" % (account_id, sku)
+        if data.get("external_reference"):
+            # Conferência: o cliente pode ecoar, nunca inventar (preço/grant
+            # continuam autoritativos no catálogo + webhook).
+            if str(data.get("external_reference")) != external_reference:
+                return self._send(400, {"error": "external_reference_mismatch"})
+        if not self.server.mp_access_token:
+            return self._send(503, {"error": "checkout_unavailable"})
+        payload, err = build_preference_payload(
+            self.server.catalog, sku, external_reference,
+            getattr(self.server, "mp_back_urls_base", ""))
+        if err:
+            return self._send(400, {"error": err})
+        pref = mp_create_preference(payload, self.server.mp_access_token)
+        if not pref:
+            return self._send(502, {"error": "preference_failed"})
+        payment_url = (pref.get("init_point")
+                       or pref.get("sandbox_init_point") or "")
+        if not payment_url:
+            return self._send(502, {"error": "preference_failed"})
+        entry = self.server.catalog[sku]
+        return self._send(200, {
+            "external_reference": external_reference,
+            "account_id": account_id,
+            "sku": sku,
+            "price": entry.get("price"), "currency": entry.get("currency", "BRL"),
+            "payment_url": payment_url,
+            "preference_id": pref.get("id"),
+        })
+
     def _checkout_simulate(self):
         """Sandbox explícito (allow_dev + shared secret): simula o pagamento
         aprovado e enfileira os grants. Produção usa o webhook do provedor."""
-        if not (self.server.allow_dev and self.server.provider == "shared"):
+        allow_checkout = bool(getattr(self.server, "allow_dev_checkout", False)
+                              or (self.server.allow_dev
+                                  and self.server.provider == "shared"))
+        if not allow_checkout:
             return self._send(403, {"error": "sandbox_only"})
         data, raw = self._read_json()
         if data is None:
@@ -875,6 +987,17 @@ def main():
                     default=os.environ.get("SHAMBLETA_ALLOW_DEV_WEBHOOK", "") == "1",
                     action="store_true",
                     help="permitir provider=shared (sandbox); NUNCA em produção")
+    ap.add_argument("--allow-dev-checkout",
+                    default=(os.environ.get("SHAMBLETA_ALLOW_DEV_CHECKOUT", "") == "1"),
+                    action="store_true",
+                    help="permitir POST /checkout/simulate em staging/teste "
+                         "(padrão: só com --allow-dev + provider=shared); "
+                         "NUNCA em produção")
+    ap.add_argument("--mp-back-urls-base",
+                    default=os.environ.get("SHAMBLETA_MP_BACK_URLS_BASE", ""),
+                    help="base pública da página de retorno do checkout "
+                         "(back_urls success/pending/failure apontam p/ "
+                         "<base>/checkout_return.html); vazio = sem back_urls")
     ap.add_argument("--refund-sweep", action="store_true",
                     help="uma passada de estornos MP (grants 'refunded' ainda não "
                          "notificados) e sai; exige SHAMBLETA_MP_REFUNDS=1 + token "
@@ -927,9 +1050,11 @@ def main():
     server.stripe_secret = args.stripe_secret
     server.mp_secret = args.mp_secret
     server.mp_access_token = args.mp_access_token
+    server.mp_back_urls_base = args.mp_back_urls_base
     server.catalog = catalog
     server.tolerance = args.tolerance
     server.allow_dev = bool(args.allow_dev)
+    server.allow_dev_checkout = bool(args.allow_dev_checkout or args.allow_dev)
     print("companion: listening on %s:%d (db %s, provider %s, %d SKUs)"
           % (host, args.port, args.db, args.provider, len(catalog)), flush=True)
     try:

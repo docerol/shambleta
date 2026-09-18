@@ -15,6 +15,47 @@ failures =="):
 - **3c** companion multi-thread + hook de alerta/uptime opt-in.
 - **3a** scaffold de i18n pt-BR (CSV + TranslationServer + `tr()` nas strings de
   código de login/conta/chefe/AFK).
+- **T1** checkout real Mercado Pago, integração técnica (`SOM-IDLE: …`, suíte
+  `== RESULT: 1015 checks, 0 failures ==` + companion 75/75): companion
+  `POST /checkout/preference` (Checkout Pro, valor do catálogo, fail-closed sem
+  `SHAMBLETA_MP_ACCESS_TOKEN`) + `Checkout.gd` pedindo a preferência e abrindo
+  a URL (`JavaScriptBridge window.open` no Web, `OS.shell_open` no Desktop) +
+  página estática de retorno (`deploy/web/checkout_return.html`, servida na raiz
+  do web) + `/checkout/simulate` preservado atrás de `SHAMBLETA_ALLOW_DEV_CHECKOUT`.
+- **T2** escala de UI (`SOM-IDLE: …`, `SuiteUIScale` verde): `Gui.ApplyUIScale()`
+  (mecanismo único — auto 1.2x mobile/web + manual Desktop), opção "Escala da
+  interface" 100/125/150% em Settings (persiste, aplica no boot e ao vivo),
+  `window/stretch/mode="canvas_items"` + janela default 1600×900 (viewport de
+  design 1280×720 mantido), `ThemeDB.fallback_font_size` como API de fonte
+  global. Auditoria das 6 janelas mais usadas (Game/Shop/AfkReport/Formation/
+  Chests/SeasonPass): sem `clip_text` nem tamanho fixo — só mínimos, nenhum
+  ajuste manual necessário.
+- **T3** rewarded ads, integração técnica trocável (`SuiteAds` +2 checks):
+  `AdProvider.ShowRewarded(placement, on_token)` via `SHAMBLETA_AD_PROVIDER`
+  (`stub` = imediato p/ dev; `portal` = SDK via `JavaScriptBridge` objeto
+  `ShambletaAds`, token só após confirmação de conclusão), 4 placements
+  migrados p/ o caminho async, contrato JS + modo de teste em
+  `deploy/web/ads_bridge.js`. Servidor inalterado (fail-closed + caps intactos).
+- **T5** antifraude, sinal unificado: `EconomyService.FlagMultiAccount` abre
+  `fraud_flag` kind `multi_account` (revisão manual, sem ban automático) a
+  partir da heurística de `Peers.FinalizeLogin` (não-bloqueante); `FEATURE_MATRIX
+  §6` corrigida (estava "Planejado", o certo era "Implementado (parcial)").
+  **Decisão do dono (2026-09-18): fica só como sinal** (item 13-residual encerrado).
+- **Correções de lançamento encontradas no caminho** (HEAD não bootava neste
+  toolchain Godot estrito; todas cobertas pela suíte verde): `Peers.gd` sem
+  `try/except` (GDScript não tem exceções — guards explícitos), `Map.gd`
+  `GetMapBoundaries` restaurado, `Stats.Init` restaurando `actor = actorNode`
+  (sem isso TODO XP/gold/essência online era no-op!), `FarmZoneData`
+  revertido aos nomes reais do MapsDB (o rebrand 1021878 quebrava as 24 zonas),
+  roleta de drops com spread via `hash` (o passo multiplicativo deixava 28/57
+  itens inalcançáveis com pesos não-uniformes), `Settings/Shop/WebPush/
+  Monitoring/DeviceFingerprint/Checkout` parse-safe, chave `Agreements Update`
+  restaurada no `ui.csv`, timeout do job `idle-tests` 300→1200s.
+- **T7** seasons verificada (não era gap de código): snapshots das 4 corridas +
+  boards + premiação automática + `TickSeasonLifecycle` existem e passam
+  (`SuiteSeasonRaces`/`SuiteSeasonPayout`); `SEASONS_GAP.md` e `FEATURE_MATRIX
+  §5` corrigidos. **Decisão do dono (2026-09-18): pós-lançamento** — ativar a
+  1ª temporada depois, com regras congeladas + changelog público (sem código).
 
 O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
 
@@ -42,6 +83,11 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   `external_reference = "<account_id>:<sku>"` (o companion faz o parse disso no
   pagamento re-buscado). Manter `SHAMBLETA_CATALOG_FILE` com o **mesmo** preço
   anunciado = cobrado; o amount concedido vem do catálogo, nunca do corpo.
+  **Status técnico (T1 entregue)**: o companion já cria a preferência sozinho
+  (`POST /checkout/preference` — só falta setar `SHAMBLETA_MP_ACCESS_TOKEN` +
+  `SHAMBLETA_MP_BACK_URLS_BASE=<url-pública-do-jogo>`); o client já abre a
+  `payment_url` e o grant já entra pelo webhook sem intervenção. Falta só o
+  lado conta/credenciais abaixo.
 - **Catálogo real**: publicado em `companion/catalog.json` (gems/vip/starter/founder,
   Pix + cartão) — usar via `SHAMBLETA_CATALOG_FILE`. O `DEFAULT_CATALOG` embutido
   espelha o arquivo (fallback sandbox).
@@ -73,21 +119,26 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   gold-entry com título de Campeão; SKU `donate.support` (R$ 4,90 → título
   Apoiador). **Fora de escopo**: tags de guild e efeitos visuais (arte),
   **portais web** (decisão de distribuição + contas CrazyGames/Poki).
-- **Rewarded ads (Fase E, abstração + stubs)**: `AdProvider` (token stub que o
-  servidor valida por formato + dia; SDK real pluga sem mudar RPCs), 4
-  placements opt-in (2×/4× no claim AFK, baú 1/dia, reroll grátis dividido
-  com o pago, chave 2/dia), teto global 6/dia, VIP dobra quantidade, janelas
-  AFK/Chests/Shop/Boss com botões. **SDK de portal ou ad network = follow-up
-  de integração** (válvula fail-closed: formato errado nunca credita).
+- **Rewarded ads (Fase E, integração técnica entregue — T3)**: `AdProvider`
+  com provider trocável (`SHAMBLETA_AD_PROVIDER=stub|portal`), 4 placements
+  opt-in migrados p/ `ShowRewarded` async (token só após conclusão real no modo
+  portal), teto global 6/dia, VIP dobra quantidade, contrato JS + modo de teste
+  em `deploy/web/ads_bridge.js`. **Decisão do dono (2026-09-18): CrazyGames** —
+  falta criar a conta no portal e trocar o corpo do `ads_bridge.js` pelo SDK
+  real (só `ads_bridge.js` + env, sem mudar jogo). (Válvula fail-closed intacta:
+  formato errado nunca credita.)
 - **Reembolso do dinheiro**: `RequestGemRefund` reverte as gems + marca
   `grant_queue.status='refunded'`; o companion faz a varredura com
   `server.py refund-sweep` (exige `SHAMBLETA_MP_REFUNDS=1` + access token;
   `--dry-run` p/ auditar). **Pendente: conta MP PJ** (handoff §2).
 
 ## 3. Operação
-- **Backups offsite testados**: `SHAMBLETA_OFFSITE_BACKUPS` + restore probe já
-  existem; apontar para S3/objeto e fazer **restore de verdade** em ambiente
-  isolado (provar RPO/RTO).
+- **Backups offsite (T6 parcial)**: `SHAMBLETA_OFFSITE_BACKUPS` + restore probe
+  existem e o mecanismo é testado (`SuiteOpsA2` + job CI); procedimento de
+  restore S3 documentado em `som-idle-docs/archive/reports/
+  OFFSITE_RESTORE_REPORT.md`. **Pendente (dono/infra)**: apontar para o bucket
+  S3 real e executar o drill em container isolado (provar RPO/RTO e anotar no
+  relatório).
 - **Alertas/uptime**: setar `SHAMBLETA_ALERT_WEBHOOK` (healthchecks/Discord).
   Sugerido: um ping periódico externo ao `/health` do companion (dead-man's switch).
 - **Promoção do companion**: reescrever em Go/Node + **Postgres** quando o CCU
@@ -106,7 +157,13 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
 - **Para bater <25 MB**: as alavancas de `WEB_SLIM.md` (re-compressão de
   texturas, pack de áudio remoto) exigem QA visual.
 
-## 5. Git
+## 5. Git + CI (T4 parcial)
 Há commits locais ainda **não enviados** ao remoto (`SOM-IDLE: …`). Fazer
 `git push` quando o fluxo de branch/revisão estiver definido (nunca foi
 autorizado nesta esteira).
+**CI**: workflows verificados no repo (`godot-ci.yml` com idle-tests,
+backup-restore, benchmarks e export Web com aviso de peso >25 MB;
+`staging.yml` p/ `develop`). Timeout do `idle-tests` ajustado p/ 1200s
+(a suíte com sims reais não cabe em 300s). **Pendente (dono, só com acesso
+ao GitHub)**: confirmar em Settings → Actions que as execuções aparecem
+p/ os commits recentes e que o job Web emite o aviso de peso corretamente.

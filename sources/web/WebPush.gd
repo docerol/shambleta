@@ -1,5 +1,8 @@
 extends Node
-class_name WebPush
+# SOM-IDLE parser: class_name WebPush escondia o autoload homônimo (erro de
+# parse no Godot estrito) — a API estática vive em WebPushService; o autoload
+# `WebPush` (nó) continua existindo para a cena/service worker.
+class_name WebPushService
 
 # SOM-IDLE F3: web push notification support for browser builds.
 # Uses the browser's Notification API and a service worker for push events.
@@ -15,7 +18,7 @@ static func Initialize():
 	_register_service_worker()
 
 static func _register_service_worker():
-	var js : JavaScriptBridge = JavaScriptBridge.get_interface("ShambletaPush")
+	var js = JavaScriptBridge.get_interface("ShambletaPush")
 	if not js:
 		return
 	if js.has_method("register_sw"):
@@ -24,7 +27,7 @@ static func _register_service_worker():
 static func RequestPermission() -> String:
 	if not LauncherCommons.isWeb:
 		return "unsupported"
-	var js : JavaScriptBridge = JavaScriptBridge.get_interface("ShambletaPush")
+	var js = JavaScriptBridge.get_interface("ShambletaPush")
 	if not js:
 		return "unsupported"
 	var result : String = js.request_permission()
@@ -53,7 +56,7 @@ static func IsSupported() -> bool:
 static func Show(title : String, body : String, icon : String = ""):
 	if not LauncherCommons.isWeb or not IsEnabled():
 		return
-	var js : JavaScriptBridge = JavaScriptBridge.get_interface("ShambletaPush")
+	var js = JavaScriptBridge.get_interface("ShambletaPush")
 	if not js:
 		return
 	js.show_notification(title, body, icon)

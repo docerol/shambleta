@@ -4,6 +4,9 @@ extends WindowPanel
 # server-authoritative (EconomyService); a resposta traz ShopFeedback +
 # EconomyState fresco, que redesenha esta janela via NetClient.
 const AdProvider = preload("res://sources/ads/AdProvider.gd")
+# SOM-IDLE checkout: Checkout.gd não tem class_name (janela criada em runtime),
+# então referencia via preload em vez do identificador global.
+const CheckoutDialog = preload("res://sources/gui/Checkout.gd")
 #
 # Fase A (checkout sandbox): seção "Buy gems (sandbox)" lista o catálogo
 # (display-only; grants são server-authoritative no companion), a oferta
@@ -102,7 +105,7 @@ func _rebuild_catalog_buttons(catalog : Array):
 			continue
 		var sku : String = str(e.get("sku", ""))
 		var b := Button.new()
-		b.text = "Buy %s — R$ %.2f (sandbox)" % [str(e.get("label", sku)), float(e.get("price", 0.0))]
+		b.text = "Buy %s — R$ %.2f" % [str(e.get("label", sku)), float(e.get("price", 0.0))]
 		b.pressed.connect(_on_buy_sku_pressed.bind(sku))
 		catalogBox.add_child(b)
 
@@ -124,7 +127,7 @@ func ShowCheckoutIntent(intent : Dictionary):
 		intentLabel.text = "Checkout rejected: %s" % str(intent.get("reason", "?"))
 		return
 	_pendingIntent = intent
-	intentLabel.text = "Intent %s — %s R$ %.2f. Press Pay (sandbox)." % [
+	intentLabel.text = "Intent %s — %s R$ %.2f. Press Pay to open secure checkout." % [
 		str(intent.get("external_reference", "?")),
 		str(intent.get("label", "?")), float(intent.get("price", 0.0))]
 	paySandboxButton.disabled = false
@@ -206,7 +209,11 @@ func _on_reroll_daily_ad_pressed():
 	if not AdProvider.IsReady("reroll"):
 		return
 	rerollAdButton.disabled = true
-	Network.RerollDailyShopAd(AdProvider.ShowStub("reroll"))
+	AdProvider.ShowRewarded("reroll", func(token : String) -> void:
+		if token.is_empty():
+			rerollAdButton.disabled = false
+			return
+		Network.RerollDailyShopAd(token))
 
 func _on_simulate_done(result : int, _code : int, _headers : PackedStringArray, body : PackedByteArray):
 	if result != HTTPRequest.RESULT_SUCCESS:
@@ -225,7 +232,7 @@ func _on_simulate_done(result : int, _code : int, _headers : PackedStringArray, 
 # SOM-IDLE F2: web-only checkout dialog.
 func _show_web_checkout(intent : Dictionary):
 	if not Launcher.GUI.checkoutWindow:
-		Launcher.GUI.checkoutWindow = Checkout.new()
+		Launcher.GUI.checkoutWindow = CheckoutDialog.new()
 		Launcher.GUI.add_child(Launcher.GUI.checkoutWindow)
 	if Launcher.GUI.checkoutWindow:
 		Launcher.GUI.checkoutWindow.StartCheckout(

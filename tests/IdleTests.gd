@@ -1727,6 +1727,14 @@ func SuiteAds(sql : SQLService) -> void:
 	sql.SetGems(accountID, 1000)
 	sql.SetCharacterFarmZone(charID, 1)
 
+	# Client: provider trocável (env; default stub) + token no formato que o
+	# servidor valida (stub:<placement>:<dia>). Portal real pluga via
+	# deploy/web/ads_bridge.js sem mudar placements/RPCs/servidor.
+	var adScript : GDScript = load("res://sources/ads/AdProvider.gd")
+	Check(adScript.call("Provider") == "stub", "ads: default provider is stub")
+	var stubTok : String = adScript.call("ShowStub", "chest")
+	Check(stubTok == tok.call("chest"), "ads: client stub token matches server day")
+
 	Check(str(economy.WatchAd(accountID, charID, "nope", tok.call("nope")).get("reason", "")) == "unknown_placement", "unknown placement rejected")
 	Check(str(economy.WatchAd(accountID, charID, "chest", "bogus").get("reason", "")) == "bad_token", "bad token rejected")
 	Check(str(economy.WatchAd(accountID, charID, "chest", "stub:bosskey:%d" % day).get("reason", "")) == "bad_token", "cross-placement token rejected")
@@ -2450,6 +2458,18 @@ func SuiteFraud(sql : SQLService) -> void:
 	Check(not velo.is_empty(), "level_velocity flag present")
 	Check(sql.ReviewFraudFlag(int(velo[0]["id"]), "dismissed"), "velocity flag dismissed")
 
+	# S5: heurística multi-conta abre flag na MESMA fila (revisão manual, sem
+	# ban automático); duplicata do mesmo detalhe não reabre.
+	Check(economy.FlagMultiAccount(accountA, "shared_fp:testhash"), "multi_account flag opened")
+	Check(not economy.FlagMultiAccount(accountA, "shared_fp:testhash"), "multi_account flag deduped")
+	Check(economy.FlagMultiAccount(accountB, "shared_fp:testhash"), "multi_account flag per account")
+	var multi : Array = sql.ListFraudFlags("open").filter(func(f : Dictionary) -> bool: return str(f["kind"]) == "multi_account")
+	CheckEq(multi.size(), 2, "two multi_account flags open")
+	Check(not economy.FlagMultiAccount(0, "shared_fp:testhash"), "multi_account rejects bad account")
+	Check(not economy.FlagMultiAccount(accountA, ""), "multi_account rejects empty detail")
+	Check(sql.ReviewFraudFlag(int(multi[0]["id"]), "dismissed"), "multi_account flag dismissed")
+	Check(sql.ReviewFraudFlag(int(multi[1]["id"]), "dismissed"), "multi_account second dismissed")
+
 	# CS reads: ledger search + lot history chain
 	var ledger : Array = sql.SearchLedger(accountA, 5)
 	Check(ledger.size() >= 1 and ledger.size() <= 5, "ledger search respects limit (%d)" % ledger.size())
@@ -2748,6 +2768,34 @@ func SuiteI18n(_sql : SQLService) -> void:
 	Check(trpt2.get_message("This well has run dry.") == "Este poço secou.", "i18n: phase 2A content sample translated (generic)")
 	Check(str(trpt2.get_message("Hi! I\'m Watchman Nathan.")).begins_with("Oi! Eu sou o Vigia"), "i18n: phase 2B content sample translated (sandstorm)")
 	Check(str(trpt2.get_message("Hello, welcome to Tulimshar!")).begins_with("Olá, bem-vindo a Tulimshar"), "i18n: phase 2C content sample translated (tulimshar)")
+
+# SOM-IDLE UI scale (Tarefa 2): ApplyUIScale() é o mecanismo ÚNICO (auto
+# mobile/web + opção manual Desktop). Chamadas absolutas, reversíveis, com
+# clamp; passos de Settings mapeiam p/ fatores.
+func SuiteUIScale() -> void:
+	print("[suite] UI scale")
+	var settingsScript : GDScript = load("res://sources/gui/Settings.gd")
+	var factors : Array = settingsScript.UIScaleFactors
+	var options : Array = settingsScript.UIScaleOptions
+	CheckEq(factors.size(), 3, "uiscale: 3 steps")
+	CheckEq(options.size(), 3, "uiscale: 3 option labels")
+	Check(absf(float(factors[0]) - 1.0) < 0.001, "uiscale: step 0 = 100%")
+	Check(absf(float(factors[1]) - 1.25) < 0.001, "uiscale: step 1 = 125%")
+	Check(absf(float(factors[2]) - 1.5) < 0.001, "uiscale: step 2 = 150%")
+	var gui : Node = Launcher.GUI
+	if not Check(gui != null and gui.has_method("ApplyUIScale"), "uiscale: GUI exposes ApplyUIScale"):
+		return
+	var base : int = ThemeDB.fallback_font_size
+	Check(base > 0, "uiscale: base theme font captured")
+	gui.ApplyUIScale(1.25)
+	CheckEq(ThemeDB.fallback_font_size, int(float(base) * 1.25), "uiscale: 125% scales theme font")
+	Check(absf(float(gui.get("uiScaleFactor")) - 1.25) < 0.001, "uiscale: factor stored")
+	gui.ApplyUIScale(1.25)
+	CheckEq(ThemeDB.fallback_font_size, int(float(base) * 1.25), "uiscale: re-apply does not accumulate")
+	gui.ApplyUIScale(9.0)
+	Check(absf(float(gui.get("uiScaleFactor")) - 2.0) < 0.001, "uiscale: factor clamps at max")
+	gui.ApplyUIScale(1.0)
+	CheckEq(ThemeDB.fallback_font_size, base, "uiscale: back to 100% restores base font")
 
 # Auth hardening (SOM-IDLE A1): KDF, lockout, e-mail único, LGPD.
 func SuiteAuthHardening(sql : SQLService) -> void:

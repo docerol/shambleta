@@ -31,7 +31,7 @@ func _process(_delta : float):
 # Custom mouse
 func _on_click_area_mouse_entered():
 	if not Launcher.Player:
-		return
+		return null
 
 	match entity.type:
 		ActorCommons.Type.PLAYER:
@@ -80,7 +80,7 @@ func DisplayTarget(type : ActorCommons.Target):
 				selectionFx = null
 			if nameLabel and nameLabel.material:
 				nameLabel.material = null
-			return
+			return null
 		ActorCommons.Target.ALLY:
 			nameLabel.material = ActorCommons.AllyTarget
 			DisplaySelection(ActorCommons.PlayerColor)
@@ -91,7 +91,7 @@ func DisplayTarget(type : ActorCommons.Target):
 func DisplayEmote(emoteID : int):
 	if emoteFx == null:
 		push_error("No emote particle found, could not display emote")
-		return
+		return null
 		if DB.EmotesDB and emoteID in DB.EmotesDB:
 			var emote : BaseCell = DB.EmotesDB[emoteID]
 			emoteFx.texture = emote.icon
@@ -161,7 +161,7 @@ func DisplayProjectile(targetPos : Vector2, skill : SkillCell):
 	if Launcher.Map.currentFringe and skill and skill.projectilePreset:
 		var projectileNode : Node2D = skill.projectilePreset.instantiate()
 		if not projectileNode:
-			return
+			return null
 		if projectileNode is Projectile:
 			projectileNode.origin = entity.interactive.visibleNode.global_position
 			projectileNode.origin.y += ActorCommons.interactionDisplayOffset
@@ -199,7 +199,7 @@ func DisplayAlteration(target : Entity, emitter : Entity, value : int, alteratio
 func DisplaySpeech(speech : String):
 	if speechContainer == null:
 		push_error("No speech container found, could not display speech bubble")
-		return
+		return null
 		var speechLabel : RichTextLabel = ActorCommons.SpeechLabel.instantiate()
 		speechLabel.set_text("[center]%s[/center]" % [speech])
 		speechLabel.set_visible_ratio(0)
@@ -233,7 +233,7 @@ func RefreshVisibleNodeOffset():
 
 func TweenSpeechOffset(target : float):
 	if is_equal_approx(speechYExtraOffset, target):
-		return
+		return null
 
 	if speechOffsetTween:
 		speechOffsetTween.kill()
@@ -248,7 +248,7 @@ func DisplayHP():
 		hpFadeTween = null
 	if not ActorCommons.IsAlive(entity) or entity.stat.health == 0 or (entity.stat.current.maxHealth == 0 and healthBar.max_value == 0):
 		HideHP()
-		return
+		return null
 
 	if Launcher.Player:
 		if Entities.target != entity:
@@ -279,7 +279,7 @@ func RefreshHP():
 
 func HideHP():
 	if not healthBar.visible:
-		return
+		return null
 	if hpFadeTween:
 		hpFadeTween.kill()
 	var duration : float = healthBar.modulate.a / 2.0

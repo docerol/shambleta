@@ -152,6 +152,7 @@ func _run_tests():
 			if suites.Check(rebChar != 0, "rebirth fixture created (charID %d)" % rebChar):
 				await suites.SuiteRebirth(sql, rebChar, economy)
 			suites.SuiteI18n(sql)
+			suites.SuiteUIScale()
 
 		# SOM-IDLE: A1 auth hardening + A2 ops hardening
 		suites.SuiteAuthHardening(sql)

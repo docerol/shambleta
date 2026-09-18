@@ -76,15 +76,21 @@ var deathTaxPct : int						= DeathTaxPct
 # Farm zone ordering — RECALIBRADO: os 24 mapas reais com mobs (fora os 4 de
 # boss) ordenados por dificuldade do mob dominante (nível, depois nível máx),
 # do dump de calibração. Difficuldade agora é monotônica zona a zona.
+# SOM-IDLE launch gaps: o catálogo PRECISA referenciar os nomes reais do MapsDB
+# (SyncWithDB resolve por _name; nome sem mapa = zona sem farm). O rebrand
+# 1021878 trocou os 24 nomes por fictícios sem renomear os assets — nenhuma
+# zona resolvia e todas as suítes de sim falhavam. Rebrand de mapas exige
+# renomear os assets primeiro (trabalho de conteúdo, fora do escopo aqui);
+# até lá, os nomes canônicos abaixo (iguais ao MapsDB).
 const MapBackedNames : Array[String] = [
-	"Aleppo Cave", "Damasco Passage", "Basra Ship Deck",
-	"Damasco", "Damasco Center", "Basra Sewer",
-	"Petra Mines", "Damasco Bay", "Petra Deep Mines",
-	"Petra Abandoned", "Damasco Western Cave", "Damasco Eastern Hills",
-	"Basra Hide", "Damasco West Wall Pathway", "Damasco Western Hills",
-	"Bagdá", "Shiraz", "Damasco Beach",
-	"Bagdá Beach", "Damasco Southern Hills", "Petra Pit", "Petra Snake",
-	"Homs Cave", "Homs Mountains",
+	"Candor Cave", "Splatyna's Corridor", "Ship Second Deck",
+	"Tulimshar", "Tulimshar Center", "Artis Sewer",
+	"Sandstorm", "Tulimshar Bay", "Desert Mines",
+	"Desert Abandoned Level", "Tulimshar Western Cave", "Tulimshar Eastern Hills",
+	"Ship Alige Hide", "Tulimshar West Wall Pathway", "Tulimshar Western Hills",
+	"Manayir", "Drazil", "Tulimshar Beach",
+	"Manayir Beach", "Tulimshar Southern Hills", "Desert Pit", "Snake Pit",
+	"Desert Mountain Cave", "Desert Mountains",
 ]
 
 # SOM-IDLE: salas de boss (mob único nomeado, sprite próprio) — fora do rodízio
@@ -309,7 +315,13 @@ static func GetDropForRoll(zoneID : int, roll : int) -> int:
 	for itemHash in pool:
 		totalWeight += _RarityWeight(int(itemHash))
 		cumulative.append(totalWeight)
-	var target : int = (roll * 2654435761) % totalWeight
+	# SOM-IDLE launch gaps: o passo multiplicativo anterior
+	# (roll * 2654435761 % total) caía num lattice defeituoso para certos
+	# totais — com o template Incomum (total 5660) os 200 rolls visitavam ~12
+	# clusters e 28 dos 57 itens ficavam inalcançáveis (0/200 p/ Apple E
+	# Espada, determinístico). Spread via hash (mesmo roll → mesmo item,
+	# determinístico; uniforme no espaço de peso).
+	var target : int = absi(hash([roll, totalWeight])) % totalWeight
 	for i in range(cumulative.size()):
 		if target < cumulative[i]:
 			return int(pool[i])

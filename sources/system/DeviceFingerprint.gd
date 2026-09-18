@@ -9,26 +9,28 @@ static func Collect() -> Dictionary:
 	var fingerprint : Dictionary = {}
 	fingerprint["platform"] = OS.get_name()
 	fingerprint["version"] = OS.get_version()
-	fingerprint["arch"] = OS.get_processor_name() if OS.has_feature("pc") else OS.get_model()
+	# SOM-IDLE parser: OS.get_model() não existe neste target — fallback
+	# para o nome da plataforma (hash opaco; só precisa ser estável).
+	fingerprint["arch"] = OS.get_processor_name() if OS.has_feature("pc") else OS.get_name()
 	fingerprint["screen"] = "%dx%d" % [DisplayServer.screen_get_size().x, DisplayServer.screen_get_size().y]
 	fingerprint["dpi"] = DisplayServer.screen_get_dpi()
 	fingerprint["locale"] = OS.get_locale()
-	fingerprint["timezone"] = Time.get_time_zone_from_system().get_bias_minutes()
+	# SOM-IDLE parser: get_time_zone_from_system() devolve Dictionary
+	# (chave "bias"), não um objeto com método.
+	fingerprint["timezone"] = int(Time.get_time_zone_from_system().get("bias", 0))
 	fingerprint["user_agent"] = _get_user_agent()
 	fingerprint["hash"] = _hash(fingerprint)
 	return fingerprint
 
 static func _get_user_agent() -> String:
 	if LauncherCommons.isWeb:
-		var js : JavaScriptBridge = JavaScriptBridge.get_interface("ShambletaFingerprint")
+		var js = JavaScriptBridge.get_interface("ShambletaFingerprint")
 		if js and js.has_method("get_user_agent"):
 			return js.get_user_agent()
 	return ""
 
 static func _hash(data : Dictionary) -> String:
-	var json : String = JSON.stringify(data)
-	var hash : int = 0
-	for i in range(json.length()):
-		hash = ((hash << 5) - hash) + json.ord_at(i)
-		hash = hash & hash
-	return str(hash)
+	# SOM-IDLE parser: String.ord_at() não existe neste build — hash opaco
+	# via String.hash() (estável por conteúdo; muda vs. versão anterior, o
+	# que só invalida matches com telemetria antiga, sem quebrar nada).
+	return str(JSON.stringify(data).hash())

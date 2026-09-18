@@ -317,6 +317,79 @@ con3.close()
 os.unlink(tmp3.name)
 os.environ.pop("SHAMBLETA_MP_REFUNDS", None)
 
+# --- Produção: POST /checkout/preference (Checkout Pro, valor do catálogo) ---
+payload, err = server.build_preference_payload(cat, "gems.550", "42:gems.550")
+ok(err is None and payload["external_reference"] == "42:gems.550",
+   "preference payload carries external_reference")
+ok(payload["items"][0]["unit_price"] == 19.90
+   and payload["items"][0]["quantity"] == 1
+   and payload["items"][0]["currency_id"] == "BRL",
+   "preference price comes from catalog (never client)")
+ok("back_urls" not in payload, "no back_urls without base")
+payload2, err2 = server.build_preference_payload(
+    cat, "vip.1mo", "7:vip.1mo", "https://jogo.exemplo.com")
+ok(err2 is None and payload2["back_urls"]["success"] ==
+   "https://jogo.exemplo.com/checkout_return.html"
+   and payload2["auto_return"] == "approved",
+   "back_urls point at static return page")
+badpay, baderr = server.build_preference_payload(cat, "nope", "1:nope")
+ok(badpay is None and baderr == "unknown_sku",
+   "preference rejects unknown sku")
+
+# mp_create_preference: mock da API do MP (nunca bate na API real nos testes)
+import urllib.request as _urlreq2
+_real2 = _urlreq2.urlopen
+
+
+class _PrefResp:
+    status = 201
+
+    def __init__(self, body):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._body
+
+
+_calls2 = []
+
+
+def _fake_pref(req, timeout=10):
+    _calls2.append({"url": getattr(req, "full_url", req),
+                    "auth": req.get_header("Authorization"),
+                    "body": __import__("json").loads(req.data.decode())})
+    return _PrefResp(b'{"id": "pref-1", "init_point": "https://mp/checkout/abc"}')
+
+
+_urlreq2.urlopen = _fake_pref
+pref = server.mp_create_preference(payload, "TOKEN123")
+ok(pref is not None and pref.get("init_point") == "https://mp/checkout/abc",
+   "preference returns init_point (mocked MP API)")
+ok(_calls2 and _calls2[0]["url"].endswith("/checkout/preferences")
+   and _calls2[0]["auth"] == "Bearer TOKEN123",
+   "preference posts to MP with bearer token")
+ok(_calls2[0]["body"]["external_reference"] == "42:gems.550"
+   and _calls2[0]["body"]["items"][0]["unit_price"] == 19.90,
+   "preference body uses catalog price + external_reference")
+
+
+def _fake_pref_down(req, timeout=10):
+    raise IOError("down")
+
+
+_urlreq2.urlopen = _fake_pref_down
+ok(server.mp_create_preference(payload, "TOKEN123") is None,
+   "preference API failure returns None (caller 502s)")
+_urlreq2.urlopen = _real2
+ok(server.mp_create_preference(payload, "") is None,
+   "preference without token refused (fail-closed)")
+
 # resumo
 if FAILS:
     print("== COMPANION: %d failures ==" % len(FAILS))

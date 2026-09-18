@@ -96,4 +96,8 @@ func _on_key_ad_pressed():
 	if not AdProvider.IsReady("bosskey"):
 		return
 	keyAdButton.disabled = true
-	Network.ClaimAdBossKey(AdProvider.ShowStub("bosskey"))
+	AdProvider.ShowRewarded("bosskey", func(token : String) -> void:
+		if token.is_empty():
+			keyAdButton.disabled = false
+			return
+		Network.ClaimAdBossKey(token))

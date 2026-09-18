@@ -83,17 +83,17 @@ func SetLocalPlayer():
 
 func Cast(skillID : int):
 	if Launcher.GUI.IsDialogueContextOpened():
-		return
+		return null
 
 	if skillID not in DB.SkillsDB:
 		push_error("Skill ID %x not found within our skill db" % skillID)
-		return
+		return null
 
 	var skill : SkillCell = DB.SkillsDB[skillID]
 	if skill == null:
 		push_error("Skill ID is not found, can't cast it")
-		return
-		return
+		return null
+		return null
 
 	var targetRID : int = 0
 	if skill.mode == Skill.TargetMode.SINGLE:

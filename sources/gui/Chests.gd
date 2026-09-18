@@ -57,4 +57,8 @@ func _on_bonus_chest_ad_pressed():
 	if not AdProvider.IsReady("chest"):
 		return
 	bonusAdButton.disabled = true
-	Network.ClaimAdChest(AdProvider.ShowStub("chest"))
+	AdProvider.ShowRewarded("chest", func(token : String) -> void:
+		if token.is_empty():
+			bonusAdButton.disabled = false
+			return
+		Network.ClaimAdChest(token))
