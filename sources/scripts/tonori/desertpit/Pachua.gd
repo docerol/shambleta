@@ -44,7 +44,7 @@ func OnAskTribe():
 
 func OnAskLand():
 	Mes("The kingdom pulled out of this land a long time ago. Said it was not worth keeping.")
-	Mes("My people were here before them and we are still here today. We trade with Tulimshar when we need to but otherwise we prefer to keep our distances.")
+	Mes("My people were here before them and we are still here today. We trade with Damasco when we need to but otherwise we prefer to keep our distances.")
 
 func OnNoDeal():
 	Mes("Alright, but you won't get a better deal anywhere else!")

@@ -10,7 +10,7 @@ func OnStart():
 	if IsTriggering():
 		Chat("Focus on your mission!")
 	else:
-		Mes("Welcome to the Heart of Candor, where Mana comes to die!")
+		Mes("Welcome to the Heart of Aleppo, where Mana comes to die!")
 		QuestionStart()
 
 func QuestionStart():
@@ -20,7 +20,7 @@ func QuestionStart():
 	Choice("Do you know where these waves of monsters come from?", ExplainWaves)
 
 func ExplainCave():
-	Mes("This is the Heart of Candor. It is a cave system that has always contained high concentrations of Kaore.")
+	Mes("This is the Heart of Aleppo. It is a cave system that has always contained high concentrations of Kaore.")
 	Mes("As Mana flows across Aemil, some of the energy decays and settles in particular areas.")
 	Mes("This is one of those areas. A place where Mana stops flowing and becomes Kaore.")
 	QuestionsCave()
@@ -33,7 +33,7 @@ func QuestionsCave():
 func ExplainWaves():
 	Mes("The board where we are standing is a catalyst that uses the energy of this cave to summon all sorts of creatures.")
 	Mes("They will come in progressive waves and try to wear you down.")
-	Mes("If you survive enough waves, the summoning will stop and you will have conquered the Heart of Candor.")
+	Mes("If you survive enough waves, the summoning will stop and you will have conquered the Heart of Aleppo.")
 
 
 func QuestionsWaves():

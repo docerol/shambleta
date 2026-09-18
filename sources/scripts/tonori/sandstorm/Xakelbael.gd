@@ -24,7 +24,7 @@ func OnMeetXakelbael():
 	Choice("Who are you?", OnBadMoment)
 
 func OnBadMoment():
-	Mes("This is a bad time for you Tulimshar folk to intrude on this place.")
+	Mes("This is a bad time for you Damasco folk to intrude on this place.")
 	Mes("I already dealt with one of you earlier, but you followed me too far, I won't be as forgiving with you.")
 	Choice("What is this place?", OnNotSupposedToBeHere)
 	Choice("Can you explain what's happening?", OnNotSupposedToBeHere)

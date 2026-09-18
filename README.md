@@ -12,7 +12,7 @@
 - Game editor: [Godot 4.7.1](https://godotengine.org/)
 - Level editor: [Tiled 1.11.2](https://www.mapeditor.org/)
 
-**Origins:** A fork of [Source of Mana](https://github.com/docerol/sourceofmana). Shambleta has since pivoted to an idle-first design with commercial launch features.
+**Origins:** A fork of the Source of Mana (`docerol/sourceofmana`) community project. **Shambleta** (this project) has since pivoted to an idle-first design with commercial launch features.
 
 **Goal:** A polished idle RPG with payment integration, cosmetics, seasons, and guild play.
 

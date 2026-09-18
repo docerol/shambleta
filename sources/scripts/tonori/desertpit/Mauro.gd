@@ -14,7 +14,7 @@ func OnStart():
 
 # Quest states
 func OnInactive():
-	Mes("My water is all gone! I don't know how I will get back to Tulimshar now.")
+	Mes("My water is all gone! I don't know how I will get back to Damasco now.")
 	Mes("A few days ago I decided to confront the desert and explore this area.")
 	Mes("The cave here has an underground pond of very fresh and pure water.")
 	Mes("People used to come here to collect water, but a few years ago the place became infested with snakes.")
@@ -47,7 +47,7 @@ func OnDeliverWater():
 	AddExp(50)
 	AddGP(1000)
 	AddKarma(1)
-	Mes("I will go back to Tulimshar now, this area is way too dangerous.")
+	Mes("I will go back to Damasco now, this area is way too dangerous.")
 	Mes("We will keep relying on the much safer wells inside the city. I guess this water belongs to the snakes now.")
 
 func OnComplete():

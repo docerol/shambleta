@@ -7,10 +7,10 @@ func OnStart():
 	match GetQuest(QUEST_ID):
 		ProgressCommons.SANDSTORM_NATHAN_WATER.INACTIVE:
 			Mes("Hi! I'm Watchman Nathan.")
-			Mes("I'm normally guarding the port of Tulimshar, but today I have the honour of GETTING ABSOLUTELY BAKED TO A CRISP OUT HERE.")
+			Mes("I'm normally guarding the port of Damasco, but today I have the honour of GETTING ABSOLUTELY BAKED TO A CRISP OUT HERE.")
 			Mes("Sorry. My bad.")
 			Mes("The Sun is getting to me.")
-			Choice("Is this the entrance to the Sandstorm Mines?", OnEntrance)
+			Choice("Is this the entrance to the Petra Mines?", OnEntrance)
 		ProgressCommons.SANDSTORM_NATHAN_WATER.STARTED:
 			Mes("Oh that's you! Sorry I didn't recognize you with all of this sand.")
 			Choice("About that bottle of water.", OnWaitingWater)

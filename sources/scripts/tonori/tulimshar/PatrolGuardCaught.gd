@@ -14,5 +14,5 @@ func Escort():
 	if own.state == ActorCommons.State.TRIGGER:
 		own.SetState(ActorCommons.State.TRIGGER)
 
-	var entranceMapID : int = "Tulimshar Center".hash()
+	var entranceMapID : int = "Damasco Center".hash()
 	Action(NpcCommons.Warp.bind(own, entranceMapID, ENTRANCE_POS))

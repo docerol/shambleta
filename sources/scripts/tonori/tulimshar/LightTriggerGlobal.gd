@@ -1,5 +1,5 @@
 extends NpcScript
-class_name TulimsharWestWallLightTrigerGlobal
+class_name DamascoWestWallLightTrigerGlobal
 
 #
 const QUEST_ID : int = ProgressCommons.Quest.TULIMSHAR_OLD_FRIENDSHIP
@@ -39,7 +39,7 @@ static func SpawnGuard(inst : WorldInstance) -> BaseAgent:
 	var spawn : SpawnObject = SpawnObject.new()
 	spawn.map = inst.map
 	spawn.type = ActorCommons.Type.NPC
-	spawn.nick = "Tulimshar Guard" if randi() % 2 == 0 else "Tulimshar Sbire"
+	spawn.nick = "Damasco Guard" if randi() % 2 == 0 else "Damasco Sbire"
 	spawn.id = spawn.nick.hash()
 	spawn.spawn_position = Vector2i(2688, 1472) # tile (84, 46)
 	spawn.spawn_offset = Vector2i.DOWN

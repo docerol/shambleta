@@ -53,7 +53,7 @@ func TakeMaterials(setCount : int):
 func OnInactive():
 	Mes("Hey! Are you new to the city? I don't think I've seen you before. My name is Eridu. I'm a glassmaker.")
 	Mes("My family has always made glass. People find it useful to carry liquids out in this climate. That's why we mainly make bottles.")
-	Mes("We make our glass from the sand of Tonori. We also use salt, bones and sulphur powder.")
+	Mes("We make our glass from the sand of Homs. We also use salt, bones and sulphur powder.")
 	Mes("The sand is everywhere, as you can see, but the other components are harder to come by.")
 
 	QuestChoice()

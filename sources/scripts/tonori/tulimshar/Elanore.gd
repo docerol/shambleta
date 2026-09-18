@@ -24,7 +24,7 @@ func OnFirstMeeting():
 	var waterBottleID : int = DB.GetCellHash("Water Bottle")
 	var cactusSourCandyID : int = DB.GetCellHash("Cactus Sour Candy")
 
-	Mes("Hello, welcome to Tulimshar!")
+	Mes("Hello, welcome to Damasco!")
 	Mes("You made it to the gates just in time. The guards found you on the ground, barely within sight.")
 	Mes("My name is Elanore. How are you feeling? You'll need to drink this water and please eat this as well, it will make you feel better.")
 	SetQuest(ProgressCommons.Quest.TUTORIAL, ProgressCommons.TUTORIAL.INTRO_ITEMS_GIVEN)

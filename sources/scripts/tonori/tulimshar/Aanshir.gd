@@ -18,7 +18,7 @@ func OnMainChoice():
 func OnCastle():
 	Mes("That's the Red Queen's castle.")
 	Mes("You can request an audience to Her Majesty if you have something important to say but I wouldn't recommend to distract her from her gardens.")
-	Mes("You can also find the second largest library from the continent, it almost matches the number of books from the Manayir tower!")
+	Mes("You can also find the second largest library from the continent, it almost matches the number of books from the Bagdá tower!")
 	OnMainChoice()
 
 func OnWest():

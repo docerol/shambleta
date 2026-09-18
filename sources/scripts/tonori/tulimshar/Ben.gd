@@ -14,7 +14,7 @@ func OnStart():
 		ProgressCommons.TULIMSHAR_OLD_FRIENDSHIP.REWARDS_WITHDREW:
 			FreeRoaming()
 		_:
-			TulimsharWestWallLightTrigerGlobal.CallGuard(own)
+			DamascoWestWallLightTrigerGlobal.CallGuard(own)
 
 func ReceiveLetters():
 	if HasItem(sealedLettersID):

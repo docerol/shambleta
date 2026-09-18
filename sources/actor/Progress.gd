@@ -56,11 +56,14 @@ func HasSkill(cell : SkillCell, level : int = 1) -> bool:
 	if cell == null:
 		push_error("Provided skill cell is null")
 		return false
+	return skills.get(cell.id, 0) >= level
 
 func AddSkill(cell : SkillCell, level : int):
 	if cell == null:
 		push_error("Provided skill cell is null")
 		return
+
+	if skills.get(cell.id, 0) == level:
 		return
 
 	if skills.get(cell.id, 0) == level:
@@ -77,7 +80,6 @@ func GetSkillLevel(cell : SkillCell) -> int:
 func RemoveSkill(cell : SkillCell):
 	if cell == null:
 		push_error("Provided skill cell is null")
-		return
 		return
 
 	skills.erase(cell.id)

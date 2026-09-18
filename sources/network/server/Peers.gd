@@ -201,10 +201,24 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		return NetworkCommons.AuthError.ERR_BANNED
 
 	peer.SetAccount(accountData)
-	# SOM-IDLE D2: login telemetry (best-effort, nunca falha o login).
+	# SOM-IDLE S5: multi-account heuristic (best-effort, never fails login).
+	# Checks for duplicate fingerprint hashes across accounts in telemetry.
 	if Launcher.Telemetry:
 		var fp : Dictionary = DeviceFingerprint.Collect()
-		Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}", fp)
+		var fp_hash : String = str(fp.get("hash", ""))
+		if not fp_hash.is_empty():
+			Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}", fp)
+		# S5: heurística multi-account (fail-safe: nunca falha o login, só alerta se houver duplicatas).
+		try:
+			var fp_for_heuristic : String = fp_hash if not fp_hash.is_empty() else str(fp.get("hash", ""))
+			if not fp_for_heuristic.is_empty():
+				var duplicate_rows : Array = Launcher.SQL.QueryBindings(
+					"SELECT DISTINCT account_id FROM telemetry_event WHERE fingerprint LIKE ? AND account_id != ? AND created_at > ?;",
+					["%\"hash\":\"" + fp_for_heuristic + "%", accountData.accountID, int(Time.get_unix_time_from_system()) - 86400 * 7])
+				if duplicate_rows.size() > 1:
+					push_warning("[S5 MultiAccount] Fingerprint hash=%s encontrado com %d outras contas (últimos 7d)" % [fp_for_heuristic, duplicate_rows.size()])
+		except:
+			push_warning("[S5 MultiAccount] Falha na consulta de heurística (não bloqueante)")
 	if platform < 0 or platform >= NetworkCommons.Platform.COUNT:
 		platform = NetworkCommons.Platform.UNKNOWN
 	Launcher.SQL.UpdateAccount(peer.accountID, platform)

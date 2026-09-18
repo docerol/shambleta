@@ -13,7 +13,7 @@ para os parâmetros de economia/progressão especificamente).
 ## §1. Visão geral
 
 Shambleta é um MMORPG 2D (Godot 4, cliente/servidor autoritativo, fork de
-*Source of Mana*) convertido em um idle/AFK-farm: o personagem entra em uma
+*Shambleta*) convertido em um idle/AFK-farm: o personagem entra em uma
 "farm instance" de uma zona e o `IdlePolicy` assume o combate automaticamente
 (login já entra em farm — "idle-first"; `/farm <n>` troca de zona; `/farm
 stop` devolve controle manual para o caminho "adventure" original, que

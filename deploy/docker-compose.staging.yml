@@ -1,3 +1,5 @@
+# Shambleta — Staging override (Coolify environment: staging)
+# Usa o mesmo Dockerfile da produção, mas com variáveis de ambiente diferentes.
 services:
   web:
     environment:
@@ -10,6 +12,6 @@ services:
     environment:
       - SHAMBLETA_WEBHOOK_PROVIDER=shared
       - SHAMBLETA_ALLOW_DEV_WEBHOOK=1
-      - SHAMBLETA_WEBHOOK_SECRET=${SHAMBLETA_WEBHOOK_SECRET:-staging-secret}
+      - SHAMBLETA_WEBHOOK_SECRET=${STAGING_WEBHOOK_SECRET:-}
 volumes:
   game-data-staging:

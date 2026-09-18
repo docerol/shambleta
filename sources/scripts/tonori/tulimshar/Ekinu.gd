@@ -50,7 +50,7 @@ func OnHelpWithExpedition():
 
 func OnExpedition():
 	Mes("We do need one more fighter and I was worried about taking too many guards away from their posts here in the city.")
-	Mes("You're going to be heading South, towards the Sandstorm Mines.")
+	Mes("You're going to be heading South, towards the Petra Mines.")
 	Mes("They're called that for a reason, you know? That area of the desert is prone to strong winds and the swirling sands tend to make it difficult to get to.")
 	Mes("This particular storm is different though. It's unusually intense, hot and long-lasting. I wonder if something out there is causing it...")
 	Choice("Why are you heading that way?", OnWhyExpedition)
@@ -116,8 +116,8 @@ func OnStrangerDanger():
 # Red Queen chain
 func OnRedQueen():
 	Mes("The \"Red Queen\", more formally known as Queen Karolina I, is the useless ruler of this city.")
-	Mes("In fact, she claims to be Queen of Tonori. As if she could control anything beyond the city walls.")
-	Mes("She claims to descend from the Platinum Dynasty, rulers of Tulimshar thousands of years ago. In reality we all know her father was a cactus farmer and she's only Queen because he was a very clever man.")
+	Mes("In fact, she claims to be Queen of Homs. As if she could control anything beyond the city walls.")
+	Mes("She claims to descend from the Platinum Dynasty, rulers of Damasco thousands of years ago. In reality we all know her father was a cactus farmer and she's only Queen because he was a very clever man.")
 	Choice("It seems that you really dislike her.", OnDislikeQueen)
 	Choice("Her father was a cactus farmer?", OnRedQueenFather)
 

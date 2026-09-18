@@ -1,4 +1,4 @@
-# Roadmap — Source of Mana: Idle Auto Battler
+# Roadmap — Shambleta: Idle Auto Battler
 
 **Versão:** 1.1 (2026-09-09) · Relacionados: [ARCHITECTURE.md](ARCHITECTURE.md) · [ECONOMY_STUDY.md](ECONOMY_STUDY.md)
 **Estimativa base:** 1–2 engenheiros (GDScript familiarizados + 1 backend), em semanas de trabalho efetivo. Estimativas ±30%.

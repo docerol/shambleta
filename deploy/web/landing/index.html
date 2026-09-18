@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shambleta — Jogue, Vote, Descubra</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg:#0b0c15; --surface:#12132e; --primary:#c0a060; --text:#eae6d8; --muted:#8a8796; --accent:#8b6f4e; --border:#232445; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    html { scroll-behavior:smooth; }
+    body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+    header { position:sticky; top:0; z-index:50; backdrop-filter:blur(14px); background:rgba(11,12,21,0.78); border-bottom:1px solid var(--border); }
+    nav { max-width:1100px; margin:0 auto; padding:1.1rem 1.5rem; display:flex; align-items:center; justify-content:space-between; }
+    .logo { font-family:'Cinzel',serif; font-weight:700; font-size:1.35rem; color:var(--primary); letter-spacing:0.04em; text-decoration:none; }
+    .nav-links { display:flex; gap:1.6rem; list-style:none; }
+    .nav-links a { color:var(--text); text-decoration:none; font-weight:400; font-size:0.92rem; opacity:0.85; transition:opacity .15s; }
+    .nav-links a:hover { opacity:1; color:var(--primary); }
+    .btn { display:inline-block; padding:0.72rem 1.35rem; border-radius:10px; border:1px solid var(--primary); background:transparent; color:var(--primary); font-weight:600; text-decoration:none; transition:background .15s, color .15s; }
+    .btn:hover { background:var(--primary); color:var(--bg); }
+    .btn-solid { background:var(--primary); color:var(--bg); border-color:var(--primary); }
+    .btn-solid:hover { background:#d4b070; color:#0b0c15; }
+
+    .hero { position:relative; overflow:hidden; min-height:92vh; display:flex; align-items:center; justify-content:center; }
+    .hero::before { content:""; position:absolute; inset:0; background:radial-gradient(circle at 50% 40%, rgba(192,160,96,0.08) 0%, transparent 60%); pointer-events:none; }
+    .hero-inner { max-width:1100px; margin:0 auto; padding:6rem 1.5rem; position:relative; z-index:2; display:grid; grid-template-columns:1fr 1fr; gap:3rem; align-items:center; }
+    .hero h1 { font-family:'Cinzel',serif; font-size:clamp(2.6rem,5vw,4.2rem); line-height:1.1; letter-spacing:0.01em; }
+    .hero h1 span { color:var(--primary); }
+    .hero p.lead { margin-top:1.1rem; opacity:0.8; font-size:1.1rem; max-width:480px; }
+    .hero .actions { margin-top:2rem; display:flex; gap:1rem; flex-wrap:wrap; }
+    .hero-img { border-radius:18px; border:1px solid var(--border); box-shadow:0 30px 70px rgba(0,0,0,0.55); overflow:hidden; }
+    .hero-img img { width:100%; height:auto; display:block; }
+
+    section { max-width:1100px; margin:0 auto; padding:5rem 1.5rem; }
+    h2 { font-family:'Cinzel',serif; font-size:2rem; margin-bottom:1rem; }
+    h2 span { color:var(--primary); }
+    .sub { color:var(--muted); margin-bottom:2.5rem; font-size:0.98rem; }
+
+    .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1.25rem; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:1.6rem 1.4rem; transition:transform .12s, border-color .12s; }
+    .card:hover { transform:translateY(-3px); border-color:#2e3050; }
+    .card h3 { font-family:'Cinzel',serif; font-size:1.15rem; margin-bottom:0.6rem; }
+    .card p { font-size:0.92rem; opacity:0.82; }
+    .tag { display:inline-block; padding:0.15rem 0.55rem; border-radius:6px; font-size:0.72rem; font-weight:600; letter-spacing:0.04em; background:rgba(192,160,96,0.12); color:var(--primary); border:1px solid rgba(192,160,96,0.22); margin-bottom:0.6rem; }
+
+    /* DAO section */
+    .dao { background:linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+    .dao .cards .card { position:relative; }
+    .dao-vote { display:flex; gap:0.6rem; margin-top:0.8rem; }
+    .dao-vote a { padding:0.35rem 0.9rem; border-radius:8px; border:1px solid var(--border); font-size:0.82rem; text-decoration:none; color:var(--text); background:rgba(255,255,255,0.03); transition:background .12s; }
+    .dao-vote a:hover { background:rgba(255,255,255,0.08); border-color:var(--primary); }
+
+    /* Guide section */
+    .guide .cards { gap:1rem; }
+    .guide .card { padding:1.4rem 1.3rem; }
+    .guide ol { padding-left:1.1rem; font-size:0.92rem; opacity:0.82; }
+    .guide li { margin-bottom:0.35rem; }
+
+    /* Info / game section */
+    .info { display:grid; grid-template-columns:1fr 1fr; gap:3rem; align-items:start; }
+    .info h2 { margin-bottom:1.4rem; }
+    .info p { opacity:0.82; font-size:0.96rem; }
+    .info .highlight { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:1.4rem; }
+    .info .highlight h3 { font-family:'Cinzel',serif; margin-bottom:0.6rem; }
+    .info ul { padding-left:1.1rem; font-size:0.92rem; opacity:0.82; }
+
+    footer { text-align:center; padding:3rem 1.5rem; color:var(--muted); font-size:0.85rem; border-top:1px solid var(--border); }
+
+    @media (max-width:900px) {
+      .hero-inner { grid-template-columns:1fr; }
+      .info { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Principal">
+      <a href="#" class="logo">Shambleta</a>
+      <ul class="nav-links" role="menubar">
+        <li role="none"><a href="#jogo" role="menuitem">Jogo</a></li>
+        <li role="none"><a href="#guia" role="menuitem">Guia</a></li>
+        <li role="none"><a href="#dao" role="menuitem">DAO</a></li>
+        <li role="none"><a href="#info" role="menuitem">Sobre</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Hero / Portal de entrada -->
+    <section class="hero" id="jogo" aria-label="Portal do jogo">
+      <div class="hero-inner">
+        <div>
+          <h1>Shambleta <span>— Idle MMORPG</span></h1>
+          <p class="lead">Um MMORPG 2D convertido em idle: entre, escolha uma zona, e o jogo cuida do resto. Jogue diretamente do navegador — sem downloads.</p>
+          <div class="actions">
+            <a href="/index.html" class="btn btn-solid" aria-label="Entrar no jogo">Entrar no jogo</a>
+            <a href="#guia" class="btn" aria-label="Ver guia">Guia rápido</a>
+            <a href="#dao" class="btn" aria-label="Ver DAO">Propostas DAO</a>
+          </div>
+        </div>
+        <div class="hero-img" aria-label="Preview do jogo">
+          <img src="assets/preview.jpg" alt="Tela de jogo Shambleta com personagem, inventário e batalha" onerror="this.style.display='none'" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Seção Jogo -->
+    <section aria-label="Sobre o jogo" id="info">
+      <div class="info">
+        <div>
+          <h2>O que é o <span>Shambleta</span></h2>
+          <p>Shambleta é um MMORPG 2D (Godot 4) que funciona no navegador. Você loga, escolhe uma zona de farm e o personagem luta automaticamente — o "idle-first" que define a experiência.</p>
+          <p>O jogo conecta via WebSocket ao servidor autoritativo (`wss://`), com economia real (gems, VIP, baús provably-fair), rebirth e guildas. A versão web é o pivô: primeira carga medida em ~32,4 MB (gzip), com meta de &lt;25 MB após otimização de texturas.</p>
+          <div class="highlight">
+            <h3>Dados técnicos (beta)</h3>
+            <ul>
+              <li><strong>Engine:</strong> Godot 4.7.2</li>
+              <li><strong>Servidor:</strong> Godot headless + Python companion</li>
+              <li><strong>Web:</strong> WASM + WebSocket (COOP/COEP obrigatório)</li>
+              <li><strong>Build:</strong> `index.pck` 36 MB raw (20,7 MB gzip)</li>
+              <li><strong>VPS recomendada:</strong> 2 vCPU / 12 GB RAM (Ampere A1)</li>
+            </ul>
+          </div>
+        </div>
+        <div aria-label="Informações técnicas adicionais">
+          <h2>Como funciona</h2>
+          <p>O cliente web é exportado pelo Godot (`--export-release "Web"`). O nginx serve os arquivos com gzip nível 9 e os headers `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` necessários para o `SharedArrayBuffer` do WASM.</p>
+          <p>A landing que você está vendo agora é independente: pode ser um site estático, um SPA ou uma página customizada antes de redirecionar para `index.html`. O jogo roda na mesma janela, sem iframes obrigatórios.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Seção Guia -->
+    <section aria-label="Guia rápido" id="guia">
+      <h2>Guia <span>rápido</span></h2>
+      <p class="sub">Como começar, o que fazer e como evoluir — sem complicação.</p>
+      <div class="cards">
+        <article class="card">
+          <h3>1. Entre</h3>
+          <p>Não precisa instalar nada. Abra o jogo no navegador, crie uma conta (com consentimento LGPD afirmativo) e faça login. O jogo inicia diretamente no modo idle.</p>
+        </article>
+        <article class="card">
+          <h3>2. Escolha a zona</h3>
+          <p>Use `/farm` ou o painel para trocar de zona. Zonas mais profundas precisam de um score de poder maior (F3). A zona 1 é aberta para todos.</p>
+        </article>
+        <article class="card">
+          <h3>3. Colha enquanto está offline</h3>
+          <p>Quando volta a logar, o `OfflineSettle` liquida os ganhos acumulados (XP, ouro, drops). Isso é o coração do idle.</p>
+        </article>
+        <article class="card">
+          <h3>4. Progresso e temporada</h3>
+          <p>Baús (`/chests`), boss ladder, vip e o passe de temporada (S1) têm regras congeladas. As 4 corridas da temporada (`Power`, `Spend`, `Boss Kills`, `Guild Points`) já têm snapshot e premiação automática implementados.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- Seção DAO -->
+    <section class="dao" aria-label="DAO — Propostas de melhoria" id="dao">
+      <h2>DAO <span>— Propostas</span></h2>
+      <p class="sub">Usuários logados podem votar por melhorias. As propostas são registradas e podem ser implementadas conforme consenso.</p>
+      <div class="cards">
+        <article class="card">
+          <span class="tag">Em votação</span>
+          <h3>Seasons (F4) no lançamento</h3>
+          <p>Incluir o snapshot de temporada + as 4 corridas (Power / Spend / Boss Kills / Guild Points) no lançamento. Código técnico já implementado; precisa de regras congeladas e changelog.</p>
+          <div class="dao-vote" aria-label="Votar na proposta Seasons">
+            <a href="#" onclick="event.preventDefault(); alert('Votar: Seasons (F4) — precisa de login no jogo');">A favor</a>
+            <a href="#" onclick="event.preventDefault(); alert('Votar: Seasons (F4) — precisa de login no jogo');">Contra</a>
+          </div>
+        </article>
+        <article class="card">
+          <span class="tag">Aberta</span>
+          <h3>Landing custom (modelo D)</h3>
+          <p>Página de entrada com seção DAO, guia e info, separada do jogo Godot. O usuário loga e é redirecionado/incorporado ao Web build. Implementada nesta branch.</p>
+          <div class="dao-vote" aria-label="Votar na proposta Landing">
+            <a href="#" onclick="event.preventDefault(); alert('Votar: Landing D — precisa de login no jogo');">A favor</a>
+            <a href="#" onclick="event.preventDefault(); alert('Votar: Landing D — precisa de login no jogo');">Contra</a>
+          </div>
+        </article>
+        <article class="card">
+          <span class="tag">Futuro</span>
+          <h3>Meta de payload web &lt;25 MB</h3>
+          <p>Reduzir o primeiro load gzip de 32,4 MB para abaixo de 25 MB. Alavancas: recompressão de texturas (ATF/WebP) e pack remoto de áudio.</p>
+          <div class="dao-vote" aria-label="Votar na proposta Web Slim">
+            <a href="#" onclick="event.preventDefault(); alert('Votar: Web Slim — precisa de login no jogo');">A favor</a>
+            <a href="#" onclick="event.preventDefault(); alert('Votar: Web Slim — precisa de login no jogo');">Contra</a>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Shambleta — Idle MMORPG · Godot 4 · Web-first · Beta fechado</p>
+    <p style="margin-top:0.35rem; opacity:0.6;">VPS recomendada: Ampere A1 (2 vCPU / 12 GB RAM) · Build atual: 32,4 MB gzip</p>
+  </footer>
+</body>
+</html>

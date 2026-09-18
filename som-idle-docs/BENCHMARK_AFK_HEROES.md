@@ -1,4 +1,4 @@
-# Benchmark: AFK Heroes (afkheroes.xyz) → aplicação ao Source of Mana Idle
+# Benchmark: AFK Heroes (afkheroes.xyz) → aplicação ao Shambleta
 
 **Fontes:** [solgames.buzz/game/afk-heroes](https://solgames.buzz/game/afk-heroes), [cryptogames.gg](https://cryptogames.gg/afk-heroes-sets-friday-launch-for-season-2-opens-early-access-waitlist/), [cryptogames3d.com (guilds)](https://cryptogames3d.com/afk-heroes-launched-guilds-members-could-earn-up-to-25-extra-afkhero/), X/@AFKHeroesXYZ. Dados de ago/2026.
 

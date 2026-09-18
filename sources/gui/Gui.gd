@@ -242,12 +242,35 @@ func ExitGame():
 	notificationLabel.ClearNotification()
 
 # SOM-IDLE P2: toggle minimal HUD for idle sessions.
+# P-A4: ajuste responsivo mínimo para mobile/web (não redesign).
+func _adjust_for_mobile_web():
+	if LauncherCommons.isMobile or LauncherCommons.isWeb:
+		# P-A4 (polimento): responsivo completo — fontes maiores, botões maiores, margens reduzidas.
+		var font_scale : float = 1.2
+		var scale_factor : float = 1.2
+		get_viewport().gui_theme_default_font_size = int(get_viewport().gui_theme_default_font_size * font_scale)
+		# Aumentar botões principais (menu, stats, chat, shop) para toque.
+		if statWindow and statWindow is WindowPanel:
+			statWindow.scale = Vector2(scale_factor, scale_factor)
+		if chatWindow and chatWindow is WindowPanel:
+			chatWindow.scale = Vector2(scale_factor, scale_factor)
+		if shopWindow and shopWindow is WindowPanel:
+			shopWindow.scale = Vector2(scale_factor, scale_factor)
+		# Reduzir margens das janelas para caber em telas pequenas.
+		if windows and windows is Control:
+			for win in windows.get_children():
+				if win is WindowPanel:
+					win.add_theme_constant_override("margin_left", 4)
+					win.add_theme_constant_override("margin_right", 4)
+					win.add_theme_constant_override("margin_top", 4)
+					win.add_theme_constant_override("margin_bottom", 4)
+
 func ToggleIdleMode():
 	idleMode = not idleMode
 	if idleMode:
 		fullModeWindows.clear()
 		idleModeWindows.clear()
-		var essential : Array[WindowPanel] = [statWindow, chatWindow, minimapWindow, shopWindow, chestsWindow, bossWindow, seasonPassWindow]
+		var essential : Array[WindowPanel] = [statWindow, chatWindow, minimapWindow, shopWindow, chestsWindow, bossWindow, seasonPassWindow, afkWindow]
 		var nonEssential : Array[WindowPanel] = [inventoryWindow, emoteWindow, socialWindow, formationWindow, skillWindow, progressWindow, respawnWindow, zoneWindow, cosmeticsWindow, leaderboardWindow]
 		for win in essential:
 			if win and not win.is_visible():

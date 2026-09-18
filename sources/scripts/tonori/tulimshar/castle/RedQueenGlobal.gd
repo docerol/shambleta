@@ -19,7 +19,7 @@ func OnAreaEnter(player : PlayerAgent):
 	trackedPlayers[playerRID] = true
 
 	if spawnedGuards.is_empty():
-		spawnedGuards = Spawn("Tulimshar Sbire".hash(), 1, SBIRE_SPAWN_POSITION, SBIRE_SPAWN_RADIUS)
+		spawnedGuards = Spawn("Damasco Sbire".hash(), 1, SBIRE_SPAWN_POSITION, SBIRE_SPAWN_RADIUS)
 
 	for guard in spawnedGuards:
 		if is_instance_valid(guard):

@@ -1,4 +1,4 @@
-# Arquitetura — Source of Mana: Idle Auto Battler (Web)
+# Arquitetura — Shambleta: Idle Auto Battler (Web)
 
 **Versão:** 1.0 (2026-09-09) · **Base de código:** `docerol/sourceofmana@48029cc` · **Docs relacionados:** [ROADMAP.md](ROADMAP.md) · [ECONOMY_STUDY.md](ECONOMY_STUDY.md) · [BENCHMARK_AFK_HEROES.md](BENCHMARK_AFK_HEROES.md)
 
@@ -6,7 +6,7 @@
 
 ## 1. Conceito do produto
 
-> **Source of Mana: Idle** — idle auto battler fantasy jogável no browser. O jogador monta sua **formação** (até 5 personagens), define **equips, skills e o mapa (zona) de farm**, e a equipe luta sozinha no servidor — online ou offline — acumulando XP, gold, drops e baús. Progressão por zonas com gate de poder, guilds com buffs, temporadas com leaderboards, loja de cosméticos/conveniência e VIP. F2P com moeda premium **fechada** (gems).
+> **Shambleta: Idle** — idle auto battler fantasy jogável no browser. O jogador monta sua **formação** (até 5 personagens), define **equips, skills e o mapa (zona) de farm**, e a equipe luta sozinha no servidor — online ou offline — acumulando XP, gold, drops e baús. Progressão por zonas com gate de poder, guilds com buffs, temporadas com leaderboards, loja de cosméticos/conveniência e VIP. F2P com moeda premium **fechada** (gems).
 
 **O jogador não controla combate.** Toda decisão de build é pré-combate; o combate é resolvido pelo servidor.
 

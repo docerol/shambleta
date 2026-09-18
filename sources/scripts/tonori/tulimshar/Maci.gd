@@ -3,7 +3,7 @@ extends NpcScript
 #
 func OnStart():
 	if own.stat and own.stat.level < 5:
-		Mes("Oh, a new face! Welcome to Tulimshar.")
+		Mes("Oh, a new face! Welcome to Damasco.")
 		Mes("I'm %s. I help people find their footing around here." % npc.nick)
 	else:
 		Mes("Need to know where something is? Ask away.")
@@ -17,7 +17,7 @@ func OnMainChoice():
 
 # Answers
 func OnCityOverview():
-	Mes("Tulimshar sits in the valley that lies between our eastern and western hills.")
+	Mes("Damasco sits in the valley that lies between our eastern and western hills.")
 	Mes("The wall you see around us keeps the desert out from wildness and protects us from that southern sandstorm.")
 	Mes("We mostly stay within that area, most people live and work in the central district which spreads between here and the port to the north.")
 	Mes("That northern part is your best bet for anything you could need, markets, games, the lot.")

@@ -77,14 +77,14 @@ var deathTaxPct : int						= DeathTaxPct
 # boss) ordenados por dificuldade do mob dominante (nível, depois nível máx),
 # do dump de calibração. Difficuldade agora é monotônica zona a zona.
 const MapBackedNames : Array[String] = [
-	"Candor Cave", "Splatyna's Corridor", "Ship Second Deck",
-	"Tulimshar", "Tulimshar Center", "Artis Sewer",
-	"Sandstorm", "Tulimshar Bay", "Desert Mines",
-	"Desert Abandoned Level", "Tulimshar Western Cave", "Tulimshar Eastern Hills",
-	"Ship Alige Hide", "Tulimshar West Wall Pathway", "Tulimshar Western Hills",
-	"Manayir", "Drazil", "Tulimshar Beach",
-	"Manayir Beach", "Tulimshar Southern Hills", "Desert Pit", "Snake Pit",
-	"Desert Mountain Cave", "Desert Mountains",
+	"Aleppo Cave", "Damasco Passage", "Basra Ship Deck",
+	"Damasco", "Damasco Center", "Basra Sewer",
+	"Petra Mines", "Damasco Bay", "Petra Deep Mines",
+	"Petra Abandoned", "Damasco Western Cave", "Damasco Eastern Hills",
+	"Basra Hide", "Damasco West Wall Pathway", "Damasco Western Hills",
+	"Bagdá", "Shiraz", "Damasco Beach",
+	"Bagdá Beach", "Damasco Southern Hills", "Petra Pit", "Petra Snake",
+	"Homs Cave", "Homs Mountains",
 ]
 
 # SOM-IDLE: salas de boss (mob único nomeado, sprite próprio) — fora do rodízio

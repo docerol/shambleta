@@ -308,15 +308,15 @@ func HasItemsSpace(items : Array) -> bool:
 		var cell : ItemCell = null
 		if item is Array:
 			if item.size() != 2:
-			push_error("Wrong format to check user inventory space")
-			return false
-				cell = DB.GetItem(item[0])
-				itemCount = item[1]
+				push_error("Wrong format to check user inventory space")
+				return false
+			cell = DB.GetItem(item[0])
+			itemCount = item[1]
 		elif item is int:
 			cell = DB.GetItem(item)
 		else:
-		push_error("Argument given is not an item, could not verify if the inventory has enough space for this")
-		return false
+			push_error("Argument given is not an item, could not verify if the inventory has enough space for this")
+			return false
 
 		if cell:
 			if cell.stackable and HasItem(cell.id):
@@ -468,8 +468,8 @@ func _init(_npc : NpcAgent, _own : BaseAgent):
 	if _npc == null or _own == null:
 		push_error("Trying to init a NPC Script with a missing player or NPC")
 		return
-		own = _own
-		npc = _npc
+	own = _own
+	npc = _npc
 
 func PostInit():
 	if npc and own:

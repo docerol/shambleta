@@ -445,6 +445,11 @@ func _ready():
 	if LauncherCommons.isMobile or LauncherCommons.isWeb:
 		renderAccessors["Render-WindowSize"][ACC_TYPE.LABEL].get_parent().set_visible(false)
 		renderAccessors["Render-Fullscreen"][ACC_TYPE.LABEL].set_visible(false)
+		# P-A3: simplificar para mobile/web — ocultar opções visuais avançadas.
+		var visualOptionsToSimplify : Array[StringName] = ["Render-CRT", "Render-HQ4x", "Render-ActionOverlay"]
+		for opt_name in visualOptionsToSimplify:
+			if renderAccessors.has(opt_name):
+				renderAccessors[opt_name][ACC_TYPE.LABEL].get_parent().set_visible(false)
 
 	renderAccessors["Network-Local"][ACC_TYPE.LABEL].set_visible(OS.is_debug_build())
 

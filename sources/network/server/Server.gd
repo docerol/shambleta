@@ -124,30 +124,6 @@ func LoginWithToken(accountName : String, token : String, platform : int, peerID
 				Launcher.SQL.RefreshAuthToken(peer.accountID, ipAddress)
 	Network.AuthError(err, peerID)
 
-func LoginWithPassword(accountName : String, password : String, rememberMe : bool, platform : int, peerID : int):
-	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
-	var peer : Peers.Peer = Peers.GetPeer(peerID)
-	if not peer:
-		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
-	else:
-		err = NetworkCommons.CheckAuthInformation(accountName, password)
-		if err == NetworkCommons.AuthError.ERR_OK:
-			var accountID : int = Launcher.SQL.GetAccountID(accountName)
-			if accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
-				err = NetworkCommons.AuthError.ERR_AUTH
-			else:
-				var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
-				if not accountData:
-					err = NetworkCommons.AuthError.ERR_AUTH
-				elif not Launcher.SQL.IsConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
-					err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
-				elif Launcher.SQL.IsTwoFactorEnabled(accountData.accountID):
-					peer.pendingTwoFactorAccount = accountName
-					err = NetworkCommons.AuthError.ERR_2FA_REQUIRED
-				else:
-					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
-	Network.AuthError(err, peerID)
-
 # SOM-IDLE LGPD: re-acceptance after an agreements bump. Verifies a credential
 # exactly like the login RPCs do (password — with the same lockout predicate —
 # or a remember-me token) and only then persists the CURRENT versions with the

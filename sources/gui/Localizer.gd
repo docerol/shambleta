@@ -10,9 +10,9 @@
 #   - app changed the text     -> rebase the stash (dynamic strings like
 #     "5 gems" or player names simply miss the table and echo unchanged —
 #     tr() on a non-key returns the input, so the pass is always safe).
-# Not covered (accepted for phase 1): OptionButton item labels and
-# TabContainer tab titles (item APIs, not properties) — logged as leftover in
-# som-idle-docs/I18N_PHASE1_REPORT.md.
+# Not covered (accepted for phase 1 / polimento UI/UX — documentado):
+# OptionButton item labels and TabContainer tab titles (item APIs, not properties).
+# Logged as leftover in som-idle-docs/I18N_PHASE1_REPORT.md; aceito como gap residual.
 extends Node
 class_name Localizer
 

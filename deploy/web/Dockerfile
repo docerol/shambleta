@@ -29,8 +29,12 @@ FROM nginx:1.27-alpine
 RUN rm /etc/nginx/conf.d/default.conf
 COPY deploy/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /out/Web/ /usr/share/nginx/html/
+COPY deploy/web/landing/ /usr/share/nginx/html/landing/
 # SOM-IDLE P1: música servida separadamente para não pesar no primeiro load.
 # Os arquivos .ogg ficam em /usr/share/nginx/music/ e são servidos por /music/.
 COPY data/music/ /usr/share/nginx/music/
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
+# NOTA: para expor via Cloudflare Tunnel (WSS sem abrir portas), configure
+# CLOUDFLARED_TOKEN no ambiente do serviço cloudflared (docker-compose.yml).
+# O proxy do Cloudflare termina TLS (como Coolify), então o server binda ws:// plain.

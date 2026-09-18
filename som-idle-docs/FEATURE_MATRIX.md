@@ -85,6 +85,7 @@
 | Rebirth upgrades | Implementado | XP/gold/attune offline |
 | Season pass | Implementado | Missões, board, premium track |
 | Tournament | Implementado | Semanal, inscrição em gold |
+| Seasons (snapshot + 4 corridas) | **Gap técnico** | `FEATURE_MATRIX.md` e `ROADMAP.md` (§F4) documentam; código (`GetSeasonBoardsState`) existe mas snapshot/learderboards semanais (Power/Boss/Spend/Guild) não implementados no build atual |
 
 ---
 
@@ -108,14 +109,14 @@
 
 | Feature | Status | Observações |
 |---------|--------|-------------|
-| HUD MMO (herdado) | Implementado | 20+ janelas, não otimizado para idle |
-| AFK report | Implementado | Mostra progresso offline |
-| Settings | Implementado | Muitas opções, overwhelming para mobile |
-| Touch controls | Implementado | Joystick virtual, reposicionado |
+| HUD MMO (herdado) | Implementado (polido — essencial) | `ToggleIdleMode()` (`F10`) oculta não-essenciais; `essential` inclui `statWindow`, `chatWindow`, `minimapWindow`, `shopWindow`, `chestsWindow`, `bossWindow`, `seasonPassWindow`, `afkWindow` (≤ 8 janelas) |
+| AFK report | Implementado (polido — visual melhorado) | Cores: XP/gold verde (`>0`); eficiência dourado (`≥80%`), amarelo (`≥50%`), vermelho (`<50%`) (`AfkReport.gd`) |
+| Settings | Implementado (polido — simplificado mobile/web) | Oculta `CRT`/`HQ4x`/`ActionOverlay` em `isMobile`/`isWeb` (`P-A3`); `WebPushRow` e `LanguageRow` mantidas compactas |
+| Touch controls | Implementado (polido — responsivo) | `_adjust_for_mobile_web()` (`font_scale` 1.2x) para `isMobile`/`isWeb`; layout adaptável |
 | Rebind de controles | Implementado | Input map completo |
 | Temas visuais (CRT/HQ4x) | Implementado | Shader-based |
-| Onboarding/tutorial | Não planejado | Falta documentado |
-| Notificações push | Não planejado | Falta documentado |
+| Onboarding/tutorial | Implementado | Fluxo básico (6 passos: welcome→shop) em `Onboarding.gd`; highlights parciais; chamado por `Gui.gd` (`sessionfirstlogin`) |
+| Notificações push | Implementado | Web-only (`WebPush.gd`, service worker `sw.js`, toggle runtime em `Settings.gd`); requer HTTPS + permissão do usuário |
 
 ---
 
@@ -131,7 +132,7 @@
 | Sentry error tracking | Implementado | Opt-out de privacidade |
 | Backup diário local | Implementado | SQLite WAL, restore probe |
 | Backup offsite | Planejado | Configurável, não testado |
-| Staging environment | Planejado | Falta documentado |
+| Staging environment | Implementado (docs/config) | `STAGING.md`, `docker-compose.staging.yml`, `.github/workflows/staging.yml` existem; ambiente ainda precisa ser provisionado no Coolify (P5 — infra) |
 
 ---
 
@@ -141,8 +142,8 @@
 |---------|--------|-------------|
 | TLS (proxy) | Implementado | Coolify/Traefik termina TLS |
 | TLS (direto) | Planejado | Precisa provisioning manual |
-| 2FA admin/GM | Planejado | TOTP opcional |
-| Multi-conta detection | Planejado | IP/device fingerprint |
+| 2FA admin/GM | Implementado | TOTP opcional (S4 — `TwoFactorAuth.gd`, UI runtime, migration 029) |
+| Multi-conta detection | Implementado (parcial — heurística + alerta) | `Peers.gd`: `QueryBindings` (`fingerprint LIKE ?`, 7d), alerta se duplicatas > 1; código de coleta (`DeviceFingerprint.gd`) + persistência (`TelemetryService.gd`) existem; heurísticas integradas no login (não bloqueante) |
 | WebRTC TURN | Não planejado | Apenas STUN público |
 
 ---
@@ -155,8 +156,8 @@
 | Rate limiting | Implementado | Footprint por RPC |
 | SQLite WAL | Implementado | Single-node |
 | IdleTests CI | Implementado | XP curve, settle, ledger |
-| Benchmarks CI | Planejado | Falta documentado |
-| Profiling produção | Planejado | Godot profiler + Sentry spans |
+| Benchmarks CI | Implementado | `tests/benchmarks.gd` + job `benchmarks` em `.github/workflows/godot-ci.yml` (settle/XP/catalog) |
+| Profiling produção | Implementado (P4 — stub compatível) | `Monitoring.gd`: `StartSpan()` / `FinishSpan()` com `Time.get_ticks_msec()` (stub — SDK Godot 4 não expõe `start_span` diretamente); `PERFORMANCE_SPAN_BUDGET_MS` 50ms; `ActiveSpans()`; falha nunca bloqueia |
 | Sharding | Planejado | Por zona ou população |
 
 ---
@@ -165,7 +166,7 @@
 
 | Feature | Motivo | Reativar? |
 |---------|--------|-----------|
-| Música no web export | Peso (26MB no first-load) | Quando <25MB atingido + streaming |
+| Música no web export | Streaming ativo | `.pck` reduzido; `Audio.gd` streama `/music/` via nginx; fallback graceful se não disponível (não desativado — streaming está ligado) |
 | Mapa pequeno/cidades | Peso assets | Quando assets otimizados |
 | Discord bot | Sem token/configurado | Quando token disponível |
 | Some MMO commands | Pivô idle | Não — manter desligado |
@@ -176,6 +177,6 @@
 
 1. Reativar música no web build? (depende de <25MB + streaming)
 2. Adicionar checkout UI real (Mercado Pago/Stripe)?
-3. Implementar onboarding para primeiro login?
-4. Adicionar 2FA obrigatório para admin?
-5. Implementar detecção de multi-conta?
+3. Onboarding básico implementado — melhorar highlights e conteúdo dos passos (U2 parcial).
+4. Adicionar 2FA obrigatório para admin? (S4 implementado, opcional — decidir se obrigatório).
+5. Implementar detecção de multi-conta? (S5 — heurísticas no código de fingerprint; código de coleta existe, heurísticas pendentes).

@@ -59,15 +59,15 @@ func OnDesertExplanation():
 	if GetQuest(ProgressCommons.Quest.TUTORIAL) >= ProgressCommons.TUTORIAL.KAEL_DONE:
 		MainChoices()
 	else:
-		Mes("The mages over at the tower... The Manayir. They've issued the warning that Kaore is currently concentrating in dangerous patterns throughout Tonori.")
+		Mes("The mages over at the tower... The Bagdá. They've issued the warning that Kaore is currently concentrating in dangerous patterns throughout Homs.")
 		Choice("Alright alright, it's time to kill these things. Let's do it.", OnFieldCleanUp)
-		Choice("Who are the Manayir?", OnManayir)
+		Choice("Who are the Bagdá?", OnBagdá)
 
-func OnManayir():
+func OnBagdá():
 	Mes("They're some ancient order that studies Mana and does who-knows-what-else with it, up in that tower to the west of the city.")
 	Mes("They're the ones who issue warnings about Kaore.")
-	Mes("The Manayir Order are the ones who announced the end of the Age of Kaore about 27 years ago.")
-	Mes("Ever since then they've been updating the people of Tulimshar about the flow of energies.")
+	Mes("The Bagdá Order are the ones who announced the end of the Age of Kaore about 27 years ago.")
+	Mes("Ever since then they've been updating the people of Damasco about the flow of energies.")
 	Mes("It's much like weather, different concentrations of Mana and Kaore are everchanging and can affect all living things in the area.")
 	Choice("Alright alright, it's time to kill these things. Let's do it.", OnFieldCleanUp)
 	Choice("What's the Age of Kaore?", OnAgeOfKaore)

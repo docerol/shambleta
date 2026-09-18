@@ -46,14 +46,14 @@ func OnWhatHappened():
 
 func OnLocation():
 	Mes("When the Uru were threatened, a group of druids that intended to protect us planted a Kano here in this cave.")
-	Mes("Then, they founded an order called Manayir somewhere nearby, to study and use the flow of Mana close to my roots.")
-	Mes("I was born here, hidden from the world. Over time the Manayir let their knowledge of my existence fade, even from their own, so that I would remain hidden.")
+	Mes("Then, they founded an order called Bagdá somewhere nearby, to study and use the flow of Mana close to my roots.")
+	Mes("I was born here, hidden from the world. Over time the Bagdá let their knowledge of my existence fade, even from their own, so that I would remain hidden.")
 	Action(OnTreeBranch)
 
 func OnWhatNext():
 	Mes("I would ask you to never speak to anyone of my existence.")
 	Mes("Take the Kano, the Mana Seed.")
-	Mes("The druid Nina of Tulimshar is someone I know you can trust with it. She is very attuned to the flow of Mana and I have come to know her presence.")
+	Mes("The druid Nina of Damasco is someone I know you can trust with it. She is very attuned to the flow of Mana and I have come to know her presence.")
 	Mes("You should tell the guards inspecting the mines around here that you found great dangers and that it is not safe to access the lower levels.")
 	Mes("I have no choice but to trust that you will take good decisions.")
 	Mes("Whatever you do, it won't be as bad as what the person you fought here would have done.")
@@ -62,12 +62,12 @@ func OnWhatNext():
 
 func OnTellNina():
 	Mes("Be careful. What you have discovered here today has been hidden for thousands of years.")
-	Mes("As chance has dictated, you are now a warden of a powerful Source of Mana.")
+	Mes("As chance has dictated, you are now a warden of a powerful Shambleta.")
 	SetQuest(QUEST_ID, ProgressCommons.MINE_EXPLORATION.MANA_TREE_MET)
 	SetQuest(ProgressCommons.Quest.DESERT_SEED, ProgressCommons.DESERT_SEED.SEEK_NINA)
 
 func OnXakelbael():
-	Mes("He used to be one of the Manayir. His intentions are different now.")
+	Mes("He used to be one of the Bagdá. His intentions are different now.")
 	Mes("You should speak to those who belong to his order. They will tell you who he is.")
 	Choice("I will go to Nina then.", OnTellNina)
 

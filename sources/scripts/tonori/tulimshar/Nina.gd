@@ -5,7 +5,7 @@ const DESERT_SEED_ID : int = ProgressCommons.Quest.DESERT_SEED
 #
 func OnStart():
 	var state : ProgressCommons.DESERT_SEED = GetQuest(DESERT_SEED_ID) as ProgressCommons.DESERT_SEED
-	if state == ProgressCommons.DESERT_SEED.SEEK_NINA and HasItem(DB.GetCellHash("Sandstorm Kano")):
+	if state == ProgressCommons.DESERT_SEED.SEEK_NINA and HasItem(DB.GetCellHash("Petra Kano")):
 		OnDesertSeedIntro()
 	elif state == ProgressCommons.DESERT_SEED.SEEK_MANAYIR:
 		OnDesertSeedReminder()
@@ -20,7 +20,7 @@ func OnStart():
 # Intro
 func OnIntro():
 	Mes("Hello. Elanore sent you? Welcome.")
-	Mes("We are standing before Tulimshar's ancient Soul Menhir. I am its guardian and use its powers to protect the people of this city, or as much as I am allowed to.")
+	Mes("We are standing before Damasco's ancient Soul Menhir. I am its guardian and use its powers to protect the people of this city, or as much as I am allowed to.")
 	OnPlayerChoice()
 
 func OnPlayerChoice():
@@ -34,7 +34,7 @@ func OnPlayerChoice():
 
 # Opposition and faith
 func OnExplainOpposition():
-	Mes("Not exactly. Kahwes, or Druids, have always been allowed in Tulimshar. If anything because without us the city would not survive the worst droughts and other perils of Tonori's climate.")
+	Mes("Not exactly. Kahwes, or Druids, have always been allowed in Damasco. If anything because without us the city would not survive the worst droughts and other perils of Homs's climate.")
 	Mes("The Kingdom however officially follows the Savean Creed. They believe, like half of the people around you, that Mana is also a corrupting force just like Kaore and that both should be avoided unless strictly necessary.")
 	Mes("Our Menhir still stands because it makes people's lives easier. Even those who have opposing beliefs cannot deny the benefit of Mana use. They will oppose it publicly, but when a personal need arises, they will seek Kahwes like myself to heal a loved one or bring some needed rain.")
 	Mes("I just wish that more people embraced the ancient traditions more openly. The Savean beliefs have brought much trouble to our world. Now they have even spawned these new cultists, the Varunian, who essentially worship Kaore.")
@@ -67,16 +67,16 @@ func OnCurrentSituation():
 	Choice("Is there anything I can do for you?", OnAskForHelp)
 
 func OnRedQueen():
-	Mes("She's the ruler of our city and the whole Kingdom of Tonori, though she doesn't have much power outside of the city walls.")
-	Mes("The Zuni tribes of Tonori never recognised our Kingdom so she really only rules over the city.")
+	Mes("She's the ruler of our city and the whole Kingdom of Homs, though she doesn't have much power outside of the city walls.")
+	Mes("The Zuni tribes of Homs never recognised our Kingdom so she really only rules over the city.")
 	Mes("Another reason for her to keep magic away from her people. The Zuni still practice their ancient magic and it makes them very hard to fight.")
-	Mes("She'd rather not have the same problem here in Tulimshar.")
+	Mes("She'd rather not have the same problem here in Damasco.")
 	Choice("What can you tell me about the Zuni?", OnZuni)
 	Choice("Is there anything I can do for you?", OnAskForHelp)
 
 func OnZuni():
-	Mes("They have lived in the Tonori desert for a very long time. In fact, they still tell stories of this land before it was even a desert.")
-	Mes("They've always traded with Tulimshar and are mostly friendly towards us, but only as long as we don't send our soldiers too far outside our walls.")
+	Mes("They have lived in the Homs desert for a very long time. In fact, they still tell stories of this land before it was even a desert.")
+	Mes("They've always traded with Damasco and are mostly friendly towards us, but only as long as we don't send our soldiers too far outside our walls.")
 	Mes("Whenever that has happened in the past they've fought us back until we gave up. I respect that about them, they have clear boundaries and will defend their homeland.")
 	Choice("It would be interesting to meet them!", OnZuniMarket)
 	Choice("Bah! They seem like uncivilised nomads to me.", OnZuniDismissal)
@@ -159,7 +159,7 @@ func OnRevealKano():
 	Choice("There is a Mana Tree at the bottom of the mines. It gave it to me.", OnRevealManaTree)
 
 func OnRevealManaTree():
-	Mes("Excuse me?! Did you say a Mana Tree? Alive? In the Sandstorm Mines???")
+	Mes("Excuse me?! Did you say a Mana Tree? Alive? In the Petra Mines???")
 	Mes("I...")
 	Mes("I need a moment.")
 	Mes("I once felt something in that direction, a long time ago. I assumed it was a deep Zielite deposit. I had no idea.")
@@ -168,8 +168,8 @@ func OnRevealManaTree():
 
 func OnNinaReacts():
 	Mes("How does it know me? This is all... very hard to grasp.")
-	Mes("I'm glad it trusted me, but we will need to let the Manayir know about this. They are an ancient order of druids who were once guardians of these trees.")
-	Mes("They built a castle into a small peninsula, all the way across the beach on west side of the Tulimshar Valley, past the storm.")
+	Mes("I'm glad it trusted me, but we will need to let the Bagdá know about this. They are an ancient order of druids who were once guardians of these trees.")
+	Mes("They built a castle into a small peninsula, all the way across the beach on west side of the Damasco Valley, past the storm.")
 	Mes("Just head south past the city walls and then west.")
 	Mes("Find them and show them the Kano. Explain what you saw.")
 	Mes("Avoid telling anyone else about this for now. This is a very powerful item. Something that will surely attract the wrong attention.")
@@ -193,11 +193,11 @@ func OnTouchMenhir():
 	Action(SaveRespawnSoulMenhir)
 	Mes("Good. You are connected now.")
 	Mes("If you ever find another Soul Menhir, touch it. You will become attuned to the last on you have touched.")
-	Mes("Now, you should make your way to the Manayir. We cannot wait around with a Kano in our hands.")
+	Mes("Now, you should make your way to the Bagdá. We cannot wait around with a Kano in our hands.")
 	OnPlayerChoice()
 
 func OnDesertSeedReminder():
-	Mes("Have you found the Manayir yet?")
+	Mes("Have you found the Bagdá yet?")
 	Mes("You should head south, then west. Their tower is past the sandstorm, on a quiet peninsula. Ask around in that area, someone should be able to point you in the right direction.")
 	OnPlayerChoice()
 

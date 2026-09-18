@@ -57,12 +57,13 @@ func ResetData():
 	originalAnimationLib = null
 
 func AddPreset(presetNode : Node2D):
-	if presetNode != preset:
+	if presetNode == preset:
 		if is_instance_valid(presetNode) and not presetNode.is_queued_for_deletion():
-			presetNode.queue_free()
+			add_child(presetNode)
 		return
-	if is_instance_valid(presetNode):
-		add_child(presetNode)
+	if is_instance_valid(presetNode) and not presetNode.is_queued_for_deletion():
+		presetNode.queue_free()
+	return
 
 func LoadData(data : EntityData):
 	ResetData()
@@ -349,7 +350,7 @@ func RefreshTree(resetOnTeleport : bool = true):
 
 func Refresh():
 	if not animationTree or not animationTree.is_inside_tree():
-		return
+		return null
 
 	var currentVelocity : Vector2 = entity.entityVelocity
 	var isMoving : bool = currentVelocity.length_squared() > 1
@@ -383,7 +384,7 @@ func CollectAnimationOverrides() -> Array[AnimationLibrary]:
 
 func ApplyAnimationOverrides():
 	if not animation:
-		return
+		return null
 
 	var allOverrides : Array[AnimationLibrary] = CollectAnimationOverrides()
 

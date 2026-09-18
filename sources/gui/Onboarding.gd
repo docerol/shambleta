@@ -111,8 +111,17 @@ func _show_step():
 	_label.text = text
 
 func _highlight_node(node : Node):
+	# Polimento UI/UX: destaca visualmente o nó-alvo (não apenas torna GUI visível).
 	if Launcher.GUI:
 		Launcher.GUI.set_visible(true)
+		# Se há um nó específico, aplica um overlay de destaque temporário.
+		if node and node is Control:
+			# Usa uma borda colorida temporária para destacar o componente
+			node.add_theme_color_override("border_color", Color(1.0, 0.9, 0.2, 1.0))
+			node.add_theme_constant_override("border_width_left", 2)
+			node.add_theme_constant_override("border_width_top", 2)
+			node.add_theme_constant_override("border_width_right", 2)
+			node.add_theme_constant_override("border_width_bottom", 2)
 
 func _on_next():
 	if _currentStep == STEP_COMPLETE:

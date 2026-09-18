@@ -1,6 +1,6 @@
 extends NpcScript
 
-var artisFlourSackID : int			= DB.GetCellHash("Artis Flour Sack")
+var artisFlourSackID : int			= DB.GetCellHash("Basra Flour Sack")
 
 #
 func OnStart():
@@ -9,7 +9,7 @@ func OnStart():
 			OnSearch()
 
 func OnSearch():
-	Mes("A deep blue wax seal stamped with the Artis crest. This is the one.")
+	Mes("A deep blue wax seal stamped with the Basra crest. This is the one.")
 	Mes("Inside, sacks of fine milled flour, just as Riskim described.")
 
 	if not HasSpace(1):

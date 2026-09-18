@@ -36,13 +36,13 @@ static func LoadFile(path : String) -> String:
 	var pathExists : bool		= FileExists(fullPath)
 	if not pathExists:
 		push_error("Content file not found " + path + " should be located at " + fullPath)
-		return
+		return ""
 
 	if pathExists:
 		var file : FileAccess = FileAccess.open(fullPath, FileAccess.READ)
 		if file == null:
 			push_error("File parsing issue on file " + fullPath)
-			return
+			return ""
 		content = file.get_as_text()
 		Util.PrintLog("File", "Loading file: " + fullPath)
 		file.close()
@@ -66,7 +66,7 @@ static func LoadDB(path : String) -> Dictionary:
 	var pathExists : bool		= FileExists(fullPath)
 	if not pathExists:
 		push_error("DB file not found " + path + " should be located at " + fullPath)
-		return
+		return {}
 
 	if pathExists:
 		var DBFile : FileAccess = FileAccess.open(fullPath, FileAccess.READ)
@@ -79,7 +79,7 @@ static func LoadDB(path : String) -> Dictionary:
 				+ " Line: " + str(jsonInstance.get_error_line()) \
 				+ " Error: " + jsonInstance.get_error_message() \
 			)
-			return
+			return {}
 
 		result = jsonInstance.get_data()
 		Util.PrintLog("DB", "Loading file: " + fullPath)

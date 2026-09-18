@@ -67,7 +67,7 @@ func OnMonsterKilled(mob : BaseAgent):
 		return
 
 	NpcCommons.SetQuest(player, QUEST_ID, ProgressCommons.MINE_EXPLORATION.DEFEATED)
-	NpcCommons.AddItem(player, DB.GetCellHash("Sandstorm Kano"))
+	NpcCommons.AddItem(player, DB.GetCellHash("Petra Kano"))
 
 	if ActorCommons.IsAlive(player) and not player.ownScript:
 		player.AddScript(npc)

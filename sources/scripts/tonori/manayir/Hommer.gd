@@ -4,20 +4,20 @@ const DESERT_SEED_ID : int = ProgressCommons.Quest.DESERT_SEED
 
 #
 func OnStart():
-	Mes("Welcome to Manayir.")
+	Mes("Welcome to Bagdá.")
 	DisplayChoices()
 
 func DisplayChoices():
 	if GetQuest(DESERT_SEED_ID) == ProgressCommons.DESERT_SEED.SEEK_MANAYIR:
-		Choice("I was sent by Nina of Tulimshar.", OnKano)
-	Choice("What is this place?", OnAboutManayir)
+		Choice("I was sent by Nina of Damasco.", OnKano)
+	Choice("What is this place?", OnAboutBagdá)
 	Choice("What are the Hantu?", OnHantus)
 	Choice("Farewell.", Farewell)
 
-func OnAboutManayir():
+func OnAboutBagdá():
 	Mes("We are Kahwe. An order of druids gathered to research, teach and protect the order of Mana in our world.")
 	Mes("Long ago we were spread across the region, each of us tending to Hantus that grew nearby. That time is behind us now.")
-	Mes("We also had a presence in Tulimshar for a long time. Tried to keep Mana from being made into a matter of politics. That time is also behind us.")
+	Mes("We also had a presence in Damasco for a long time. Tried to keep Mana from being made into a matter of politics. That time is also behind us.")
 	Mes("Now we preserve what we still know and continue our studies.")
 	DisplayChoices()
 
@@ -45,5 +45,5 @@ func OnEndPrototype():
 	Mes("The people who built this world are still working on what comes next. You have caught up to them.")
 	Mes("Congratulation for getting this far and thank you for being part of this journey with us!")
 	Mes("Stay as long as you like and please do come visit us and come say hi on our Discord.")
-	Mes("Until then, Manayir and the Tonori region is yours to continue to explore.")
+	Mes("Until then, Bagdá and the Homs region is yours to continue to explore.")
 	Choice("I'll stay a while.", Farewell)

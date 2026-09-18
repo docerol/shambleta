@@ -22,18 +22,28 @@ func _ready():
 func ShowReport(report : Dictionary):
 	if report.is_empty():
 		return
+	# P-B1: polimento visual — cores para valores positivos, destaque de eficiência.
 	hoursLabel.text = tr("Away: %.1fh") % float(report.get("hours", 0.0))
 	var doubled : bool = bool(report.get("doubled", false))
 	var tag : String = " (2× AD!)" if doubled else ""
-	xpLabel.text = tr("+%s XP") % Util.FormatNumber(int(report.get("xp_earned", 0))) + tag
-	goldLabel.text = tr("+%s gold") % Util.FormatNumber(int(report.get("gold_earned", 0))) + tag
+	# Cores: verde para valores positivos (ganho), amarelo para eficiência alta.
+	var xp_val : int = int(report.get("xp_earned", 0))
+	xpLabel.text = tr("+%s XP") % Util.FormatNumber(xp_val) + tag
+	xpLabel.add_theme_color_override("font_color", Color(0.2, 0.8, 0.2) if xp_val > 0 else Color(0.8, 0.8, 0.8))
+	var gold_val : int = int(report.get("gold_earned", 0))
+	goldLabel.text = tr("+%s gold") % Util.FormatNumber(gold_val) + tag
+	goldLabel.add_theme_color_override("font_color", Color(0.2, 0.8, 0.2) if gold_val > 0 else Color(0.8, 0.8, 0.8))
 	var drops : Dictionary = report.get("drops", {})
 	var dropTotal : int = 0
 	for itemHash in drops:
 		dropTotal += int(drops[itemHash])
 	dropsLabel.text = tr("Drops: %d") % dropTotal + tag
 	chestsLabel.text = tr("Chests: %d") % int(report.get("chests", 0))
-	effLabel.text = tr("Efficiency: %d%%") % int(float(report.get("efficiency", 1.0)) * 100.0)
+	# Eficiência com cor de destaque (amarelo/dourado para alta eficiência).
+	var eff_raw : float = float(report.get("efficiency", 1.0))
+	var eff_pct : int = int(eff_raw * 100.0)
+	effLabel.text = tr("Efficiency: %d%%") % eff_pct
+	effLabel.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3) if eff_pct >= 80 else (Color(1.0, 0.95, 0.6) if eff_pct >= 50 else Color(0.9, 0.3, 0.2)))
 	if bool(report.get("armed", false)) and not doubled:
 		adHintLabel.text = tr("2× ad armed — applies on Collect (4× with VIP)")
 		doubleAdButton.disabled = true
