@@ -521,6 +521,10 @@ func SetReferralCode(code : String, peerID : int = NetworkCommons.PeerAuthorityI
 func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyDailyOffer", [offerID], peerID, NetworkCommons.DelayConfig)
 
+# R2 vendor gold: consumíveis por gold (preço e estoque server-side).
+func BuyVendorOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyVendorOffer", [offerID], peerID, NetworkCommons.DelayConfig)
+
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RerollDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("RerollDailyShop", [], peerID, NetworkCommons.DelayConfig)

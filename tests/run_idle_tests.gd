@@ -151,6 +151,7 @@ func _run_tests():
 			suites.SuiteTournamentDonation(sql)
 			suites.SuiteSeasonLock(sql)
 			suites.SuiteReferral(sql)
+			suites.SuiteVendor(sql)
 			# SOM-IDLE: rebirth (híbrido B+C, XP_PROGRESSION §4.2) — awaited: a
 			# metade B exige agente vivo no cap (o motor de renascimento é async).
 			var rebChar : int = suites.CreateFixture(sql, "idle_rebirth_account", "IdleRebirth")

@@ -96,6 +96,39 @@ func ShowState(state : Dictionary):
 		for p in pending:
 			parts.append(str(p.get("sku", "?")))
 		pendingLabel.text = "Pending purchases: %s (credit in ~30s)" % ", ".join(parts)
+	ShowVendor(state.get("vendor", {}))
+
+# R2 vendor gold (runtime, sem .tscn): suprimentos por gold, estoque diário.
+var _vendorBox : VBoxContainer = null
+
+func _vendor_box() -> VBoxContainer:
+	if _vendorBox == null:
+		_vendorBox = VBoxContainer.new()
+		_vendorBox.name = "VendorBox"
+		$Layout.add_child(_vendorBox)
+	return _vendorBox
+
+func ShowVendor(vendor : Dictionary):
+	var box : VBoxContainer = _vendor_box()
+	for c in box.get_children():
+		c.queue_free()
+	if vendor.is_empty() or not bool(vendor.get("ok", false)):
+		return
+	for e in vendor.get("offers", []):
+		if not (e is Dictionary):
+			continue
+		var left : int = int((e as Dictionary).get("left", 0))
+		var b := Button.new()
+		if left <= 0:
+			b.text = "%s — sold out today" % str((e as Dictionary).get("label", "?"))
+			b.disabled = true
+		else:
+			b.text = "%s — %d gold (%d left today)" % [str((e as Dictionary).get("label", "?")), int((e as Dictionary).get("cost", 0)), left]
+			b.pressed.connect(_on_buy_vendor_pressed.bind(str((e as Dictionary).get("id", ""))))
+		box.add_child(b)
+
+func _on_buy_vendor_pressed(offerID : String):
+	Network.BuyVendorOffer(offerID)
 
 func _rebuild_catalog_buttons(catalog : Array):
 	for c in catalogBox.get_children():

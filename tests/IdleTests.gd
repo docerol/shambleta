@@ -2121,6 +2121,49 @@ func SuiteReferral(sql : SQLService) -> void:
 	for uname in ["idle_ref_a", "idle_ref_b", "idle_ref_c", "idle_ref_old"]:
 		sql.db.delete_rows("account", "username = '%s'" % uname)
 
+# R2 vendor gold (COMMUNITY_ROADMAP): consumíveis por gold, preço server-side,
+# estoque diário, sem chave/power à venda.
+func SuiteVendor(sql : SQLService) -> void:
+	print("[suite] vendor gold (R2)")
+	var economy : EconomyService = Launcher.Economy
+	var charID : int = CreateFixture(sql, "idle_vendor", "IdleVendor")
+	if not Check(charID != 0, "vendor fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var apple : int = FarmZoneData.DefaultDropItemHash
+	# Catálogo no estado: 7 ofertas, preço e estoque server-side
+	var st : Dictionary = economy.GetVendorState(accountID)
+	Check(bool(st.get("ok", false)), "vendor state ok")
+	CheckEq((st.get("offers", []) as Array).size(), 7, "7 vendor offers")
+	# Compra: +1 apple (prova que "Apple".hash() casa com o drop), -50 gold
+	_SetInventory(sql, charID, apple, 0)
+	_GrantGold(sql, charID, accountID, 1000, "vendor_test_gold")
+	var g0 : int = int(sql.GetStat(charID).get("gp", -1))
+	var r1 : Dictionary = economy.BuyVendorOffer(accountID, charID, "apple")
+	Check(bool(r1.get("ok", false)), "apple bought with gold")
+	CheckEq(_CountItem(sql, charID, apple), 1, "apple granted (hash matches)")
+	CheckEq(g0 - int(sql.GetStat(charID).get("gp", -1)), 50, "50 gold debited")
+	CheckEq(int(r1.get("cost", -1)), 50, "cost from server")
+	Check(not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "vendor:apple"]).is_empty(), "vendor ledger row")
+	# Erros fail-closed
+	Check(str(economy.BuyVendorOffer(accountID, charID, "nope").get("reason", "")) == "unknown_offer", "unknown offer rejected")
+	_GrantGold(sql, charID, accountID, -(g0 - 50 - 10), "vendor_test_poor")
+	Check(str(economy.BuyVendorOffer(accountID, charID, "potion").get("reason", "")) == "insufficient_gold", "poor rejected")
+	# Estoque: 20/dia esgotam, 21ª recusa
+	_GrantGold(sql, charID, accountID, 100000, "vendor_test_stock")
+	for i in 19:
+		economy.BuyVendorOffer(accountID, charID, "apple")
+	Check(str(economy.BuyVendorOffer(accountID, charID, "apple").get("reason", "")) == "sold_out", "21st apple sold out")
+	var st2 : Dictionary = economy.GetVendorState(accountID)
+	var left : int = -1
+	for e in st2.get("offers", []):
+		if str((e as Dictionary).get("id", "")) == "apple":
+			left = int((e as Dictionary).get("left", -1))
+	CheckEq(left, 0, "stock shows 0 left")
+	sql.ExecuteBindings("DELETE FROM vendor_claim WHERE account_id = ?;", [accountID])
+	sql.db.delete_rows("character", "nickname = 'IdleVendor'")
+	sql.db.delete_rows("account", "username = 'idle_vendor'")
+
 # Fase B: cap offline por tier (12h F2P / 24h VIP1 / 36h VIP2, expirado volta).
 func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] VIP cap hours (Fase B)")

@@ -981,7 +981,83 @@ func GetEconomyState(accountID : int, charID : int) -> Dictionary:
 		"catalog" = SHOP_CATALOG,
 		"starter_offer" = GetStarterOfferState(accountID),
 		"pending_grants" = GetPendingGrants(accountID),
+		"vendor" = GetVendorState(accountID),
 	}
+
+# ------------------------------------------------------------------ R2: vendor gold (COMMUNITY_ROADMAP)
+# Loja de consumíveis por gold (poções usáveis de verdade, mesmo loop do
+# auto-potion). Preço só server-side; estoque diário por oferta; sem reroll,
+# sem chave de boss (não canibaliza gems/ads), sem poder permanente.
+const VENDOR_STOCK_PER_DAY : int = 20
+const VENDOR_CATALOG : Array = [
+	{"id": "apple", "label": "Apple x1", "item": "Apple", "count": 1, "cost": 50},
+	{"id": "water", "label": "Water Bottle x1", "item": "WaterBottle", "count": 1, "cost": 80},
+	{"id": "candy", "label": "Cactus Sour Candy x1", "item": "CactusSourCandy", "count": 1, "cost": 150},
+	{"id": "croissant", "label": "Croissant x1", "item": "Croissant", "count": 1, "cost": 120},
+	{"id": "drink", "label": "Cactus Drink x1", "item": "CactusDrink", "count": 1, "cost": 200},
+	{"id": "pitaya", "label": "Pitaya x1", "item": "Pitaya", "count": 1, "cost": 350},
+	{"id": "potion", "label": "Cactus Potion x1", "item": "CactusPotion", "count": 1, "cost": 500},
+]
+
+func GetVendorState(accountID : int) -> Dictionary:
+	var day : int = ShopDay(SQLCommons.Timestamp())
+	var offers : Array = []
+	for e in VENDOR_CATALOG:
+		var claimed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT count FROM vendor_claim WHERE account_id = ? AND day = ? AND offer_id = ?;", [accountID, day, str(e.get("id", ""))])
+		var bought : int = int(claimed[0].get("count", 0)) if not claimed.is_empty() else 0
+		var row : Dictionary = (e as Dictionary).duplicate()
+		row["bought"] = bought
+		row["left"] = maxi(0, VENDOR_STOCK_PER_DAY - bought)
+		offers.append(row)
+	return {"ok" = true, "day" = day, "stock" = VENDOR_STOCK_PER_DAY, "offers" = offers}
+
+# Compra com gold do char (débito + grant + estoque na MESMA transação).
+func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictionary:
+	var offer : Dictionary = {}
+	for e in VENDOR_CATALOG:
+		if str((e as Dictionary).get("id", "")) == offerID:
+			offer = e
+			break
+	if offer.is_empty():
+		return {"ok" = false, "reason" = "unknown_offer"}
+	var cost : int = int(offer.get("cost", 0))
+	var count : int = int(offer.get("count", 0))
+	if cost <= 0 or count <= 0:
+		return {"ok" = false, "reason" = "bad_offer"}
+	var result : Dictionary = {"ok" = false, "reason" = "rejected"}
+	settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var day : int = ShopDay(SQLCommons.Timestamp())
+		var claimed : Array = sql.db.select_rows("vendor_claim", "account_id = %d AND day = %d AND offer_id = '%s'" % [accountID, day, offerID], ["count"])
+		var bought : int = int(claimed[0].get("count", 0)) if not claimed.is_empty() else 0
+		if bought >= VENDOR_STOCK_PER_DAY:
+			result["reason"] = "sold_out"
+			return false
+		var gp : int = _CharGoldRaw(charID)
+		if gp < cost:
+			result["reason"] = "insufficient_gold"
+			return false
+		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - cost}):
+			return false
+		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -cost, gp - cost, "vendor:" + offerID):
+			return false
+		var itemHash : int = str(offer.get("item", "")).hash()
+		if _GrantStackRaw(charID, accountID, itemHash, count, "vendor:" + offerID, "vendor") == 0:
+			return false
+		if claimed.is_empty():
+			if not sql.db.query_with_bindings("INSERT INTO vendor_claim (account_id, day, offer_id, count) VALUES (?, ?, ?, 1);", [accountID, day, offerID]):
+				return false
+		elif not sql.UpdateRowsRaw("vendor_claim", "account_id = %d AND day = %d AND offer_id = '%s'" % [accountID, day, offerID], {"count" = bought + 1}):
+			return false
+		result["ok"] = true
+		result["reason"] = "ok"
+		result["cost"] = cost
+		result["balance"] = gp - cost
+		return true):
+		pass
+	settleMutex.unlock()
+	return result
 
 # Boards da temporada ativa em um shot, já com nomes resolvidos (GUI de
 # leaderboard). {} quando não há temporada ativa.

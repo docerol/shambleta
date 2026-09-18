@@ -716,6 +716,20 @@ func BuyDailyOffer(offerID : String, peerID : int):
 	Network.DailyShop(Launcher.Economy.GetDailyShop(accountID), peerID)
 	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
+# R2 vendor gold: conta/char sempre da sessão.
+func BuyVendorOffer(offerID : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.ShopFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyVendorOffer(accountID, charID, offerID)
+	if not bool(result.get("ok", false)):
+		Network.ShopFeedback(false, "vendor rejected (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	Network.ShopFeedback(true, "vendor %s for %d gold" % [offerID, int(result.get("cost", 0))], peerID)
+	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
 func RerollDailyShop(peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	if accountID == NetworkCommons.PeerUnknownID:
