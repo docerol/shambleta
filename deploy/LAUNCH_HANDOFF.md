@@ -158,9 +158,8 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   texturas, pack de áudio remoto) exigem QA visual.
 
 ## 5. Git + CI (T4 parcial)
-Há commits locais ainda **não enviados** ao remoto (`SOM-IDLE: …`). Fazer
-`git push` quando o fluxo de branch/revisão estiver definido (nunca foi
-autorizado nesta esteira).
+`b7b9d4e` (gaps T1–T7) enviado ao remoto em 2026-09-18 (`master`, suíte verde).
+Próximos commits seguem o mesmo padrão (`SOM-IDLE: …` + resultado da suíte).
 **CI**: workflows verificados no repo (`godot-ci.yml` com idle-tests,
 backup-restore, benchmarks e export Web com aviso de peso >25 MB;
 `staging.yml` p/ `develop`). Timeout do `idle-tests` ajustado p/ 1200s
