@@ -186,7 +186,7 @@ func DisplayAlteration(target : Entity, emitter : Entity, value : int, alteratio
 			if alteration == ActorCommons.Alteration.HEAL:
 				target.stat.health += value
 				target.stat.RefreshVitalStats()
-			elif alteration == ActorCommons.Alteration.HIT or alteration == ActorCommons.Alteration.CRIT:
+			elif alteration == ActorCommons.Alteration.HIT or alteration == ActorCommons.Alteration.CRIT or alteration == ActorCommons.Alteration.DEADLY:
 				target.stat.health -= value
 				target.stat.RefreshVitalStats()
 

@@ -3,6 +3,8 @@ class_name NetClient
 
 # SOM-IDLE onboarding: último AFK report (lido pela janela AfkReport).
 static var LastAFKReport : Dictionary = {}
+# Hero class do personagem logado (cache do CharacterInfo; server revalida).
+static var MyHeroClass : String = ""
 
 # SOM-IDLE beta GUI: último estado de economia (wallet/baús/odds/preços),
 # último drop de baú e boards da temporada ativa (lidos pelas janelas).
@@ -14,6 +16,9 @@ static var LastLeaderboard : Array = []
 # SOM-IDLE: estado do ladder de bosses + último resultado de desafio (janela Boss).
 static var LastBossState : Dictionary = {}
 static var LastBossResult : Dictionary = {}
+# Hub Atividades: caches das abas (janela Atividades).
+static var LastAchievements : Array = []
+static var LastTorment : Dictionary = {}
 static var LastCheckoutIntent : Dictionary = {}
 static var LastDailyShop : Dictionary = {}
 static var LastReferralState : Dictionary = {}
@@ -314,8 +319,11 @@ func RefreshEquipment(agentRID : int, equipment : Dictionary, _peerID : int):
 	if entity:
 		if entity.inventory:
 			entity.inventory.ImportEquipment(equipment)
-		if entity == Launcher.Player and Launcher.GUI and Launcher.GUI.inventoryWindow:
-			Launcher.GUI.inventoryWindow.RefreshInventory()
+	if entity == Launcher.Player and Launcher.GUI and Launcher.GUI.inventoryWindow:
+		Launcher.GUI.inventoryWindow.RefreshInventory()
+	# Autoupdate das abas do hub após mudanças relevantes no inventário/equip.
+	if entity == Launcher.Player and Launcher.GUI and Launcher.GUI.characterHub and is_instance_valid(Launcher.GUI.characterHub) and Launcher.GUI.characterHub.is_visible():
+		Launcher.GUI.characterHub.RefreshAll()
 
 func DropAdded(dropID : int, itemID : int, customfield : StringName, pos : Vector2, _peerID : int):
 	if Launcher.Map:
@@ -352,6 +360,8 @@ func AFKReport(report : Dictionary, _peerID : int):
 	var gold : int = int(report.get("gold_earned", 0))
 	var hours : float = float(report.get("hours", 0.0))
 	Launcher.GUI.notificationLabel.AddNotification("AFK %.1fh: +%s XP, +%s GP" % [hours, Util.FormatNumber(xp), Util.FormatNumber(gold)])
+	if Launcher.GUI.has_method("RefreshNotices"):
+		Launcher.GUI.RefreshNotices()
 
 func FarmZoneFeedback(zoneID : int, ok : bool, reason : String, _peerID : int):
 	if not Launcher.GUI:
@@ -408,6 +418,8 @@ func EconomyState(state : Dictionary, _peerID : int):
 		Launcher.GUI.shopWindow.ShowState(state)
 	if Launcher.GUI.chestsWindow and Launcher.GUI.chestsWindow.is_visible():
 		Launcher.GUI.chestsWindow.ShowState(state)
+	if Launcher.GUI.has_method("RefreshNotices"):
+		Launcher.GUI.RefreshNotices()
 
 func ChestOpened(result : Dictionary, _peerID : int):
 	LastChestOpened = result
@@ -465,6 +477,8 @@ func Cosmetics(data : Dictionary, _peerID : int):
 		Launcher.GUI.cosmeticsWindow.ShowCosmetics(data)
 	if Launcher.GUI.formationWindow and Launcher.GUI.formationWindow.has_method("ShowSkin"):
 		Launcher.GUI.formationWindow.ShowSkin(data)
+	if Launcher.GUI and Launcher.GUI.characterHub and is_instance_valid(Launcher.GUI.characterHub) and Launcher.GUI.characterHub.is_visible():
+		Launcher.GUI.characterHub.RefreshAll()
 
 func CosmeticFeedback(ok : bool, reason : String, _peerID : int):
 	if Launcher.GUI:
@@ -511,6 +525,8 @@ func BossState(state : Dictionary, _peerID : int):
 	LastBossState = state
 	if Launcher.GUI and Launcher.GUI.bossWindow and Launcher.GUI.bossWindow.is_visible():
 		Launcher.GUI.bossWindow.ShowState(state)
+	if Launcher.GUI and Launcher.GUI.has_method("RefreshNotices"):
+		Launcher.GUI.RefreshNotices()
 
 # SOM-IDLE: rebirth — empurra para o painel de personagem (criado em runtime).
 func RebirthState(state : Dictionary, _peerID : int):
@@ -549,6 +565,17 @@ func BossResult(result : Dictionary, _peerID : int):
 		return
 	w.ShowResult(result)
 	w.ExitSpectate()				# reabre com o desfecho (se estávamos assistindo)
+
+# Hub Atividades: estados das abas (refresh silencioso + janela, se aberta).
+func AchievementsState(state : Array, _peerID : int):
+	LastAchievements = state
+	if Launcher.GUI and Launcher.GUI.has_method("RefreshActivitiesTab"):
+		Launcher.GUI.RefreshActivitiesTab(0)
+
+func TormentState(state : Dictionary, _peerID : int):
+	LastTorment = state
+	if Launcher.GUI and Launcher.GUI.has_method("RefreshActivitiesTab"):
+		Launcher.GUI.RefreshActivitiesTab(1)
 
 func RefreshOnlineList(players : PackedStringArray, _peerID : int):
 	if Launcher.GUI:
@@ -611,8 +638,10 @@ func UpdateSkill(skillID : int, level : int, _peerID : int, notify : bool = true
 		var skill : SkillCell = DB.GetSkill(skillID)
 		if skill:
 			Launcher.Player.progress.AddSkill(skill, level)
-			if Launcher.GUI and Launcher.GUI.skillWindow:
-				Launcher.GUI.skillWindow.RefreshSkills()
+		if Launcher.GUI and Launcher.GUI.skillWindow:
+			Launcher.GUI.skillWindow.RefreshSkills()
+		if Launcher.GUI and Launcher.GUI.characterHub and Launcher.GUI.characterHub.is_visible():
+			Launcher.GUI.characterHub.RefreshAll()
 			if notify:
 				Launcher.Player.sfx.HandleAlteration(ActorCommons.Alteration.SKILL_UP)
 
@@ -621,6 +650,8 @@ func UpdateBestiary(mobID : int, count : int, _peerID : int, _notify : bool = tr
 		Launcher.Player.progress.AddBestiary(mobID, count)
 		if Launcher.GUI and Launcher.GUI.progressWindow:
 			Launcher.GUI.progressWindow.RefreshBestiary(mobID, count)
+		if Launcher.GUI and Launcher.GUI.characterHub and Launcher.GUI.characterHub.is_visible():
+			Launcher.GUI.characterHub.RefreshAll()
 
 func UpdateQuest(questID : int, state : int, _peerID : int, notify : bool = true):
 	if Launcher.Player:
@@ -628,12 +659,16 @@ func UpdateQuest(questID : int, state : int, _peerID : int, notify : bool = true
 		Entities.RefreshQuestHighlights(questID)
 		if Launcher.GUI and Launcher.GUI.progressWindow:
 			Launcher.GUI.progressWindow.RefreshQuest(questID, state)
+		if Launcher.GUI and Launcher.GUI.characterHub and Launcher.GUI.characterHub.is_visible():
+			Launcher.GUI.characterHub.RefreshAll()
 		if notify:
 			Launcher.Player.sfx.HandleAlteration(ActorCommons.Alteration.QUEST_COMPLETE if state == ProgressCommons.CompletedProgress else ActorCommons.Alteration.QUEST_UPDATE)
 
 func RefreshProgress(skills : Dictionary, quests : Dictionary, bestiary : Dictionary, peerID : int):
 	if Launcher.GUI and Launcher.GUI.progressWindow:
 		Launcher.GUI.progressWindow.Clear()
+	if Launcher.GUI and Launcher.GUI.characterHub and Launcher.GUI.characterHub.is_visible():
+		Launcher.GUI.characterHub.RefreshAll()
 	if Launcher.Player:
 		for skill in skills:
 			UpdateSkill(skill, skills[skill], peerID, false)

@@ -74,6 +74,8 @@ func GetTooltipHeader() -> String:
 	var lightColor : String = "#" + UICommons.LightTextColor.to_html(false)
 	if cell is ItemCell and not cell.customfield.is_empty():
 		bbcode += " (%s)" % cell.customfield
+	if cell is ItemCell and not str(cell.classReq).is_empty():
+		bbcode += "\nClass: [color=%s]%s[/color]" % [lightColor, str(ClassBonus.GetClass(str(cell.classReq)).get("label", cell.classReq))]
 	if cell.description:
 		bbcode += "\n[color=%s]%s[/color]" % [lightColor, cell.description]
 	if cell is SkillCell and Launcher.Player and Launcher.Player.progress:

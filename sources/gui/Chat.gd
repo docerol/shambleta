@@ -107,6 +107,23 @@ func OnNewTextSubmitted(newText : String):
 				if newText[0] == "/":
 					var command : String = newText.trim_prefix("/")
 					var commandStripped : String = command.strip_edges().to_lower()
+					# Hub Atividades: comandos de sistema abrem a GUI em vez de
+					# texto (menos fricção); o resto segue para o servidor.
+					var root : String = commandStripped.split(" ", false)[0] if not commandStripped.is_empty() else ""
+					var hubTab : int = -1
+					match root:
+						"ach":
+							hubTab = 0
+						"torment":
+							hubTab = 1
+						"rush":
+							hubTab = 2
+						"corrupt", "cube", "salvage":
+							hubTab = 3
+					if hubTab >= 0 and Launcher.GUI and Launcher.GUI.has_method("OpenActivities"):
+						Launcher.GUI.OpenActivities(hubTab)
+						SetNewLineEnabled(false)
+						return
 					match commandStripped:
 						"clear":
 							ClearCurrentTab()

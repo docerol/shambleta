@@ -31,7 +31,8 @@ func RemoveOnlinePlayer(playerName : String) -> void:
 
 #
 func _ready():
-	FSM.enter_game.connect(Network.RequestOnlineList)
+	if Network and Network.has_method("RequestOnlineList"):
+		FSM.enter_game.connect(Network.RequestOnlineList)
 	FSM.enter_game.connect(RefreshGuild)
 
 # Fase F (guild premium): painel da minha guild + top por pontos + ações de

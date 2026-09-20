@@ -29,11 +29,17 @@ const TickInterval : float			= 1.0	# seconds between DoT ticks
 const TickCount : int				= 4		# ticks per application (duration = TickInterval * TickCount)
 
 # ------------------------------------------------------------------ instant elemental damage
+# Penetration (Modifier.Penetration, equipamento): reduz a resistência efetiva
+# do alvo, com piso em 0 (sem resist negativa na v1). Lida uma vez por golpe.
+static func EffectiveResist(resist : float, penetration : float) -> float:
+	return clampf(resist - maxf(penetration, 0.0), 0.0, 1.0)
+
 static func GetElementalDamage(agent : BaseAgent, target : BaseAgent) -> int:
+	var penetration : float = float(agent.stat.modifiers.Get(CellCommons.Modifier.Penetration, true))
 	var total : int = 0
-	total += _MitigatedElement(agent.stat.current.fireDamage, target.stat.current.fireResist)
-	total += _MitigatedElement(agent.stat.current.iceDamage, target.stat.current.iceResist)
-	total += _MitigatedElement(agent.stat.current.lightningDamage, target.stat.current.lightningResist)
+	total += _MitigatedElement(agent.stat.current.fireDamage, EffectiveResist(target.stat.current.fireResist, penetration))
+	total += _MitigatedElement(agent.stat.current.iceDamage, EffectiveResist(target.stat.current.iceResist, penetration))
+	total += _MitigatedElement(agent.stat.current.lightningDamage, EffectiveResist(target.stat.current.lightningResist, penetration))
 	return total
 
 static func _MitigatedElement(rawDamage : int, resist : float) -> int:

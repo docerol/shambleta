@@ -84,6 +84,9 @@ func RefreshEntityStats():
 	current.lightningResist = Formula.GetLightningResist(self)
 	current.poisonResist	= Formula.GetPoisonResist(self)
 	current.bleedResist		= Formula.GetBleedResist(self)
+	# Hero class (server-side): afinidade multiplicativa por classe. No client
+	# (sem SQL/PlayerAgent de servidor) ResolveClassID devolve '' = sem efeito.
+	ClassBonus.ApplyClassMults(current, ClassBonus.ResolveClassID(actor))
 	isHidden				= Formula.IsHidden(self)
 	isInvisible				= Formula.IsInvisible(self)
 	entity_stats_updated.emit()

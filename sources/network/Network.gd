@@ -525,6 +525,36 @@ func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthority
 func BuyVendorOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyVendorOffer", [offerID], peerID, NetworkCommons.DelayConfig)
 
+# R3 live events: estado de eventos ativos (banner + modificadores).
+func GetActiveEvents(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetActiveEvents", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func ActiveEvents(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("ActiveEvents", [state], peerID)
+
+# R4 async arena: defesa salva + ataque por ticket + board.
+func ArenaSetDefense(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ArenaSetDefense", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func ArenaDefenseResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("ArenaDefenseResult", [result], peerID)
+
+func ArenaAttack(defenderAccountID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ArenaAttack", [defenderAccountID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func ArenaAttackResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("ArenaAttackResult", [result], peerID)
+
+func ArenaBoard(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ArenaBoard", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func ArenaBoardResult(board : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("ArenaBoardResult", [board], peerID)
+
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RerollDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("RerollDailyShop", [], peerID, NetworkCommons.DelayConfig)
@@ -575,6 +605,52 @@ func BuyCosmetic(cosmeticID : String, peerID : int = NetworkCommons.PeerAuthorit
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func CosmeticFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("CosmeticFeedback", [ok, reason], peerID)
+
+# Hub Atividades (GUI sem fricção; mesmos backends dos comandos /ach /torment
+# /rush /corrupt /cube /salvage — resultados saem no chat + pushes de estado).
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetAchievements(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetAchievements", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func AchievementsState(state : Array, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("AchievementsState", [state], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func ClaimAchievement(achievementID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("ClaimAchievement", [achievementID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetTorment(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetTorment", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func TormentState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("TormentState", [state], peerID)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func SetTorment(level : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("SetTorment", [level], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func RunBossRush(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("RunBossRush", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyBossKey(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyBossKey", [], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func CorruptItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("CorruptItem", [itemID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func CubeUpcycle(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("CubeUpcycle", [itemID], peerID, NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func SalvageItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("SalvageItem", [itemID], peerID, NetworkCommons.DelayConfig)
 
 # Fase E (rewarded ads, MONETIZATION §2.5): 4 placements opt-in. O token vem
 # do AdProvider (stub agora, SDK depois); o servidor valida e credita.

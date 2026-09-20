@@ -48,6 +48,19 @@ static func GetDamage(agent : BaseAgent, target : BaseAgent, skill : SkillCell, 
 	if floorDmg > info.value:
 		info.value = floorDmg
 
+	# Tormento (D2): mobs ficam mais duros e batem mais forte contra chars em
+	# tormento. Antes do elemental/crit para escalar junto com o resto do golpe.
+	var tormentOut : int = 0
+	if agent is PlayerAgent:
+		tormentOut = (agent as PlayerAgent).tormentLevel
+	var tormentIn : int = 0
+	if target is PlayerAgent:
+		tormentIn = (target as PlayerAgent).tormentLevel
+	if tormentOut > 0 and not (target is PlayerAgent):
+		info.value = maxi(1, ceili(float(info.value) / Formula.TormentMobHpFactor(tormentOut)))
+	if tormentIn > 0 and not (agent is PlayerAgent):
+		info.value = maxi(1, ceili(float(info.value) * Formula.TormentMobDmgFactor(tormentIn)))
+
 	# SOM-IDLE: elemental combat (ELEMENTAL_COMBAT.md) — flat Fire/Ice/Lightning
 	# bonus, already resist-mitigated, added before crit/dodge so it scales with
 	# both like the rest of the hit (a crit multiplies total damage, elemental
@@ -65,10 +78,21 @@ static func GetDamage(agent : BaseAgent, target : BaseAgent, skill : SkillCell, 
 		info.type = ActorCommons.Alteration.HIT
 		info.value = ceili(info.value * rng)
 
+	# D2-depth: deadly strike — chance só-de-equipamento de dobrar um HIT que
+	# não foi crit (roll independente, como no D2; nunca quadruplica com crit).
+	if info.type == ActorCommons.Alteration.HIT:
+		var deadly : float = clampf(float(agent.stat.modifiers.Get(CellCommons.Modifier.DeadlyChance, true)), 0.0, DeadlyCap)
+		if deadly > 0.0 and randf() < deadly:
+			info.type = ActorCommons.Alteration.DEADLY
+			info.value *= 2
+
 	if info.value <= 0:
 		info.type = ActorCommons.Alteration.DODGE
 
 	return info
+
+# D2-depth: teto do deadly strike (evita 100% determinístico via stacking).
+const DeadlyCap : float = 0.5
 
 # SOM-IDLE: piso de dano do idle — FarmMinDamagePct do HP máximo do alvo, só
 # para jogadores em sessão de farm. Retorna 0 fora desse contexto.

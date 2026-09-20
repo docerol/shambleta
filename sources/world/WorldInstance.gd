@@ -1,8 +1,11 @@
 class_name WorldInstance
 extends SubViewport
 
+# P1 — escalabilidade: limite máximo de players por instância (sub-instância automática).
+const MAX_PLAYERS_PER_INSTANCE : int = 20
+
 #
-var id : int							= 0
+var id : int								= 0
 var npcs : Array[AIAgent]				= []
 var mobs : Array[AIAgent]				= []
 var players : Array[BaseAgent]			= []

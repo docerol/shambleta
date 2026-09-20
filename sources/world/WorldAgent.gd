@@ -3,6 +3,8 @@ class_name WorldAgent
 
 static var agents : Dictionary[int, BaseAgent]		= {}
 static var defaultSpawnLocation : SpawnObject		= SpawnObject.new()
+# P2 — escalabilidade: raio de visibilidade para limitar notificações de rede.
+const VISIBLE_RADIUS_SQUARED : float = 200.0
 
 # From Agent getters
 static func GetInstanceFromAgent(agent : BaseAgent) -> SubViewport:
@@ -59,21 +61,23 @@ static func PopAgent(agent : BaseAgent):
 			if agent is PlayerAgent:
 				inst.players.erase(agent)
 				agent.visibleAgents.clear()
-				if inst.players.is_empty():
-					if inst.id != 0 and inst.map:
-						inst.map.DestroyInstance.call_deferred(inst.id)
-					else:
-						inst.QueryProcessMode()
-				else:
-					var agentRID : int = agent.get_rid().get_id()
-					for neighbour in inst.players:
-						if neighbour and neighbour.visibleAgents.has(agentRID):
-							Network.Bulk("RemoveEntity", [agentRID], neighbour.peerID)
-							neighbour.visibleAgents.erase(agentRID)
 			elif agent is MonsterAgent:
 				inst.mobs.erase(agent)
 			elif agent is NpcAgent:
 				inst.npcs.erase(agent)
+			if inst.players.is_empty():
+				if inst.id != 0 and inst.map:
+					inst.map.DestroyInstance.call_deferred(inst.id)
+				else:
+					inst.QueryProcessMode()
+			else:
+				var agentRID : int = agent.get_rid().get_id()
+				for neighbour in inst.players:
+					if neighbour and neighbour.visibleAgents.has(agentRID):
+						# P2 — limite de raio: só notifica vizinhos dentro do raio de visibilidade.
+						if agent.position.distance_squared_to(neighbour.position) < WorldAgent.VISIBLE_RADIUS_SQUARED:
+							Network.Bulk("RemoveEntity", [agentRID], neighbour.peerID)
+						neighbour.visibleAgents.erase(agentRID)
 			inst.remove_child(agent)
 
 static func PushAgent(agent : BaseAgent, inst : WorldInstance):
@@ -122,6 +126,21 @@ static func CreateAgent(spawn : SpawnObject, instanceID : int = 0, nickname : St
 	var inst : WorldInstance = spawn.map.instances.get(instanceID, null)
 	if not inst:
 		return null
+
+	# P1 — escalabilidade: se a instância atingiu o cap de players, cria sub-instância automaticamente.
+	if inst and inst.players.size() >= WorldInstance.MAX_PLAYERS_PER_INSTANCE:
+		var subInstanceID : int = instanceID + 1
+		# Se já existe sub-instância para este batch, tenta usá-la; senão cria nova.
+		var subInst : WorldInstance = spawn.map.instances.get(subInstanceID, null)
+		if not subInst:
+			subInst = WorldInstance.Create(spawn.map, subInstanceID)
+			if subInst:
+				spawn.map.instances[subInstanceID] = subInst
+		if subInst:
+			inst = subInst
+			instanceID = subInstanceID
+		else:
+			return null
 
 	var position : Vector2i = WorldNavigation.GetSpawnPosition(inst, spawn)
 	if position == Vector2i.ZERO:

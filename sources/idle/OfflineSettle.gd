@@ -184,6 +184,8 @@ static func GetModsForAccount(accountID : int, now : int = 0) -> float:
 		var eco : EconomyService = _economy()
 		if eco:
 			mods *= eco.GuildBuffForAccount(accountID)
+		if eco:
+			mods *= eco.GetLiveEventMods(accountID)
 	return mods
 
 static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int = 1):
@@ -202,6 +204,8 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	var offFactor : float = RebirthData.OfflineFactorWithBonus(OfflineFactor, int(rebInfo.get("attune_offline", 0)))
 
 	report.mods = GetModsForAccount(report.accountID, _now())
+	# Tormento (D2): recompensa offline escala com a dificuldade do char.
+	report.mods *= Formula.TormentRewardMult(sql.GetTormentLevel(report.charID))
 	# Fase E: ad armado dobra XP/ouro/drops da liquidação (4× com VIP). Baús,
 	# chaves e favores intactos. Essência de overflow acompanha o XP dobrado
 	# (mesmo eixo tempo-por-tempo do VIP 1.2× — §2.5, não é faucet de essência).

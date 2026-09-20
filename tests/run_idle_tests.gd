@@ -88,6 +88,7 @@ func _run_tests():
 
 		# SOM-IDLE: F3 suites (tiers, spawn table, VIP, leaderboard, slots)
 		suites.SuiteItemTiers()
+		suites.SuiteItemSets()
 		suites.SuiteFarmSpawnTable()
 		suites.SuiteBossService()
 		suites.SuiteElementalCombat()
@@ -152,6 +153,14 @@ func _run_tests():
 			suites.SuiteSeasonLock(sql)
 			suites.SuiteReferral(sql)
 			suites.SuiteVendor(sql)
+			suites.SuiteLiveEvents(sql)
+			suites.SuiteArena(sql)
+			suites.SuiteItemSinks(sql)
+			suites.SuiteClasses(sql)
+			suites.SuiteAutoIdle()
+			suites.SuiteMobVariants(sql)
+			suites.SuiteAchievements(sql)
+			await suites.SuiteTormentRush(sql, economy)
 			# SOM-IDLE: rebirth (híbrido B+C, XP_PROGRESSION §4.2) — awaited: a
 			# metade B exige agente vivo no cap (o motor de renascimento é async).
 			var rebChar : int = suites.CreateFixture(sql, "idle_rebirth_account", "IdleRebirth")

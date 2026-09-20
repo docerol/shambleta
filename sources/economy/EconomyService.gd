@@ -13,7 +13,19 @@ const LedgerKindGems : String = "gems"
 const LedgerKindBossKey : String = "boss_key"
 const LedgerKindEssence : String = "essence"
 
-var settleMutex : Mutex						= Mutex.new()
+# P4 — escalabilidade: sharding do mutex por conta para reduzir serialização.
+# Antes: 1 mutex global (settleMutex) serializa todas as transações.
+# Agora: dicionário de mutexes derivado por hash(accountID), com fallback para mutex global.
+const SHARD_COUNT : int = 8
+var settleMutex : Mutex = Mutex.new()
+var settleMutexes : Dictionary[int, Mutex] = {}
+
+# P4 — escalabilidade: função auxiliar para obter o mutex de sharding por conta.
+func _get_settle_mutex(accountID : int) -> Mutex:
+	var shardID : int = absi(hash(accountID)) % SHARD_COUNT
+	if not settleMutexes.has(shardID):
+		settleMutexes[shardID] = Mutex.new()
+	return settleMutexes[shardID]
 
 # SOM-IDLE C1: companion grant poll (main thread, vazio = no-op barato).
 const GrantPollSec : float = 30.0
@@ -62,12 +74,22 @@ func LedgerAppend(charID : int, accountID : int, kind : String, amount : int, ba
 # ------------------------------------------------------------------ item ops (account-bound stash paths, used by F3/F4)
 
 func GrantItem(accountID : int, itemHash : int, count : int, reason : String = "") -> bool:
-	settleMutex.lock()
+	# Valida se o item existe no inventário antes de registrar no ledger.
+	# Se o hash for 0 (inválido) ou o item não existir e não for um caso de
+	# referência, rejeita para manter a integridade (invariante 1 de auditabilidade).
 	var dbNode : SQLite = Launcher.SQL.db
+	var itemExists : bool = false
+	if itemHash > 0:
+		var itemRows : Array = dbNode.select_rows("item", "item_id = %d" % itemHash, ["item_id"])
+		itemExists = not itemRows.is_empty()
+	if not itemExists and itemHash > 0:
+		return false
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
 	var ok : bool = dbNode.query_with_bindings(
 		"INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, ?, ?, 0, ?, ?);",
 		[accountID, LedgerKindItem, count, reason, SQLCommons.Timestamp()])
-	settleMutex.unlock()
+	mutex.unlock()
 	return ok
 
 func RemoveItem(uid : int) -> bool:
@@ -93,7 +115,8 @@ func GetGems(accountID : int) -> int:
 func AddGems(accountID : int, amount : int, reason : String) -> bool:
 	if amount == 0:
 		return false
-	settleMutex.lock()
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
 	var ok : bool = false
 	if Launcher.SQL.Transaction(func() -> bool:
 		var current : int = Launcher.SQL.GetGemsRaw(accountID)
@@ -104,7 +127,7 @@ func AddGems(accountID : int, amount : int, reason : String) -> bool:
 			return false
 		return _LedgerAppendLocked(accountID, 0, LedgerKindGems, amount, newBalance, reason)):
 		ok = true
-	settleMutex.unlock()
+	mutex.unlock()
 	return ok
 
 # ------------------------------------------------------------------ boss keys (character column + ledger mirror)
@@ -116,7 +139,9 @@ func GrantBossKey(charID : int, amount : int, reason : String) -> int:
 	if amount == 0:
 		return Launcher.SQL.GetCharacterBossKeys(charID)
 	var applied : bool = false
-	settleMutex.lock()
+	var accountID : int = _AccountIDForCharacterRaw(charID)
+	var mutex : Mutex = _get_settle_mutex(accountID) if accountID > 0 else settleMutex
+	mutex.lock()
 	# GDScript closures capture by VALUE: we cannot read `result` back out of the
 	# transaction closure, so we re-query the (now committed) column after commit.
 	if Launcher.SQL.Transaction(func() -> bool:
@@ -126,7 +151,7 @@ func GrantBossKey(charID : int, amount : int, reason : String) -> int:
 		var acct : int = _AccountIDForCharacterRaw(charID)
 		return _LedgerAppendLocked(acct, charID, LedgerKindBossKey, amount, next, reason)):
 		applied = true
-	settleMutex.unlock()
+	mutex.unlock()
 	return Launcher.SQL.GetCharacterBossKeys(charID) if applied else -1
 
 # ------------------------------------------------------------------ rebirth (B+C)
@@ -353,12 +378,14 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 
 	# SOM-IDLE rebirth: o faucet do boss respeita os mesmos favores da zona.
 	var reb : Dictionary = GetRebirthMults(charID)
+	# Tormento (D2): recompensa de boss escala com a dificuldade do char.
+	var tormentMult : float = Formula.TormentRewardMult(player.tormentLevel if player is PlayerAgent else 0)
 	var baseXp : int = BossService.VictoryXp(zoneXp) if win else BossService.ConsolationXp(zoneXp)
-	var xpGrant : int = maxi(1, roundi(float(baseXp) * nb * vipMult * float(reb.get("xp", 1.0))))
+	var xpGrant : int = maxi(1, roundi(float(baseXp) * nb * vipMult * float(reb.get("xp", 1.0)) * tormentMult))
 	player.stat.AddExperience(xpGrant, false)
 	var goldGrant : int = 0
 	if win:
-		goldGrant = roundi(float(BossService.VictoryGold(zoneXp)) * nb * vipMult * float(reb.get("gold", 1.0)))
+		goldGrant = roundi(float(BossService.VictoryGold(zoneXp)) * nb * vipMult * float(reb.get("gold", 1.0)) * tormentMult)
 		player.stat.AddGP(goldGrant, false)
 
 	var chestsGranted : int = 0
@@ -366,7 +393,17 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 		for i in BossService.BossChestReward:
 			if Launcher.SQL.AddChestInstance(charID, FarmZoneData.DefaultDropItemHash, "boss"):
 				chestsGranted += 1
+		var prevBeaten : int = Launcher.SQL.GetCharacterBossesBeaten(charID)
 		Launcher.SQL.SetCharacterBossesBeaten(charID, index + 1)
+		# Tormento: zerar a escada (4 bosses) libera T1; vencer no teto atual
+		# sobe o teto (+1, cap). Fronteira nova tem 30% de dropar +1 key.
+		var tmax : int = Launcher.SQL.GetTormentMax(charID)
+		if maxi(prevBeaten, index + 1) >= BossService.GetBossCount() and tmax < 1:
+			Launcher.SQL.SetTormentMax(charID, 1)
+		elif tmax >= 1 and tmax < Formula.TormentMaxCap and player is PlayerAgent and (player as PlayerAgent).tormentLevel >= tmax:
+			Launcher.SQL.SetTormentMax(charID, tmax + 1)
+		if index + 1 > prevBeaten and randf() < FRONTIER_KEY_CHANCE:
+			GrantBossKey(charID, 1, "frontier_bonus")
 		# Fase C: marco do passe (50 PT, auto-crédito, só com temporada ativa).
 		_PassMilestoneCredit(accountID, index)
 		# Fase F: +5 pontos de guild por vitória.
@@ -1059,6 +1096,84 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	settleMutex.unlock()
 	return result
 
+# ------------------------------------------------------------------ R3: live events (COMMUNITY_ROADMAP)
+# Eventos temporários rotativos: framework ativado por timestamp no job diário.
+# 2 kinds iniciais: "weekend_drops" (multiplicador no settle/sim) e "smith_week"
+# (taxa de crafting -50%). O modificador soma no mesmo eixo dos bônus VIP/ads.
+const LIVE_EVENT_DEFAULT_MOD : float = 1.0
+
+func TickLiveEvents() -> Dictionary:
+	var now : int = SQLCommons.Timestamp()
+	var activated : int = 0
+	var closed : int = 0
+	for row in Launcher.SQL.QueryBindings("SELECT id, kind, starts_at, ends_at, params_json FROM live_event WHERE starts_at <= ? AND ends_at > ? AND id NOT IN (SELECT event_id FROM live_event_tick WHERE ticked_at >= ?);", [now, now, now]):
+		var eventID : int = int(row["id"])
+		var kind : String = str(row["kind"])
+		var raw : String = str(row["params_json"])
+		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
+		if not (params is Dictionary):
+			params = {}
+		var startsAt : int = int(row["starts_at"])
+		var endsAt : int = int(row["ends_at"])
+		if now >= startsAt and now < endsAt:
+			Launcher.SQL.ExecuteBindings("INSERT OR IGNORE INTO live_event_tick (event_id, ticked_at) VALUES (?, ?);", [eventID, now])
+			activated += 1
+			_ApplyLiveEventActivation(kind, params, true)
+		else:
+			closed += 1
+			_ApplyLiveEventActivation(kind, params, false)
+	return {"activated": activated, "closed": closed}
+
+func _ApplyLiveEventActivation(kind : String, params : Dictionary, active : bool) -> void:
+	match kind:
+		"weekend_drops", "smith_week":
+			_ApplyLiveEventMods(kind, params, active)
+		_:
+			pass
+
+func _ApplyLiveEventMods(kind : String, params : Dictionary, active : bool) -> void:
+	pass
+
+func GetActiveEventsState(accountID : int) -> Dictionary:
+	var now : int = SQLCommons.Timestamp()
+	var active : Array = []
+	for row in Launcher.SQL.QueryBindings("SELECT id, kind, starts_at, ends_at, params_json FROM live_event WHERE starts_at <= ? AND ends_at > ? AND id IN (SELECT event_id FROM live_event_tick WHERE ticked_at >= ?);", [now, now, now]):
+		var raw : String = str(row["params_json"])
+		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
+		if not (params is Dictionary):
+			params = {}
+		active.append({
+			"id": int(row["id"]),
+			"kind": str(row["kind"]),
+			"ends_at": int(row["ends_at"]),
+			"params": params,
+		})
+	return {"ok": true, "now": now, "events": active}
+
+func GetLiveEventMods(accountID : int) -> float:
+	var now : int = SQLCommons.Timestamp()
+	var mods : float = LIVE_EVENT_DEFAULT_MOD
+	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l INNER JOIN live_event_tick t ON t.event_id = l.id WHERE l.starts_at <= ? AND l.ends_at > ? AND t.ticked_at >= ?;", [now, now, now]):
+		var raw : String = str(row["params_json"])
+		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
+		if not (params is Dictionary):
+			continue
+		var dropsMod : float = float(params.get("drops_mod", 1.0))
+		if dropsMod > 1.0:
+			mods *= dropsMod
+	return mods
+
+func GetLiveEventCraftingFeeMod() -> float:
+	var now : int = SQLCommons.Timestamp()
+	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l INNER JOIN live_event_tick t ON t.event_id = l.id WHERE l.kind = 'smith_week' AND l.starts_at <= ? AND l.ends_at > ? AND t.ticked_at >= ?;", [now, now, now]):
+		var raw : String = str(row["params_json"])
+		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
+		if not (params is Dictionary):
+			continue
+		var feeMod : float = float(params.get("fee_mod", 1.0))
+		return feeMod
+	return 1.0
+
 # Boards da temporada ativa em um shot, já com nomes resolvidos (GUI de
 # leaderboard). {} quando não há temporada ativa.
 func GetSeasonBoardsState(limit : int = 10) -> Dictionary:
@@ -1074,6 +1189,420 @@ func GetSeasonBoardsState(limit : int = 10) -> Dictionary:
 		"boss_kills" = _NamedSeasonBoard(seasonID, "boss_kills", limit),
 		"guild_points" = _NamedSeasonBoard(seasonID, "guild_points", limit),
 	}
+
+# ------------------------------------------------------------------ R4: async arena (COMMUNITY_ROADMAP)
+# Arena assíncrona: defesa = snapshot de poder do char; ataque = ticket diário.
+# Ranking por ELO simplificado com reset semanal; recompensa em cosméticos/títulos.
+# Servidor simula os dois lados (sem RNG do cliente); derrota não tira nada do
+# defensor (atacar é sempre seguro psicologicamente).
+const ARENA_TICKETS_PER_DAY : int = 3
+const ARENA_TICKETS_VIP_BONUS : int = 1
+const ARENA_BASE_ELO : int = 1000
+const ARENA_ELO_K : int = 32
+
+func TickArenaTickets() -> Dictionary:
+	var now : int = SQLCommons.Timestamp()
+	var dayStart : int = now - (now % 86400)
+	var refilled : int = 0
+	for row in Launcher.SQL.QueryBindings("SELECT account_id, ticket_reset_at FROM arena_entry;", []):
+		var accountID : int = int(row["account_id"])
+		var resetAt : int = int(row["ticket_reset_at"])
+		if resetAt < dayStart:
+			var tickets : int = ARENA_TICKETS_PER_DAY
+			var vipUntil : int = Launcher.SQL.GetVIPUntil(accountID)
+			if vipUntil > now:
+				tickets += ARENA_TICKETS_VIP_BONUS
+			if Launcher.SQL.ExecuteBindings("UPDATE arena_entry SET tickets = ?, ticket_reset_at = ? WHERE account_id = ?;", [tickets, dayStart, accountID]):
+				refilled += 1
+	return {"refilled": refilled}
+
+func ArenaSetDefense(charID : int) -> Dictionary:
+	var accountID : int = _AccountIDForCharacterRaw(charID)
+	if accountID == 0:
+		return {"ok": false, "reason": "no_character"}
+	var powerScore : int = 0
+	var powerRow : Array = Launcher.SQL.QueryBindings("SELECT power_score FROM character WHERE char_id = ?;", [charID])
+	if not powerRow.is_empty():
+		powerScore = int(powerRow[0].get("power_score", 0))
+	var snapshot : String = JSON.stringify({"char_id": charID, "power": powerScore, "ts": SQLCommons.Timestamp()})
+	var now : int = SQLCommons.Timestamp()
+	var existing : Array = Launcher.SQL.QueryBindings("SELECT account_id FROM arena_entry WHERE account_id = ?;", [accountID])
+	if existing.is_empty():
+		var tickets : int = ARENA_TICKETS_PER_DAY
+		var vipUntil : int = Launcher.SQL.GetVIPUntil(accountID)
+		if vipUntil > now:
+			tickets += ARENA_TICKETS_VIP_BONUS
+		Launcher.SQL.ExecuteBindings("INSERT INTO arena_entry (account_id, tickets, ticket_reset_at, defense_char_id, defense_snapshot, updated_at) VALUES (?, ?, ?, ?, ?, ?);", [accountID, tickets, now, charID, snapshot, now])
+	else:
+		Launcher.SQL.ExecuteBindings("UPDATE arena_entry SET defense_char_id = ?, defense_snapshot = ?, updated_at = ? WHERE account_id = ?;", [charID, snapshot, now, accountID])
+	_EnsureArenaLadder(accountID)
+	return {"ok": true, "power": powerScore}
+
+func _EnsureArenaLadder(accountID : int) -> void:
+	var existing : Array = Launcher.SQL.QueryBindings("SELECT account_id FROM arena_ladder WHERE account_id = ?;", [accountID])
+	if existing.is_empty():
+		Launcher.SQL.ExecuteBindings("INSERT INTO arena_ladder (account_id, elo, wins, losses, updated_at) VALUES (?, ?, 0, 0, ?);", [accountID, ARENA_BASE_ELO, SQLCommons.Timestamp()])
+
+func ArenaAttack(attackerCharID : int, defenderAccountID : int) -> Dictionary:
+	var attackerAcct : int = _AccountIDForCharacterRaw(attackerCharID)
+	if attackerAcct == 0:
+		return {"ok": false, "reason": "no_attacker"}
+	if attackerAcct == defenderAccountID:
+		return {"ok": false, "reason": "self_attack"}
+	var now : int = SQLCommons.Timestamp()
+	var attackerRow : Array = Launcher.SQL.QueryBindings("SELECT tickets FROM arena_entry WHERE account_id = ?;", [attackerAcct])
+	if attackerRow.is_empty() or int(attackerRow[0].get("tickets", 0)) <= 0:
+		return {"ok": false, "reason": "no_tickets"}
+	var defenderRow : Array = Launcher.SQL.QueryBindings("SELECT defense_char_id, defense_snapshot FROM arena_entry WHERE account_id = ? AND defense_char_id > 0;", [defenderAccountID])
+	if defenderRow.is_empty():
+		return {"ok": false, "reason": "no_defense"}
+	var attackerPower : int = 0
+	var attackerPowerRow : Array = Launcher.SQL.QueryBindings("SELECT power_score FROM character WHERE char_id = ?;", [attackerCharID])
+	if not attackerPowerRow.is_empty():
+		attackerPower = int(attackerPowerRow[0].get("power_score", 0))
+	var defenderCharID : int = int(defenderRow[0].get("defense_char_id", 0))
+	var defenderPower : int = 0
+	var defenderPowerRow : Array = Launcher.SQL.QueryBindings("SELECT power_score FROM character WHERE char_id = ?;", [defenderCharID])
+	if not defenderPowerRow.is_empty():
+		defenderPower = int(defenderPowerRow[0].get("power_score", 0))
+	var win : bool = attackerPower >= defenderPower
+	var attackerElo : int = ARENA_BASE_ELO
+	var attackerLadder : Array = Launcher.SQL.QueryBindings("SELECT elo FROM arena_ladder WHERE account_id = ?;", [attackerAcct])
+	if not attackerLadder.is_empty():
+		attackerElo = int(attackerLadder[0].get("elo", ARENA_BASE_ELO))
+	var newAttackerElo : int = maxi(100, attackerElo + (ARENA_ELO_K if win else -ARENA_ELO_K))
+	_EnsureArenaLadder(attackerAcct)
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var curTickets : Array = sql.db.select_rows("arena_entry", "account_id = %d" % attackerAcct, ["tickets"])
+		if curTickets.is_empty() or int(curTickets[0].get("tickets", 0)) <= 0:
+			return false
+		if not sql.UpdateRowsRaw("arena_entry", "account_id = %d" % attackerAcct, {"tickets": int(curTickets[0].get("tickets", 0)) - 1}):
+			return false
+		var ladder : Array = sql.db.select_rows("arena_ladder", "account_id = %d" % attackerAcct, ["wins", "losses"])
+		var w : int = int(ladder[0].get("wins", 0)) if not ladder.is_empty() else 0
+		var l : int = int(ladder[0].get("losses", 0)) if not ladder.is_empty() else 0
+		if not sql.UpdateRowsRaw("arena_ladder", "account_id = %d" % attackerAcct, {"elo": newAttackerElo, "wins": w + (1 if win else 0), "losses": l + (0 if win else 1), "updated_at": now}):
+			return false
+		result["ok"] = true
+		return true):
+		pass
+	settleMutex.unlock()
+	if not bool(result.get("ok", false)):
+		return {"ok": false, "reason": "rejected"}
+	return {"ok": true, "win": win, "attacker_power": attackerPower, "defender_power": defenderPower, "new_attacker_elo": newAttackerElo}
+
+func ArenaBoard(accountID : int, limit : int = 10) -> Dictionary:
+	var myRow : Array = Launcher.SQL.QueryBindings("SELECT elo, wins, losses FROM arena_ladder WHERE account_id = ?;", [accountID])
+	var my : Dictionary = {}
+	if not myRow.is_empty():
+		my = {"elo": int(myRow[0].get("elo", ARENA_BASE_ELO)), "wins": int(myRow[0].get("wins", 0)), "losses": int(myRow[0].get("losses", 0))}
+	var top : Array = Launcher.SQL.QueryBindings("SELECT a.account_id, a.elo, a.wins, a.losses, acc.username FROM arena_ladder a INNER JOIN account acc ON acc.account_id = a.account_id ORDER BY a.elo DESC, a.account_id ASC LIMIT ?;", [limit])
+	var board : Array = []
+	for row in top:
+		board.append({"account_id": int(row["account_id"]), "username": str(row.get("username", "?")), "elo": int(row["elo"]), "wins": int(row["wins"]), "losses": int(row["losses"])})
+	return {"ok": true, "my": my, "top": board}
+
+# ------------------------------------------------------------------ item sinks (sem wipe)
+# Três sumidouros voluntários (a la comunidade ARPG): altar de corrupção
+# (risco estilo vaal), cubagem 3:1 e desmanche. Tudo server-side e atômico
+# (settleMutex + Transaction + ops raw, com espelho no ledger). Sem wipe de
+# temporada: itens só saem do jogo pela decisão do próprio jogador.
+const CORRUPT_FEE_BASE : int = 500		# gold × tier², queimado mesmo se brickar
+const CORRUPT_BRICK_W : float = 0.25
+const CORRUPT_SEALED_W : float = 0.30
+const CORRUPT_BLESSED_W : float = 0.30
+# exalted = restante (0.15): item vira equipamento aleatório de tier+1
+const CUBE_COUNT : int = 3
+const SALVAGE_GOLD_PER_TIER2 : int = 25	# gold = tier² × 25
+const SALVAGE_ESSENCE_TIER_MIN : int = 4
+const SALVAGE_ESSENCE_PER_TIER : int = 2	# essência (loop do rebirth)
+
+# Queima gold dentro de transação aberta (raw; não chama AddGems — mutex).
+func _BurnGoldRaw(sql : SQLService, charID : int, accountID : int, fee : int, reason : String) -> bool:
+	var gp : int = _CharGoldRaw(charID)
+	if gp < fee:
+		return false
+	if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - fee}):
+		return false
+	return _LedgerAppendLocked(accountID, charID, LedgerKindGold, -fee, gp - fee, reason)
+
+# Recompensa de upgrade (corrupção exaltada / cubo): equipamento aleatório de
+# tier+1 no pool da zona do char; fallback mesmo tier (outra peça); 0 se vazio.
+func _RollUpgradeReward(charID : int, itemID : int, tier : int) -> int:
+	var char : Dictionary = Launcher.SQL.GetCharacter(charID)
+	var zoneID : int = int(char.get("farm_zone", 0) if char.get("farm_zone", 0) != null else 0)
+	if zoneID <= 0:
+		zoneID = 1
+	var pool : Array = FarmZoneData.GetDropPool(zoneID)
+	var target : int = mini(tier + 1, 8)
+	var cands : Array = []
+	for h in pool:
+		var c : ItemCell = DB.GetItem(int(h))
+		if c != null and c.slot != ActorCommons.Slot.NONE and c.tier == target and int(h) != itemID:
+			cands.append(int(h))
+	if cands.is_empty():
+		for h in pool:
+			var c2 : ItemCell = DB.GetItem(int(h))
+			if c2 != null and c2.slot != ActorCommons.Slot.NONE and int(h) != itemID:
+				cands.append(int(h))
+	if cands.is_empty():
+		return 0
+	return int(cands[randi() % cands.size()])
+
+# Altar de corrupção: consome 1 unidade + fee em gold. Selado (bound) não pode
+# ser corrompido de novo — corrupção é terminal, como no PoE. forceOutcome =
+# "brick"|"sealed"|"blessed"|"exalted" (testes); "" rola de verdade.
+func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	var cell : ItemCell = DB.GetItem(itemID)
+	if cell == null or cell.slot == ActorCommons.Slot.NONE:
+		result["reason"] = "not_equipment"
+		return result
+	var accountID : int = _AccountIDForCharacterRaw(charID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		result["reason"] = "no_character"
+		return result
+	var fee : int = CORRUPT_FEE_BASE * maxi(cell.tier, 1) * maxi(cell.tier, 1)
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		if sql.GetLotBalanceRaw(charID, itemID, false) < 1:
+			result["reason"] = "no_stock"
+			return false
+		var outcome : String = forceOutcome
+		if outcome != "brick" and outcome != "sealed" and outcome != "blessed" and outcome != "exalted":
+			var r : float = randf()
+			if r < CORRUPT_BRICK_W:
+				outcome = "brick"
+			elif r < CORRUPT_BRICK_W + CORRUPT_SEALED_W:
+				outcome = "sealed"
+			elif r < CORRUPT_BRICK_W + CORRUPT_SEALED_W + CORRUPT_BLESSED_W:
+				outcome = "blessed"
+			else:
+				outcome = "exalted"
+		var consumed : Array = sql.ConsumeItemLotsRaw(charID, itemID, 1, false)
+		if consumed.is_empty():
+			result["reason"] = "consume_failed"
+			return false
+		if not _BurnGoldRaw(sql, charID, accountID, fee, "corrupt_fee:%d" % itemID):
+			result["reason"] = "insufficient_gold"
+			return false
+		match outcome:
+			"brick":
+				if not _LedgerAppendLocked(accountID, charID, LedgerKindItem, -1, 0, "corrupt_brick:%d" % itemID):
+					return false
+			"sealed":
+				if _GrantStackRaw(charID, accountID, itemID, 1, "corrupt_sealed:%d" % itemID, "corrupt_sealed", 1, int(consumed[0])) == 0:
+					return false
+			"blessed":
+				var gain : int = maxi(cell.tier, 1) * 5
+				var next : int = sql.AddCharacterEssence(charID, gain)
+				if next < 0:
+					return false
+				if not _LedgerAppendLocked(accountID, charID, LedgerKindEssence, gain, next, "corrupt_blessed:%d" % itemID):
+					return false
+				result["essence"] = gain
+			_:
+				var prize : int = _RollUpgradeReward(charID, itemID, cell.tier)
+				if prize <= 0:
+					result["reason"] = "no_upgrade_pool"
+					return false
+				if _GrantStackRaw(charID, accountID, prize, 1, "corrupt_exalted:%d->%d" % [itemID, prize], "corrupt_exalted", 0, int(consumed[0])) == 0:
+					return false
+				result["prize"] = prize
+				var prizeCell : ItemCell = DB.GetItem(prize)
+				result["prize_name"] = prizeCell.name if prizeCell else str(prize)
+		result["ok"] = true
+		result["reason"] = "ok"
+		result["outcome"] = outcome
+		return true):
+		pass
+	mutex.unlock()
+	return result
+
+# Cubagem 3:1: 3 unidades NÃO-bound do mesmo item viram 1 equipamento aleatório
+# de tier+1 (linhagem via parent_uid). forceResultID = 0 rola de verdade.
+func CubeUpcycle(charID : int, itemID : int, forceResultID : int = 0) -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	var cell : ItemCell = DB.GetItem(itemID)
+	if cell == null or cell.slot == ActorCommons.Slot.NONE:
+		result["reason"] = "not_equipment"
+		return result
+	var accountID : int = _AccountIDForCharacterRaw(charID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		result["reason"] = "no_character"
+		return result
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		if sql.GetLotBalanceRaw(charID, itemID, false) < CUBE_COUNT:
+			result["reason"] = "need_three"
+			return false
+		var consumed : Array = sql.ConsumeItemLotsRaw(charID, itemID, CUBE_COUNT, false)
+		if consumed.is_empty():
+			result["reason"] = "consume_failed"
+			return false
+		var prize : int = forceResultID
+		if prize <= 0 or DB.GetItem(prize) == null:
+			prize = _RollUpgradeReward(charID, itemID, cell.tier)
+		if prize <= 0:
+			result["reason"] = "no_upgrade_pool"
+			return false
+		if _GrantStackRaw(charID, accountID, prize, 1, "cube_upcycle:%d->%d" % [itemID, prize], "cube_upcycle", 0, int(consumed[0])) == 0:
+			return false
+		result["ok"] = true
+		result["reason"] = "ok"
+		result["prize"] = prize
+		var prizeCell : ItemCell = DB.GetItem(prize)
+		result["prize_name"] = prizeCell.name if prizeCell else str(prize)
+		return true):
+		pass
+	mutex.unlock()
+	return result
+
+# Desmanche: destrói 1 unidade (bound vale) e devolve gold por tier; T4+
+# também rende essência (amarra no loop do rebirth).
+func SalvageItem(charID : int, itemID : int) -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	var cell : ItemCell = DB.GetItem(itemID)
+	if cell == null or cell.slot == ActorCommons.Slot.NONE:
+		result["reason"] = "not_equipment"
+		return result
+	var accountID : int = _AccountIDForCharacterRaw(charID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		result["reason"] = "no_character"
+		return result
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		if sql.GetLotBalanceRaw(charID, itemID, true) < 1:
+			result["reason"] = "no_stock"
+			return false
+		var consumed : Array = sql.ConsumeItemLotsRaw(charID, itemID, 1, true)
+		if consumed.is_empty():
+			result["reason"] = "consume_failed"
+			return false
+		var tier : int = maxi(cell.tier, 1)
+		var gain : int = SALVAGE_GOLD_PER_TIER2 * tier * tier
+		var gp : int = _CharGoldRaw(charID)
+		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp + gain}):
+			return false
+		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, gain, gp + gain, "salvage:%d" % itemID):
+			return false
+		result["gold"] = gain
+		if tier >= SALVAGE_ESSENCE_TIER_MIN:
+			var egain : int = SALVAGE_ESSENCE_PER_TIER * tier
+			var next : int = sql.AddCharacterEssence(charID, egain)
+			if next < 0:
+				return false
+			if not _LedgerAppendLocked(accountID, charID, LedgerKindEssence, egain, next, "salvage_essence:%d" % itemID):
+				return false
+			result["essence"] = egain
+		if not _LedgerAppendLocked(accountID, charID, LedgerKindItem, -1, 0, "salvage_burn:%d" % itemID):
+			return false
+		result["ok"] = true
+		result["reason"] = "ok"
+		return true):
+		pass
+	mutex.unlock()
+	return result
+
+# ------------------------------------------------------------------ tormento + boss rush (D2)
+# Tormento: opt-in 0..max (desbloqueio por progressão na escada). Boss rush:
+# 1 key = até 4 duelos simulados em sequência, níveis escalados (+2/luta +
+# tormento), para na primeira derrota; recompensas somadas via SettleBossResult
+# (tormento, unlock e bônus de fronteira valem por vitória, igual ao ao vivo).
+const FRONTIER_KEY_CHANCE : float = 0.30
+const BOSS_KEY_GOLD_PRICE : int = 10000
+const BOSS_RUSH_ESCALATION : int = 2
+
+func SetTorment(charID : int, player, level : int) -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	var tmax : int = Launcher.SQL.GetTormentMax(charID)
+	if level < 0 or level > mini(tmax, Formula.TormentMaxCap):
+		result["reason"] = "locked"
+		return result
+	if not Launcher.SQL.SetTormentLevel(charID, level):
+		result["reason"] = "db_error"
+		return result
+	if player is PlayerAgent:
+		(player as PlayerAgent).tormentLevel = level
+	result["ok"] = true
+	result["reason"] = "ok"
+	result["level"] = level
+	return result
+
+func BuyBossKey(charID : int) -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	var accountID : int = _AccountIDForCharacterRaw(charID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		result["reason"] = "no_character"
+		return result
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var gp : int = _CharGoldRaw(charID)
+		if gp < BOSS_KEY_GOLD_PRICE:
+			result["reason"] = "insufficient_gold"
+			return false
+		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - BOSS_KEY_GOLD_PRICE}):
+			return false
+		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -BOSS_KEY_GOLD_PRICE, gp - BOSS_KEY_GOLD_PRICE, "boss_key_buy"):
+			return false
+		var next : int = sql.AddCharacterBossKeys(charID, 1)
+		if next < 0:
+			return false
+		if not _LedgerAppendLocked(accountID, charID, LedgerKindBossKey, 1, next, "boss_key_buy"):
+			return false
+		result["ok"] = true
+		result["reason"] = "ok"
+		result["keys"] = next
+		return true):
+		pass
+	mutex.unlock()
+	return result
+
+func RunBossRush(charID : int, player) -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected", "wins": 0, "xp": 0, "gold": 0, "chests": 0}
+	if player == null or not is_instance_valid(player) or player.stat == null:
+		result["reason"] = "not_online"
+		return result
+	if not SpendBossKey(charID, 1, "boss_rush"):
+		result["reason"] = "no_key"
+		return result
+	var torment : int = player.tormentLevel if player is PlayerAgent else 0
+	var snapshot : Dictionary = BossService.PlayerFightSnapshot(player)
+	var wins : int = 0
+	var totalXp : int = 0
+	var totalGold : int = 0
+	var totalChests : int = 0
+	for i in BossService.GetBossCount():
+		var level : int = BossService.GetBossLevel(player.stat.level, i) + i * BOSS_RUSH_ESCALATION + torment * 2
+		var duel : Dictionary = BossService.Resolve(snapshot, level)
+		if not bool(duel.get("win", false)):
+			break
+		var settled : Dictionary = SettleBossResult(charID, player, i, true)
+		wins += 1
+		totalXp += int(settled.get("xp", 0))
+		totalGold += int(settled.get("gold", 0))
+		totalChests += int(settled.get("chests", 0))
+	if wins == 0:
+		var consolation : Dictionary = SettleBossResult(charID, player, 0, false)
+		totalXp += int(consolation.get("xp", 0))
+	result["ok"] = true
+	result["reason"] = "ok"
+	result["wins"] = wins
+	result["xp"] = totalXp
+	result["gold"] = totalGold
+	result["chests"] = totalChests
+	return result
 
 # subject_id → nome legível: power é por char (nickname), spend por conta
 # (username). ≤ limit rows por board, chamada rate-limited — queries por linha OK.
@@ -1232,6 +1761,40 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		if not sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, cid, "grant:%s" % str(grant["idempotency_key"]), now]):
 			return false
 		return _LedgerAppendLocked(accountID, 0, "cosmetic", 1, 1, "grant:%s" % str(grant["idempotency_key"]))
+	if kind == "item":
+		# Item de crafting (criado pelo jogador, aprovado pelo GM).
+		# O payload contém item_id (hash) e o item precisa existir no DB
+		# para ser aplicado ao inventário do char vinculado à conta.
+		var parsedItem : Variant = JSON.parse_string(str(grant.get("payload", "")))
+		var itemHash : int = 0
+		var charRef : int = 0
+		if parsedItem is Dictionary:
+			itemHash = int((parsedItem as Dictionary).get("item_id", 0))
+			charRef = int((parsedItem as Dictionary).get("char_id", 0))
+		if itemHash <= 0:
+			return false
+		if charRef > 0 and _AccountIDForCharacterRaw(charRef) != accountID:
+			return false
+		var itemCount : int = amount
+		var appliedItem : bool = false
+		if Launcher.SQL.Transaction(func() -> bool:
+			var sqlItem : SQLService = Launcher.SQL
+			var itemRows : Array = sqlItem.db.select_rows("item", "item_id = %d" % itemHash, ["item_id"])
+			if itemRows.is_empty():
+				sqlItem.db.insert_row("item", {"item_id" = itemHash, "char_id" = charRef, "count" = 0, "storage" = 0, "customfield" = ""})
+			var existingInv : Array = sqlItem.db.select_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemHash, charRef], ["count"])
+			if existingInv.is_empty():
+				if not sqlItem.db.insert_row("item", {"item_id" = itemHash, "char_id" = charRef, "count" = itemCount, "storage" = 0, "customfield" = ""}):
+					return false
+			else:
+				var currentCount : int = int(existingInv[0]["count"]) if existingInv[0].get("count", null) != null else 0
+				if not sqlItem.UpdateRowsRaw("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemHash, charRef], {"count" = currentCount + itemCount}):
+					return false
+			return _LedgerAppendLocked(accountID, charRef, LedgerKindItem, itemCount, 0, "grant:%s" % str(grant["idempotency_key"]))):
+			appliedItem = true
+		if not appliedItem:
+			return false
+		return true
 	return false
 
 # ------------------------------------------------------------------ CDC art.49 — direito de arrependimento
@@ -2991,7 +3554,131 @@ func RunReconcileJob() -> int:
 	var ref : int = GrantReferralBonuses()
 	if ref > 0:
 		Util.PrintLog("Economy", "Referral bonuses paid: %d" % ref)
+	# R3: ativa/desativa eventos temporários por timestamp.
+	var events : Dictionary = TickLiveEvents()
+	if int(events.get("activated", 0)) > 0 or int(events.get("closed", 0)) > 0:
+		Util.PrintLog("Economy", "Live events: activated %d, closed %d" % [int(events.get("activated", 0)), int(events.get("closed", 0))])
+	# R4: refila tickets da arena assíncrona.
+	var arena : Dictionary = TickArenaTickets()
+	if int(arena.get("refilled", 0)) > 0:
+		Util.PrintLog("Economy", "Arena tickets refilled: %d" % int(arena.get("refilled", 0)))
 	return divergences
+
+# ------------------------------------------------------------------ conquistas (sem wipe)
+# Metas one-time sobre contadores existentes (bestiary, chest_instance,
+# bosses_beaten, level, rebirths). Progresso é derivado (sem sync); aqui só
+# vive o resgate, idempotente por PK em achievement_state (migration 036).
+# Recompensas: gems + (no topo) cosméticos existentes, nunca poder direto.
+const ACHIEVEMENTS : Array = [
+	{"id": "slayer_100", "label": "Exterminador iniciante", "desc": "Derrote 100 monstros", "counter": "kills_total", "goal": 100, "gems": 25},
+	{"id": "slayer_1000", "label": "Exterminador", "desc": "Derrote 1.000 monstros", "counter": "kills_total", "goal": 1000, "gems": 50, "cosmetic": "emote_tocha"},
+	{"id": "slime_100", "label": "Caça-slimes", "desc": "Derrote 100 Slimes", "counter": "kills_mob", "mob": "Slime", "goal": 100, "gems": 30},
+	{"id": "chest_10", "label": "Abre-baús", "desc": "Abra 10 baús", "counter": "chests", "goal": 10, "gems": 20},
+	{"id": "chest_100", "label": "Mestre dos baús", "desc": "Abra 100 baús", "counter": "chests", "goal": 100, "gems": 60},
+	{"id": "boss_1", "label": "Caçador de chefes", "desc": "Vença 1 chefe", "counter": "bosses", "goal": 1, "gems": 30},
+	{"id": "boss_10", "label": "Lenda viva", "desc": "Vença 10 chefes", "counter": "bosses", "goal": 10, "gems": 100},
+	{"id": "level_20", "label": "Veterano", "desc": "Alcance o nível 20", "counter": "level", "goal": 20, "gems": 25},
+	{"id": "level_40", "label": "Elite", "desc": "Alcance o nível 40", "counter": "level", "goal": 40, "gems": 60},
+	{"id": "rebirth_1", "label": "Renascer", "desc": "Renasça 1 vez", "counter": "rebirths", "goal": 1, "gems": 50},
+]
+
+static func _AchievementByID(achievementID : String) -> Dictionary:
+	for entry in ACHIEVEMENTS:
+		if str(entry.get("id", "")) == achievementID:
+			return entry
+	return {}
+
+func AchievementProgress(accountID : int, entry : Dictionary) -> int:
+	var sql : SQLService = Launcher.SQL
+	match str(entry.get("counter", "")):
+		"kills_total":
+			var rows : Array = sql.db.select_rows("bestiary", "char_id IN (SELECT char_id FROM character WHERE account_id = %d)" % accountID, ["killed_count"])
+			var total : int = 0
+			for row in rows:
+				total += int(row.get("killed_count", 0))
+			return total
+		"kills_mob":
+			var mobID : int = str(entry.get("mob", "")).hash()
+			var rows : Array = sql.db.select_rows("bestiary", "mob_id = %d AND char_id IN (SELECT char_id FROM character WHERE account_id = %d)" % [mobID, accountID], ["killed_count"])
+			var total : int = 0
+			for row in rows:
+				total += int(row.get("killed_count", 0))
+			return total
+		"chests":
+			var rows : Array = sql.db.select_rows("chest_instance", "item_state = 'opened' AND char_id IN (SELECT char_id FROM character WHERE account_id = %d)" % accountID, ["id"])
+			return rows.size()
+		"bosses":
+			var rows : Array = sql.QueryBindings("SELECT COALESCE(SUM(bosses_beaten), 0) AS n FROM character WHERE account_id = ?;", [accountID])
+			return int(rows[0].get("n", 0)) if not rows.is_empty() else 0
+		"level":
+			var rows : Array = sql.QueryBindings("SELECT MAX(s.level) AS m FROM stat s INNER JOIN character c ON c.char_id = s.char_id WHERE c.account_id = ?;", [accountID])
+			if rows.is_empty() or rows[0].get("m", null) == null:
+				return 0
+			return int(rows[0]["m"])
+		"rebirths":
+			var rows : Array = sql.QueryBindings("SELECT MAX(rebirths) AS m FROM character WHERE account_id = ?;", [accountID])
+			if rows.is_empty() or rows[0].get("m", null) == null:
+				return 0
+			return int(rows[0]["m"])
+	return 0
+
+func GetAchievements(accountID : int) -> Array:
+	var out : Array = []
+	var claimed : Dictionary = {}
+	for row in Launcher.SQL.QueryBindings("SELECT achievement_id FROM achievement_state WHERE account_id = ? AND claimed = 1;", [accountID]):
+		claimed[str(row.get("achievement_id", ""))] = true
+	for entry in ACHIEVEMENTS:
+		var aid : String = str(entry.get("id", ""))
+		out.append({
+			"id": aid, "label": str(entry.get("label", aid)), "desc": str(entry.get("desc", "")),
+			"goal": int(entry.get("goal", 0)), "progress": AchievementProgress(accountID, entry),
+			"claimed": claimed.has(aid), "gems": int(entry.get("gems", 0)),
+			"cosmetic": str(entry.get("cosmetic", "")),
+		})
+	return out
+
+func ClaimAchievement(accountID : int, achievementID : String) -> Dictionary:
+	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	var entry : Dictionary = _AchievementByID(achievementID)
+	if entry.is_empty():
+		result["reason"] = "unknown_achievement"
+		return result
+	if AchievementProgress(accountID, entry) < int(entry.get("goal", 0)):
+		result["reason"] = "not_completed"
+		return result
+	var mutex : Mutex = _get_settle_mutex(accountID)
+	mutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var done : Array = sql.db.select_rows("achievement_state", "account_id = %d AND achievement_id = '%s' AND claimed = 1" % [accountID, achievementID], ["account_id"])
+		if not done.is_empty():
+			result["reason"] = "already_claimed"
+			return false
+		var gems : int = int(entry.get("gems", 0))
+		if gems > 0:
+			var balance : int = sql.GetGemsRaw(accountID)
+			if not sql.SetGemsRaw(accountID, balance + gems):
+				return false
+			if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, gems, balance + gems, "achievement:%s" % achievementID):
+				return false
+		var cid : String = str(entry.get("cosmetic", ""))
+		if not cid.is_empty():
+			if not COSMETIC_CATALOG.has(cid):
+				return false
+			if not sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, cid, "achievement:%s" % achievementID, SQLCommons.Timestamp()]):
+				return false
+			if not _LedgerAppendLocked(accountID, 0, "cosmetic", 1, 1, "achievement:%s" % achievementID):
+				return false
+		if not sql.ExecuteBindings("INSERT OR REPLACE INTO achievement_state (account_id, achievement_id, claimed, claimed_at) VALUES (?, ?, 1, ?);", [accountID, achievementID, SQLCommons.Timestamp()]):
+			return false
+		result["ok"] = true
+		result["reason"] = "ok"
+		result["gems"] = gems
+		result["cosmetic"] = cid
+		return true):
+		pass
+	mutex.unlock()
+	return result
 
 # ------------------------------------------------------------------ R1: referral (COMMUNITY_ROADMAP)
 # Código por conta, recompensa por marco (L10 + e-mail verificado), anti-farma

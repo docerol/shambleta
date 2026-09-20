@@ -23,6 +23,12 @@ var lastCheckedPosition : Vector2		= Vector2.ZERO
 var visibilityTimer : Timer				= Timer.new()
 var visibilityHalfSize : Vector2		= Vector2(NetworkCommons.MaxVisibilityHalfWidth, NetworkCommons.MaxVisibilityHalfHeight)
 
+# Auto-idle: último input manual (relógio do servidor) + opt-out via /farm stop.
+var lastActivityMsec : int				= 0
+var autoIdleEnabled : bool				= true
+# Tormento (D2): dificuldade opt-in cacheada no spawn (0 = normal).
+var tormentLevel : int					= 0
+
 # Player-specific signals
 signal warp_confirmed
 

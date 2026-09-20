@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="EntityData" format=3]
+
+[ext_resource type="Script" uid="uid://mtjk83jdl176" path="res://sources/db/instance/EntityData.gd" id="1_data"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="2_cell"]
+[ext_resource type="Material" path="res://presets/palettes/shaders/monsters/mob-bat-dune.tres" id="2_mat"]
+[ext_resource type="Resource" uid="uid://c8nytjc6kurih" path="res://presets/entities/Bat.tres" id="3_prnt"]
+
+[resource]
+script = ExtResource("1_data")
+_parent = ExtResource("3_prnt")
+_id = 1935371240
+_name = "Dune Bat"
+_stats = {
+"attack": 24,
+"baseExp": 16,
+"defense": 4,
+"dodgeRate": 0.22,
+"level": 6,
+"maxHealth": 200,
+"lightningResist": 0.3
+}
+_equipment = Array[ExtResource("2_cell")]([null, null, null, null, null, null, null, null])
+_customMaterial = ExtResource("2_mat")
+_behaviour = 4

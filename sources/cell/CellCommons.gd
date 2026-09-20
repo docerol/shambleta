@@ -76,6 +76,11 @@ enum Modifier {
 	BleedResist,
 	BurnChance,
 	BurnPower,
+	# D2-depth stats (community roadmap): elemental penetration (counter-stat
+	# de resist, lido do equipamento no hit) e deadly strike (chance de
+	# dobrar o golpe, só-equipamento, roll independente do crit).
+	Penetration,
+	DeadlyChance,
 	Count
 }
 
@@ -115,6 +120,8 @@ static func GetModifierDisplayName(effect : Modifier) -> String:
 		Modifier.BleedResist:	return "Bleed Resist"
 		Modifier.BurnChance:	return "Burn Chance"
 		Modifier.BurnPower:	return "Burn Power"
+		Modifier.Penetration:	return "Elemental Penetration"
+		Modifier.DeadlyChance:	return "Deadly Chance"
 		_:						return "Unknown"
 
 static func IsInverseModifier(effect : Modifier) -> bool:
@@ -145,7 +152,7 @@ static func GetPercentDiffBBCode(diffPercent : float, inverse : bool = false) ->
 
 static func FormatModifierValue(effect : Modifier, value : Variant) -> String:
 	match effect:
-		Modifier.CritRate, Modifier.DodgeRate:
+		Modifier.CritRate, Modifier.DodgeRate, Modifier.Penetration, Modifier.DeadlyChance:
 			var floatVal : float = float(value) * 100.0
 			return ("+" if floatVal >= 0.0 else "") + ("%.2f" % floatVal) + "%"
 		Modifier.CastDelay, Modifier.CooldownDelay:

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shambleta — Checkout</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
+<style>
+:root { --bg:#0d1117; --surface:#161b22; --primary:#2dd4bf; --text:#c9d1d9; --muted:#8b949e; --border:#30363d; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; min-height:100vh; display:flex; align-items:center; justify-content:center; }
+.card { max-width:420px; width:92%; background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:2.5rem 2rem; text-align:center; }
+.logo { font-family:'Cinzel',serif; font-weight:700; font-size:1.3rem; color:var(--primary); letter-spacing:0.04em; text-decoration:none; display:block; margin-bottom:1.5rem; }
+.card h2 { font-family:'Cinzel',serif; font-size:1.3rem; margin-bottom:0.4rem; }
+.card .sku { color:var(--primary); font-weight:600; font-size:0.85rem; letter-spacing:0.06em; margin-bottom:1rem; }
+.card p { color:var(--muted); font-size:0.95rem; margin-bottom:1.6rem; }
+.btn { display:inline-block; padding:0.8rem 1.6rem; border-radius:10px; border:1px solid var(--primary); background:var(--primary); color:var(--bg); font-weight:600; text-decoration:none; transition:background .15s, color .15s; margin:0.25rem; }
+.btn:hover { background:#22b8cf; color:#0d1117; }
+.btn-secondary { background:transparent; color:var(--primary); }
+.btn-secondary:hover { background:rgba(45,212,191,0.1); }
+.note { margin-top:1.2rem; font-size:0.8rem; color:var(--muted); opacity:0.8; }
+</style>
+</head>
+<body>
+<div class="card">
+  <a href="/" class="logo">Shambleta</a>
+  <h2>Checkout</h2>
+  <div class="sku" id="skuLabel">SKU: —</div>
+  <p>O pagamento é processado pelo gateway (Mercado Pago / Stripe) via o serviço companion. Os itens creditam automaticamente no jogo quando o pagamento é aprovado.</p>
+  <a href="#" class="btn" id="btnGame">Entrar no jogo com este SKU</a>
+  <a href="#" class="btn btn-secondary" onclick="window.close();">Fechar</a>
+  <div class="note">Se você já está logado no jogo, os itens aparecerão automaticamente após a confirmação do gateway.</div>
+</div>
+<script>
+(function() {
+  var q = new URLSearchParams(window.location.search);
+  var sku = q.get('sku') || 'unknown';
+  document.getElementById('skuLabel').textContent = 'SKU: ' + sku;
+  var btn = document.getElementById('btnGame');
+  btn.href = '/index.html?checkout_sku=' + encodeURIComponent(sku) + '#' + ('checkout_sku=' + sku);
+})();
+</script>
+</body>
+</html>

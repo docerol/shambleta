@@ -3486,3 +3486,400 @@ func SuiteElementalCombat() -> void:
 	# --- death clears all active status generations (invalidates any in-flight ticks) ---
 	ElementCommons.ClearAllStatus(resistedTarget)
 	Check(resistedTarget.activeStatusEffects.is_empty(), "status proc: ClearAllStatus empties the tracking dict")
+
+# SOM-IDLE R3 (COMMUNITY_ROADMAP): eventos temporários rotativos.
+func SuiteLiveEvents(sql : SQLService) -> void:
+	print("[suite] live events (R3)")
+	var economy : EconomyService = Launcher.Economy
+	var charID : int = CreateFixture(sql, "idle_live_account", "IdleLiveTester")
+	if not Check(charID != 0, "live events fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	Check(accountID > 0, "live events account created")
+	sql.ExecuteBindings("INSERT INTO live_event (kind, starts_at, ends_at, params_json, created_at) VALUES (?, ?, ?, ?, ?);", ["weekend_drops", SQLCommons.Timestamp() - 3600, SQLCommons.Timestamp() + 86400, '{"drops_mod": 2.0}', SQLCommons.Timestamp()])
+	sql.ExecuteBindings("INSERT INTO live_event (kind, starts_at, ends_at, params_json, created_at) VALUES (?, ?, ?, ?, ?);", ["smith_week", SQLCommons.Timestamp() - 3600, SQLCommons.Timestamp() + 86400, '{"fee_mod": 0.5}', SQLCommons.Timestamp()])
+	economy.TickLiveEvents()
+	var state : Dictionary = economy.GetActiveEventsState(accountID)
+	Check(bool(state.get("ok", false)), "live events state ok")
+	var events : Array = state.get("events", [])
+	Check(events.size() >= 2, "live events: %d active" % events.size())
+	var dropsMod : float = economy.GetLiveEventMods(accountID)
+	Check(dropsMod >= 2.0, "live events drops mod %.1f" % dropsMod)
+	var feeMod : float = economy.GetLiveEventCraftingFeeMod()
+	Check(feeMod <= 0.5, "live events crafting fee mod %.1f" % feeMod)
+	for nick in ["IdleLiveTester"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_live_account"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+	# Hygiene: events/ticks are global (not fixture-scoped) — remove what
+	# this suite created so later suites/runs never see a stale 2x mod.
+	sql.ExecuteBindings("DELETE FROM live_event_tick WHERE event_id IN (SELECT id FROM live_event WHERE kind IN ('weekend_drops', 'smith_week'));", [])
+	sql.ExecuteBindings("DELETE FROM live_event WHERE kind IN ('weekend_drops', 'smith_week');", [])
+
+# SOM-IDLE R4 (COMMUNITY_ROADMAP): arena assíncrona.
+func SuiteArena(sql : SQLService) -> void:
+	print("[suite] arena (R4)")
+	var economy : EconomyService = Launcher.Economy
+	var charA : int = CreateFixture(sql, "idle_arena_a", "IdleArenaA", 10000)
+	var charB : int = CreateFixture(sql, "idle_arena_b", "IdleArenaB", 5000)
+	if not Check(charA != 0 and charB != 0, "arena fixtures created"):
+		return
+	var acctA : int = sql.GetAccountID("idle_arena_a")
+	var acctB : int = sql.GetAccountID("idle_arena_b")
+	if not Check(acctA > 0 and acctB > 0, "arena accounts created"):
+		return
+	# set power scores so A > B
+	var powerA : int = 2000
+	var powerB : int = 1000
+	sql.ExecuteBindings("UPDATE character SET power_score = ? WHERE char_id = ?;", [powerA, charA])
+	sql.ExecuteBindings("UPDATE character SET power_score = ? WHERE char_id = ?;", [powerB, charB])
+	# ticket refill
+	economy.TickArenaTickets()
+	# set defenses
+	var defA : Dictionary = economy.ArenaSetDefense(charA)
+	Check(bool(defA.get("ok", false)), "defense A saved")
+	var defB : Dictionary = economy.ArenaSetDefense(charB)
+	Check(bool(defB.get("ok", false)), "defense B saved")
+	# A attacks B -> A wins (higher power)
+	var attack : Dictionary = economy.ArenaAttack(charA, acctB)
+	Check(bool(attack.get("ok", false)), "attack A->B ok")
+	Check(bool(attack.get("win", false)), "A wins (higher power)")
+	# B attacks A -> B loses
+	var attackB : Dictionary = economy.ArenaAttack(charB, acctA)
+	Check(bool(attackB.get("ok", false)), "attack B->A ok")
+	Check(not bool(attackB.get("win", false)), "B loses (lower power)")
+	# self-attack denied
+	var selfAtk : Dictionary = economy.ArenaAttack(charA, acctA)
+	Check(str(selfAtk.get("reason", "")) == "self_attack", "self-attack denied")
+	# board
+	var boardA : Dictionary = economy.ArenaBoard(acctA)
+	Check(bool(boardA.get("ok", false)), "board A ok")
+	CheckEq(boardA.get("my", {}).get("elo", 0), economy.ARENA_BASE_ELO + economy.ARENA_ELO_K, "A ELO after win")
+	var boardB : Dictionary = economy.ArenaBoard(acctB)
+	Check(bool(boardB.get("ok", false)), "board B ok")
+	CheckEq(boardB.get("my", {}).get("elo", 0), economy.ARENA_BASE_ELO - economy.ARENA_ELO_K, "B ELO after loss")
+	for nick in ["IdleArenaA", "IdleArenaB"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_arena_a", "idle_arena_b"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+	# Hygiene: arena rows are account-scoped orphans after fixture delete.
+	sql.ExecuteBindings("DELETE FROM arena_entry WHERE account_id IN (?, ?);", [acctA, acctB])
+	sql.ExecuteBindings("DELETE FROM arena_ladder WHERE account_id IN (?, ?);", [acctA, acctB])
+
+
+# D2-depth: set bonuses + penetration + deadly (puro, sem ator/mundo).
+func SuiteItemSets() -> void:
+	print("[suite] item sets + deep stats (D2)")
+	var shield : int = DB.GetCellHash("Desert Shield")
+	var armor : int = DB.GetCellHash("Desert Armor")
+	var hood : int = DB.GetCellHash("Desert Hood")
+	Check(shield != DB.UnknownHash and armor != DB.UnknownHash and hood != DB.UnknownHash, "set piece hashes resolve")
+	var two : Dictionary = SetBonus.EvaluateIds([shield, armor])
+	Check(absf(float(two.get(CellCommons.Modifier.Defense, 0.0)) - 8.0) < 0.0001, "desert 2pc defense +8")
+	Check(not two.has(CellCommons.Modifier.Penetration), "no 3pc bonus with 2 pieces")
+	var three : Dictionary = SetBonus.EvaluateIds([shield, armor, hood])
+	Check(absf(float(three.get(CellCommons.Modifier.Penetration, 0.0)) - 0.06) < 0.0001, "desert 3pc penetration")
+	Check(absf(float(three.get(CellCommons.Modifier.Defense, 0.0)) - 8.0) < 0.0001, "desert 3pc keeps 2pc bonus")
+	var sell : Dictionary = SetBonus.EvaluateIds([DB.GetCellHash("Short Sword"), DB.GetCellHash("Leather Shield")])
+	Check(absf(float(sell.get(CellCommons.Modifier.Attack, 0.0)) - 4.0) < 0.0001, "sellsword attack +4")
+	Check(absf(float(sell.get(CellCommons.Modifier.DeadlyChance, 0.0)) - 0.08) < 0.0001, "sellsword deadly 8%")
+	Check(SetBonus.EvaluateIds([]).is_empty(), "naked: no set bonus")
+	Check(absf(ElementCommons.EffectiveResist(0.5, 0.1) - 0.4) < 0.0001, "penetration cuts resist")
+	Check(absf(ElementCommons.EffectiveResist(0.1, 0.5)) < 0.0001, "penetration floors resist at zero")
+	Check(CellCommons.GetModifierDisplayName(CellCommons.Modifier.Penetration) == "Elemental Penetration", "penetration tooltip name")
+	Check(CellCommons.GetModifierDisplayName(CellCommons.Modifier.DeadlyChance) == "Deadly Chance", "deadly tooltip name")
+
+# Sinks voluntários (sem wipe): corrupção, cubo 3:1, desmanche.
+func SuiteItemSinks(sql : SQLService) -> void:
+	print("[suite] item sinks (corrupt/cube/salvage)")
+	var economy : EconomyService = Launcher.Economy
+	var charID : int = CreateFixture(sql, "idle_sink_account", "IdleSinkTester", 100000)
+	if not Check(charID != 0, "sinks fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var sword : int = DB.GetCellHash("Short Sword")	# T1
+	var scimitar : int = DB.GetCellHash("Scimitar")	# T4
+	Check(sword != DB.UnknownHash and scimitar != DB.UnknownHash, "sink item hashes resolve")
+
+	# Reject paths (deterministic, no stock touched)
+	var bad : Dictionary = economy.CorruptItem(charID, 0)
+	Check(not bool(bad.get("ok", false)), "corrupt unknown item rejected")
+	Check(not bool(economy.CubeUpcycle(charID, sword).get("ok", false)), "cube without stock rejected")
+	Check(not bool(economy.SalvageItem(charID, sword).get("ok", false)), "salvage without stock rejected")
+
+	# Brick: item gone, fee burned (T1 fee = 500)
+	sql.AddItemToCharacter(charID, sword, 1)
+	var gpBefore : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
+	var brick : Dictionary = economy.CorruptItem(charID, sword, "brick")
+	Check(bool(brick.get("ok", false)) and str(brick.get("outcome", "")) == "brick", "brick resolves")
+	CheckEq(sql.GetLotBalanceRaw(charID, sword, true), 0, "bricked lot gone")
+	var gpAfter : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
+	CheckEq(gpBefore - gpAfter, 500, "corrupt fee burned (T1)")
+
+	# Sealed: item back, bound (soulbound), unbound balance zero
+	sql.AddItemToCharacter(charID, sword, 1)
+	var sealed : Dictionary = economy.CorruptItem(charID, sword, "sealed")
+	Check(bool(sealed.get("ok", false)), "sealed resolves")
+	CheckEq(sql.GetLotBalanceRaw(charID, sword, false), 0, "no unbound left after seal")
+	var boundRows : Array = sql.db.select_rows("item_instance", "char_id = %d AND item_id = %d AND bound = 1" % [charID, sword], ["uid"])
+	Check(not boundRows.is_empty(), "sealed lot is bound")
+	# Sealed can't be re-corrupted (terminal, like PoE)
+	var reseal : Dictionary = economy.CorruptItem(charID, sword, "blessed")
+	Check(not bool(reseal.get("ok", false)), "sealed item cannot be re-corrupted")
+
+	# Blessed: item gone, essence up (T1 → +5)
+	sql.AddItemToCharacter(charID, sword, 1)
+	var essBefore : int = sql.GetCharacterEssence(charID)
+	var blessed : Dictionary = economy.CorruptItem(charID, sword, "blessed")
+	Check(bool(blessed.get("ok", false)), "blessed resolves")
+	CheckEq(sql.GetCharacterEssence(charID) - essBefore, 5, "blessed grants essence (T1)")
+	CheckEq(sql.GetLotBalanceRaw(charID, sword, true), 1, "sealed lot untouched by blessed")
+
+	# Cube 3:1: grant 2 more unbound (1 sealed exists, unbound needed) → prize T2
+	sql.AddItemToCharacter(charID, sword, 3)
+	var venom : int = DB.GetCellHash("Venom Dagger")	# T2
+	var cube : Dictionary = economy.CubeUpcycle(charID, sword, venom)
+	Check(bool(cube.get("ok", false)), "cube resolves")
+	CheckEq(int(cube.get("prize", 0)), venom, "cube grants forced prize")
+	CheckEq(sql.GetLotBalanceRaw(charID, sword, false), 0, "cube consumed 3 unbound")
+	var prizeCell : ItemCell = DB.GetItem(int(cube.get("prize", 0)))
+	Check(prizeCell != null and prizeCell.tier == 2, "cube prize is tier+1")
+	Check(not bool(economy.CubeUpcycle(charID, sword, venom).get("ok", false)), "cube rejects without 3 units")
+
+	# Salvage T1: +25 gold, lot gone (bound sealed lot counts as salvageable)
+	var gpS : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
+	var salv : Dictionary = economy.SalvageItem(charID, sword)
+	Check(bool(salv.get("ok", false)), "salvage resolves")
+	CheckEq(int(salv.get("gold", 0)), 25, "salvage T1 gold")
+	var gpS2 : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
+	CheckEq(gpS2 - gpS, 25, "salvage gold paid")
+
+	# Salvage T4: 400 gold + 8 essence
+	sql.AddItemToCharacter(charID, scimitar, 1)
+	var essS : int = sql.GetCharacterEssence(charID)
+	var salv4 : Dictionary = economy.SalvageItem(charID, scimitar)
+	Check(bool(salv4.get("ok", false)), "salvage T4 resolves")
+	CheckEq(int(salv4.get("gold", 0)), 400, "salvage T4 gold")
+	CheckEq(sql.GetCharacterEssence(charID) - essS, 8, "salvage T4 essence")
+
+	for nick in ["IdleSinkTester"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_sink_account"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+
+# Hero classes: simetria de orçamento, direção dos bônus, gates e persistência.
+func SuiteClasses(sql : SQLService) -> void:
+	print("[suite] hero classes (balance + gates)")
+	Check(ClassBonus.GetCatalog().size() == 3, "3 classes in catalog")
+	Check(not ClassBonus.IsValidClass("paladin"), "unknown class rejected")
+	Check(not ClassBonus.IsValidClass(""), "empty class invalid for creation")
+	# Simetria: toda classe tem buff e nerf (sem classe dominante por construção)
+	for entry in ClassBonus.GetCatalog():
+		var mults : Dictionary = entry.get("mults", {})
+		var buffs : int = 0
+		var nerfs : int = 0
+		for key in mults.keys():
+			if float(mults[key]) > 1.0:
+				buffs += 1
+			elif float(mults[key]) < 1.0:
+				nerfs += 1
+		Check(buffs > 0 and nerfs > 0, "%s has buffs (%d) and nerfs (%d)" % [str(entry.get("id", "?")), buffs, nerfs])
+	# Direção: cada classe lidera exatamente sua lane (pedra-papel-tesoura)
+	var w : Dictionary = ClassBonus.GetClass("warden").get("mults", {})
+	var r : Dictionary = ClassBonus.GetClass("rogue").get("mults", {})
+	var s : Dictionary = ClassBonus.GetClass("scholar").get("mults", {})
+	Check(float(w.get("maxHealth", 0.0)) > float(s.get("maxHealth", 0.0)), "warden tankiest")
+	Check(float(s.get("mattack", 0.0)) > float(w.get("mattack", 0.0)), "scholar top mattack")
+	Check(float(r.get("critRate", 0.0)) > float(w.get("critRate", 0.0)), "rogue top crit")
+	Check(float(w.get("attack", 0.0)) > float(s.get("attack", 0.0)), "warden over scholar physical")
+	# Mults aplicados (BaseStats fabricado, puro)
+	var b := BaseStats.new()
+	b.attack = 100
+	b.maxHealth = 100
+	b.mattack = 100
+	b.critRate = 0.05
+	ClassBonus.ApplyClassMults(b, "warden")
+	CheckEq(b.maxHealth, 115, "warden HP mult applied")
+	var b2 := BaseStats.new()
+	b2.mattack = 100
+	ClassBonus.ApplyClassMults(b2, "scholar")
+	CheckEq(b2.mattack, 120, "scholar mattack mult applied")
+	var b3 := BaseStats.new()
+	b3.attack = 100
+	ClassBonus.ApplyClassMults(b3, "")
+	CheckEq(b3.attack, 100, "classless unchanged")
+	# Gates de skill (puros)
+	Check(ClassBonus.SkillAllowed("", "Flar"), "classless casts anything")
+	Check(ClassBonus.SkillAllowed("warden", "Melee"), "universal skill open")
+	Check(not ClassBonus.SkillAllowed("warden", "Flar"), "warden cannot cast scholar skill")
+	Check(ClassBonus.SkillAllowed("scholar", "Flar"), "scholar casts own skill")
+	Check(ClassBonus.SkillAllowed("rogue", "Archer"), "rogue casts own skill")
+	Check(not ClassBonus.SkillAllowed("rogue", "Sonic Wave"), "rogue cannot cast warden skill")
+	# Gates de equipamento (puros)
+	Check(ClassBonus.EquipAllowed("", "warden"), "classless equips anything")
+	Check(ClassBonus.EquipAllowed("rogue", ""), "universal item open")
+	Check(not ClassBonus.EquipAllowed("rogue", "warden"), "cross-class equip refused")
+	Check(ClassBonus.EquipAllowed("warden", "warden"), "own class equips")
+	# Armas iniciais: resolvem, T1, classReq certo, ids distintos
+	var wb : int = DB.GetCellHash("Warden Blade")
+	var rs : int = DB.GetCellHash("Rogue Shiv")
+	var sf : int = DB.GetCellHash("Scholar Focus")
+	Check(wb != DB.UnknownHash and rs != DB.UnknownHash and sf != DB.UnknownHash, "starter weapons resolve")
+	Check(wb != rs and rs != sf and wb != sf, "starter weapon ids distinct")
+	var wbCell : ItemCell = DB.GetItem(wb)
+	var rsCell : ItemCell = DB.GetItem(rs)
+	var sfCell : ItemCell = DB.GetItem(sf)
+	Check(wbCell != null and wbCell.tier == 1 and str(wbCell.classReq) == "warden", "warden blade tagged")
+	Check(rsCell != null and rsCell.tier == 1 and str(rsCell.classReq) == "rogue", "rogue shiv tagged")
+	Check(sfCell != null and sfCell.tier == 1 and str(sfCell.classReq) == "scholar", "scholar focus tagged")
+	Check(absf(float(rsCell.modifiers.Get(CellCommons.Modifier.DeadlyChance, true)) - 0.10) < 0.0001, "shiv grants deadly day one")
+	# Persistência: roundtrip de classe no char
+	var charID : int = CreateFixture(sql, "idle_class_account", "IdleClassTester")
+	if Check(charID != 0, "class fixture created"):
+		Check(sql.SetCharacterClass(charID, "rogue"), "class stored")
+		Check(sql.GetCharacterClass(charID) == "rogue", "class roundtrip")
+		Check(sql.GetCharacterClass(999999999) == "", "unknown char classless")
+	for nick in ["IdleClassTester"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_class_account"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+
+# Auto-idle por inatividade (puro: só a regra de tempo, sem atores).
+func SuiteAutoIdle() -> void:
+	print("[suite] auto-idle watchdog (inactivity)")
+	var now : int = 1000000
+	Check(IdlePolicyService.ShouldAutoIdle(0, now), "never-active player idles")
+	Check(not IdlePolicyService.ShouldAutoIdle(now - 9 * 1000, now), "9s silent stays manual")
+	Check(IdlePolicyService.ShouldAutoIdle(now - 10 * 1000, now), "10s silent auto-idles")
+	Check(IdlePolicyService.ShouldAutoIdle(now - 120 * 1000, now), "2min silent auto-idles")
+	Check(not IdlePolicyService.ShouldAutoIdle(now + 5000, now), "future timestamp never idles")
+	CheckEq(IdlePolicyService.AutoIdleTimeoutSec, 10, "timeout is 10s")
+
+# Variantes elite de mob (paleta + resist + stats, com _parent).
+func SuiteMobVariants(sql : SQLService) -> void:
+	print("[suite] mob variants (palette + resist + stats)")
+	Check(MobVariant.GetCatalog().size() == 3, "3 variants in catalog")
+	for entry in MobVariant.GetCatalog():
+		var cell = DB.GetEntity(MobVariant.VariantHash(entry))
+		Check(cell != null, "%s resolves" % str(entry["name"]))
+		if cell == null:
+			continue
+		var merged = cell.GetMergedEntity()
+		Check(str(merged._name) == str(entry["name"]), "%s merged name" % str(entry["name"]))
+		Check(merged._customMaterial != null, "%s has tint material" % str(entry["name"]))
+	var frost = DB.GetEntity(MobVariant.EntityHashByName("Frost Croc")).GetMergedEntity()
+	CheckEq(int(frost._stats.get("attack", 0)), 20, "frost croc attack override")
+	Check(absf(float(frost._stats.get("iceResist", 0.0)) - 0.35) < 0.0001, "frost croc ice resist")
+	var ember = DB.GetEntity(MobVariant.EntityHashByName("Ember Turtle")).GetMergedEntity()
+	CheckEq(int(ember._stats.get("maxHealth", 0)), 550, "ember turtle HP override")
+	Check(absf(float(ember._stats.get("fireResist", 0.0)) - 0.4) < 0.0001, "ember turtle fire resist")
+	var dune = DB.GetEntity(MobVariant.EntityHashByName("Dune Bat")).GetMergedEntity()
+	Check(absf(float(dune._stats.get("dodgeRate", 0.0)) - 0.22) < 0.0001, "dune bat dodge override")
+	# Injeção: zona com Croc base tem Frost Croc spawnado
+	var zone8 = FarmZoneData.GetZone(8)
+	Check(zone8 != null, "zone 8 exists")
+	if zone8 != null:
+		var map = Launcher.World.GetMap(zone8.mapID)
+		var found : bool = false
+		if map != null:
+			for sp in map.spawns:
+				if int(sp.id) == MobVariant.EntityHashByName("Frost Croc"):
+					found = true
+		Check(found, "frost croc injected where croc spawns")
+	CheckEq(MobVariant.InjectZoneVariants(), 0, "injection idempotent")
+
+# Conquistas one-time (sem wipe): progresso derivado + resgate idempotente.
+func SuiteAchievements(sql : SQLService) -> void:
+	print("[suite] achievements (one-time goals)")
+	var economy : EconomyService = Launcher.Economy
+	var charID : int = CreateFixture(sql, "idle_ach_account", "IdleAchTester")
+	if not Check(charID != 0, "achievements fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	# Seed: 100 Slimes + 900 Bats, 3 baús abertos, 2 bosses, level 25, 1 rebirth
+	Check(sql.SetBestiary(charID, "Slime".hash(), 100), "seed slime kills")
+	Check(sql.SetBestiary(charID, "Bat".hash(), 900), "seed bat kills")
+	for i in 3:
+		sql.db.insert_row("chest_instance", {"char_id" = charID, "chest_hash" = 1, "origin" = "test", "item_state" = "opened", "created_at" = 1750000000})
+	Check(sql.UpdateRowsRaw("character", "char_id = %d" % charID, {"bosses_beaten" = 2}), "seed boss wins")
+	Check(sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"level" = 25}), "seed level")
+	Check(sql.UpdateRowsRaw("character", "char_id = %d" % charID, {"rebirths" = 1}), "seed rebirth")
+	# Progresso derivado
+	var states : Dictionary = {}
+	for row in economy.GetAchievements(accountID):
+		states[str(row.get("id", ""))] = int(row.get("progress", 0))
+	CheckEq(states.get("slime_100", -1), 100, "slime progress")
+	CheckEq(states.get("slayer_100", -1), 1000, "total kills progress")
+	CheckEq(states.get("chest_10", -1), 3, "chest progress")
+	CheckEq(states.get("boss_1", -1), 2, "boss progress")
+	CheckEq(states.get("level_20", -1), 25, "level progress")
+	CheckEq(states.get("rebirth_1", -1), 1, "rebirth progress")
+	# Resgate: desconhecida, incompleta, ok, idempotente
+	Check(not bool(economy.ClaimAchievement(accountID, "nope").get("ok", false)), "unknown achievement rejected")
+	Check(not bool(economy.ClaimAchievement(accountID, "chest_100").get("ok", false)), "incomplete achievement rejected")
+	var g0 : int = economy.GetGems(accountID)
+	var claim : Dictionary = economy.ClaimAchievement(accountID, "slime_100")
+	Check(bool(claim.get("ok", false)), "slime_100 claimed")
+	CheckEq(economy.GetGems(accountID) - g0, 30, "slime_100 paid 30 gems")
+	Check(not bool(economy.ClaimAchievement(accountID, "slime_100").get("ok", false)), "double claim rejected")
+	var top : Dictionary = economy.ClaimAchievement(accountID, "slayer_1000")
+	Check(bool(top.get("ok", false)), "slayer_1000 claimed")
+	Check(not Launcher.SQL.QueryBindings("SELECT id FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = ?;", [accountID, "emote_tocha"]).is_empty(), "top reward cosmetic granted")
+	for nick in ["IdleAchTester"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_ach_account"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
+	sql.ExecuteBindings("DELETE FROM achievement_state WHERE account_id = ?;", [accountID])
+
+# Tormento (D2) + boss rush com key.
+func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] torment + boss rush")
+	# Mults puros
+	Check(absf(Formula.TormentRewardMult(0) - 1.0) < 0.0001, "T0 reward x1")
+	Check(absf(Formula.TormentRewardMult(4) - 2.0) < 0.0001, "T4 reward x2")
+	Check(absf(Formula.TormentMobHpFactor(10) - 2.0) < 0.0001, "T10 mobs 2x HP")
+	Check(absf(Formula.TormentMobDmgFactor(10) - 2.5) < 0.0001, "T10 mobs 2.5x dmg")
+	Check(absf(Formula.TormentRewardMult(-3) - 1.0) < 0.0001, "negative torment clamps")
+	CheckEq(Formula.TormentMaxCap, 10, "torment cap 10")
+	# Persistência + gate de set
+	var charID : int = CreateFixture(sql, "idle_torment_account", "IdleTormentTester", 20000)
+	if not Check(charID != 0, "torment fixture created"):
+		return
+	CheckEq(sql.GetTormentLevel(charID), 0, "torment default 0")
+	CheckEq(sql.GetTormentMax(charID), 0, "torment max default 0")
+	Check(sql.SetTormentMax(charID, 2) and sql.GetTormentMax(charID) == 2, "torment max stored")
+	Check(not bool(economy.SetTorment(charID, null, 5).get("ok", false)), "set above max rejected")
+	Check(bool(economy.SetTorment(charID, null, 2).get("ok", false)), "set within max ok")
+	CheckEq(sql.GetTormentLevel(charID), 2, "torment level stored")
+	# Compra de key com gold
+	var gp0 : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
+	var buy : Dictionary = economy.BuyBossKey(charID)
+	if Check(bool(buy.get("ok", false)), "key bought with gold"):
+		CheckEq(int(buy.get("keys", -1)), 1, "first key")
+		var gp1 : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
+		CheckEq(gp0 - gp1, economy.BOSS_KEY_GOLD_PRICE, "key price burned")
+	# Rush sem key → rejeita (gasta a key comprada primeiro)
+	Check(economy.SpendBossKey(charID, 1, "test"), "key spent")
+	Check(not bool(economy.RunBossRush(charID, null).get("ok", false)), "rush without agent rejected")
+	# Rush com agente overpower: vence a escada inteira
+	var agent : PlayerAgent = await _SpawnSimAgent(charID, 981, 1)
+	if Check(agent != null, "rush agent spawned"):
+		IdlePolicyService.StopIdleSession(agent)
+		agent.stat.current.attack = 999999
+		agent.stat.current.defense = 999999
+		agent.stat.current.maxHealth = 99999999
+		CheckEq(economy.GrantBossKey(charID, 1, "test"), 1, "rush key granted")
+		var xpBefore : int = agent.stat.experience
+		var rush : Dictionary = economy.RunBossRush(charID, agent)
+		if Check(bool(rush.get("ok", false)), "rush resolves"):
+			CheckEq(int(rush.get("wins", -1)), BossService.GetBossCount(), "rush clears the ladder")
+			Check(int(rush.get("xp", 0)) > 0, "rush grants xp")
+			Check(int(rush.get("chests", 0)) >= BossService.GetBossCount(), "rush grants chest per win")
+			Check(agent.stat.experience > xpBefore, "rush xp applied to agent")
+			CheckEq(sql.GetCharacterBossesBeaten(charID), BossService.GetBossCount(), "rush advances ladder")
+			Check(sql.GetTormentMax(charID) >= 1, "clearing ladder unlocks T1")
+		IdlePolicyService.StopIdleSession(agent)
+	for nick in ["IdleTormentTester"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for uname in ["idle_torment_account"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)

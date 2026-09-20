@@ -152,6 +152,8 @@ func EnableControl(state : bool):
 	set_visible(state)
 	if state:
 		SetFloatingWindowToTop()
+		if Launcher.GUI and Launcher.GUI.has_method("ClearNoticeByNode"):
+			Launcher.GUI.ClearNoticeByNode(self)
 
 	if Launcher.Action && blockActions:
 		Launcher.Action.Enable(!state)

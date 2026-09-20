@@ -37,7 +37,8 @@ func ScaleDefaultOffsets(window : WindowPanel, ratio : Vector2):
 func _ready():
 	prevSize = size
 	for window in get_children():
-		window.MoveFloatingWindowToTop.connect(self.MoveWindow)
+		if window is WindowPanel and window.has_signal("MoveFloatingWindowToTop"):
+			window.MoveFloatingWindowToTop.connect(self.MoveWindow)
 		defaultOffsets[window.get_name()] = Rect2(window.offset_left, window.offset_top, window.offset_right - window.offset_left, window.offset_bottom - window.offset_top)
 
 func _on_window_resized():

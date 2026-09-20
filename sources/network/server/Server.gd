@@ -229,11 +229,18 @@ func CreateCharacter(charName : String, traits : Dictionary, attributes : Dictio
 		err = NetworkCommons.CharacterError.ERR_NO_ACCOUNT_ID
 	else:
 		traits.merge(ActorCommons.DefaultTraits)
+		# Hero class viaja em traits (sem mudar a assinatura do RPC); sai do
+		# dict antes do AddCharacter (tabela trait tem colunas fixas) e vai
+		# para character.class_id (migration 035). Classe é obrigatória.
+		var heroClass : String = str(traits.get("hero_class", ""))
+		traits.erase("hero_class")
 		if Launcher.SQL.HasCharacter(charName):
 			err = NetworkCommons.CharacterError.ERR_NAME_AVAILABLE
 		elif Launcher.SQL.GetCharacters(accountID).size() >= ActorCommons.MaxCharacterCount:
 			err = NetworkCommons.CharacterError.ERR_SLOT_AVAILABLE
 		elif not ActorCommons.CheckTraits(traits) or not ActorCommons.CheckAttributes(attributes):
+			err = NetworkCommons.CharacterError.ERR_MISSING_PARAMS
+		elif not ClassBonus.IsValidClass(heroClass):
 			err = NetworkCommons.CharacterError.ERR_MISSING_PARAMS
 		elif not Launcher.SQL.AddCharacter(accountID, charName, ActorCommons.DefaultStats, traits, attributes):
 			err = NetworkCommons.CharacterError.ERR_NAME_AVAILABLE
@@ -241,12 +248,22 @@ func CreateCharacter(charName : String, traits : Dictionary, attributes : Dictio
 			var characterID : int = Launcher.SQL.GetCharacterID(accountID, charName)
 			if characterID == NetworkCommons.PeerUnknownID:
 				err = NetworkCommons.CharacterError.ERR_NO_CHARACTER_ID
+			elif not Launcher.SQL.SetCharacterClass(characterID, heroClass):
+				err = NetworkCommons.CharacterError.ERR_NO_CHARACTER_ID
 			else:
 				Network.characters_list_update.emit()
 				for itemData in ActorCommons.DefaultInventory:
 					Launcher.SQL.AddItem(characterID, itemData.get("item_id", DB.UnknownHash), itemData.get("customfield", ""), itemData.get("count", 1))
 				for skillData in ActorCommons.DefaultSkills:
 					Launcher.SQL.SetSkill(characterID, skillData.get("skill_id", DB.UnknownHash), skillData.get("level", 1))
+				# Kit da classe: arma inicial + primeira skill exclusiva.
+				var classEntry : Dictionary = ClassBonus.GetClass(heroClass)
+				var starterWeapon : String = str(classEntry.get("starter_weapon", ""))
+				if not starterWeapon.is_empty() and DB.HasCellHash(starterWeapon):
+					Launcher.SQL.AddItem(characterID, DB.GetCellHash(starterWeapon), "", 1)
+				var starterSkill : String = str(classEntry.get("starter_skill", ""))
+				if not starterSkill.is_empty() and DB.HasCellHash(starterSkill):
+					Launcher.SQL.SetSkill(characterID, DB.GetCellHash(starterSkill), 1)
 
 				Network.CharacterInfo(Launcher.SQL.GetCharacterInfo(characterID), Launcher.SQL.GetEquipment(characterID), peerID)
 
@@ -296,6 +313,8 @@ func ConnectCharacter(nickname : String, peerID : int):
 				var agent : PlayerAgent = WorldAgent.CreateAgent(spawnLocation, 0, nickname)
 				if agent:
 					agent.peerID = peerID
+					agent.lastActivityMsec = Time.get_ticks_msec()
+					agent.tormentLevel = Launcher.SQL.GetTormentLevel(peer.characterID)
 					peer.SetAgent(agent.get_rid().get_id())
 					agent.SetCharacterInfo(charInfo, peer.characterID)
 					Launcher.SQL.CharacterLogin(peer.characterID)
@@ -494,6 +513,136 @@ func BuyCosmetic(cosmeticID : String, peerID : int):
 	if bool(result.get("ok", false)):
 		Network.Cosmetics(Launcher.Economy.GetCosmetics(accountID), peerID)
 		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+# Hub Atividades: mesmos backends dos comandos, resultados no chat + pushes.
+func GetAchievements(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.AchievementsState([], peerID)
+		return
+	Network.AchievementsState(Launcher.Economy.GetAchievements(accountID), peerID)
+
+func ClaimAchievement(achievementID : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("Claim failed (not_logged_in)", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ClaimAchievement(accountID, achievementID)
+	if not bool(result.get("ok", false)):
+		Network.CommandFeedback("Claim failed (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	var extra : String = " + %s" % EconomyService.CosmeticLabel(str(result.get("cosmetic", ""))) if not str(result.get("cosmetic", "")).is_empty() else ""
+	Network.CommandFeedback("Achievement claimed: +%d gems%s!" % [int(result.get("gems", 0)), extra], peerID)
+	Network.AchievementsState(Launcher.Economy.GetAchievements(accountID), peerID)
+	if Peers.GetCharacter(peerID) != NetworkCommons.PeerUnknownID:
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, Peers.GetCharacter(peerID)), peerID)
+
+func GetTorment(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.TormentState({}, peerID)
+		return
+	Network.TormentState(_TormentState(charID), peerID)
+
+func _TormentState(charID : int) -> Dictionary:
+	var level : int = Launcher.SQL.GetTormentLevel(charID)
+	var tmax : int = Launcher.SQL.GetTormentMax(charID)
+	return {"ok" = true, "level" = level, "max" = tmax,
+		"reward" = Formula.TormentRewardMult(level), "mob_hp" = Formula.TormentMobHpFactor(level), "mob_dmg" = Formula.TormentMobDmgFactor(level)}
+
+func SetTorment(level : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("Torment failed (not_logged_in)", peerID)
+		return
+	var player : PlayerAgent = Peers.GetAgent(peerID)
+	var result : Dictionary = Launcher.Economy.SetTorment(charID, player, level)
+	if not bool(result.get("ok", false)):
+		Network.CommandFeedback("Torment locked (%s, max %d)" % [str(result.get("reason", "?")), Launcher.SQL.GetTormentMax(charID)], peerID)
+		return
+	Network.CommandFeedback("Torment %d active" % int(result.get("level", 0)), peerID)
+	Network.TormentState(_TormentState(charID), peerID)
+
+func RunBossRush(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("Rush failed (not_logged_in)", peerID)
+		return
+	var player : PlayerAgent = Peers.GetAgent(peerID)
+	var result : Dictionary = Launcher.Economy.RunBossRush(charID, player)
+	if not bool(result.get("ok", false)):
+		Network.CommandFeedback("Rush failed (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	Network.CommandFeedback("Rush: %d wins, +%d xp, +%d gold, %d chests" % [int(result.get("wins", 0)), int(result.get("xp", 0)), int(result.get("gold", 0)), int(result.get("chests", 0))], peerID)
+	_pushPostFight(charID, peerID)
+
+func BuyBossKey(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("Key buy failed (not_logged_in)", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyBossKey(charID)
+	if not bool(result.get("ok", false)):
+		Network.CommandFeedback("Key buy failed (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	Network.CommandFeedback("Boss key bought (%d keys)" % int(result.get("keys", 0)), peerID)
+	_pushPostFight(charID, peerID)
+
+func _pushPostFight(charID : int, peerID : int):
+	var player : PlayerAgent = Peers.GetAgent(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if player:
+		Network.BossState(Launcher.Economy.GetBossState(charID, player.stat.level), peerID)
+	if accountID != NetworkCommons.PeerUnknownID:
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+		var inv : PlayerAgent = Peers.GetAgent(peerID)
+		if inv and inv.inventory:
+			Network.RefreshInventory(inv.inventory.ExportInventory(), peerID)
+
+func CorruptItem(itemID : int, peerID : int):
+	_AltarAction("corrupt", itemID, peerID)
+
+func CubeUpcycle(itemID : int, peerID : int):
+	_AltarAction("cube", itemID, peerID)
+
+func SalvageItem(itemID : int, peerID : int):
+	_AltarAction("salvage", itemID, peerID)
+
+func _AltarAction(kind : String, itemID : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("Altar failed (not_logged_in)", peerID)
+		return
+	var result : Dictionary = {}
+	match kind:
+		"corrupt":
+			result = Launcher.Economy.CorruptItem(charID, itemID)
+		"cube":
+			result = Launcher.Economy.CubeUpcycle(charID, itemID)
+		_:
+			result = Launcher.Economy.SalvageItem(charID, itemID)
+	if not bool(result.get("ok", false)):
+		Network.CommandFeedback("Altar failed (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	match kind:
+		"corrupt":
+			match str(result.get("outcome", "?")):
+				"brick":
+					Network.CommandFeedback("The altar consumes the item. Nothing remains.", peerID)
+				"sealed":
+					Network.CommandFeedback("Sealed: soulbound forever.", peerID)
+				"blessed":
+					Network.CommandFeedback("Blessed: +%d essence." % int(result.get("essence", 0)), peerID)
+				_:
+					Network.CommandFeedback("EXALTED: %s!" % str(result.get("prize_name", "?")), peerID)
+		"cube":
+			Network.CommandFeedback("Cubed into: %s!" % str(result.get("prize_name", "?")), peerID)
+		_:
+			if int(result.get("essence", 0)) > 0:
+				Network.CommandFeedback("Salvaged: +%d gold, +%d essence." % [int(result.get("gold", 0)), int(result.get("essence", 0))], peerID)
+			else:
+				Network.CommandFeedback("Salvaged: +%d gold." % int(result.get("gold", 0)), peerID)
+	_pushPostFight(charID, peerID)
 
 # Fase E (rewarded ads): arma 2× do AFK, baú bônus, reroll grátis e chave de
 # boss. Sucessos empurram o estado fresco da janela correspondente.
@@ -730,6 +879,50 @@ func BuyVendorOffer(offerID : String, peerID : int):
 	Network.ShopFeedback(true, "vendor %s for %d gold" % [offerID, int(result.get("cost", 0))], peerID)
 	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
+# R3 live events: estado de eventos ativos (conta da sessão).
+func GetActiveEvents(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.ActiveEvents({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	Network.ActiveEvents(Launcher.Economy.GetActiveEventsState(accountID), peerID)
+
+# R4 async arena: defesa salva pelo char da sessão.
+func ArenaSetDefense(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.ArenaDefenseResult({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ArenaSetDefense(charID)
+	Network.ArenaDefenseResult(result, peerID)
+	Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(accountID), peerID)
+
+# R4 async arena: ataque por ticket (conta/char da sessão vs defensor).
+func ArenaAttack(defenderAccountID : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.ArenaAttackResult({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	if defenderAccountID == accountID:
+		Network.ArenaAttackResult({"ok" = false, "reason" = "self_attack"}, peerID)
+		return
+	var result : Dictionary = Launcher.Economy.ArenaAttack(charID, defenderAccountID)
+	Network.ArenaAttackResult(result, peerID)
+	Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(accountID), peerID)
+	if bool(result.get("ok", false)):
+		var defenderAcct : int = defenderAccountID
+		Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(defenderAcct), defenderAcct)
+
+# R4 async arena: board da conta da sessão.
+func ArenaBoard(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.ArenaBoardResult({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(accountID), peerID)
+
 func RerollDailyShop(peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	if accountID == NetworkCommons.PeerUnknownID:
@@ -829,17 +1022,20 @@ func CharacterListing(peerID : int):
 func SetClickPos(pos : Vector2, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player and not player.ownScript:
+		IdlePolicyService.NoteActivity(player)
 		player.SetRelativeMode(false, Vector2.ZERO)
 		player.WalkToward(pos)
 
 func SetMovePos(direction : Vector2, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player and not player.ownScript:
+		IdlePolicyService.NoteActivity(player)
 		player.SetRelativeMode(true, direction.normalized())
 
 func ClearNavigation(peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
+		IdlePolicyService.NoteActivity(player)
 		player.SetRelativeMode(false, Vector2.ZERO)
 
 func SetViewportSize(halfWidth : float, halfHeight : float, peerID : int):
@@ -901,6 +1097,7 @@ func TriggerCloseContext(peerID : int):
 func TriggerInteract(targetRID : int, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
+		IdlePolicyService.NoteActivity(player)
 		var target : BaseAgent = WorldAgent.GetAgent(targetRID)
 		if target:
 			target.Interact(player)
@@ -913,6 +1110,7 @@ func TriggerExplore(peerID : int):
 func TriggerSkill(targetRID : int, skillID : int, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player and DB.SkillsDB.has(skillID):
+		IdlePolicyService.NoteActivity(player)
 		var target : BaseAgent = WorldAgent.GetAgent(targetRID)
 		Skill.Cast(player, target, DB.SkillsDB[skillID])
 
@@ -938,6 +1136,7 @@ func UseItem(itemID : int, peerID : int):
 	if cell and cell.usable:
 		var player : PlayerAgent = Peers.GetAgent(peerID)
 		if player and ActorCommons.IsAlive(player) and player.inventory:
+			IdlePolicyService.NoteActivity(player)
 			player.inventory.UseItem(cell)
 
 func DropItem(itemID : int, customfield : StringName, itemCount : int, itemIndex : int, peerID : int):
@@ -964,6 +1163,7 @@ func UnequipItem(itemID : int, customfield : StringName, peerID : int):
 func PickupDrop(dropID : int, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
+		IdlePolicyService.NoteActivity(player)
 		WorldDrop.PickupDrop(dropID, player)
 
 func RetrieveCharacterInformation(peerID : int):

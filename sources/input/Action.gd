@@ -182,10 +182,12 @@ func _input(event : InputEvent):
 			elif TryJustPressed(event, "ui_minimap"):		Launcher.GUI.ToggleControl(Launcher.GUI.minimapWindow)
 			elif TryJustPressed(event, "ui_chat"):			Launcher.GUI.ToggleControl(Launcher.GUI.chatWindow)
 			elif TryJustPressed(event, "ui_emote"):			Launcher.GUI.ToggleControl(Launcher.GUI.emoteWindow)
-			elif TryJustPressed(event, "ui_skill"):			Launcher.GUI.ToggleControl(Launcher.GUI.skillWindow)
-			elif TryJustPressed(event, "ui_progress"):		Launcher.GUI.ToggleControl(Launcher.GUI.progressWindow)
-			elif TryJustPressed(event, "ui_settings"):		Launcher.GUI.ToggleControl(Launcher.GUI.settingsWindow)
-			elif TryJustPressed(event, "ui_stat"):			Launcher.GUI.ToggleControl(Launcher.GUI.statWindow)
+		elif TryJustPressed(event, "ui_skill"):
+			Launcher.GUI.OpenCharacterHub(1)
+		elif TryJustPressed(event, "ui_progress"):
+			Launcher.GUI.OpenCharacterHub(2)
+		elif TryJustPressed(event, "ui_stat"):
+			Launcher.GUI.OpenCharacterHub(0)
 			elif TryJustPressed(event, "ui_social"):		Launcher.GUI.ToggleControl(Launcher.GUI.socialWindow)
 			elif TryJustPressed(event, "ui_validate"):		Launcher.GUI.ToggleChatNewLine()
 			elif TryJustPressed(event, "ui_screenshot"):	FileSystem.SaveScreenshot()

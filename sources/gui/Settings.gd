@@ -584,7 +584,7 @@ func _ready():
 		qrLabel.text = tr("Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.):")
 		var qrUrlLabel : Label = Label.new()
 		qrUrlLabel.name = "QRUrlLabel"
-		qrUrlLabel.autowrap = true
+		qrUrlLabel.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		qrUrlLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		qrUrlLabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		qrVBox.add_child(qrLabel)

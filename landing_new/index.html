@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shambleta — O RPG Idle que Continua Quando Você Sai</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg:#0d1117; --surface:#161b22; --primary:#2dd4bf; --text:#c9d1d9;
+  --muted:#8b949e; --border:#30363d; --accent:#22b8cf;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+html { scroll-behavior:smooth; }
+body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+header { position:sticky; top:0; z-index:50; backdrop-filter:blur(14px); background:rgba(13,17,23,0.82); border-bottom:1px solid var(--border); }
+nav { max-width:1100px; margin:0 auto; padding:1.1rem 1.5rem; display:flex; align-items:center; justify-content:space-between; }
+.logo { font-family:'Cinzel',serif; font-weight:700; font-size:1.35rem; color:var(--primary); letter-spacing:0.04em; text-decoration:none; }
+.nav-links { display:flex; gap:1.6rem; list-style:none; }
+.nav-links a { color:var(--text); text-decoration:none; font-weight:400; font-size:0.92rem; opacity:0.85; transition:opacity .15s; }
+.nav-links a:hover { opacity:1; color:var(--primary); }
+.btn { display:inline-block; padding:0.72rem 1.35rem; border-radius:10px; border:1px solid var(--primary); background:transparent; color:var(--primary); font-weight:600; text-decoration:none; transition:background .15s, color .15s; }
+.btn:hover { background:var(--primary); color:var(--bg); }
+.btn-solid { background:var(--primary); color:var(--bg); border-color:var(--primary); }
+.btn-solid:hover { background:#22b8cf; color:#0d1117; }
+.hero { position:relative; overflow:hidden; min-height:92vh; display:flex; align-items:center; justify-content:center; }
+.hero::before { content:""; position:absolute; inset:0; background:radial-gradient(circle at 50% 30%, rgba(45,212,191,0.07) 0%, transparent 60%); pointer-events:none; }
+.hero-inner { max-width:1100px; margin:0 auto; padding:6rem 1.5rem; position:relative; z-index:2; display:grid; grid-template-columns:1fr 1fr; gap:3rem; align-items:center; }
+.hero h1 { font-family:'Cinzel',serif; font-size:clamp(2.6rem,5vw,4.2rem); line-height:1.1; letter-spacing:0.01em; }
+.hero h1 span { color:var(--primary); }
+.hero p.lead { margin-top:1.1rem; opacity:0.85; font-size:1.1rem; max-width:480px; }
+.hero-stats { display:flex; gap:1.2rem; margin-top:1.4rem; flex-wrap:wrap; }
+.hero-stats .stat { display:flex; align-items:center; gap:0.4rem; background:rgba(22,27,34,0.7); border:1px solid var(--border); border-radius:8px; padding:0.55rem 1rem; font-size:0.9rem; color:var(--muted); }
+.hero-stats .stat strong { color:var(--primary); font-weight:700; font-size:1rem; letter-spacing:0.02em; }
+.hero .actions { margin-top:2rem; display:flex; gap:1rem; flex-wrap:wrap; }
+.hero-img { border-radius:18px; border:1px solid var(--border); box-shadow:0 30px 70px rgba(0,0,0,0.55); overflow:hidden; background:linear-gradient(135deg, #161b22 0%, #0d1117 100%); position:relative; }
+.hero-img::after { content:""; position:absolute; inset:0; background:linear-gradient(180deg, transparent 60%, rgba(13,17,23,0.6) 100%); pointer-events:none; }
+.hero-img img { width:100%; height:auto; display:block; opacity:0.92; transition:transform .6s ease; }
+.hero-img:hover img { transform:scale(1.03); }
+.hero-img { animation: pulse-border 4s ease-in-out infinite; }
+@keyframes pulse-border {
+  0%, 100% { box-shadow:0 30px 70px rgba(0,0,0,0.55); border-color:var(--border); }
+  50% { box-shadow:0 30px 90px rgba(45,212,191,0.15); border-color:rgba(45,212,191,0.3); }
+}
+.stats-bar { background:linear-gradient(90deg, #161b22 0%, #0d1117 100%); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+.stats-inner { max-width:1100px; margin:0 auto; padding:2.2rem 1.5rem; display:flex; justify-content:center; align-items:center; gap:0; flex-wrap:wrap; }
+.stat-item { text-align:center; padding:0 2rem; min-width:140px; flex:1; }
+.stat-number { display:block; font-family:'Cinzel',serif; font-size:1.4rem; font-weight:700; color:var(--primary); letter-spacing:0.02em; }
+.stat-label { display:block; font-size:0.82rem; color:var(--muted); margin-top:0.2rem; }
+.stat-divider { width:1px; height:40px; background:var(--border); }
+.section-inner { max-width:1100px; margin:0 auto; padding:5rem 1.5rem; }
+.section-inner h2 { font-family:'Cinzel',serif; font-size:2rem; margin-bottom:1rem; }
+.section-inner h2 span { color:var(--primary); }
+.sub { color:var(--muted); margin-bottom:2.5rem; font-size:0.98rem; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1.25rem; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:1.6rem 1.4rem; transition:transform .12s, border-color .12s, box-shadow .12s; }
+.card:hover { transform:translateY(-3px); border-color:rgba(45,212,191,0.35); box-shadow:0 20px 40px rgba(45,212,191,0.08); }
+.card-icon { font-size:2rem; color:var(--primary); margin-bottom:0.8rem; line-height:1; animation: icon-pulse 3s ease-in-out infinite; }
+@keyframes icon-pulse { 0%, 100% { transform:scale(1); opacity:1; } 50% { transform:scale(1.08); opacity:0.9; } }
+.card h3 { font-family:'Cinzel',serif; font-size:1.15rem; margin-bottom:0.6rem; color:var(--text); }
+.card p { font-size:0.92rem; opacity:0.82; line-height:1.55; }
+.starter-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:1.25rem; }
+.starter-card { background:var(--surface); border:1px solid var(--border); border-top:3px solid var(--primary); border-radius:12px; padding:1.8rem 1.3rem; transition:transform .12s, box-shadow .12s; }
+.starter-card:hover { transform:translateY(-3px); box-shadow:0 20px 40px rgba(45,212,191,0.1); }
+.starter-card .starter-icon { font-size:1.8rem; color:var(--primary); margin-bottom:0.8rem; }
+.starter-card h3 { font-family:'Cinzel',serif; font-size:1.15rem; margin-bottom:0.6rem; color:var(--text); }
+.starter-card p { font-size:0.92rem; opacity:0.82; line-height:1.55; }
+.starter-fire { border-top-color:#f87171; }
+.starter-water { border-top-color:#38bdf8; }
+.starter-grass { border-top-color:#34d399; }
+.mechanisms-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:1.25rem; }
+.mech-block { background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--primary); border-radius:12px; padding:1.5rem 1.3rem; transition:border-color .12s, box-shadow .12s; }
+.mech-block:hover { border-color:rgba(45,212,191,0.4); box-shadow:0 10px 30px rgba(45,212,191,0.06); }
+.mech-block h3 { font-family:'Cinzel',serif; font-size:1.1rem; margin-bottom:0.6rem; color:var(--text); }
+.mech-block p { font-size:0.92rem; opacity:0.82; line-height:1.55; }
+@media (max-width:900px) { .stats-inner { flex-direction:column; gap:1.2rem; } .stat-divider { display:none; } .stat-item { padding:0; } .section-inner { padding:4rem 1.5rem; } }
+footer { border-top:1px solid var(--border); background:linear-gradient(180deg, #161b22 0%, #0d1117 100%); padding:3rem 1.5rem; }
+.footer-inner { max-width:1100px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1.5rem; }
+.footer-brand p { color:var(--muted); font-size:0.9rem; margin-top:0.4rem; opacity:0.85; }
+.footer-links { display:flex; gap:1.2rem; }
+.footer-links a { color:var(--text); text-decoration:none; font-weight:400; font-size:0.9rem; transition:color .15s; }
+.footer-links a:hover { color:var(--primary); }
+.footer-meta { text-align:right; color:var(--muted); font-size:0.82rem; }
+.pricing-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1.25rem; }
+.pricing-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.5rem 1.3rem; position:relative; overflow:hidden; }
+.pricing-card::before { content:""; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg, var(--primary), #38bdf8); }
+.pricing-card:hover { transform:translateY(-2px); box-shadow:0 15px 35px rgba(45,212,191,0.08); }
+.pricing-badge { display:inline-block; padding:0.2rem 0.6rem; border-radius:6px; font-size:0.75rem; font-weight:700; letter-spacing:0.03em; background:rgba(45,212,191,0.1); color:var(--primary); border:1px solid rgba(45,212,191,0.2); margin-bottom:0.8rem; }
+.pricing-card h3 { font-family:'Cinzel',serif; font-size:1.1rem; margin-bottom:0.5rem; color:var(--text); }
+.pricing-card p { font-size:0.9rem; opacity:0.82; line-height:1.5; }
+@media (max-width:700px) { .footer-inner { flex-direction:column; align-items:flex-start; } .footer-meta { text-align:left; } }
+</style>
+</head>
+<body>
+<header>
+<nav aria-label="Principal">
+  <a href="#" class="logo">Shambleta</a>
+  <ul class="nav-links" role="menubar">
+    <li role="none"><a href="#jogo" role="menuitem">Jogo</a></li>
+    <li role="none"><a href="#guia" role="menuitem">Guia</a></li>
+    <li role="none"><a href="#dao" role="menuitem">DAO</a></li>
+  </ul>
+</nav>
+</header>
+
+<main>
+<section class="hero" id="jogo" aria-label="Portal do jogo">
+  <div class="hero-inner">
+    <div>
+      <h1>Shambleta <span>— O RPG Idle que Continua</span></h1>
+      <p class="lead">Entre, escolha uma zona e deixe o jogo cuidar do resto. Progresso offline, economia real, guildas e temporadas — direto do navegador.</p>
+      <div class="hero-stats" aria-label="Destaques">
+        <div class="stat"><strong>Web Build</strong> · Godot WASM</div>
+        <div class="stat"><strong>Offline</strong> · Progresso real</div>
+        <div class="stat"><strong>Open Source</strong> · MIT</div>
+      </div>
+      <div class="actions">
+        <a href="/login" class="btn btn-solid" aria-label="Entrar no jogo">Entrar no jogo</a>
+        <a href="/register" class="btn" aria-label="Criar conta">Criar conta</a>
+        <a href="#guia" class="btn" aria-label="Ver guia">Guia rápido</a>
+      </div>
+    </div>
+    <div class="hero-img" aria-label="Preview do jogo">
+      <img src="assets/preview.jpg" alt="Tela de jogo Shambleta com personagem, inventário e batalha" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+      <div style="display:none; align-items:center; justify-content:center; padding:3rem; color:var(--primary); font-family:'Cinzel',serif; font-size:1.2rem;">Shambleta Preview</div>
+    </div>
+  </div>
+</section>
+
+<section class="stats-bar" aria-label="Dados do jogo">
+  <div class="stats-inner">
+    <div class="stat-item"><span class="stat-number">Godot 4.7</span><span class="stat-label">Engine</span></div>
+    <div class="stat-divider"></div>
+    <div class="stat-item"><span class="stat-number">Web + Desktop</span><span class="stat-label">Plataformas</span></div>
+    <div class="stat-divider"></div>
+    <div class="stat-item"><span class="stat-number">Offline</span><span class="stat-label">Progressão real</span></div>
+    <div class="stat-divider"></div>
+    <div class="stat-item"><span class="stat-number">MIT</span><span class="stat-label">Open Source</span></div>
+  </div>
+</section>
+
+<section aria-label="Recursos" id="features">
+  <div class="section-inner">
+    <h2>O que define o <span>Shambleta</span></h2>
+    <p class="sub">Idle-first, economia real, progressão contínua — mesmo quando você sai.</p>
+    <div class="cards">
+      <article class="card">
+        <div class="card-icon">&#9878;</div>
+        <h3>Idle Combat</h3>
+        <p>Seu líder caça automaticamente, mesmo offline. Volte para coletar XP, ouro e novos drops — o coração do loop.</p>
+      </article>
+      <article class="card">
+        <div class="card-icon">&#9733;</div>
+        <h3>Economia Real</h3>
+        <p>Gems, ouro, itens com rastreamento de lote, casa de leilões e mercado de jogador. A economia vive entre os jogadores.</p>
+      </article>
+      <article class="card">
+        <div class="card-icon">&#9874;</div>
+        <h3>Guildas</h3>
+        <p>Crie ou entre em guildas, deposite itens, suba de nível em conjunto e compita nas corridas da temporada.</p>
+      </article>
+      <article class="card">
+        <div class="card-icon">&#9730;</div>
+        <h3>Rebirth & Boss</h3>
+        <p>Ladder de chefes, baús prováveis, mecânica de prestígio com bônus permanentes — a progressão nunca para.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section aria-label="Sistemas" id="systems">
+  <div class="section-inner">
+    <h2>Sistemas que <span>definem</span> o jogo</h2>
+    <p class="sub">Cada mecanismo é projetado para funcionar em conjunto — sem quebrar o loop idle.</p>
+    <div class="mechanics-grid">
+      <div class="mech-block">
+        <h3>Idle Progress</h3>
+        <p>O personagem avança automaticamente — você só escolhe a zona e a estratégia. Progresso real enquanto está offline.</p>
+      </div>
+      <div class="mech-block">
+        <h3>Economia & Mercado</h3>
+        <p>Gems, ouro, itens rastreados e uma casa de leilões ativa. A economia vive entre os jogadores.</p>
+      </div>
+      <div class="mech-block">
+        <h3>Guildas & Temporadas</h3>
+        <p>Junte-se a uma guilda, contribua para subir de nível e compita nas corridas da temporada.</p>
+      </div>
+      <div class="mech-block">
+        <h3>Boss Ladder & Rebirth</h3>
+        <p>Suba o ladder de chefes, ganhe baús prováveis e reinicie com bônus permanentes — a progressão nunca para.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section aria-label="Como começar" id="starter">
+  <div class="section-inner">
+    <h2>Escolha seu <span>caminho</span></h2>
+    <p class="sub">Não há uma única forma de jogar — apenas a que combina com você.</p>
+    <div class="starter-grid">
+      <div class="starter-card starter-fire">
+        <div class="starter-icon">&#9730;</div>
+        <h3>Zona Avançada</h3>
+        <p>Para jogadores que buscam desafios. Chefes fortes, drops raros e maior progressão — se você aguenta a pressão.</p>
+      </div>
+      <div class="starter-card starter-water">
+        <div class="starter-icon">&#9730;</div>
+        <h3>Zona Equilibrada</h3>
+        <p>O ponto de partida ideal. Progressão constante, economia estável e guildas ativas — a base do jogo.</p>
+      </div>
+      <div class="starter-card starter-grass">
+        <div class="starter-icon">&#9730;</div>
+        <h3>Zona de Iniciante</h3>
+        <p>Entre sem pressa. Aprenda o loop, explore a economia e prepare-se para subir — tudo no seu ritmo.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section aria-label="Modelo de negócio" id="pricing">
+  <div class="section-inner">
+    <h2>Como <span>funciona</span> a economia</h2>
+    <p class="sub">100% grátis para jogar. Nenhum conteúdo essencial é bloqueado — apenas aceleração opcional e cosméticos.</p>
+    <div class="pricing-grid">
+      <div class="pricing-card">
+        <span class="pricing-badge">Grátis</span>
+        <h3>Jogo Completo</h3>
+        <p>Idle progress, economia, guildas, temporadas e rebirth — tudo acessível sem custo.</p>
+      </div>
+      <div class="pricing-card">
+        <span class="pricing-badge">Gems · R$ 19,90</span>
+        <h3>Moeda Premium</h3>
+        <p>550 gems (SKU: gems.550). Usada para itens cosméticos, aceleração de progresso e trocas no mercado livre.</p>
+        <a href="checkout_start.html?sku=gems.550" class="btn btn-solid" style="margin-top:1rem;">Comprar</a>
+      </div>
+      <div class="pricing-card">
+        <span class="pricing-badge">VIP · 1 mês</span>
+        <h3>Status VIP</h3>
+        <p>Multiplicador de idle, capas estendidas de progresso offline e acesso antecipado a eventos (SKU: vip.1mo).</p>
+        <a href="checkout_start.html?sku=vip.1mo" class="btn btn-solid" style="margin-top:1rem;">Comprar</a>
+      </div>
+      <div class="pricing-card">
+        <span class="pricing-badge">Starter Pack</span>
+        <h3>Pacote Inicial</h3>
+        <p>7 dias VIP + 220 gems (SKU: starter.pack). Oferta única para novas contas — expira após 72h do registro.</p>
+        <a href="checkout_start.html?sku=starter.pack" class="btn btn-solid" style="margin-top:1rem;">Comprar</a>
+      </div>
+      <div class="pricing-card">
+        <span class="pricing-badge">Founder Pack</span>
+        <h3>Fundador</h3>
+        <p>1.200 gems + 30 dias VIP (SKU: founder.pack). Para quem quer apoiar o desenvolvimento e começar forte.</p>
+        <a href="checkout_start.html?sku=founder.pack" class="btn btn-solid" style="margin-top:1rem;">Comprar</a>
+      </div>
+      <div class="pricing-card">
+        <span class="pricing-badge">Pass S1</span>
+        <h3>Temporada S1</h3>
+        <p>Passe premium com recompensas exclusivas, missões diárias e bônus nas corridas de guilda (SKU: pass.s1).</p>
+        <a href="checkout_start.html?sku=pass.s1" class="btn btn-solid" style="margin-top:1rem;">Comprar</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <a href="#" class="logo">Shambleta</a>
+      <p>O RPG idle que continua quando você sai. Web-first, open source, sem downloads.</p>
+    </div>
+    <div class="footer-links">
+      <a href="/index.html">Jogar</a>
+      <a href="#guia">Guia</a>
+      <a href="#dao">DAO</a>
+    </div>
+    <div class="footer-meta">
+      <p>Godot 4.7 · Web Build · Offline Progress</p>
+      <p style="margin-top:0.35rem; opacity:0.6;">© 2026 Shambleta — MIT License · CC BY-SA 4.0 Assets</p>
+    </div>
+  </div>
+</footer>
+
+</main>
+</body>
+</html>

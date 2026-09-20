@@ -1,0 +1,7 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://sources/shaders/MobTint.gdshader" id="1_tint"]
+
+[resource]
+shader = ExtResource("1_tint")
+shader_parameter/tint = Color(0.7, 0.88, 1.12, 1)

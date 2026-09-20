@@ -13,6 +13,7 @@ const STEP_SHOP : int = 4
 const STEP_COMPLETE : int = 5
 
 var _currentStep : int = STEP_WELCOME
+var _previousHighlightedNode : Node = null
 var _overlay : ColorRect = null
 var _label : Label = null
 var _nextButton : Button = null
@@ -75,6 +76,9 @@ func Stop():
 	_label.visible = false
 	_nextButton.visible = false
 	_backButton.visible = false
+	if _previousHighlightedNode != null:
+		_clear_highlight(_previousHighlightedNode)
+		_previousHighlightedNode = null
 	if Launcher.GUI:
 		Launcher.GUI.set_visible(true)
 
@@ -85,6 +89,11 @@ func _show_step():
 	_label.visible = true
 	_nextButton.visible = true
 	_backButton.visible = _currentStep > STEP_WELCOME
+
+	# P-A2: limpa destaque anterior antes de aplicar o novo.
+	if _previousHighlightedNode != null:
+		_clear_highlight(_previousHighlightedNode)
+		_previousHighlightedNode = null
 
 	var text : String = ""
 	match _currentStep:
@@ -110,18 +119,26 @@ func _show_step():
 				Launcher.GUI.set_visible(true)
 	_label.text = text
 
+func _clear_highlight(node : Node):
+	if node and node is Control:
+		node.remove_theme_color_override("border_color")
+		node.remove_theme_constant_override("border_width_left")
+		node.remove_theme_constant_override("border_width_top")
+		node.remove_theme_constant_override("border_width_right")
+		node.remove_theme_constant_override("border_width_bottom")
+
 func _highlight_node(node : Node):
-	# Polimento UI/UX: destaca visualmente o nó-alvo (não apenas torna GUI visível).
-	if Launcher.GUI:
-		Launcher.GUI.set_visible(true)
-		# Se há um nó específico, aplica um overlay de destaque temporário.
-		if node and node is Control:
-			# Usa uma borda colorida temporária para destacar o componente
-			node.add_theme_color_override("border_color", Color(1.0, 0.9, 0.2, 1.0))
-			node.add_theme_constant_override("border_width_left", 2)
-			node.add_theme_constant_override("border_width_top", 2)
-			node.add_theme_constant_override("border_width_right", 2)
-			node.add_theme_constant_override("border_width_bottom", 2)
+	# P-A2: destaque visual real — limpa destaque anterior e aplica no novo nó.
+	if _previousHighlightedNode != null:
+		_clear_highlight(_previousHighlightedNode)
+	_previousHighlightedNode = node
+	# Se há um nó específico, aplica uma borda colorida temporária.
+	if node and node is Control:
+		node.add_theme_color_override("border_color", Color(1.0, 0.9, 0.2, 1.0))
+		node.add_theme_constant_override("border_width_left", 2)
+		node.add_theme_constant_override("border_width_top", 2)
+		node.add_theme_constant_override("border_width_right", 2)
+		node.add_theme_constant_override("border_width_bottom", 2)
 
 func _on_next():
 	if _currentStep == STEP_COMPLETE:

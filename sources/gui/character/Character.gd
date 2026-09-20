@@ -162,9 +162,19 @@ func CreateCharacter():
 			FillWarningLabel(err)
 		else:
 			if Network.CreateCharacter(nickname, traitsPanel.GetValues(), attributesPanel.GetValues()):
+				var classIds : Array = []
+				for entry in ClassBonus.GetCatalog():
+					classIds.append(str(entry.get("id", "")))
+				var classIdx : int = int(traitsPanel.get("classValue"))
+				if classIdx >= 0 and classIdx < classIds.size():
+					NetClient.MyHeroClass = classIds[classIdx]
 				FSM.EnterState(FSM.States.CHAR_PROGRESS)
 
 func SelectCharacter():
+	for info in charactersInfo:
+		if info.get("nickname", "") == characterNameDisplay.get_text():
+			NetClient.MyHeroClass = str(info.get("class_id", ""))
+			break
 	if Network.ConnectCharacter(characterNameDisplay.get_text()):
 		FSM.EnterState(FSM.States.CHAR_PROGRESS)
 

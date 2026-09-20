@@ -66,6 +66,15 @@ func RegisterCommands():
 	CommandManager.Register("season", CommandSeason, ActorCommons.Permission.NONE, "season active|board ..." )
 	# Fase F: copas semanais (inscrição em gold, prêmios em gems + título).
 	CommandManager.Register("tournament", CommandTournament, ActorCommons.Permission.NONE, "tournament info|enter" )
+	# Sinks voluntários (sem wipe): corrupção (risco), cubagem 3:1, desmanche.
+	CommandManager.Register("corrupt", CommandCorrupt, ActorCommons.Permission.NONE, "corrupt <item_id>" )
+	CommandManager.Register("cube", CommandCube, ActorCommons.Permission.NONE, "cube <item_id>" )
+	CommandManager.Register("salvage", CommandSalvage, ActorCommons.Permission.NONE, "salvage <item_id>" )
+	# Conquistas one-time (sem wipe): lista progresso + resgata recompensa.
+	CommandManager.Register("ach", CommandAch, ActorCommons.Permission.NONE, "ach list|claim <id>" )
+	# Tormento (D2): dificuldade opt-in com mais recompensa; boss rush com key.
+	CommandManager.Register("torment", CommandTorment, ActorCommons.Permission.NONE, "torment [0..max]" )
+	CommandManager.Register("rush", CommandRush, ActorCommons.Permission.NONE, "rush info|start|key" )
 	# SOM-IDLE Fase H: GM review of player-crafted item submissions
 	CommandManager.Register("cs_craft", CommandCsCraft, ActorCommons.Permission.GM, "cs_craft <list|approve <id>|reject <id> [reason]>" )
 
@@ -132,6 +141,12 @@ static func UnregisterCommands():
 	CommandManager.Unregister("ah")
 	CommandManager.Unregister("season")
 	CommandManager.Unregister("tournament")
+	CommandManager.Unregister("corrupt")
+	CommandManager.Unregister("cube")
+	CommandManager.Unregister("salvage")
+	CommandManager.Unregister("ach")
+	CommandManager.Unregister("torment")
+	CommandManager.Unregister("rush")
 	# SOM-IDLE Fase H
 	CommandManager.Unregister("cs_craft")
 
@@ -509,6 +524,135 @@ func CommandAH(caller : PlayerAgent, arg : String = "") -> bool:
 	Network.CommandFeedback("Unknown /ah subcommand", caller.peerID)
 	return false
 
+# Sinks voluntários (sem wipe): /corrupt arrisca 1 unidade (fee em gold;
+# brick 25% / sealed 30% soulbound / blessed 30% essência / exalted 15% tier+1),
+# /cube funde 3 iguais em 1 de tier+1, /salvage desmancha por gold (+essência T4+).
+func CommandCorrupt(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
+	if parts.is_empty():
+		Network.CommandFeedback("Usage: /corrupt <item_id> (fee burns gold; sealed items can't be corrupted)", caller.peerID)
+		return false
+	var r : Dictionary = Launcher.Economy.CorruptItem(caller.GetCharacterID(), parts[0].to_int())
+	if not bool(r.get("ok", false)):
+		Network.CommandFeedback("Corrupt failed (%s)" % str(r.get("reason", "?")), caller.peerID)
+		return false
+	match str(r.get("outcome", "?")):
+		"brick":
+			Network.CommandFeedback("The altar consumes the item. Nothing remains.", caller.peerID)
+		"sealed":
+			Network.CommandFeedback("Sealed: the item survives, soulbound forever (no trade, no re-corrupt).", caller.peerID)
+		"blessed":
+			Network.CommandFeedback("Blessed: +%d essence." % int(r.get("essence", 0)), caller.peerID)
+		_:
+			Network.CommandFeedback("EXALTED: %s!" % str(r.get("prize_name", "?")), caller.peerID)
+	return true
+
+func CommandCube(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
+	if parts.is_empty():
+		Network.CommandFeedback("Usage: /cube <item_id> (needs 3 unbound units, grants tier+1)", caller.peerID)
+		return false
+	var r : Dictionary = Launcher.Economy.CubeUpcycle(caller.GetCharacterID(), parts[0].to_int())
+	if not bool(r.get("ok", false)):
+		Network.CommandFeedback("Cube failed (%s)" % str(r.get("reason", "?")), caller.peerID)
+		return false
+	Network.CommandFeedback("Cubed into: %s!" % str(r.get("prize_name", "?")), caller.peerID)
+	return true
+
+func CommandSalvage(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
+	if parts.is_empty():
+		Network.CommandFeedback("Usage: /salvage <item_id> (destroys 1 unit for gold; T4+ also gives essence)", caller.peerID)
+		return false
+	var r : Dictionary = Launcher.Economy.SalvageItem(caller.GetCharacterID(), parts[0].to_int())
+	if not bool(r.get("ok", false)):
+		Network.CommandFeedback("Salvage failed (%s)" % str(r.get("reason", "?")), caller.peerID)
+		return false
+	if int(r.get("essence", 0)) > 0:
+		Network.CommandFeedback("Salvaged: +%d gold, +%d essence." % [int(r.get("gold", 0)), int(r.get("essence", 0))], caller.peerID)
+	else:
+		Network.CommandFeedback("Salvaged: +%d gold." % int(r.get("gold", 0)), caller.peerID)
+	return true
+
+# Conquistas: /ach list mostra id, progresso/meta e resgatado; /ach claim <id>
+# resgata gems (+cosmético no topo). Sem wipe, sem poder direto.
+func CommandAch(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
+	var accountID : int = Peers.GetAccount(caller.peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("Not logged in", caller.peerID)
+		return false
+	if parts.is_empty() or parts[0] == "list":
+		var rows : Array = Launcher.Economy.GetAchievements(accountID)
+		if rows.is_empty():
+			Network.CommandFeedback("No achievements yet", caller.peerID)
+			return true
+		var lines : PackedStringArray = PackedStringArray()
+		for row in rows:
+			var mark : String = "✓ " if bool(row.get("claimed", false)) else ""
+			lines.append("%s%s: %d/%d — %s" % [mark, str(row.get("id", "?")), int(row.get("progress", 0)), int(row.get("goal", 0)), str(row.get("label", "?"))])
+		Network.CommandFeedback("\n".join(lines), caller.peerID)
+		return true
+	if parts[0] == "claim" and parts.size() >= 2:
+		var r : Dictionary = Launcher.Economy.ClaimAchievement(accountID, parts[1])
+		if not bool(r.get("ok", false)):
+			Network.CommandFeedback("Claim failed (%s)" % str(r.get("reason", "?")), caller.peerID)
+			return false
+		var extra : String = " + %s" % EconomyService.CosmeticLabel(str(r.get("cosmetic", ""))) if not str(r.get("cosmetic", "")).is_empty() else ""
+		Network.CommandFeedback("Achievement claimed: +%d gems%s!" % [int(r.get("gems", 0)), extra], caller.peerID)
+		return true
+	Network.CommandFeedback("Usage: /ach list | /ach claim <id>", caller.peerID)
+	return false
+
+# Tormento (D2): /torment mostra nível/teto/mult; /torment <n> troca (0..teto).
+# Desbloqueio: zerar a escada libera T1; vencer no teto sobe +1 (cap 10).
+func CommandTorment(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var charID : int = caller.GetCharacterID()
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
+	if parts.is_empty():
+		var level : int = Launcher.SQL.GetTormentLevel(charID)
+		var tmax : int = Launcher.SQL.GetTormentMax(charID)
+		Network.CommandFeedback("Torment %d (max %d): reward x%.2f, mobs x%.2f HP / x%.2f dmg" % [level, tmax, Formula.TormentRewardMult(level), Formula.TormentMobHpFactor(level), Formula.TormentMobDmgFactor(level)], caller.peerID)
+		return true
+	var r : Dictionary = Launcher.Economy.SetTorment(charID, caller, parts[0].to_int())
+	Network.CommandFeedback("Torment %d active" % int(r.get("level", 0)) if bool(r.get("ok", false)) else "Torment locked (%s, max %d)" % [str(r.get("reason", "?")), Launcher.SQL.GetTormentMax(charID)], caller.peerID)
+	return bool(r.get("ok", false))
+
+# Boss rush: /rush info (keys, recorde), /rush start (1 key, até 4 duelos
+# simulados escalados, para na 1ª derrota), /rush key (compra por gold).
+func CommandRush(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
+	var charID : int = caller.GetCharacterID()
+	var accountID : int = Peers.GetAccount(caller.peerID)
+	if parts.is_empty() or parts[0] == "info":
+		Network.CommandFeedback("Boss rush: %d keys, %d/4 beaten, key = %d gold (/rush key)" % [Launcher.SQL.GetCharacterBossKeys(charID), Launcher.SQL.GetCharacterBossesBeaten(charID), EconomyService.BOSS_KEY_GOLD_PRICE], caller.peerID)
+		return true
+	if parts[0] == "key":
+		var r : Dictionary = Launcher.Economy.BuyBossKey(charID)
+		Network.CommandFeedback("Boss key bought (%d keys)" % int(r.get("keys", 0)) if bool(r.get("ok", false)) else "Key buy failed (%s)" % str(r.get("reason", "?")), caller.peerID)
+		return bool(r.get("ok", false))
+	if parts[0] == "start":
+		var r : Dictionary = Launcher.Economy.RunBossRush(charID, caller)
+		if not bool(r.get("ok", false)):
+			Network.CommandFeedback("Rush failed (%s)" % str(r.get("reason", "?")), caller.peerID)
+			return false
+		Network.CommandFeedback("Rush: %d wins, +%d xp, +%d gold, %d chests" % [int(r.get("wins", 0)), int(r.get("xp", 0)), int(r.get("gold", 0)), int(r.get("chests", 0))], caller.peerID)
+		return true
+	Network.CommandFeedback("Usage: /rush info|start|key", caller.peerID)
+	return false
+
 # Fase F: copa semanal (inscrição em gold, rank por ganho de power).
 func CommandTournament(caller : PlayerAgent, arg : String = "") -> bool:
 	if not caller:
@@ -598,11 +742,12 @@ func CommandFarm(caller : PlayerAgent, zoneArg : String = "") -> bool:
 
 	var arg : String = zoneArg.strip_edges().to_lower()
 	if arg == "stop" or arg == "off":
+		caller.autoIdleEnabled = false
 		if caller.idlePolicy:
 			IdlePolicyService.StopIdleSession(caller)
-			Network.CommandFeedback("Idle farming stopped", caller.peerID)
+			Network.CommandFeedback("Idle farming stopped (auto-idle off)", caller.peerID)
 			return true
-		Network.CommandFeedback("No active farming session", caller.peerID)
+		Network.CommandFeedback("No active farming session (auto-idle off)", caller.peerID)
 		return false
 
 	var zoneID : int = arg.to_int()
@@ -628,6 +773,7 @@ func CommandFarm(caller : PlayerAgent, zoneArg : String = "") -> bool:
 
 	Launcher.SQL.SetCharacterFormationSlot(caller.GetCharacterID(), clampi(formSlot, 0, IdlePolicyService.MaxFormationSlots - 1))
 	Launcher.SQL.SetCharacterFarmZone(caller.GetCharacterID(), zoneID)
+	caller.autoIdleEnabled = true
 	var started : bool = IdlePolicyService.StartIdleSession(caller, zoneID)
 	if not started:
 		Network.CommandFeedback("Could not start farming zone %d" % zoneID, caller.peerID)

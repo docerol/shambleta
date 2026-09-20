@@ -17,6 +17,9 @@ enum TargetMode
 static func Cast(agent : BaseAgent, target : BaseAgent, skill : SkillCell):
 	if not ActorCommons.IsAlive(agent) or not SkillCommons.HasSkill(agent, skill) or SkillCommons.IsCoolingDown(agent, skill) or SkillCommons.IsCasting(agent, skill):
 		return
+	# Hero class: fora da lista da classe não conjura (classless pode tudo).
+	if not ClassBonus.CanUseSkill(agent, skill):
+		return
 	if skill.mode == TargetMode.SINGLE and (not target or not ActorCommons.IsAlive(target)):
 		return
 	var map : WorldMap = WorldAgent.GetMapFromAgent(agent)

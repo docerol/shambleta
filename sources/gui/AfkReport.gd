@@ -14,10 +14,11 @@ const AdProvider = preload("res://sources/ads/AdProvider.gd")
 @onready var doubleAdButton : Button = $Layout/DoubleAd
 
 func _ready():
-	if NetClient.LastAFKReport.is_empty():
-		Network.GetAFKReport()
-	else:
-		ShowReport(NetClient.LastAFKReport)
+	if Network and Network.has_method("GetAFKReport"):
+		if NetClient.LastAFKReport.is_empty():
+			Network.GetAFKReport()
+		else:
+			ShowReport(NetClient.LastAFKReport)
 
 func ShowReport(report : Dictionary):
 	if report.is_empty():

@@ -330,6 +330,16 @@ WHERE character.char_id = ?;", [charID])
 	if results.size() != 1: push_error("Character information tables are missing"); return {}
 	return {} if results.is_empty() else results[0]
 
+# Hero class (migration 035): '' = classless (veteranos, irrestrito).
+func GetCharacterClass(charID : int) -> String:
+	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["class_id"])
+	if rows.is_empty():
+		return ""
+	return str(rows[0].get("class_id", ""))
+
+func SetCharacterClass(charID : int, classID : String) -> bool:
+	return UpdateRowsRaw("character", "char_id = %d" % charID, {"class_id" = classID})
+
 func RefreshCharacter(player : PlayerAgent) -> bool:
 	var charID : int = Peers.GetCharacter(player.peerID)
 	if charID == NetworkCommons.PeerUnknownID:
@@ -694,6 +704,25 @@ func GetCharacterBossesBeaten(charID : int) -> int:
 
 func SetCharacterBossesBeaten(charID : int, count : int) -> bool:
 	return db.update_rows("character", "char_id = %d" % charID, {"bosses_beaten" = maxi(0, count)})
+
+# Tormento (migration 037): dificuldade opt-in por char (0 = normal).
+func GetTormentLevel(charID : int) -> int:
+	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["torment"])
+	if rows.is_empty() or rows[0].get("torment", null) == null:
+		return 0
+	return maxi(0, int(rows[0]["torment"]))
+
+func SetTormentLevel(charID : int, level : int) -> bool:
+	return db.update_rows("character", "char_id = %d" % charID, {"torment" = maxi(0, level)})
+
+func GetTormentMax(charID : int) -> int:
+	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["torment_max"])
+	if rows.is_empty() or rows[0].get("torment_max", null) == null:
+		return 0
+	return maxi(0, int(rows[0]["torment_max"]))
+
+func SetTormentMax(charID : int, level : int) -> bool:
+	return db.update_rows("character", "char_id = %d" % charID, {"torment_max" = maxi(0, level)})
 
 # SOM-IDLE: F2 — persist live session efficiency on disconnect (NetServer hook)
 func PersistSessionEfficiency(charID : int, efficiency : float) -> bool:

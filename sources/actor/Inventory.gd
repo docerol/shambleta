@@ -5,6 +5,32 @@ var actor : Actor					= null
 var items : Array[Item]				= []
 var equipment : Array[Item]			= []
 var itemCount : int					= 0
+# D2-depth: container sintético do bônus de set ativo (trocado a cada recompute).
+var setBonusMods : CellModifier		= null
+
+# D2-depth: recomputa o bônus de set (SetBonus.EvaluateIds) sobre o
+# equipamento atual, reaplica como modificadores persistentes e refresca os
+# stats. Chamado em todo equip/unequip (e no load via ImportEquipment, que
+# passa por EquipItem). Sem peças de set: só refresca.
+func _RefreshSetBonus() -> void:
+	if setBonusMods:
+		setBonusMods.Unequip(actor)
+		setBonusMods = null
+	var ids : Array = []
+	for slot in ActorCommons.SlotEquipmentCount:
+		if slot < equipment.size() and equipment[slot]:
+			ids.append((equipment[slot] as Item).cellID)
+	var totals : Dictionary = SetBonus.EvaluateIds(ids)
+	if not totals.is_empty():
+		setBonusMods = CellModifier.new()
+		for eff in totals.keys():
+			var m := StatModifier.new()
+			m._effect = eff
+			m._value = totals[eff]
+			m._persistent = true
+			setBonusMods.Add(m)
+		setBonusMods.Equip(actor)
+	actor.stat.RefreshEntityStats()
 
 #
 func GetEquipmentCell(slot : int) -> ItemCell:
@@ -144,6 +170,9 @@ func DropItem(cell : ItemCell, count : int, itemIndex : int):
 func EquipItem(cell : ItemCell, itemIndex : int):
 	if not cell or cell.type != CellCommons.Type.ITEM or cell.slot == ActorCommons.Slot.NONE or not actor:
 		return
+	# Hero class: fora da classe do item não equipa (classless pode tudo).
+	if not ClassBonus.CanEquip(actor, cell):
+		return
 
 	var targetItem : Item = null
 	if itemIndex >= 0 and itemIndex < itemCount and CellCommons.IsSameItem(cell, items[itemIndex]):
@@ -161,7 +190,7 @@ func EquipItem(cell : ItemCell, itemIndex : int):
 	equipment[cell.slot] = targetItem
 	if cell.modifiers:
 		cell.modifiers.Equip(actor)
-	actor.stat.RefreshEntityStats()
+	_RefreshSetBonus()
 
 	if actor is PlayerAgent and actor.peerID != NetworkCommons.PeerUnknownID:
 		var charID : int = Peers.GetCharacter(actor.peerID)
@@ -181,7 +210,7 @@ func UnequipItem(cell : ItemCell):
 	if cell.modifiers:
 		cell.modifiers.Unequip(actor)
 	equipment[cell.slot] = null
-	actor.stat.RefreshEntityStats()
+	_RefreshSetBonus()
 
 	if actor is PlayerAgent and actor.peerID != NetworkCommons.PeerUnknownID:
 		var charID : int = Peers.GetCharacter(actor.peerID)

@@ -295,7 +295,10 @@ enum Alteration
 	# so the client can show poison/bleed/burn numbers distinctly from a normal HIT.
 	POISON,
 	BLEED,
-	BURN
+	BURN,
+	# D2-depth: deadly strike (chance de equipamento de dobrar um HIT que não
+	# foi crit — número grande e som de crit, mas cor própria no label).
+	DEADLY
 }
 
 # Colors
@@ -441,6 +444,7 @@ static var DefaultSkills : Array[Dictionary] = [
 static var DefaultSfx : Dictionary[ActorCommons.Alteration, AudioStream] = {
 	Alteration.HIT:				preload("res://data/sounds/alteration/hit.ogg"),
 	Alteration.CRIT:			preload("res://data/sounds/alteration/crit.ogg"),
+	Alteration.DEADLY:			preload("res://data/sounds/alteration/crit.ogg"),
 	Alteration.DODGE:			preload("res://data/sounds/alteration/dodge.ogg"),
 	Alteration.HEAL:			preload("res://data/sounds/alteration/heal.ogg"),
 	Alteration.EXP:				preload("res://data/sounds/alteration/exp.ogg"),

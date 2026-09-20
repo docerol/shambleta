@@ -5,6 +5,14 @@ class_name WorldService
 var areas : Dictionary[int, WorldMap]				= {}
 var commands : WorldCommands						= WorldCommands.new()
 var canary : ShutdownCanary							= ShutdownCanary.new()
+# Auto-idle watchdog: acumulador de 1s (policies rodam no physics; isto é só presença).
+var _autoIdleAccum : float							= 0.0
+
+func _process(delta : float) -> void:
+	_autoIdleAccum += delta
+	if _autoIdleAccum >= 1.0:
+		_autoIdleAccum = 0.0
+		IdlePolicyService.TickAutoIdle()
 
 # Getters
 func GetMap(mapID : int) -> WorldMap:
@@ -164,6 +172,9 @@ func _post_launch():
 func _init_world():
 	for mapID in DB.MapsDB:
 		areas[mapID] = WorldMap.Create(mapID)
+	var variants : int = MobVariant.InjectZoneVariants()
+	if variants > 0:
+		Util.PrintLog("World", "Mob variants injected: %d spawns" % variants)
 	WorldAgent._post_launch()
 	canary.Start()
 	isInitialized = true

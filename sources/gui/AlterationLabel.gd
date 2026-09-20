@@ -30,6 +30,11 @@ func SetValue(dealer : Entity, value : int, alteration : ActorCommons.Alteration
 			criticalHit = true
 			bounce = true
 			set_text(str(value))
+		ActorCommons.Alteration.DEADLY:
+			criticalHit = true
+			bounce = true
+			hue = ActorCommons.LocalAttackColor
+			set_text(str(value))
 		ActorCommons.Alteration.DODGE:
 			hue = ActorCommons.DodgeAttackColor
 			bounce = true

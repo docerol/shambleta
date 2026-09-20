@@ -160,10 +160,22 @@ static func _Attach(player : PlayerAgent, map : WorldMap, instID : int, zoneID :
 	if currentInst == null or not (currentInst is WorldInstance) or (currentInst as WorldInstance).id != instID:
 		Launcher.World.Warp(player, map, pos, ActorCommons.Direction.UNKNOWN, instID)
 
-	player.idlePolicy = policy
-	inst.AttachIdlePolicy(policy)
+	# P3 — escalabilidade: farm zones usam ZonePolicy para batching (O(1) por
+	# zona em vez de O(N) por player). ZonePolicy herda IdlePolicy, então a
+	# configuração de formação (loadout/potion) é copiada do policy base.
+	if instID >= ZoneInstanceBase:
+		var zonePolicy : ZonePolicy = ZonePolicy.new()
+		zonePolicy.Setup(player, zoneID)
+		zonePolicy.skillLoadout = policy.skillLoadout.duplicate()
+		zonePolicy.autoPotionPct = policy.autoPotionPct
+		zonePolicy.autoPotionItemHash = policy.autoPotionItemHash
+		player.idlePolicy = zonePolicy
+		inst.AttachIdlePolicy(zonePolicy)
+	else:
+		player.idlePolicy = policy
+		inst.AttachIdlePolicy(policy)
 
-	Util.PrintLog("Idle", "Player %s is now farming zone %d on instance %d" % [player.nick, zoneID, instID])
+	Util.PrintLog("Idle", "Player %s is now farming zone %d on instance %d (ZonePolicy=%s)" % [player.nick, zoneID, instID, str(instID >= ZoneInstanceBase)])
 	return true
 
 static func StopIdleSession(player : PlayerAgent):
@@ -175,6 +187,58 @@ static func StopIdleSession(player : PlayerAgent):
 			var inst : WorldInstance = WorldAgent.GetInstanceFromAgent(player)
 			if inst and inst is WorldInstance:
 				inst.DetachIdlePolicy(policy)
+
+# ------------------------------------------------------------------ auto-idle (inatividade)
+# Sem input manual por AutoIdleTimeoutSec, o farm recomeça sozinho — inclusive
+# skills/casts (o IdlePolicy conjura o loadout). Input manual tem takeover:
+# pausa a policy ativa e o jogador assume; o watchdog retoma após o silêncio.
+# /farm stop desliga (opt-out); /farm <zona> religa.
+const AutoIdleTimeoutSec : int = 10
+
+static func NoteActivity(player : PlayerAgent) -> void:
+	if player == null or not is_instance_valid(player):
+		return
+	player.lastActivityMsec = Time.get_ticks_msec()
+	if player.idlePolicy != null:
+		StopIdleSession(player)
+
+# Puro e testável: já deveria estar em idle dados os timestamps?
+static func ShouldAutoIdle(lastActivityMsec : int, nowMsec : int) -> bool:
+	if lastActivityMsec <= 0:
+		return true
+	return (nowMsec - lastActivityMsec) >= AutoIdleTimeoutSec * 1000
+
+# Watchdog (chamado 1×/s pelo World): retoma farm de quem está manual há tempo
+# demais, na zona salva (com gate de power, igual ao login idle-first).
+static func TickAutoIdle() -> int:
+	if not IsServerSide():
+		return 0
+	var now : int = Time.get_ticks_msec()
+	var started : int = 0
+	for peerID : int in Peers.peers.keys():
+		var player : PlayerAgent = Peers.GetAgent(peerID)
+		if player == null or not is_instance_valid(player):
+			continue
+		if player.idlePolicy != null or not player.autoIdleEnabled:
+			continue
+		if not ActorCommons.IsAlive(player):
+			continue
+		if not ShouldAutoIdle(player.lastActivityMsec, now):
+			continue
+		var charID : int = Peers.GetCharacter(peerID)
+		if charID == NetworkCommons.PeerUnknownID:
+			continue
+		var zoneID : int = 1
+		var row : Dictionary = Launcher.SQL.GetCharacter(charID)
+		if not row.is_empty():
+			zoneID = maxi(1, int(row.get("farm_zone", 0) if row.get("farm_zone", 0) != null else 0))
+		var zone : FarmZoneData = FarmZoneData.GetZone(zoneID)
+		if zone == null or zone.mapID == DB.UnknownHash or Formula.GetPowerScore(player.stat) < zone.minPower:
+			zoneID = 1
+		if StartIdleSession(player, zoneID):
+			started += 1
+			Util.PrintLog("Idle", "Auto-idle: %s farming zone %d after %ds silent" % [player.nick, zoneID, AutoIdleTimeoutSec])
+	return started
 
 # ------------------------------------------------------------------ boss-key ladder (live fight)
 

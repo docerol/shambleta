@@ -49,7 +49,8 @@ func GetValues():
 		"haircolor" = haircolors[haircolorValue],
 		"race" = races[raceValue],
 		"skintone" = skinsKeys[skintoneValue].hash(),
-		"gender" = genderValue
+		"gender" = genderValue,
+		"hero_class" = GetHeroClass()
 	}
 
 # Hairstyle
@@ -134,6 +135,75 @@ func _on_skintone_next_button():
 	skintoneValue = skintoneValue + 1 if skintoneValue < skintoneCount - 1 else 0
 	RefreshSkintone()
 
+# Hero class (runtime row, mirrors the Race cycler; class is mandatory).
+var classValue : int = 0
+var _classNameLabel : Label = null
+
+func _ready() -> void:
+	EnsureClassRow()
+
+func _class_ids() -> Array:
+	var ids : Array = []
+	for entry in ClassBonus.GetCatalog():
+		ids.append(str(entry.get("id", "")))
+	return ids
+
+func EnsureClassRow() -> void:
+	if _classNameLabel != null or _class_ids().is_empty():
+		return
+	var row := HBoxContainer.new()
+	row.name = "Class"
+	var prev := Button.new()
+	prev.name = "Previous"
+	prev.text = "<"
+	prev.pressed.connect(_on_class_prev_button)
+	var nameLabel := Label.new()
+	nameLabel.name = "Name"
+	nameLabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nameLabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var next := Button.new()
+	next.name = "Next"
+	next.text = ">"
+	next.pressed.connect(_on_class_next_button)
+	row.add_child(prev)
+	row.add_child(nameLabel)
+	row.add_child(next)
+	($Margin/VBox as VBoxContainer).add_child(row)
+	($Margin/VBox as VBoxContainer).move_child(row, 0)
+	_classNameLabel = nameLabel
+	RefreshClass()
+
+func RefreshClass():
+	EnsureClassRow()
+	if _classNameLabel == null:
+		return
+	var ids : Array = _class_ids()
+	if classValue < 0 or classValue >= ids.size():
+		classValue = 0
+	_classNameLabel.set_text(str(ClassBonus.GetClass(ids[classValue]).get("label", ids[classValue])))
+
+func GetHeroClass() -> String:
+	var ids : Array = _class_ids()
+	if ids.is_empty():
+		return ""
+	if classValue < 0 or classValue >= ids.size():
+		classValue = 0
+	return ids[classValue]
+
+func _on_class_prev_button():
+	var n : int = _class_ids().size()
+	if n <= 0:
+		return
+	classValue = classValue - 1 if classValue > 0 else n - 1
+	RefreshClass()
+
+func _on_class_next_button():
+	var n : int = _class_ids().size()
+	if n <= 0:
+		return
+	classValue = classValue + 1 if classValue < n - 1 else 0
+	RefreshClass()
+
 #
 func Randomize():
 	if hairstylesCount == 0:
@@ -151,5 +221,7 @@ func Randomize():
 	RefreshGender()
 	raceValue = randi() % raceCount
 	RefreshRace()
+	classValue = randi() % maxi(_class_ids().size(), 1)
+	RefreshClass()
 	skintoneValue = randi() % skintoneCount
 	RefreshSkintone()

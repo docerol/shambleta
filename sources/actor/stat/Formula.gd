@@ -210,17 +210,25 @@ static func ApplyXp(agent : AIAgent):
 				var zoneXp : int = zone.xpPerKill
 				if entry.attacker.stat.level < FarmZoneData.NewbieBoostMaxLevel:
 					zoneXp = roundi(float(zoneXp) * FarmZoneData.NewbieBoostFactor)
-				zoneXp = maxi(1, roundi(float(zoneXp) * damageRatio * rebXp))
+				var tormentMult : float = 1.0
+				if entry.attacker is PlayerAgent:
+					tormentMult = TormentRewardMult((entry.attacker as PlayerAgent).tormentLevel)
+				zoneXp = maxi(1, roundi(float(zoneXp) * damageRatio * rebXp * tormentMult))
 				entry.attacker.stat.AddExperience(zoneXp, false)
 
 				if damageRatio > 0.5:
-					var zoneGold : int = maxi(1, roundi(float(zone.goldPerKill) * damageRatio * rebGold))
+					var zoneGold : int = maxi(1, roundi(float(zone.goldPerKill) * damageRatio * rebGold * tormentMult))
 					entry.attacker.stat.AddGP(zoneGold, false)
 					# SOM-IDLE: boss-key drop — mobs de farm dropam chaves (raras)
 					# que abrem a escada de bosses. Só com o EconomyService no ar
 					# (servidor); sims puras sem Launcher.Economy só contam kills.
-					if Launcher.Economy != null and BossService.RollsKeyDrop(randf()):
-						Launcher.Economy.GrantBossKey(entry.attacker.GetCharacterID(), 1, "farm_drop")
+					# Key drop é evento raro (~1/3.5h): avisa (BossState + chat).
+					if Launcher.Economy != null and entry.attacker is PlayerAgent and BossService.RollsKeyDrop(randf()):
+						var keyChar : int = (entry.attacker as PlayerAgent).GetCharacterID()
+						var keyPeer : int = (entry.attacker as PlayerAgent).peerID
+						if Launcher.Economy.GrantBossKey(keyChar, 1, "farm_drop") >= 0 and keyPeer != NetworkCommons.PeerUnknownID:
+							Network.BossState(Launcher.Economy.GetBossState(keyChar, entry.attacker.stat.level), keyPeer)
+							Network.CommandFeedback("Boss key dropped! Check /boss", keyPeer)
 			else:
 				var bonusScaled : int = int(bonus * damageRatio)
 				entry.attacker.stat.AddExperience(bonusScaled, false)
@@ -232,6 +240,16 @@ static func ApplyXp(agent : AIAgent):
 # SOM-IDLE: F2 idle spike — spike power score proxy (§2): level*10 + attack + defense
 static func GetPowerScore(stat : ActorStats) -> int:
 	return stat.level * 10 + stat.current.attack + stat.current.defense
+
+# Tormento (D2): T0 = normal. Recompensa sobe linear; mobs ficam mais duros
+# (dano causado cai) e batem mais forte. Teto 10 (recompensa ×3.5).
+const TormentMaxCap : int = 10
+static func TormentRewardMult(torment : int) -> float:
+	return 1.0 + 0.25 * float(maxi(torment, 0))
+static func TormentMobHpFactor(torment : int) -> float:
+	return 1.0 + 0.10 * float(maxi(torment, 0))
+static func TormentMobDmgFactor(torment : int) -> float:
+	return 1.0 + 0.15 * float(maxi(torment, 0))
 
 # Attribute points
 static func GetMaxAttributePoints(level : int) -> int:
