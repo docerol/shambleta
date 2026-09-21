@@ -68,6 +68,7 @@ func PruneBackups() -> void:
 		var backupFrequencyDir = SQLCommons.BackupFrequency.keys()[backupFrequency]
 		var dir : DirAccess = DirAccess.open(SQLCommons.GetBackupPath() + "/" + backupFrequencyDir)
 		if not dir:
+			Util.PrintLog("SQL", "PruneBackups: diretório '%s' inacessível — disco cheio?" % (SQLCommons.GetBackupPath() + "/" + backupFrequencyDir))
 			return
 		
 		var dirFiles : PackedStringArray = dir.get_files()
@@ -88,8 +89,6 @@ func PruneBackups() -> void:
 
 #
 func Run():
-	Thread.set_thread_safety_checks_enabled(false)
-
 	var lastDailyBackupTimestamp : int = SQLCommons.Timestamp()
 	var lastWeeklyBackupTimestamp : int = SQLCommons.Timestamp()
 	var lastMonthlyBackupTimestamp : int = SQLCommons.Timestamp()
@@ -104,7 +103,6 @@ func Run():
 			lastDailyBackupTimestamp = timestamp
 			if not backupFilePath.is_empty():
 				PushOffsite(backupFilePath)
-				# SOM-IDLE D2: reconcile diário após o backup (best-effort).
 				if Launcher.Economy:
 					Launcher.Economy.RunReconcileJob()
 
@@ -121,8 +119,8 @@ func Run():
 			PruneBackups()
 
 		if timestamp - lastPlayerUpdateTimestamp >= SQLCommons.BackupPlayersSec:
-			if Launcher.World:
-				Launcher.World.BackupPlayers()
+			if Launcher.World and Launcher.World.is_inside_tree():
+				Launcher.World.call_deferred("BackupPlayers")
 			lastPlayerUpdateTimestamp = timestamp
 
 		if timestamp - lastStopCheckTimestamp >= SQLCommons.BackupCheckIntervalSec:

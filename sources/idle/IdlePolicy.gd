@@ -93,6 +93,7 @@ func Setup(pAgent : PlayerAgent, pZoneID : int):
 	_deathDownAccumulator = 0.0
 	_retargets = 0
 	_attackedTarget = false
+	_killRegistered = false
 	sessionStartTime = Time.get_ticks_msec()
 	sessionGameTime = 0.0
 	sessionKills = 0
@@ -255,50 +256,40 @@ func _setTarget(target : AIAgent):
 # ------------------------------------------------------------------ combat
 
 func _tickCombat(delta : float):
-	var target : BaseAgent = WorldAgent.GetAgent(currentTargetRID) as AIAgent if currentTargetRID != 0 else null
-	if target == null or not is_instance_valid(target) or not ActorCommons.IsAlive(target):
-		# Kill detection: if we attacked this target and it's now dead/gone, count
-		# it (one-shot kills die between ticks — also covers mob corpse cleanup)
-		if _attackedTarget:
-			sessionKills += 1
-			_attackedTarget = false
-		currentTargetRID = 0
-		state = State.SEEK
-		return
+  var target : BaseAgent = WorldAgent.GetAgent(currentTargetRID) as AIAgent if currentTargetRID != 0 else null
+  if target == null or not is_instance_valid(target) or not ActorCommons.IsAlive(target):
+    if _attackedTarget and not _killRegistered:
+      sessionKills += 1
+      _killRegistered = true
+    _attackedTarget = false
+    currentTargetRID = 0
+    state = State.SEEK
+    return
 
-	var skill : SkillCell = _getSkill()
-	if skill == null:
-		state = State.SEEK
-		return
+  var skill : SkillCell = _getSkill()
+  if skill == null:
+    state = State.SEEK
+    return
 
-	var range : float = float(ActorCommons.GetSkillRange(agent, skill)) - AttackRangeBuffer
-	var dist : float = agent.position.distance_to(target.position)
+  var range : float = float(ActorCommons.GetSkillRange(agent, skill)) - AttackRangeBuffer
+  var dist : float = agent.position.distance_to(target.position)
 
-	if dist > range:
-		# SOM-IDLE: nunca cancele um cast em progresso para perseguir. Melee é
-		# static cast (castWalk=false) e WalkToward chama Skill.Stopped — na
-		# borda de range o flicker de wander cancelava a esmagadora maioria dos
-		# casts em real-time (probe: 995 casts / 1 kill; sims comprimidos não
-		# sofrem porque o cast resolve em ~1,5 frames no timeScale 20). Deixa o
-		# swing resolver e aproxima no tick seguinte; o failsafe STUCK cobre
-		# casos patológicos.
-		if not SkillCommons.IsCasting(agent) and not SkillCommons.HasAnyActionInProgress(agent):
-			agent.WalkToward(target.position)
-	else:
-		# SOM-IDLE D1: chama Cast só quando um cast real pode começar
-		# (predicados do próprio motor). Sem isso cada tick empilha um timer
-		# que morre no Process — milhares de timers/seg por farmer no servidor.
-		if not SkillCommons.HasAnyActionInProgress(agent) and not SkillCommons.IsCasting(agent) and not SkillCommons.IsCoolingDown(agent, skill):
-			Skill.Cast(agent, target, skill)
-			_attackedTarget = true
-			metricAttacksCast += 1
+  if dist > range:
+    if not SkillCommons.IsCasting(agent) and not SkillCommons.HasAnyActionInProgress(agent):
+      agent.WalkToward(target.position)
+  else:
+    if not SkillCommons.HasAnyActionInProgress(agent) and not SkillCommons.IsCasting(agent) and not SkillCommons.IsCoolingDown(agent, skill):
+      Skill.Cast(agent, target, skill)
+      _attackedTarget = true
+      metricAttacksCast += 1
 
-	# Kill detection: target died between ticks
-	if not ActorCommons.IsAlive(target):
-		sessionKills += 1
-		_attackedTarget = false
-		currentTargetRID = 0
-		state = State.LOOT
+  if not ActorCommons.IsAlive(target):
+    if _attackedTarget and not _killRegistered:
+      sessionKills += 1
+      _killRegistered = true
+    _attackedTarget = false
+    currentTargetRID = 0
+    state = State.LOOT
 
 # ------------------------------------------------------------------ loot
 

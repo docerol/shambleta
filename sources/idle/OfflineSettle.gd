@@ -133,7 +133,7 @@ static func SettlePending(charID : int) -> Dictionary:
 	report.zoneID = zoneID
 	report.lastSettledAt = now
 	report.hours = minf(float(now - lastSettled) / 3600.0, CapHoursForAccount(report.accountID))
-	report.efficiency = clampf(float(char.get("session_efficiency", 1.0)), MinEfficiency, 1.0)
+	report.efficiency = clampf(float(char.get("session_efficiency", 1.0) if char.get("session_efficiency", 1.0) != null else 1.0), MinEfficiency, 1.0)
 	# NOTE: session deaths are already baked into session_efficiency on disconnect
 	# (NetServer SOM-IDLE hook); the spike does not track a separate death count.
 
@@ -206,12 +206,15 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	report.mods = GetModsForAccount(report.accountID, _now())
 	# Tormento (D2): recompensa offline escala com a dificuldade do char.
 	report.mods *= Formula.TormentRewardMult(sql.GetTormentLevel(report.charID))
+	# SOM-IDLE newbie boost: primeiras 48h (até level 10) rendem 5× offline.
+	var charLevel : int = int(sql.GetCharacter(report.charID).get("level", 1))
+	var newbieMult : float = float(FarmZoneData.NewbieBoostFactor) if charLevel < FarmZoneData.NewbieBoostMaxLevel else 1.0
 	# Fase E: ad armado dobra XP/ouro/drops da liquidação (4× com VIP). Baús,
 	# chaves e favores intactos. Essência de overflow acompanha o XP dobrado
 	# (mesmo eixo tempo-por-tempo do VIP 1.2× — §2.5, não é faucet de essência).
 	report.doubled = adMult > 1
-	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp * float(adMult))
-	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold * float(adMult))
+	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp * float(adMult) * newbieMult)
+	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold * float(adMult) * newbieMult)
 	if eff < 1.0:
 		report.goldTaxed = roundi(float(report.goldEarned) * float(DeathTaxPct) / 100.0)
 

@@ -3001,6 +3001,8 @@ func SuiteTwoFactor(sql : SQLService) -> void:
 	Check(sql.AddAccount("idle_2fa_b", "CorrectHorse123!", "idle_2fa_b@test.local"), "2fa fixture B created")
 	var secA : String = TwoFactorAuth.GenerateSecret()
 	var secB : String = TwoFactorAuth.GenerateSecret()
+	Check(secA.length() == 32 and secB.length() == 32 and secA != secB, "CSPRNG secrets are Base32-encoded and distinct")
+	Check(not TwoFactorAuth.VerifyTOTP(secA, "12345", now), "malformed TOTP token is rejected")
 	Check(int(sql.GetAccountPermission(sql.GetAccountID("idle_2fa_a"))) >= 0, "permission helper resolves")
 	Check(sql.SetTwoFactorSecret(sql.GetAccountID("idle_2fa_a"), secA), "A secret stored")
 	Check(sql.SetTwoFactorEnabled(sql.GetAccountID("idle_2fa_a"), true), "A 2fa enabled")
@@ -3032,7 +3034,15 @@ func SuiteTwoFactor(sql : SQLService) -> void:
 	peer.pendingTwoFactorAt = now
 	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_OK), "valid code → OK")
 	Check(peer.pendingTwoFactorAccount.is_empty(), "success consumes challenge")
-	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_NO_PEER_DATA), "replay → NO_PEER_DATA")
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_NO_PEER_DATA), "same-peer replay → NO_PEER_DATA")
+	var replayPeerID : int = 424243
+	Peers.AddPeer(replayPeerID, Peers.TransportType.OFFLINE)
+	var replayPeer : Peers.Peer = Peers.GetPeer(replayPeerID)
+	replayPeer.pendingTwoFactorAccount = "idle_2fa_a"
+	replayPeer.pendingTwoFactorAt = now
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(replayPeer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_AUTH), "cross-peer replay → AUTH")
+	Check(replayPeer.pendingTwoFactorAccount == "idle_2fa_a", "cross-peer replay preserves active challenge")
+	Peers.RemovePeer(replayPeerID)
 	Peers.RemovePeer(peerID)
 	sql.db.delete_rows("account", "username = 'idle_2fa_a'")
 	sql.db.delete_rows("account", "username = 'idle_2fa_b'")

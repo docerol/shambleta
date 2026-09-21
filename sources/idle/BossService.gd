@@ -48,22 +48,27 @@ static func GetBossName(index : int) -> String:
 
 # SOM-IDLE: hash da entidade do boss (para spawnar a luta ao vivo). Procurado
 # pelo _name do preset (Dorian/Gabriel/Marvin/Splatyna são entidades reais com
-# sprite+animação próprios). Cache por índice (DB não muda pós-boot).
+# sprite+animação próprios). Cache por índice com TTL para acomodar hotfixes de
+# balance que alterem EntitiesDB pós-boot.
+const ENTITY_HASH_CACHE_TTL_SEC : int = 300
 static var _entityHashCache : Dictionary = {}
+static var _entityHashCacheTimestamp : int = 0
 static func GetBossEntityHash(index : int) -> int:
-	if index < 0 or index >= BossNames.size():
-		return DB.UnknownHash
-	if _entityHashCache.has(index):
-		return int(_entityHashCache[index])
-	var want : String = BossNames[index]
-	var found : int = DB.UnknownHash
-	for hash in DB.EntitiesDB:
-		var data : EntityData = DB.EntitiesDB[hash]
-		if data != null and data._name == want:
-			found = int(hash)
-			break
-	_entityHashCache[index] = found
-	return found
+  if index < 0 or index >= BossNames.size():
+    return DB.UnknownHash
+  var now : int = SQLCommons.Timestamp()
+  if _entityHashCache.has(index) and now - _entityHashCacheTimestamp < ENTITY_HASH_CACHE_TTL_SEC:
+    return int(_entityHashCache[index])
+  var want : String = BossNames[index]
+  var found : int = DB.UnknownHash
+  for hash in DB.EntitiesDB:
+    var data : EntityData = DB.EntitiesDB[hash]
+    if data != null and data._name == want:
+      found = int(hash)
+      break
+  _entityHashCache[index] = found
+  _entityHashCacheTimestamp = now
+  return found
 
 static func GetBossFloorLevel(index : int) -> int:
 	return BossFloorLevel[index] if index >= 0 and index < BossFloorLevel.size() else 1

@@ -14,11 +14,15 @@ const AdProvider = preload("res://sources/ads/AdProvider.gd")
 @onready var doubleAdButton : Button = $Layout/DoubleAd
 
 func _ready():
-	if Network and Network.has_method("GetAFKReport"):
-		if NetClient.LastAFKReport.is_empty():
-			Network.GetAFKReport()
-		else:
-			ShowReport(NetClient.LastAFKReport)
+  if Network and Network.has_method("GetAFKReport"):
+    if NetClient.LastAFKReport.is_empty():
+      hoursLabel.text = tr("Carregando...")
+      goldLabel.text = "—"
+      xpLabel.text = "—"
+      effLabel.text = "—"
+      Network.GetAFKReport()
+    else:
+      ShowReport(NetClient.LastAFKReport)
 
 func ShowReport(report : Dictionary):
 	if report.is_empty():
@@ -43,7 +47,8 @@ func ShowReport(report : Dictionary):
 	# Eficiência com cor de destaque (amarelo/dourado para alta eficiência).
 	var eff_raw : float = float(report.get("efficiency", 1.0))
 	var eff_pct : int = int(eff_raw * 100.0)
-	effLabel.text = tr("Efficiency: %d%%") % eff_pct
+	var eff_symbol : String = "▲" if eff_pct >= 80 else ("→" if eff_pct >= 50 else "▼")
+	effLabel.text = tr("Efficiency: %s %d%%") % [eff_symbol, eff_pct]
 	effLabel.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3) if eff_pct >= 80 else (Color(1.0, 0.95, 0.6) if eff_pct >= 50 else Color(0.9, 0.3, 0.2)))
 	if bool(report.get("armed", false)) and not doubled:
 		adHintLabel.text = tr("2× ad armed — applies on Collect (4× with VIP)")

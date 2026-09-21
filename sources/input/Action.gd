@@ -15,7 +15,7 @@ signal deviceChanged
 
 #
 func Enable(enable : bool):
-	disableCounter = clampi(disableCounter + (1 if enable else -1), -256, 0)
+	disableCounter = clampi(disableCounter + (-1 if enable else 1), 0, 256)
 	isEnabled = disableCounter == 0
 
 func IsEnabled() -> bool:
@@ -82,11 +82,10 @@ func GetMove(forceMode : bool = false) -> Vector2:
 		moveVector.x = Input.get_action_strength("gp_move_right") - Input.get_action_strength("gp_move_left")
 		moveVector.y = Input.get_action_strength("gp_move_down") - Input.get_action_strength("gp_move_up")
 		moveVector += Launcher.GUI.sticks.GetMove()
-		moveVector = moveVector.normalized()
 
 		var moveLength : float = moveVector.length()
 		if moveLength < stickDeadzone:
-			moveVector = Vector2.ZERO;
+			moveVector = Vector2.ZERO
 		else:
 			moveVector = moveVector.normalized() * ((moveLength - stickDeadzone) / (1 - stickDeadzone))
 
@@ -188,10 +187,10 @@ func _input(event : InputEvent):
 			Launcher.GUI.OpenCharacterHub(2)
 		elif TryJustPressed(event, "ui_stat"):
 			Launcher.GUI.OpenCharacterHub(0)
-			elif TryJustPressed(event, "ui_social"):		Launcher.GUI.ToggleControl(Launcher.GUI.socialWindow)
-			elif TryJustPressed(event, "ui_validate"):		Launcher.GUI.ToggleChatNewLine()
-			elif TryJustPressed(event, "ui_screenshot"):	FileSystem.SaveScreenshot()
-			elif TryJustPressed(event, "ui_fullscreen"):	Launcher.GUI.ToggleFullscreen()
+		elif TryJustPressed(event, "ui_social"):		Launcher.GUI.ToggleControl(Launcher.GUI.socialWindow)
+		elif TryJustPressed(event, "ui_validate"):		Launcher.GUI.ToggleChatNewLine()
+		elif TryJustPressed(event, "ui_screenshot"):	FileSystem.SaveScreenshot()
+		elif TryJustPressed(event, "ui_fullscreen"):	Launcher.GUI.ToggleFullscreen()
 	consumed.clear()
 
 #

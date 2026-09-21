@@ -212,6 +212,8 @@ static func ValidateTwoFactorChallenge(peer : Peer, accountName : String, token 
 	var secret : String = Launcher.SQL.GetTwoFactorSecret(accountID)
 	if secret.is_empty() or not TwoFactorAuth.VerifyTOTP(secret, token):
 		return NetworkCommons.AuthError.ERR_AUTH
+	if not Launcher.SQL.ConsumeTwoFactorToken(accountID, token):
+		return NetworkCommons.AuthError.ERR_AUTH
 	peer.pendingTwoFactorAccount = ""
 	peer.pendingTwoFactorAt = 0
 	return NetworkCommons.AuthError.ERR_OK

@@ -63,11 +63,6 @@ services:
       # MESMO volume do game: grant_queue é consumido do mesmo SQLite (WAL).
       - game-data:/data
 
-volumes:
-  game-data:
-
-  # Cloudflared tunnel — expõe o jogo via WSS sem abrir portas no firewall da VPS.
-  # Requer token do Cloudflare Zero Trust (CLOUDFLARED_TOKEN).
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
@@ -75,3 +70,12 @@ volumes:
       - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN:-}
     depends_on:
       - game
+    command: tunnel run
+
+volumes:
+  game-data:
+
+  # Cloudflared tunnel — expõe o jogo via WSS sem abrir portas no firewall da VPS.
+  # Requer token do Cloudflare Zero Trust (CLOUDFLARED_TOKEN).
+  # NOTA: não declarar como volume nomeado aqui; o serviço cloudflared acima
+  # cuida da inicialização do tunnel.

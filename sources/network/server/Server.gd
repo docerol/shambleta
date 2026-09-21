@@ -186,10 +186,12 @@ func ConfirmPasswordReset(accountName : String, code : String, newPassword : Str
 		if accountID != NetworkCommons.PeerUnknownID:
 			var codeHash : String = Hasher.HashPassword(code)
 			if Launcher.Email.ValidateReset(accountID, codeHash):
-				Launcher.SQL.UpdateAccountPassword(accountID, newPassword)
-				Launcher.Email.RemoveReset(accountID)
-				Launcher.SQL.RemoveAllAuthTokens(accountID)
-				err = NetworkCommons.AuthError.ERR_RESET_PASSWORD_UPDATED
+				if Launcher.SQL.Transaction(func() -> bool:
+					Launcher.SQL.UpdateAccountPassword(accountID, newPassword)
+					Launcher.Email.RemoveReset(accountID)
+					Launcher.SQL.RemoveAllAuthTokens(accountID)
+					return true):
+					err = NetworkCommons.AuthError.ERR_RESET_PASSWORD_UPDATED
 
 	Network.AuthError(err, peerID)
 
@@ -400,16 +402,18 @@ func SetFarmZone(zoneID : int, peerID : int):
 	Network.FarmZoneFeedback(zoneID, true, "farming", peerID)
 
 func ClaimOfflineSettle(peerID : int):
-	var charID : int = Peers.GetCharacter(peerID)
-	if charID == NetworkCommons.PeerUnknownID:
-		Network.AFKReport({}, peerID)
-		return
+  var charID : int = Peers.GetCharacter(peerID)
+  if charID == NetworkCommons.PeerUnknownID:
+    Network.AFKReport({}, peerID)
+    return
+  if not Footprint.CheckAction(peerID, "claim_settle", 1, 60):
+    Network.AFKReport({}, peerID)
+    return
 
-	var report : Dictionary = OfflineSettle.SettlePending(charID)
-	if report.is_empty():
-		# Nothing pending: report the current state so the client can sync
-		report = OfflineSettle.BuildReport(charID).to_dictionary()
-	Network.AFKReport(report, peerID)
+  var report : Dictionary = OfflineSettle.SettlePending(charID)
+  if report.is_empty():
+    report = OfflineSettle.BuildReport(charID).to_dictionary()
+  Network.AFKReport(report, peerID)
 
 func GetAFKReport(peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
@@ -786,6 +790,9 @@ func OpenChest(chestID : int, peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	var result : Dictionary = {}
 	if charID != NetworkCommons.PeerUnknownID and accountID != NetworkCommons.PeerUnknownID:
+		if not Footprint.CheckAction(peerID, "open_chest", 10, 60):
+			Network.ChestOpened({}, peerID)
+			return
 		result = Launcher.Economy.OpenChest(charID, chestID)
 		if not result.is_empty():
 			var cell : ItemCell = DB.ItemsDB.get(int(result["item_id"]), null)

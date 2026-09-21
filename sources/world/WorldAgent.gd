@@ -2,6 +2,7 @@ extends Node
 class_name WorldAgent
 
 static var agents : Dictionary[int, BaseAgent]		= {}
+static var _agentsMutex : Mutex = Mutex.new()
 static var defaultSpawnLocation : SpawnObject		= SpawnObject.new()
 # P2 — escalabilidade: raio de visibilidade para limitar notificações de rede.
 const VISIBLE_RADIUS_SQUARED : float = 200.0
@@ -22,33 +23,40 @@ static func GetMapFromAgent(agent : BaseAgent) -> WorldMap:
 
 # Basic Agent container handling
 static func GetAgent(agentRID : int) -> BaseAgent:
-	var agent : BaseAgent = null
-	if agents.has(agentRID):
-		agent = agents.get(agentRID)
-	return agent
+  var agent : BaseAgent = null
+  _agentsMutex.lock()
+  if agents.has(agentRID):
+    agent = agents.get(agentRID)
+  _agentsMutex.unlock()
+  return agent
 
 static func AddAgent(agent : BaseAgent):
-	if agent == null:
-		push_error("Agent is null, can't add it")
-		return
-	if agent and not agents.has(agent.get_rid().get_id()):
-		agents[agent.get_rid().get_id()] = agent
+  if agent == null:
+    push_error("Agent is null, can't add it")
+    return
+  var agentRID : int = agent.get_rid().get_id()
+  _agentsMutex.lock()
+  if not agents.has(agentRID):
+    agents[agentRID] = agent
+  _agentsMutex.unlock()
 
 static func RemoveAgent(agent : BaseAgent):
-	if agent == null:
-		push_error("Agent is null, can't remove it")
-		return
-	if agent:
-		if agent is AIAgent:
-			var inst : WorldInstance = agent.get_parent()
-			if inst and inst.timers and agent.spawnInfo and agent.spawnInfo.is_persistant:
-				Callback.SelfDestructTimer(inst.timers, agent.spawnInfo.respawn_delay, WorldAgent.CreateAgent, [agent.spawnInfo, inst.id])
-			if agent.leader != null:
-				agent.leader.RemoveFollower(agent)
+  if agent == null:
+    push_error("Agent is null, can't remove it")
+    return
+  if agent:
+    if agent is AIAgent:
+      var inst : WorldInstance = agent.get_parent()
+      if inst and inst.timers and agent.spawnInfo and agent.spawnInfo.is_persistant:
+        Callback.SelfDestructTimer(inst.timers, agent.spawnInfo.respawn_delay, WorldAgent.CreateAgent, [agent.spawnInfo, inst.id])
+      if agent.leader != null:
+        agent.leader.RemoveFollower(agent)
 
-		PopAgent(agent)
-		agents.erase(agent.get_rid().get_id())
-		agent.queue_free()
+    PopAgent(agent)
+    _agentsMutex.lock()
+    agents.erase(agent.get_rid().get_id())
+    _agentsMutex.unlock()
+    agent.queue_free()
 
 static func PopAgent(agent : BaseAgent):
 	if agent == null:

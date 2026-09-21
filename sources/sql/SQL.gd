@@ -88,12 +88,15 @@ func SetConsentAccepted(accountID : int, tosVersion : String, privacyVersion : S
 	# SOM-IDLE LGPD: records a (re-)acceptance of the given agreement versions
 	# with timestamp + IP audit trail (single-row house update, like
 	# UpdatePowerScore — no transaction wrapper needed).
-	return db.update_rows("account", "account_id = %d" % accountID, {
+	var ok : bool = db.update_rows("account", "account_id = %d" % accountID, {
 		"consent_tos_version" : tosVersion,
 		"consent_privacy_version" : privacyVersion,
 		"consent_timestamp" : SQLCommons.Timestamp(),
 		"consent_ip" : ip,
 	})
+	if ok:
+		LogConsent(accountID, tosVersion, privacyVersion, ip)
+	return ok
 
 func RemoveAccount(accountID : int) -> bool:
 	return db.delete_rows("account", "account_id = %d" % accountID)
@@ -390,9 +393,9 @@ func UpdateCharacter(player : PlayerAgent) -> bool:
 
 	var map : WorldMap = WorldAgent.GetMapFromAgent(player)
 	var newTimestamp : int = SQLCommons.Timestamp()
-	var data : Dictionary = GetCharacter(charID)
+	var data : Dictionary = {}
 
-	data["total_time"] = SQLCommons.GetOrAddValue(data, "total_time", 0) + newTimestamp - SQLCommons.GetOrAddValue(data, "last_timestamp", newTimestamp)
+	data["total_time"] = SQLCommons.GetOrAddValue(GetCharacter(charID), "total_time", 0) + newTimestamp - SQLCommons.GetOrAddValue(GetCharacter(charID), "last_timestamp", newTimestamp)
 	data["last_timestamp"] = newTimestamp
 
 	if map != null and not map.HasFlags(WorldMap.Flags.NO_REJOIN) and ActorCommons.IsAlive(player):
@@ -412,7 +415,7 @@ func UpdateCharacter(player : PlayerAgent) -> bool:
 		data["explore_x"] = player.exploreOrigin.pos.x
 		data["explore_y"] = player.exploreOrigin.pos.y
 
-	return db.update_rows("character", "char_id = %d;" % charID, data)
+	return ExecuteBindings("UPDATE character SET total_time = total_time + ?, last_timestamp = ?, pos_x = ?, pos_y = ?, pos_map = ?, respawn_x = ?, respawn_y = ?, respawn_map = ?, explore_x = COALESCE(?, explore_x), explore_y = COALESCE(?, explore_y) WHERE char_id = ?;", [newTimestamp - SQLCommons.GetOrAddValue(GetCharacter(charID), "last_timestamp", newTimestamp), newTimestamp, data.get("pos_x", 0), data.get("pos_y", 0), data.get("pos_map", 0), data.get("respawn_x", 0), data.get("respawn_y", 0), data.get("respawn_map", 0), data.get("explore_x", 0), data.get("explore_y", 0), charID])
 
 # Stats
 func GetAttribute(charID : int) -> Dictionary:
@@ -474,8 +477,6 @@ func Transaction(callable : Callable) -> bool:
 			committed = true
 		else:
 			db.query("ROLLBACK;")
-	else:
-		callable.call()
 	queryMutex.unlock()
 	return committed
 
@@ -520,27 +521,27 @@ func GrantItemLotRaw(charID : int, itemID : int, count : int, reason : String, b
 	var res : Array = db.query_result
 	return int(res[0].get("uid", 0)) if not res.is_empty() else 0
 
-func _LotCondition(charID : int, itemID : int, allowBound : bool, customfield : String) -> String:
-	var cond : String = "char_id = %d AND item_id = %d AND storage = 0 AND customfield = '%s'" % [charID, itemID, customfield.replace("'", "''")]
+func _LotCondition(charID : int, itemID : int, allowBound : bool, customfield : String) -> Dictionary:
+	var cond : String = "char_id = ? AND item_id = ? AND storage = 0 AND customfield = ?"
+	var bindings : Array = [charID, itemID, customfield]
 	if not allowBound:
 		cond += " AND bound = 0"
-	return cond
+	return {"condition": cond, "bindings": bindings}
 
 func GetLotBalanceRaw(charID : int, itemID : int, allowBound : bool = true, customfield : String = "") -> int:
-	if not db.query_with_bindings("SELECT COALESCE(SUM(count), 0) AS total FROM item_instance WHERE " + _LotCondition(charID, itemID, allowBound, customfield) + ";", []):
+	var lot : Dictionary = _LotCondition(charID, itemID, allowBound, customfield)
+	if not db.query_with_bindings("SELECT COALESCE(SUM(count), 0) AS total FROM item_instance WHERE " + lot["condition"] + ";", lot["bindings"]):
 		return 0
 	var res : Array = db.query_result
 	return int(res[0].get("total", 0)) if not res.is_empty() else 0
 
-# Consome lotes em FIFO (mais antigo primeiro). Retorna os uids consumidos ou
-# []. Dentro de Transaction(), falhar reverte parciais (all-or-nothing).
 func ConsumeItemLotsRaw(charID : int, itemID : int, count : int, allowBound : bool = false, customfield : String = "") -> Array:
 	if count <= 0:
 		return []
-	var cond : String = _LotCondition(charID, itemID, allowBound, customfield)
+	var lot : Dictionary = _LotCondition(charID, itemID, allowBound, customfield)
 	if GetLotBalanceRaw(charID, itemID, allowBound, customfield) < count:
 		return []
-	if not db.query_with_bindings("SELECT uid, count FROM item_instance WHERE " + cond + " ORDER BY uid;", []):
+	if not db.query_with_bindings("SELECT uid, count FROM item_instance WHERE " + lot["condition"] + " ORDER BY uid;", lot["bindings"]):
 		return []
 	var lots : Array = (db.query_result as Array).duplicate()
 	var consumed : Array = []
@@ -776,9 +777,12 @@ func GetClosedChests(charID : int) -> Array[Dictionary]:
 	return QueryBindings("SELECT id, chest_hash, origin, created_at FROM chest_instance WHERE char_id = ? AND item_state = 'closed' ORDER BY id;", [charID])
 
 func GetChestStats(charID : int) -> Dictionary:
-	var opened : int = int(QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND item_state = 'opened';", [charID])[0]["n"])
-	var closed : int = int(QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND item_state = 'closed';", [charID])[0]["n"])
-	return {"opened" = opened, "closed" = closed}
+  var rows : Array[Dictionary] = QueryBindings("SELECT SUM(CASE WHEN item_state='opened' THEN 1 ELSE 0 END) AS opened, SUM(CASE WHEN item_state='closed' THEN 1 ELSE 0 END) AS closed FROM chest_instance WHERE char_id = ?;", [charID])
+  if rows.is_empty():
+    return {"opened" = 0, "closed" = 0}
+  var opened : int = int(rows[0].get("opened", 0))
+  var closed : int = int(rows[0].get("closed", 0))
+  return {"opened" = opened, "closed" = closed}
 
 func GetGems(accountID : int) -> int:
 	var rows : Array[Dictionary] = QueryBindings("SELECT gems FROM wallet WHERE account_id = ?;", [accountID])
@@ -880,16 +884,19 @@ func UpdateEquipment(charID : int, data : Dictionary) -> bool:
 func UpdateProgress(charID : int, progress : ActorProgress):
 	progress.questMutex.lock()
 	for entryID in progress.quests:
-		Launcher.SQL.SetQuest(charID, entryID, progress.quests[entryID])
+		if not Launcher.SQL.SetQuest(charID, entryID, progress.quests[entryID]):
+			push_error("UpdateProgress: SetQuest falhou charID=%d entryID=%d" % [charID, entryID])
 	progress.questMutex.unlock()
 
 	progress.bestiaryMutex.lock()
 	for entryID in progress.bestiary:
-		Launcher.SQL.SetBestiary(charID, entryID, progress.bestiary[entryID])
+		if not Launcher.SQL.SetBestiary(charID, entryID, progress.bestiary[entryID]):
+			push_error("UpdateProgress: SetBestiary falhou charID=%d mobID=%d" % [charID, entryID])
 	progress.bestiaryMutex.unlock()
 
 	for entryID in progress.skills:
-		Launcher.SQL.SetSkill(charID, entryID, progress.skills[entryID])
+		if not Launcher.SQL.SetSkill(charID, entryID, progress.skills[entryID]):
+			push_error("UpdateProgress: SetSkill falhou charID=%d skillID=%d" % [charID, entryID])
 
 	return true
 
@@ -1029,6 +1036,27 @@ func SetTwoFactorSecret(accountID : int, secret : String) -> bool:
 func SetTwoFactorEnabled(accountID : int, enabled : bool) -> bool:
 	return ExecuteBindings("UPDATE account SET two_factor_enabled = ? WHERE account_id = ?;", [1 if enabled else 0, accountID])
 
+func ConsumeTwoFactorToken(accountID : int, token : String, ttlSec : int = 600) -> bool:
+	if accountID <= 0 or token.is_empty() or ttlSec <= 0:
+		return false
+	var now : int = SQLCommons.Timestamp()
+	ExecuteBindings("DELETE FROM two_factor_used_token WHERE expires_at <= ?;", [now])
+	var tokenHash : String = TwoFactorAuth.HashToken(token)
+	return ExecuteBindings("INSERT OR IGNORE INTO two_factor_used_token(account_id, token_hash, expires_at) VALUES (?, ?, ?);", [accountID, tokenHash, now + ttlSec])
+
+func CleanExpiredTwoFactorTokens():
+	ExecuteBindings("DELETE FROM two_factor_used_token WHERE expires_at <= ?;", [SQLCommons.Timestamp()])
+
+func LogConsent(accountID : int, termsVersion : String, privacyVersion : String, ipHash : String = "") -> bool:
+	if accountID <= 0 or termsVersion.is_empty() or privacyVersion.is_empty():
+		return false
+	var now : int = SQLCommons.Timestamp()
+	return ExecuteBindings("INSERT OR REPLACE INTO consent_log(account_id, terms_version, privacy_version, accepted_at, ip_hash) VALUES (?, ?, ?, ?, ?);", [accountID, termsVersion, privacyVersion, now, ipHash])
+
+func GetConsent(accountID : int) -> Dictionary:
+	var rows : Array[Dictionary] = QueryBindings("SELECT terms_version, privacy_version, accepted_at, ip_hash FROM consent_log WHERE account_id = ? ORDER BY accepted_at DESC LIMIT 1;", [accountID])
+	return rows[0] if not rows.is_empty() else {}
+
 # Ban
 func BanAccount(accountID : int, unbanTimestamp : int, reason : String = "") -> bool:
 	var results : Array[Dictionary] = db.select_rows("ban", "account_id = %d" % accountID, ["*"])
@@ -1139,13 +1167,15 @@ func _post_launch():
 	if not db.open_db():
 		push_error("Failed to open database: "+ db.error_message); return
 	else:
-		if OS.is_debug_build() and not LauncherCommons.isWeb:
-			Query("PRAGMA journal_mode=WAL;")
-			Query("PRAGMA busy_timeout=5000;")
+	if not LauncherCommons.isWeb:
+		Query("PRAGMA journal_mode=WAL;")
+		Query("PRAGMA busy_timeout=5000;")
+		Query("PRAGMA synchronous=NORMAL;")
 		if not Launcher.Debug and not LauncherCommons.isWeb:
 			backups = SQLBackups.new()
 
 	ApplyMigrations()
+	CleanExpiredTwoFactorTokens()
 	Peers.bannedAccounts = LoadBans()
 	Peers.bannedIPRanges = LoadIPBans()
 	CleanExpiredTokens()
@@ -1159,7 +1189,11 @@ func Destroy():
 		db.close_db()
 
 func Wipe():
-	db.delete_rows("account", "")
+  assert(OS.is_debug_build(), "Wipe() só pode ser chamada em debug build")
+  if not OS.is_debug_build():
+    push_error("SQL.Wipe(): recusado em produção")
+    return
+  db.delete_rows("account", "")
 	db.delete_rows("attribute", "")
 	db.delete_rows("auth_token", "")
 	db.delete_rows("ban", "")

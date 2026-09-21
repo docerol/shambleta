@@ -19,12 +19,15 @@ const LedgerKindEssence : String = "essence"
 const SHARD_COUNT : int = 8
 var settleMutex : Mutex = Mutex.new()
 var settleMutexes : Dictionary[int, Mutex] = {}
+var _shardInitMutex : Mutex = Mutex.new()
 
-# P4 — escalabilidade: função auxiliar para obter o mutex de sharding por conta.
 func _get_settle_mutex(accountID : int) -> Mutex:
 	var shardID : int = absi(hash(accountID)) % SHARD_COUNT
 	if not settleMutexes.has(shardID):
-		settleMutexes[shardID] = Mutex.new()
+		_shardInitMutex.lock()
+		if not settleMutexes.has(shardID):
+			settleMutexes[shardID] = Mutex.new()
+		_shardInitMutex.unlock()
 	return settleMutexes[shardID]
 
 # SOM-IDLE C1: companion grant poll (main thread, vazio = no-op barato).
@@ -77,11 +80,7 @@ func GrantItem(accountID : int, itemHash : int, count : int, reason : String = "
 	# Valida se o item existe no inventário antes de registrar no ledger.
 	# Se o hash for 0 (inválido) ou o item não existir e não for um caso de
 	# referência, rejeita para manter a integridade (invariante 1 de auditabilidade).
-	var dbNode : SQLite = Launcher.SQL.db
-	var itemExists : bool = false
-	if itemHash > 0:
-		var itemRows : Array = dbNode.select_rows("item", "item_id = %d" % itemHash, ["item_id"])
-		itemExists = not itemRows.is_empty()
+	var itemExists : bool = DB.ItemsDB.has(itemHash) if itemHash > 0 else false
 	if not itemExists and itemHash > 0:
 		return false
 	var mutex : Mutex = _get_settle_mutex(accountID)
@@ -1066,7 +1065,7 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
 		var day : int = ShopDay(SQLCommons.Timestamp())
-		var claimed : Array = sql.db.select_rows("vendor_claim", "account_id = %d AND day = %d AND offer_id = '%s'" % [accountID, day, offerID], ["count"])
+		var claimed : Array = sql.db.query_with_bindings("SELECT count FROM vendor_claim WHERE account_id = ? AND day = ? AND offer_id = ?;", [accountID, day, offerID])
 		var bought : int = int(claimed[0].get("count", 0)) if not claimed.is_empty() else 0
 		if bought >= VENDOR_STOCK_PER_DAY:
 			result["reason"] = "sold_out"
@@ -1085,7 +1084,7 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 		if claimed.is_empty():
 			if not sql.db.query_with_bindings("INSERT INTO vendor_claim (account_id, day, offer_id, count) VALUES (?, ?, ?, 1);", [accountID, day, offerID]):
 				return false
-		elif not sql.UpdateRowsRaw("vendor_claim", "account_id = %d AND day = %d AND offer_id = '%s'" % [accountID, day, offerID], {"count" = bought + 1}):
+		elif not sql.db.query_with_bindings("UPDATE vendor_claim SET count = ? WHERE account_id = ? AND day = ? AND offer_id = ?;", [bought + 1, accountID, day, offerID]):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -3108,6 +3107,7 @@ func _PassMilestoneCredit(accountID : int, bossIndex : int) -> void:
 # p/ quem comprou). Chamado no settle da temporada fechada.
 func _AutoClaimPass(seasonID : int) -> Dictionary:
 	var done : Dictionary = {"claimed": 0}
+	var eligible : Array = []
 	for row in Launcher.SQL.QueryBindings("SELECT account_id, pt, premium, claimed_free, claimed_premium FROM season_account_state WHERE season_id = ?;", [seasonID]):
 		var accountID : int = int(row["account_id"])
 		var level : int = PassLevelForPT(int(row.get("pt", 0)))
@@ -3116,7 +3116,11 @@ func _AutoClaimPass(seasonID : int) -> Dictionary:
 		var chars : Array = _PassChars(accountID)
 		if chars.is_empty():
 			continue
-		var charID : int = int(chars[0])
+		eligible.append(row)
+	for row in eligible:
+		var accountID : int = int(row["account_id"])
+		var level : int = PassLevelForPT(int(row.get("pt", 0)))
+		var charID : int = int(_PassChars(accountID)[0])
 		var cf : Variant = JSON.parse_string(str(row.get("claimed_free", "[]")))
 		var cp : Variant = JSON.parse_string(str(row.get("claimed_premium", "[]")))
 		var claimedF : Array = []

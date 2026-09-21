@@ -238,7 +238,9 @@ func AddExperience(value : int, hasFeedback : bool = true):
 	if experience >= RebirthData.EssenceDivisor and Experience.IsMaxLevel(level) and actor is PlayerAgent and Launcher.Economy != null:
 		var convert : int = (experience / RebirthData.EssenceDivisor) * RebirthData.EssenceDivisor
 		experience -= convert
-		Launcher.Economy.AddEssence(actor.GetCharacterID(), convert / RebirthData.EssenceDivisor, "xp_overflow")
+		var essenceAdded : int = Launcher.Economy.AddEssence(actor.GetCharacterID(), convert / RebirthData.EssenceDivisor, "xp_overflow")
+		if essenceAdded <= 0:
+			push_error("AddExperience: AddEssence falhou para overflow=%d, charID=%d" % [convert, actor.GetCharacterID()])
 	vital_stats_updated.emit()
 	if actor is PlayerAgent:
 		Network.TargetAlteration(actor.get_rid().get_id(), actor.get_rid().get_id(), value, ActorCommons.Alteration.EXP, DB.UnknownHash, hasFeedback, actor.peerID)

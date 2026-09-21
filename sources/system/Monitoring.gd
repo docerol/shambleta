@@ -7,8 +7,8 @@ func Configure(options : SentryOptions):
 	options.before_send = BeforeSend
 
 func BeforeSend(event : SentryEvent) -> SentryEvent:
-	var enabled : bool = Conf.GetVariant("User", "Privacy-BugReports", Conf.Type.USERSETTINGS, true)
-	return event if enabled else null
+  var enabled : bool = Conf.GetVariant("User", "Privacy-BugReports", Conf.Type.USERSETTINGS, false)
+  return event if enabled else null
 
 func SetPlayer(playerName : String):
 	if SentrySDK.is_enabled() and not playerName.is_empty():
