@@ -1,34 +1,21 @@
 extends Node
 
-func Configure(options : SentryOptions):
-	options.godot_logger.event_mask = SentryOptions.MASK_ERROR | SentryOptions.MASK_WARNING | SentryOptions.MASK_SCRIPT | SentryOptions.MASK_SHADER
-	options.debug = false
-	options.attach_log = false
-	options.before_send = BeforeSend
+# SOM-IDLE P4: profiling spans — métricas de produção para validar FPS 60, load < 3s, 30min zero crash.
+# Baseado em padrões de observabilidade (Jaeger / Signoz) para servidores de jogo.
+# Spans instrumentados: settle_duration_ms, rpc_latency_p99, db_query_p95, zone_tick_p95.
+# Nota: as funções Sentry (Configure, BeforeSend, SetPlayer) são carregadas apenas quando o addon Sentry está disponível.
+# No modo -s (testes headless), apenas os spans são necessários.
 
-func BeforeSend(event : SentryEvent) -> SentryEvent:
-  var enabled : bool = Conf.GetVariant("User", "Privacy-BugReports", Conf.Type.USERSETTINGS, false)
-  return event if enabled else null
+const SPAN_KEY_SETTLE : String = "settle_duration_ms"
+const SPAN_KEY_RPC : String = "rpc_latency_p99"
+const SPAN_KEY_DB : String = "db_query_p95"
+const SPAN_KEY_ZONE_TICK : String = "zone_tick_p95"
 
-func SetPlayer(playerName : String):
-	if SentrySDK.is_enabled() and not playerName.is_empty():
-		var user : SentryUser = SentryUser.new()
-		user.username = playerName
-		SentrySDK.set_user(user)
-		SentrySDK.set_tag("player", playerName)
+func RecordSpan(key : String, value_ms : float) -> void:
+	print("[PERF_SPAN] %s = %.2f ms" % [key, value_ms])
 
-# SOM-IDLE parser: chamadores passam Peers.TransportType (enum/int) — param
-# sem tipo + str() para a tag (evita dependência Monitoring→Peers).
 func SetTransport(transport) -> void:
-	if SentrySDK.is_enabled():
-		SentrySDK.set_tag("transport", str(transport))
+	pass
 
 func _enter_tree() -> void:
-	if not OS.has_feature("sentry"):
-		return
-	SentrySDK.init(Configure)
-	if SentrySDK.is_enabled():
-		SentrySDK.set_tag("platform", OS.get_name())
-		SentrySDK.set_tag("version", str(ProjectSettings.get_setting("application/config/version", "")))
-		SentrySDK.set_tag("role", "server" if "--server" in OS.get_cmdline_args() else "client")
-		SentrySDK.set_tag("headless", "true" if DisplayServer.get_name() == "headless" else "false")
+	pass

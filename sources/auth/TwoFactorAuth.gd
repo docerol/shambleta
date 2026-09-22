@@ -21,36 +21,36 @@ static func GenerateSecret(length: int = 20) -> String:
 	return Base32Encode(bytes)
 
 static func Base32Encode(data: PackedByteArray) -> String:
-    var bits: int = 0
-    var value: int = 0
-    var output: String = ""
-    for byte in data:
-        value = (value << 8) | byte
-        bits += 8
-        while bits >= 5:
-            output += BASE32_ALPHABET[(value >> (bits - 5)) & 31]
-            bits -= 5
-    if bits > 0:
-        output += BASE32_ALPHABET[(value << (5 - bits)) & 31]
-    while output.length() % 8 != 0:
-        output += "="
-    return output
+	var bits: int = 0
+	var value: int = 0
+	var output: String = ""
+	for byte in data:
+		value = (value << 8) | byte
+		bits += 8
+		while bits >= 5:
+			output += BASE32_ALPHABET[(value >> (bits - 5)) & 31]
+			bits -= 5
+	if bits > 0:
+		output += BASE32_ALPHABET[(value << (5 - bits)) & 31]
+	while output.length() % 8 != 0:
+		output += "="
+	return output
 
 static func Base32Decode(encoded: String) -> PackedByteArray:
-    encoded = encoded.to_upper().replace("=", "")
-    var bits: int = 0
-    var value: int = 0
-    var output: PackedByteArray = []
-    for char in encoded:
-        var index: int = BASE32_ALPHABET.find(char)
-        if index < 0:
-            continue
-        value = (value << 5) | index
-        bits += 5
-        if bits >= 8:
-            output.append((value >> (bits - 8)) & 255)
-            bits -= 8
-    return output
+	encoded = encoded.to_upper().replace("=", "")
+	var bits: int = 0
+	var value: int = 0
+	var output: PackedByteArray = []
+	for char in encoded:
+		var index: int = BASE32_ALPHABET.find(char)
+		if index < 0:
+			continue
+		value = (value << 5) | index
+		bits += 5
+		if bits >= 8:
+			output.append((value >> (bits - 8)) & 255)
+			bits -= 8
+	return output
 
 static func GetTOTPCounter(timestamp: int = -1) -> int:
 	if timestamp < 0:
@@ -110,5 +110,5 @@ static func VerifyTOTP(secret: String, token: String, timestamp: int = -1) -> bo
 	return matchMask != 0
 
 static func GetQRCodeURL(secret: String, accountName: String, issuer: String = "Shambleta") -> String:
-    var encodedAccount: String = "%s:%s" % [issuer, accountName]
-    return "otpauth://totp/%s?secret=%s&issuer=%s&digits=%d&period=%d" % [encodedAccount.replace(":", "%3A"), secret, issuer.replace(":", "%3A"), TOTP_DIGITS, TOTP_STEP_SECONDS]
+	var encodedAccount: String = "%s:%s" % [issuer, accountName]
+	return "otpauth://totp/%s?secret=%s&issuer=%s&digits=%d&period=%d" % [encodedAccount.replace(":", "%3A"), secret, issuer.replace(":", "%3A"), TOTP_DIGITS, TOTP_STEP_SECONDS]

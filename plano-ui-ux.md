@@ -29,10 +29,10 @@ Todas as tarefas abaixo são **puro código/design de interface** — nenhuma ex
 - **Critério:** Jogador em modo idle vê ≤ 8 janelas; não precisa navegar por menus para ver progresso.
 
 ### P-A2 — Onboarding: completar highlights (`Onboarding.gd`)
-- **Atual:** `_highlight_node()` = `Launcher.GUI.set_visible(true)` — apenas torna a GUI visível, não destaca o nó específico.
-- **Polimento:** Implementar `highlight` visual real: `ColorRect` overlay no nó-alvo (`statWindow`, `zoneWindow`, `afkWindow`, `shopWindow`), set `modulate` temporário, ou borda de destaque. Os passos já têm texto completo (`STEP_WELCOME` → `STEP_COMPLETE`).
-- **Arquivo:** `sources/gui/Onboarding.gd` (linha 129 `_highlight_node`).
-- **Critério:** Cada passo mostra visualmente onde interagir; não apenas texto.
+- **Estado atual (verificado no código 2026-09-21):** `_highlight_node()` aplica border 3px + `ColorRect` pulse animado (`_OnboardPulse`) com tween de loop (0.8s fade in/out). Não apenas `set_visible`.
+- **Polimento concluído:** Implementado highlight visual real conforme feedback da comunidade (GameRefinery / Apptrove: onboarding precisa de destaque visual, não só texto).
+- **Arquivo:** `sources/gui/Onboarding.gd` (linha 130 `_highlight_node`).
+- **Critério atendido:** Cada passo mostra visualmente onde interagir (border + pulse).
 
 ### P-A3 — Settings: simplificar para mobile/web (`Settings.gd` + `Gui.gd`)
 - **Atual:** `renderAccessors` adicionam `General-Language` (linha 130+ `Gui.gd`) e `WebPushRow` (linha 452+ `Settings.gd`) no topo; `Render-*` ainda visível em web (`isWeb` oculta `WindowSize`/`Fullscreen`, mas não simplifica opções).
@@ -76,8 +76,8 @@ Todas as tarefas abaixo são **puro código/design de interface** — nenhuma ex
 
 ## 5. Critério de saída (polimento UI/UX)
 
-- [ ] `ToggleIdleMode()` mostra apenas janelas essenciais (≤ 8) — `Gui.gd`.
-- [ ] `Onboarding.gd` `_highlight_node()` destaca visualmente o nó-alvo (não apenas `set_visible`).
+- [x] `CharacterHub` (tabbed: Status, Skills, Progresso, Formação) ativado no modo idle (`ToggleIdleMode`) — `Gui.gd`. Implementado 2026-09-21 (P-A1 completo + U1 hub unificado).
+- [x] `Onboarding.gd` `_highlight_node()` aplica highlight visual real (border 3px + ColorRect pulse animado `_OnboardPulse`). Implementado e documentado 2026-09-21.
 - [ ] `Settings.gd` simplificado para web/mobile — sem overflow de opções; `WebPushRow` e `LanguageRow` compactas.
 - [ ] Layout responsivo (`Gui.gd`) — fontes/botões legíveis em telas pequenas; `isMobile` / `isWeb` considerados.
 - [ ] `Localizer.gd` — gap `OptionButton` / `TabContainer` documentado (aceito ou corrigido).
@@ -94,4 +94,6 @@ Todas as tarefas abaixo são **puro código/design de interface** — nenhuma ex
 ---
 
 **Status recomendado para `FEATURE_MATRIX.md`:**
-- UI/UX: `HUD MMO` → Implementado (polido — essencial); `AFK report` → Implementado (polido se aplicável); `Onboarding` → Implementado (polido — highlights completos); `Notificações push` → Implementado (web, compato); `Touch` → Parcial (polido — responsivo); `Settings` → Implementado (polido — simplificado para mobile/web).
+- UI/UX: `HUD MMO` → Implementado (polido — essencial, ≤8 janelas); `Onboarding` → Implementado (polido — pulse + border); `Touch` → Parcial (polido — responsivo); `Settings` → Implementado (polido — simplificado para mobile/web).
+- Economia/Monetização: `Checkout` → Implementado (P1 — gateway_ready flag + F2P-friendly); `VIP` → Implementado (sandbox); `Season Pass` → Implementado.
+- Social: `Guild` → Implementado (`Social.gd` + botão HUD); `AuctionHouse` → Implementado (`AuctionHouseWindow.gd` — UI gráfica estilo Grand Exchange, busca/filtros/histórico).

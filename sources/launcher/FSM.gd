@@ -39,7 +39,10 @@ func IsGameState() -> bool:
 	return currentState == States.IN_GAME
 
 func EnterState(state : States):
-	Util.PrintLog("Launcher", "Entering new FSM state: %s" % str(States.keys()[state]))
+	# Corrigido P4: evitar erro quando singleton Util não está disponível no escopo (ex: modo -s / headless).
+	# Referência: auditoria-tecnica-shambleta.md (§3); RELATORIO_FINAL_2026-09-21.md.
+	if Engine.has_singleton("Util"):
+		Engine.get_singleton("Util").PrintLog("Launcher", "Entering new FSM state: %s" % str(States.keys()[state]))
 	nextState = state
 	UpdateStates.call_deferred()
 

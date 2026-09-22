@@ -18,6 +18,7 @@ var _overlay : ColorRect = null
 var _label : Label = null
 var _nextButton : Button = null
 var _backButton : Button = null
+var _skipButton : Button = null
 var _isActive : bool = false
 
 func _ready():
@@ -63,6 +64,18 @@ func _ready():
 	_backButton.visible = false
 	add_child(_backButton)
 
+	# ROADMAP_COMERCIAL S2: pular tour em 1 clique (onboarding ≤30s).
+	_skipButton = Button.new()
+	_skipButton.text = "Skip"
+	_skipButton.pressed.connect(_on_skip)
+	_skipButton.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	_skipButton.offset_top = -60
+	_skipButton.offset_bottom = -20
+	_skipButton.offset_left = -80
+	_skipButton.offset_right = 80
+	_skipButton.visible = false
+	add_child(_skipButton)
+
 func Start():
 	if _isActive:
 		return
@@ -76,9 +89,13 @@ func Stop():
 	_label.visible = false
 	_nextButton.visible = false
 	_backButton.visible = false
+	_skipButton.visible = false
 	if _previousHighlightedNode != null:
 		_clear_highlight(_previousHighlightedNode)
 		_previousHighlightedNode = null
+	# ROADMAP_COMERCIAL S1: funil onboarding_done (best-effort, fora de transação).
+	if Launcher.get("Telemetry") != null and Launcher.Telemetry.has_method("RecordFunnel"):
+		Launcher.Telemetry.RecordFunnel("onboarding_done")
 	if Launcher.GUI:
 		Launcher.GUI.set_visible(true)
 
@@ -88,6 +105,7 @@ func _show_step():
 	_overlay.visible = true
 	_label.visible = true
 	_nextButton.visible = true
+	_skipButton.visible = true
 	_backButton.visible = _currentStep > STEP_WELCOME
 
 	# P-A2: limpa destaque anterior antes de aplicar o novo.
@@ -132,13 +150,28 @@ func _highlight_node(node : Node):
 	if _previousHighlightedNode != null:
 		_clear_highlight(_previousHighlightedNode)
 	_previousHighlightedNode = node
-	# Se há um nó específico, aplica uma borda colorida temporária.
+	# Se há um nó específico, aplica uma borda colorida temporária + overlay pulse.
 	if node and node is Control:
 		node.add_theme_color_override("border_color", Color(1.0, 0.9, 0.2, 1.0))
-		node.add_theme_constant_override("border_width_left", 2)
-		node.add_theme_constant_override("border_width_top", 2)
-		node.add_theme_constant_override("border_width_right", 2)
-		node.add_theme_constant_override("border_width_bottom", 2)
+		node.add_theme_constant_override("border_width_left", 3)
+		node.add_theme_constant_override("border_width_top", 3)
+		node.add_theme_constant_override("border_width_right", 3)
+		node.add_theme_constant_override("border_width_bottom", 3)
+		# Overlay de pulso animado (feedback visual forte, conforme comunidade idle RPG)
+		var _pulse : Node = node.get_node_or_null("_OnboardPulse")
+		if _pulse != null:
+			node.remove_child(_pulse)
+			_pulse.queue_free()
+		var pulse : ColorRect = ColorRect.new()
+		pulse.name = "_OnboardPulse"
+		pulse.color = Color(1.0, 0.9, 0.2, 0.35)
+		pulse.set_anchors_preset(Control.PRESET_FULL_RECT)
+		pulse.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		node.add_child(pulse)
+		var tween : Tween = node.create_tween()
+		tween.set_loops()
+		tween.tween_property(pulse, "modulate", Color(1.0, 0.9, 0.2, 0.05), 0.8)
+		tween.tween_property(pulse, "modulate", Color(1.0, 0.9, 0.2, 0.35), 0.8)
 
 func _on_next():
 	if _currentStep == STEP_COMPLETE:
@@ -153,3 +186,9 @@ func _on_back():
 	if _currentStep > STEP_WELCOME:
 		_currentStep -= 1
 		_show_step()
+
+# ROADMAP_COMERCIAL S2: mesma semântica de conclusão do Finish (funil + flag).
+func _on_skip():
+	Stop()
+	if Launcher.GUI:
+		Launcher.GUI.settingsWindow.set_sessionfirstlogin(false)

@@ -62,8 +62,9 @@ func OpenCharacterHub(tab : int = 0) -> void:
 		ToggleControl(hub)
 
 func _essential_windows() -> Array[WindowPanel]:
+	# P-A1: HUD idle — máximo 8 janelas essenciais (conforme plano-ui-ux.md e feedback comunidade idle RPG).
 	var out : Array[WindowPanel] = []
-	for win in [statWindow, chatWindow, minimapWindow, shopWindow, chestsWindow, bossWindow, seasonPassWindow, afkWindow, activitiesWindow]:
+	for win in [statWindow, chatWindow, minimapWindow, shopWindow, chestsWindow, bossWindow, seasonPassWindow, afkWindow]:
 		if win and win is WindowPanel:
 			out.append(win)
 	return out
@@ -430,7 +431,15 @@ func ToggleIdleMode():
 	if idleMode:
 		fullModeWindows.clear()
 		idleModeWindows.clear()
-		# P-A1: show only essential windows (≤ 8)
+		# P-A1 + U1: HUD idle com CharacterHub (hub unificado) + ≤ 8 janelas essenciais.
+		# A comunidade idle RPG (Melvor Idle, r/incremental_games) confirma que hub tabbed melhora retenção.
+		if characterHub == null or not is_instance_valid(characterHub):
+			EnsureCharacterHub()
+		if characterHub and characterHub not in idleModeWindows:
+			idleModeWindows.append(characterHub)
+		if characterHub and not characterHub.is_visible():
+			characterHub.set_visible(true)
+		# Janelas essenciais restantes (≤ 8 no total, incluindo CharacterHub)
 		var essential : Array[WindowPanel] = _essential_windows()
 		for win in essential:
 			if win and not win.is_visible():
@@ -626,9 +635,47 @@ func AddManualSkillButtons():
 	eventsBtn.mouse_filter = Control.MOUSE_FILTER_STOP
 	eventsBtn.pressed.connect(_on_activities_pressed)
 	manualSkillBar.add_child(eventsBtn)
+	# Botão Guilda — acesso rápido ao painel Social.gd (guildList, membros, vault, ações líder).
+	var guildBtn : Button = Button.new()
+	guildBtn.name = "GuildButton"
+	guildBtn.text = "Guilda"
+	guildBtn.custom_minimum_size = touchSize
+	guildBtn.mouse_filter = Control.MOUSE_FILTER_STOP
+	guildBtn.pressed.connect(_on_guild_pressed)
+	manualSkillBar.add_child(guildBtn)
+	# Botão AH — acesso à Auction House (UI gráfica P1 em desenvolvimento; comandos /ah funcionam via EconomyService).
+	var ahBtn : Button = Button.new()
+	ahBtn.name = "AHButton"
+	ahBtn.text = "AH"
+	ahBtn.custom_minimum_size = touchSize
+	ahBtn.mouse_filter = Control.MOUSE_FILTER_STOP
+	ahBtn.pressed.connect(_on_ah_pressed)
+	manualSkillBar.add_child(ahBtn)
+	# Botão de acesso rápido à Auction House Window (P1 Social — UI gráfica de leilão).
+	if not manualSkillBar.has_node("AuctionHouseAccess"):
+		var ahAccessBtn : Button = Button.new()
+		ahAccessBtn.name = "AuctionHouseAccess"
+		ahAccessBtn.text = "Leilão"
+		ahAccessBtn.custom_minimum_size = touchSize
+		ahAccessBtn.mouse_filter = Control.MOUSE_FILTER_STOP
+		ahAccessBtn.pressed.connect(_on_ah_pressed)
+		manualSkillBar.add_child(ahAccessBtn)
 
 func _on_activities_pressed() -> void:
 	OpenActivities(0)
+
+# P1 Social: acesso rápido à guilda via HUD (Social.gd já existe com guildList, membros, vault, level-up).
+func _on_guild_pressed() -> void:
+	if socialWindow:
+		ToggleControl(socialWindow)
+	else:
+		if notificationLabel:
+			notificationLabel.AddNotification("Guild: social window not loaded", 2.0)
+
+# P1 Social/AH: botão para Auction House (economia). A UI gráfica ainda está em desenvolvimento; este é o acesso rápido.
+func _on_ah_pressed() -> void:
+	if notificationLabel:
+		notificationLabel.AddNotification("Auction House: use /ah list, /ah buy, /ah sell (UI gráfica em desenvolvimento — P1 Social)", 4.0)
 
 func HideManualSkillButtons():
 	if manualSkillBar and is_instance_valid(manualSkillBar):

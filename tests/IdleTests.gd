@@ -971,15 +971,15 @@ func SuiteTrade(sql : SQLService, charA : int, charB : int, accountA : int, acco
 	Check(economy.ExecuteTrade(charA, charB, [{"item_id" = apple, "count" = 2}], []), "trade executed")
 	CheckEq(_CountItem(sql, charA, apple), 3, "sender debited")
 	CheckEq(_CountItem(sql, charB, apple), 2, "receiver credited")
-	CheckEq(sql.GetGems(accountA), 100 - economy.TradeFeeGems, "fee burned from wallet")
+	CheckEq(sql.GetGems(accountA), 100 - EconomyCatalog.TradeFeeGems, "fee burned from wallet")
 	CheckEq(sql.GetGems(accountB), 100, "receiver pays no fee")
 
 	# Ledger invariant: every mutation mirrored
 	var ledgerAfter : int = int(sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction;", [])[0]["n"])
 	Check(ledgerAfter - ledgerBefore >= 3, "ledger rows appended (fee + item moves): %d" % (ledgerAfter - ledgerBefore))
 	var feeRow : Array[Dictionary] = sql.QueryBindings("SELECT amount, balance_after FROM ledger_transaction WHERE reason = 'trade_fee' ORDER BY id DESC LIMIT 1;", [])
-	CheckEq(int(feeRow[0]["amount"]), -economy.TradeFeeGems, "fee ledger row negative")
-	CheckEq(int(feeRow[0]["balance_after"]), 100 - economy.TradeFeeGems, "fee balance_after consistent")
+	CheckEq(int(feeRow[0]["amount"]), -EconomyCatalog.TradeFeeGems, "fee ledger row negative")
+	CheckEq(int(feeRow[0]["balance_after"]), 100 - EconomyCatalog.TradeFeeGems, "fee balance_after consistent")
 
 	# Self-trade guard
 	Check(not economy.ExecuteTrade(charA, charA, [{"item_id" = apple, "count" = 1}], []), "self-trade rejected")
@@ -1044,7 +1044,7 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 	_SetInventory(sql, charID, FarmZoneData.DefaultDropItemHash, 0)  # clean slate
 	_GrantGold(sql, charID, accountID, 2000, "fixture_craft_seed")
 	sql.SetEmailVerified(accountID, true)
-	var feeT1 : int = economy.CraftSubmitFee(1)  # 500 * 1 * 1 = 500
+	var feeT1 : int = EconomyCatalog.CraftSubmitFee(1)  # 500 * 1 * 1 = 500
 	var bad : Dictionary = economy.SubmitCraft(charID, accountID, -1, shortSwordHash, "Blade", {})
 	Check(not bool(bad["ok"]), "rejected: invalid slot")
 	Check(str(bad["reason"]) == "invalid_slot", "invalid_slot reason")
@@ -1293,14 +1293,14 @@ func SuiteVIPCheckout(sql : SQLService, charID : int, accountID : int) -> void:
 	# Successful VIP1
 	sql.SetGems(accountID, 500)
 	Check(economy.PurchaseVIP(accountID, 1), "VIP1 purchased")
-	CheckEq(sql.GetGems(accountID), 500 - economy.VIP1CostGems, "gems debited")
+	CheckEq(sql.GetGems(accountID), 500 - EconomyCatalog.VIP1CostGems, "gems debited")
 	Check(sql.GetVIPUntil(accountID) > now, "vip_until in the future")
 
 	# Stacking: VIP2 extends from the current window (top up: VIP1 left 60 gems)
 	sql.SetGems(accountID, 1000)
 	var before : int = sql.GetVIPUntil(accountID)
 	Check(economy.PurchaseVIP(accountID, 2), "VIP2 purchased (stack)")
-	CheckEq(sql.GetVIPUntil(accountID), before + economy.VIPDays * 86400, "window extended from current until")
+	CheckEq(sql.GetVIPUntil(accountID), before + EconomyCatalog.VIPDays * 86400, "window extended from current until")
 
 	# Ledger has purchase rows
 	var rows : Array[Dictionary] = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE reason LIKE 'vip%%' ORDER BY id DESC LIMIT 2;", [])
@@ -1318,7 +1318,7 @@ func SuiteEconomyShop(sql : SQLService, charID : int, accountID : int) -> void:
 
 	# Counts fora da faixa rejeitados sem tocar na wallet
 	Check(economy.BuyChests(accountID, charID, 0).is_empty(), "buy 0 rejected")
-	Check(economy.BuyChests(accountID, charID, economy.MaxChestsPerPurchase + 1).is_empty(), "buy >max rejected")
+	Check(economy.BuyChests(accountID, charID, EconomyCatalog.MaxChestsPerPurchase + 1).is_empty(), "buy >max rejected")
 
 	# Gems insuficientes: rejeitado, nada criado
 	sql.SetGems(accountID, 50)
@@ -1716,7 +1716,7 @@ func SuiteCosmetics(sql : SQLService) -> void:
 func SuiteAds(sql : SQLService) -> void:
 	print("[suite] rewarded ads (Fase E)")
 	# SOM-IDLE beta fechado (T7): stub explícito; reais fora de escopo.
-	Check(EconomyService.AdStubEnabled, "ads: beta roda em stub explícito")
+	Check(EconomyCatalog.AdStubEnabled, "ads: beta roda em stub explícito")
 	var economy : EconomyService = Launcher.Economy
 	var tele : TelemetryService = Launcher.Telemetry
 	var now : int = SQLCommons.Timestamp()
@@ -2267,7 +2267,7 @@ func SuiteDailyShop(sql : SQLService, charID : int, accountID : int) -> void:
 	if Check(not bossOffer.is_empty(), "boss-0-pack eligible"):
 		var cb : int = int(sql.GetChestStats(charID)["closed"])
 		var bb : Dictionary = economy.BuyDailyOffer(accountID, charID, "boss-0-pack")
-		Check(bool(bb.get("ok", false)) and int(bb.get("cost", 0)) == economy.BOSS_PACK_COST, "boss pack bought at deal price")
+		Check(bool(bb.get("ok", false)) and int(bb.get("cost", 0)) == EconomyCatalog.BOSS_PACK_COST, "boss pack bought at deal price")
 		CheckEq(int(sql.GetChestStats(charID)["closed"]), cb + economy.BOSS_PACK_CHESTS, "boss pack chests granted")
 		Check(not bool(economy.BuyDailyOffer(accountID, charID, "boss-0-pack").get("ok", true)), "boss pack one-time")
 
@@ -2768,7 +2768,7 @@ func SuiteSeasonAH(sql : SQLService) -> void:
 	Check(economy.SnapshotSeasonSpend(seasonID) >= 1, "spend snapshot")
 	var spend : Array = economy.GetSeasonBoard(seasonID, "spend", 10)
 	var spentU : Array = spend.filter(func(r : Dictionary) -> bool: return int(r["subject_id"]) == accountU)
-	Check(not spentU.is_empty() and int(spentU[0]["value"]) == economy.VIP1CostGems, "spend board tracks buyer")
+	Check(not spentU.is_empty() and int(spentU[0]["value"]) == EconomyCatalog.VIP1CostGems, "spend board tracks buyer")
 	Check(economy.GetSeasonBoard(seasonID, "bogus").is_empty(), "bad kind empty")
 	Check(economy.CloseSeason(seasonID), "season closed")
 	Check(economy.ActiveSeason().is_empty(), "no active season")
@@ -2810,8 +2810,8 @@ func SuiteSeasonPayout(sql : SQLService) -> void:
 	var res : Dictionary = economy.SettleSeasonPrizes(seasonID)
 	Check(bool(res.get("ok", false)), "payout: settle ok")
 	Check(int(res.get("awarded", 0)) >= 2, "payout: at least top-2 paid")
-	CheckEq(economy.GetGems(acctA), economy.SeasonPrizeGems[0], "payout: #1 power gets top prize")
-	CheckEq(economy.GetGems(acctB), economy.SeasonPrizeGems[1], "payout: #2 power gets 2nd prize")
+	CheckEq(economy.GetGems(acctA), EconomyCatalog.SeasonPrizeGems[0], "payout: #1 power gets top prize")
+	CheckEq(economy.GetGems(acctB), EconomyCatalog.SeasonPrizeGems[1], "payout: #2 power gets 2nd prize")
 	Check(not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [acctA, "season_prize:%d:power:%d" % [seasonID, charA]]).is_empty(), "payout: prize ledger row")
 	Check(str(economy.SettleSeasonPrizes(seasonID).get("reason", "")) == "already_settled", "payout: idempotent (settled)")
 	CheckEq(int(economy.SettleSeasonPrizes(seasonID).get("awarded", 0)), 0, "payout: no double grant")

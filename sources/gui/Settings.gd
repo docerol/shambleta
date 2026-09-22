@@ -622,37 +622,37 @@ func show_two_factor_qr(qrURL : String):
 	_twoFactorQRDialog.popup_centered()
 
 func _on_two_factor_qr_confirmed():
-  if _verifyDialog != null:
-    _verifyDialog.queue_free()
-  var verifyDialog : AcceptDialog = AcceptDialog.new()
-  _verifyDialog = verifyDialog
-  verifyDialog.title = tr("Verify Two-Factor Authentication")
-  verifyDialog.ok_button_text = tr("Verify")
-  verifyDialog.confirmed.connect(_on_verify_two_factor_setup)
-  var vbox : VBoxContainer = VBoxContainer.new()
-  var label : Label = Label.new()
-  label.text = tr("Enter the 6-digit code from your authenticator app to verify setup:")
-  var codeControl : LineEdit = LineEdit.new()
-  codeControl.name = "VerifyCode"
-  codeControl.placeholder_text = "000000"
-  codeControl.max_length = 6
-  vbox.add_child(label)
-  vbox.add_child(codeControl)
-  verifyDialog.add_child(vbox)
-  add_child(verifyDialog)
-  verifyDialog.popup_centered()
-  codeControl.grab_focus()
+	if _verifyDialog != null:
+		_verifyDialog.queue_free()
+	var verifyDialog : AcceptDialog = AcceptDialog.new()
+	_verifyDialog = verifyDialog
+	verifyDialog.title = tr("Verify Two-Factor Authentication")
+	verifyDialog.ok_button_text = tr("Verify")
+	verifyDialog.confirmed.connect(_on_verify_two_factor_setup)
+	var vbox : VBoxContainer = VBoxContainer.new()
+	var label : Label = Label.new()
+	label.text = tr("Enter the 6-digit code from your authenticator app to verify setup:")
+	var codeControl : LineEdit = LineEdit.new()
+	codeControl.name = "VerifyCode"
+	codeControl.placeholder_text = "000000"
+	codeControl.max_length = 6
+	vbox.add_child(label)
+	vbox.add_child(codeControl)
+	verifyDialog.add_child(vbox)
+	add_child(verifyDialog)
+	verifyDialog.popup_centered()
+	codeControl.grab_focus()
 
 func _on_verify_two_factor_setup():
-  if _verifyDialog == null:
-    return
-  var codeControl : LineEdit = _verifyDialog.get_node_or_null("VerifyCode")
-  if not codeControl:
-    return
-  var code : String = codeControl.text.strip_edges()
-  if code.length() != 6 or not code.is_valid_int():
-    return
-  Network.VerifyTwoFactorSetup(code, Launcher.Peer.peerID)
+	if _verifyDialog == null:
+		return
+	var codeControl : LineEdit = _verifyDialog.get_node_or_null("VerifyCode")
+	if not codeControl:
+		return
+	var code : String = codeControl.text.strip_edges()
+	if code.length() != 6 or not code.is_valid_int():
+		return
+	Network.VerifyTwoFactorSetup(code, Launcher.Peer.peerID)
 
 # SOM-IDLE parser (S4): o botão LGPD conectava _on_delete_account_pressed, que
 # nunca foi declarado (o diálogo de confirmação estava perdido no fim do

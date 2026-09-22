@@ -97,5 +97,36 @@ func _run_benchmarks():
         print("FAIL: XP walk exceeded budget")
         failures += 1
 
+    # ROADMAP_COMERCIAL S3: load probe real — 200 settles sequenciais no mesmo
+    # char (rewind de 1h no anchor por iteração), P99 medido, gate < 200ms.
+    # Substitui o print-only anterior; mede latência de transação real.
+    const LoadProbeIters: int = 200
+    const BudgetSettleP99Ms: int = 200
+    sql.AddAccount("bench_load", "testpass", "bench_load@test.local")
+    var loadAcct: int = sql.GetAccountID("bench_load")
+    sql.AddCharacter(loadAcct, "BenchLoad", commons.DefaultStats, commons.DefaultTraits, commons.DefaultAttributes)
+    var loadChar: int = sql.GetCharacterID(loadAcct, "BenchLoad")
+    sql.SetCharacterFarmZone(loadChar, 1)
+    var probeLat: Array[int] = []
+    var probeErrors: int = 0
+    for i in range(LoadProbeIters):
+        sql.UpdateSettleAnchor(loadChar, int(Time.get_unix_time_from_system()) - 3600, 1.0)
+        var probeStart: int = Time.get_ticks_msec()
+        var probeResult: Dictionary = settleScript.SettlePending(loadChar)
+        probeLat.append(Time.get_ticks_msec() - probeStart)
+        if probeResult.is_empty():
+            probeErrors += 1
+    sql.db.delete_rows("character", "nickname = 'BenchLoad'")
+    sql.db.delete_rows("account", "username = 'bench_load'")
+    probeLat.sort()
+    var p99Ms: int = probeLat[LoadProbeIters * 99 / 100]
+    print("Load probe: %d settles, P99 %d ms (budget: %d ms), errors: %d" % [LoadProbeIters, p99Ms, BudgetSettleP99Ms, probeErrors])
+    if probeErrors > 0:
+        print("FAIL: load probe errors")
+        failures += 1
+    if p99Ms > BudgetSettleP99Ms:
+        print("FAIL: load probe P99 exceeded budget")
+        failures += 1
+
     print("== Benchmarks: %d failures ==" % failures)
     quit(failures)

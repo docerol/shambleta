@@ -24,13 +24,20 @@ services:
     restart: unless-stopped
     depends_on:
       game:
-        condition: service_started
+        condition: service_healthy
 
   game:
     build:
       context: .
       dockerfile: deploy/server/Dockerfile
     restart: unless-stopped
+    healthcheck:
+      # P1 Deploy / Performance: healthcheck de produção confirma estabilidade da sessão.
+      test: ["CMD", "curl", "-f", "http://localhost:9400/healthz", "||", "exit", "1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
       # TLS termina no proxy do Coolify — server binda ws:// plain na 6108.
       SHAMBLETA_PROXY_TLS: "1"

@@ -54,21 +54,21 @@ const ENTITY_HASH_CACHE_TTL_SEC : int = 300
 static var _entityHashCache : Dictionary = {}
 static var _entityHashCacheTimestamp : int = 0
 static func GetBossEntityHash(index : int) -> int:
-  if index < 0 or index >= BossNames.size():
-    return DB.UnknownHash
-  var now : int = SQLCommons.Timestamp()
-  if _entityHashCache.has(index) and now - _entityHashCacheTimestamp < ENTITY_HASH_CACHE_TTL_SEC:
-    return int(_entityHashCache[index])
-  var want : String = BossNames[index]
-  var found : int = DB.UnknownHash
-  for hash in DB.EntitiesDB:
-    var data : EntityData = DB.EntitiesDB[hash]
-    if data != null and data._name == want:
-      found = int(hash)
-      break
-  _entityHashCache[index] = found
-  _entityHashCacheTimestamp = now
-  return found
+	if index < 0 or index >= BossNames.size():
+		return DB.UnknownHash
+	var now : int = SQLCommons.Timestamp()
+	if _entityHashCache.has(index) and now - _entityHashCacheTimestamp < ENTITY_HASH_CACHE_TTL_SEC:
+		return int(_entityHashCache[index])
+	var want : String = BossNames[index]
+	var found : int = DB.UnknownHash
+	for hash in DB.EntitiesDB:
+		var data : EntityData = DB.EntitiesDB[hash]
+		if data != null and data._name == want:
+			found = int(hash)
+			break
+	_entityHashCache[index] = found
+	_entityHashCacheTimestamp = now
+	return found
 
 static func GetBossFloorLevel(index : int) -> int:
 	return BossFloorLevel[index] if index >= 0 and index < BossFloorLevel.size() else 1

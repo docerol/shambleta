@@ -237,6 +237,13 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		var fp_hash : String = str(fp.get("hash", ""))
 		if not fp_hash.is_empty():
 			Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}", fp)
+		# ROADMAP_COMERCIAL S2: funil d1_return — 2º dia distinto com login.
+		if Launcher.Telemetry.has_method("RecordFunnel") and Launcher.SQL != null:
+			var dayRows : Array = Launcher.SQL.QueryBindings(
+				"SELECT COUNT(DISTINCT date(created_at, 'unixepoch')) AS d FROM telemetry_event WHERE kind = 'login' AND account_id = ?;",
+				[accountData.accountID])
+			if not dayRows.is_empty() and int(dayRows[0].get("d", 0)) == 1:
+				Launcher.Telemetry.RecordFunnel("d1_return", accountData.accountID)
 		# S5: heurística multi-account (fail-safe: nunca falha o login; abre flag
 		# na fila de revisão manual via EconomyService.FlagMultiAccount — o mesmo
 		# fraud_flag das outras heurísticas, sem ban automático por design).

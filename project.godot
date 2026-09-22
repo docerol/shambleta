@@ -34,6 +34,12 @@ FSM="*res://sources/launcher/FSM.gd"
 Monitoring="*res://sources/system/Monitoring.gd"
 
 WebPush="*res://sources/web/WebPush.gd"
+NetworkAuth="*res://sources/network/NetworkAuth.gd"
+NetworkSocial="*res://sources/network/NetworkSocial.gd"
+NetworkCharacter="*res://sources/network/NetworkCharacter.gd"
+NetworkCombat="*res://sources/network/NetworkCombat.gd"
+NetworkEconomy="*res://sources/network/NetworkEconomy.gd"
+NetworkGuild="*res://sources/network/NetworkGuild.gd"
 [debug]
 
 settings/gdscript/always_track_call_stacks=true

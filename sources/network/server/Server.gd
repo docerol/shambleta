@@ -402,18 +402,18 @@ func SetFarmZone(zoneID : int, peerID : int):
 	Network.FarmZoneFeedback(zoneID, true, "farming", peerID)
 
 func ClaimOfflineSettle(peerID : int):
-  var charID : int = Peers.GetCharacter(peerID)
-  if charID == NetworkCommons.PeerUnknownID:
-    Network.AFKReport({}, peerID)
-    return
-  if not Footprint.CheckAction(peerID, "claim_settle", 1, 60):
-    Network.AFKReport({}, peerID)
-    return
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.AFKReport({}, peerID)
+		return
+	if not Peers.Footprint(peerID, "claim_settle", 60):
+		Network.AFKReport({}, peerID)
+		return
 
-  var report : Dictionary = OfflineSettle.SettlePending(charID)
-  if report.is_empty():
-    report = OfflineSettle.BuildReport(charID).to_dictionary()
-  Network.AFKReport(report, peerID)
+	var report : Dictionary = OfflineSettle.SettlePending(charID)
+	if report.is_empty():
+		report = OfflineSettle.BuildReport(charID).to_dictionary()
+	Network.AFKReport(report, peerID)
 
 func GetAFKReport(peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
@@ -790,7 +790,7 @@ func OpenChest(chestID : int, peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	var result : Dictionary = {}
 	if charID != NetworkCommons.PeerUnknownID and accountID != NetworkCommons.PeerUnknownID:
-		if not Footprint.CheckAction(peerID, "open_chest", 10, 60):
+		if not Peers.Footprint(peerID, "open_chest", 60):
 			Network.ChestOpened({}, peerID)
 			return
 		result = Launcher.Economy.OpenChest(charID, chestID)
@@ -808,7 +808,7 @@ func BuyChests(count : int, peerID : int):
 		return
 	var result : Dictionary = Launcher.Economy.BuyChests(accountID, charID, count)
 	if result.is_empty():
-		Network.ShopFeedback(false, "rejected (gems or count 1..%d)" % Launcher.Economy.MaxChestsPerPurchase, peerID)
+		Network.ShopFeedback(false, "rejected (gems or count 1..%d)" % EconomyCatalog.MaxChestsPerPurchase, peerID)
 		return
 	Network.ShopFeedback(true, "%d chests for %d gems" % [int(result["count"]), int(result["cost"])], peerID)
 	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)

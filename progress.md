@@ -38,3 +38,15 @@ Métrica: FPS 60 | Load < 3s | 30min zero crash | Comerciais end-to-end
 - [x] E2E `tests/test_e2e_implementation.gd`: 10/10 PASS
 - [x] Suite completa `run_idle_tests.gd`: 1124 checks, 0 failures | `benchmarks.gd`: 0 failures
 - [ ] Ações restantes (pós-beta): checkout real (gateway), staging/TLS direto, sharding eval, tuning de preços VIP por catálogo.
+
+## Roadmap Comercial (2026-09-22 — lucrar)
+
+Plano executável em `ROADMAP_COMERCIAL.md` (3 semanas: Cobrar → Reter → Escalar).
+
+- [x] S1 código: funil `onboarding_done/first_boss/first_chest/d1_return` (`TelemetryService.RecordFunnel` + emits best-effort) + `FunnelSummary()` + migration 042 (covering index)
+- [x] S2 código: Skip onboarding + `TradeDailyCapVIP` (20→40) + `GetTradeFeeState()` + `SeasonS1Rules()`/`EnsureSeasonS1()` (respeita trava T5)
+- [x] S3 código: load probe real 200 settles P99<200ms (`benchmarks.gd`) + `.graphifyignore` (remove Sentry vendorado + sprites do grafo)
+- [x] Correções: `EconomyService.gd:2264` (newline) + `Onboarding.gd:161` (walrus inválido) — parse OK isolado
+- [ ] S1 dono: ligar 1 gateway (Stripe OU MP) + `refund-sweep --dry-run` em staging
+- [ ] S3: fatiar `EconomyService.gd` — FATIA 1 FEITA: `EconomyCatalog.gd` (605 linhas, 114 consts + 18 puros) + wrappers; BLOQUEIO ANTERIOR REMOVIDO (network destravado, suíte 1122 checks/25 fails pré-existentes)
+- [ ] S2: AH seed de bots + crash-test duplicação

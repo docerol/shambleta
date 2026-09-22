@@ -42,26 +42,26 @@ func _ready():
 		defaultOffsets[window.get_name()] = Rect2(window.offset_left, window.offset_top, window.offset_right - window.offset_left, window.offset_bottom - window.offset_top)
 
 func _on_window_resized():
-  var newSize : Vector2 = get_viewport_rect().size
-  var wasLandscape : bool = prevSize.x > prevSize.y
-  var isLandscape : bool = newSize.x > newSize.y
-  if wasLandscape != isLandscape:
-    ResetWindowsLayout()
-    prevSize = newSize
-    return
+	var newSize : Vector2 = get_viewport_rect().size
+	var wasLandscape : bool = prevSize.x > prevSize.y
+	var isLandscape : bool = newSize.x > newSize.y
+	if wasLandscape != isLandscape:
+		ResetWindowsLayout()
+		prevSize = newSize
+		return
 
-  var overallRatio = Vector2.ONE
-  if prevSize != null and prevSize.x != 0 and prevSize.y != 0:
-    overallRatio = newSize / prevSize
-  prevSize = newSize
+	var overallRatio = Vector2.ONE
+	if prevSize != null and prevSize.x != 0 and prevSize.y != 0:
+		overallRatio = newSize / prevSize
+	prevSize = newSize
 
-  for child in get_children():
-    if child is not WindowPanel:
-      push_error("Floating window node has non-WindowPanel defined as child")
-      continue
-    if overallRatio != Vector2.ONE:
-      child.set_position(child.get_position() * overallRatio)
-      if child.allowAutomaticResize:
-        child.set_size(child.get_size() * overallRatio)
-      ScaleDefaultOffsets(child, overallRatio)
-    child.ClampToMargin(get_size())
+	for child in get_children():
+		if child is not WindowPanel:
+			push_error("Floating window node has non-WindowPanel defined as child")
+			continue
+		if overallRatio != Vector2.ONE:
+			child.set_position(child.get_position() * overallRatio)
+			if child.allowAutomaticResize:
+				child.set_size(child.get_size() * overallRatio)
+			ScaleDefaultOffsets(child, overallRatio)
+		child.ClampToMargin(get_size())

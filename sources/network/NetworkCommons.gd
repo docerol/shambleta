@@ -75,18 +75,36 @@ const CharSelectionTimeout : float		= 15
 static var ProtocolVersion : int		= 0
 
 static func ComputeProtocolVersion(network : Node) -> int:
-	var rpcConfig : Dictionary = network.get_script().get_rpc_config()
+	# Passo 2 (P4): protocolo agora agrega todos os módulos fragmentados,
+	# não apenas Network.gd. Cada módulo (NetworkAuth, NetworkSocial, etc.)
+	# contribui com seus @rpc; a facade Network.gd não tem mais RPCs.
+	var all_rpc : Dictionary = {}
+	var modules : Array = [
+		network,
+		Engine.get_singleton("NetworkAuth"),
+		Engine.get_singleton("NetworkSocial"),
+		Engine.get_singleton("NetworkCharacter"),
+		Engine.get_singleton("NetworkCombat"),
+		Engine.get_singleton("NetworkEconomy"),
+		Engine.get_singleton("NetworkGuild"),
+	]
+	for mod in modules:
+		if mod == null or not mod.get_script():
+			continue
+		var rpc_config = mod.get_script().get_rpc_config()
+		for method in rpc_config.keys():
+			all_rpc[method] = rpc_config[method]
+
 	var methods : Array = []
-	for method in rpcConfig.keys():
+	for method in all_rpc.keys():
 		methods.append(str(method))
 	methods.sort()
 
 	var serialized : String = ""
 	for method in methods:
-		var config : Dictionary = rpcConfig[StringName(method)]
+		var config : Dictionary = all_rpc[StringName(method)]
 		var keys : Array = config.keys()
 		keys.sort()
-
 		serialized += method
 		for key in keys:
 			serialized += ",%s:%s" % [key, config[key]]

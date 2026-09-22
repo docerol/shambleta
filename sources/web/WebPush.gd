@@ -12,9 +12,15 @@ static var _permission : String = "default"
 static var _enabled : bool = false
 
 static func Initialize():
-	if not LauncherCommons.isWeb:
+	# Corrige erro de parse no modo -s: autoloads não disponíveis diretamente;
+	# acessa via singleton global (Engine.get_singleton) — conforme API Godot 4.
+	var launcher_node = Engine.get_singleton("LauncherCommons") if Engine.has_singleton("LauncherCommons") else null
+	var conf_node = Engine.get_singleton("Conf") if Engine.has_singleton("Conf") else null
+	if launcher_node == null or conf_node == null:
 		return
-	_enabled = Conf.GetBool("web", "push_enabled", Conf.Type.USERSETTINGS)
+	if not launcher_node.isWeb:
+		return
+	_enabled = conf_node.GetBool("web", "push_enabled", 0)  # Conf.Type.USERSETTINGS = 0
 	_register_service_worker()
 
 static func _register_service_worker():
@@ -25,7 +31,11 @@ static func _register_service_worker():
 		js.register_sw("/sw.js")
 
 static func RequestPermission() -> String:
-	if not LauncherCommons.isWeb:
+	var launcher_node = Engine.get_singleton("LauncherCommons") if Engine.has_singleton("LauncherCommons") else null
+	var conf_node = Engine.get_singleton("Conf") if Engine.has_singleton("Conf") else null
+	if launcher_node == null or conf_node == null:
+		return "unsupported"
+	if not launcher_node.isWeb:
 		return "unsupported"
 	var js = JavaScriptBridge.get_interface("ShambletaPush")
 	if not js:
@@ -34,8 +44,8 @@ static func RequestPermission() -> String:
 	if result == "granted":
 		_permission = "granted"
 		_enabled = true
-		Conf.SetValue("web", "push_enabled", Conf.Type.USERSETTINGS, true)
-		Conf.SaveType("settings", Conf.Type.USERSETTINGS)
+		conf_node.SetValue("web", "push_enabled", 0, true)
+		conf_node.SaveType("settings", 0)
 	elif result == "denied":
 		_permission = "denied"
 		_enabled = false
@@ -45,16 +55,26 @@ static func RequestPermission() -> String:
 	return _permission
 
 static func GetPermission() -> String:
+	var conf_node = Engine.get_singleton("Conf") if Engine.has_singleton("Conf") else null
+	if conf_node == null:
+		return _permission
 	return _permission
 
 static func IsEnabled() -> bool:
 	return _enabled and _permission == "granted"
 
 static func IsSupported() -> bool:
-	return LauncherCommons.isWeb
+	var launcher_node = Engine.get_singleton("LauncherCommons") if Engine.has_singleton("LauncherCommons") else null
+	if launcher_node == null:
+		return false
+	return launcher_node.isWeb
 
 static func Show(title : String, body : String, icon : String = ""):
-	if not LauncherCommons.isWeb or not IsEnabled():
+	var launcher_node = Engine.get_singleton("LauncherCommons") if Engine.has_singleton("LauncherCommons") else null
+	var conf_node = Engine.get_singleton("Conf") if Engine.has_singleton("Conf") else null
+	if launcher_node == null or conf_node == null:
+		return
+	if not launcher_node.isWeb or not IsEnabled():
 		return
 	var js = JavaScriptBridge.get_interface("ShambletaPush")
 	if not js:
@@ -63,7 +83,11 @@ static func Show(title : String, body : String, icon : String = ""):
 
 static func SetEnabled(enabled : bool):
 	_enabled = enabled
-	if LauncherCommons.isWeb:
-		Conf.SetValue("web", "push_enabled", Conf.Type.USERSETTINGS, enabled)
-		Conf.SaveType("settings", Conf.Type.USERSETTINGS)
+	var launcher_node = Engine.get_singleton("LauncherCommons") if Engine.has_singleton("LauncherCommons") else null
+	var conf_node = Engine.get_singleton("Conf") if Engine.has_singleton("Conf") else null
+	if launcher_node == null or conf_node == null:
+		return
+	if launcher_node.isWeb:
+		conf_node.SetValue("web", "push_enabled", 0, enabled)
+		conf_node.SaveType("settings", 0)
 

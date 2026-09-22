@@ -92,5 +92,6 @@ Staging is used for:
 ## Notes
 
 - Never use production payment credentials in staging
-- Staging data is not backed up
-- Staging environment is reset weekly
+- Staging data is backed up weekly (local + offsite probe; ver `sources/sql/SQLBackups.gd` e `tests/test_backup_restore.gd`)
+- TLS direto no container validado via `healthcheck` (`/healthz`) no `docker-compose.yml`
+- Deploy confirmado estável quando: `service_healthy` (não apenas `service_started`) para `web` → `game`

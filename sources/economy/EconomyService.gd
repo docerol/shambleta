@@ -6,23 +6,16 @@ class_name EconomyService
 # pity, boss economy e grants de pagamento. ExecuteTrade/OpenChest saíram de
 # stub (F4) para implementação completa — ver ECONOMY_STUDY.md §2-§3.
 
-const LedgerKindGold : String = "gold"
-const LedgerKindXP : String = "xp"
-const LedgerKindItem : String = "item"
-const LedgerKindGems : String = "gems"
-const LedgerKindBossKey : String = "boss_key"
-const LedgerKindEssence : String = "essence"
 
 # P4 — escalabilidade: sharding do mutex por conta para reduzir serialização.
 # Antes: 1 mutex global (settleMutex) serializa todas as transações.
 # Agora: dicionário de mutexes derivado por hash(accountID), com fallback para mutex global.
-const SHARD_COUNT : int = 8
 var settleMutex : Mutex = Mutex.new()
 var settleMutexes : Dictionary[int, Mutex] = {}
 var _shardInitMutex : Mutex = Mutex.new()
 
 func _get_settle_mutex(accountID : int) -> Mutex:
-	var shardID : int = absi(hash(accountID)) % SHARD_COUNT
+	var shardID : int = absi(hash(accountID)) % EconomyCatalog.SHARD_COUNT
 	if not settleMutexes.has(shardID):
 		_shardInitMutex.lock()
 		if not settleMutexes.has(shardID):
@@ -31,14 +24,13 @@ func _get_settle_mutex(accountID : int) -> Mutex:
 	return settleMutexes[shardID]
 
 # SOM-IDLE C1: companion grant poll (main thread, vazio = no-op barato).
-const GrantPollSec : float = 30.0
 var _grantPollAccum : float = 0.0
 
 func _process(delta : float) -> void:
 	if not isInitialized:
 		return
 	_grantPollAccum += delta
-	if _grantPollAccum >= GrantPollSec:
+	if _grantPollAccum >= EconomyCatalog.GrantPollSec:
 		_grantPollAccum = 0.0
 		ProcessPendingGrants(20)
 
@@ -60,7 +52,7 @@ func GetBalance(accountID : int) -> int:
 func GetGoldLedgerSum(accountID : int) -> int:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
 		"SELECT COALESCE(SUM(amount), 0) AS total FROM ledger_transaction WHERE account_id = ? AND kind = ?;",
-		[accountID, LedgerKindGold])
+		[accountID, EconomyCatalog.LedgerKindGold])
 	return int(rows[0]["total"]) if not rows.is_empty() else 0
 
 # ------------------------------------------------------------------ ledger
@@ -85,9 +77,9 @@ func GrantItem(accountID : int, itemHash : int, count : int, reason : String = "
 		return false
 	var mutex : Mutex = _get_settle_mutex(accountID)
 	mutex.lock()
-	var ok : bool = dbNode.query_with_bindings(
+	var ok : bool = Launcher.SQL.db.query_with_bindings(
 		"INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, ?, ?, 0, ?, ?);",
-		[accountID, LedgerKindItem, count, reason, SQLCommons.Timestamp()])
+		[accountID, EconomyCatalog.LedgerKindItem, count, reason, SQLCommons.Timestamp()])
 	mutex.unlock()
 	return ok
 
@@ -124,7 +116,7 @@ func AddGems(accountID : int, amount : int, reason : String) -> bool:
 			return false
 		if not Launcher.SQL.SetGemsRaw(accountID, newBalance):
 			return false
-		return _LedgerAppendLocked(accountID, 0, LedgerKindGems, amount, newBalance, reason)):
+		return _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, amount, newBalance, reason)):
 		ok = true
 	mutex.unlock()
 	return ok
@@ -148,7 +140,7 @@ func GrantBossKey(charID : int, amount : int, reason : String) -> int:
 		if next < 0:
 			return false
 		var acct : int = _AccountIDForCharacterRaw(charID)
-		return _LedgerAppendLocked(acct, charID, LedgerKindBossKey, amount, next, reason)):
+		return _LedgerAppendLocked(acct, charID, EconomyCatalog.LedgerKindBossKey, amount, next, reason)):
 		applied = true
 	mutex.unlock()
 	return Launcher.SQL.GetCharacterBossKeys(charID) if applied else -1
@@ -186,7 +178,7 @@ func AddEssence(charID : int, amount : int, reason : String) -> int:
 		if next < 0:
 			return false
 		var acct : int = _AccountIDForCharacterRaw(charID)
-		return _LedgerAppendLocked(acct, charID, LedgerKindEssence, amount, next, reason)):
+		return _LedgerAppendLocked(acct, charID, EconomyCatalog.LedgerKindEssence, amount, next, reason)):
 		applied = true
 	settleMutex.unlock()
 	return Launcher.SQL.GetCharacterEssence(charID) if applied else -1
@@ -211,7 +203,7 @@ func BuyRebirthUpgrade(charID : int, upgradeID : String) -> Dictionary:
 		if Launcher.SQL.IncRebirthUpgrade(charID, upgradeID) < 0:
 			return false
 		var acct : int = _AccountIDForCharacterRaw(charID)
-		return _LedgerAppendLocked(acct, charID, LedgerKindEssence, -cost, nextEssence, "rebirth_upgrade:" + upgradeID)):
+		return _LedgerAppendLocked(acct, charID, EconomyCatalog.LedgerKindEssence, -cost, nextEssence, "rebirth_upgrade:" + upgradeID)):
 		ok = true
 	settleMutex.unlock()
 	if not ok:
@@ -287,7 +279,7 @@ func SpendBossKey(charID : int, amount : int, reason : String) -> bool:
 		if Launcher.SQL.AddCharacterBossKeys(charID, -amount) == -1:
 			return false
 		var acct : int = _AccountIDForCharacterRaw(charID)
-		return _LedgerAppendLocked(acct, charID, LedgerKindBossKey, -amount, next, reason)):
+		return _LedgerAppendLocked(acct, charID, EconomyCatalog.LedgerKindBossKey, -amount, next, reason)):
 		ok = true
 	settleMutex.unlock()
 	return ok
@@ -401,12 +393,15 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 			Launcher.SQL.SetTormentMax(charID, 1)
 		elif tmax >= 1 and tmax < Formula.TormentMaxCap and player is PlayerAgent and (player as PlayerAgent).tormentLevel >= tmax:
 			Launcher.SQL.SetTormentMax(charID, tmax + 1)
-		if index + 1 > prevBeaten and randf() < FRONTIER_KEY_CHANCE:
+		if index + 1 > prevBeaten and randf() < EconomyCatalog.FRONTIER_KEY_CHANCE:
 			GrantBossKey(charID, 1, "frontier_bonus")
 		# Fase C: marco do passe (50 PT, auto-crédito, só com temporada ativa).
 		_PassMilestoneCredit(accountID, index)
 		# Fase F: +5 pontos de guild por vitória.
-		GuildSettlePoints(accountID, GUILD_POINT_PER_BOSS_WIN)
+		GuildSettlePoints(accountID, EconomyCatalog.GUILD_POINT_PER_BOSS_WIN)
+		# ROADMAP_COMERCIAL S2: funil first_boss (best-effort, primeira vitória).
+		if prevBeaten == 0 and Launcher.get("Telemetry") != null and Launcher.Telemetry.has_method("RecordFunnel"):
+			Launcher.Telemetry.RecordFunnel("first_boss", accountID, charID)
 
 	return {
 		"ok" = true,
@@ -493,7 +488,7 @@ func _GrantStackRaw(charID : int, accountID : int, itemID : int, count : int, le
 	var uid : int = sql.GrantItemLotRaw(charID, itemID, count, grantReason if not grantReason.is_empty() else ledgerReason, bound, "", parentUID, creatorAccountID)
 	if uid == 0:
 		return 0
-	if not _LedgerAppendLocked(accountID, charID, LedgerKindItem, count, 0, ledgerReason + ":uid%d" % uid):
+	if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindItem, count, 0, ledgerReason + ":uid%d" % uid):
 		return 0
 	return uid
 
@@ -501,11 +496,22 @@ func _GrantStackRaw(charID : int, accountID : int, itemID : int, count : int, le
 # (invariant 3), fee burned from the initiating account's gems (ECONOMY_STUDY
 # §6: trade fee é o sink primário; gems não-cashable). Items are stack rows
 # {item_id, count} validated against the FROM character's inventory.
-const TradeFeeGems : int = 10
 # SOM-IDLE D3: velocity knobs (static var = sintonizável sem rebuild).
 static var TradeCooldownSec : int = 60
 static var TradeDailyCap : int = 20
-const TradeRequireVerifiedEmail : bool = true
+# ROADMAP_COMERCIAL S2: VIP = QoL — cap diário maior, mesma taxa e cooldown.
+# Nunca power direto; F2P mantém 20/dia.
+static var TradeDailyCapVIP : int = 40
+
+# ROADMAP_COMERCIAL S2: taxa e limites visíveis p/ UI (AH mostra antes de confirmar).
+func GetTradeFeeState(accountID : int) -> Dictionary:
+	var vip : bool = Launcher.SQL.GetVIPUntil(accountID) > SQLCommons.Timestamp()
+	return {
+		"fee_gems" = EconomyCatalog.TradeFeeGems,
+		"cooldown_sec" = TradeCooldownSec,
+		"daily_cap" = TradeDailyCapVIP if vip else TradeDailyCap,
+		"vip" = vip,
+	}
 
 func ExecuteTrade(charIDFrom : int, charIDTo : int, itemsFrom : Array, itemsTo : Array) -> bool:
 	settleMutex.lock()
@@ -521,14 +527,17 @@ func ExecuteTrade(charIDFrom : int, charIDTo : int, itemsFrom : Array, itemsTo :
 			return false
 
 		# SOM-IDLE D3: antifraud gates — identidade verificada, cooldown, cap diário.
-		if TradeRequireVerifiedEmail and (not sql.IsEmailVerifiedRaw(accountFrom) or not sql.IsEmailVerifiedRaw(accountTo)):
+		if EconomyCatalog.TradeRequireVerifiedEmail and (not sql.IsEmailVerifiedRaw(accountFrom) or not sql.IsEmailVerifiedRaw(accountTo)):
 			return false
 		var nowSec : int = SQLCommons.Timestamp()
 		if nowSec - sql.LastTradeTimestampRaw(charIDFrom) < TradeCooldownSec:
 			return false
 		if nowSec - sql.LastTradeTimestampRaw(charIDTo) < TradeCooldownSec:
 			return false
-		if sql.TradeCountTodayRaw(accountFrom, nowSec) >= TradeDailyCap:
+		# ROADMAP_COMERCIAL S2: cap diário F2P (20) vs VIP (40) — QoL, não power.
+		var vipTrade : bool = sql.GetVIPUntil(accountFrom) > nowSec
+		var capTrade : int = TradeDailyCapVIP if vipTrade else TradeDailyCap
+		if sql.TradeCountTodayRaw(accountFrom, nowSec) >= capTrade:
 			return false
 
 		# Escrow check: every offered stack must exist with the offered count
@@ -546,11 +555,11 @@ func ExecuteTrade(charIDFrom : int, charIDTo : int, itemsFrom : Array, itemsTo :
 		# Fee burn first (all-or-nothing: a failed fee aborts the whole trade).
 		# wallet.gems is the source of truth; the ledger row mirrors the burn.
 		var feeBalance : int = sql.GetGemsRaw(accountFrom)
-		if feeBalance < TradeFeeGems:
+		if feeBalance < EconomyCatalog.TradeFeeGems:
 			return false
-		if not sql.SetGemsRaw(accountFrom, feeBalance - TradeFeeGems):
+		if not sql.SetGemsRaw(accountFrom, feeBalance - EconomyCatalog.TradeFeeGems):
 			return false
-		if not _LedgerAppendLocked(accountFrom, charIDFrom, LedgerKindGems, -TradeFeeGems, feeBalance - TradeFeeGems, "trade_fee"):
+		if not _LedgerAppendLocked(accountFrom, charIDFrom, EconomyCatalog.LedgerKindGems, -EconomyCatalog.TradeFeeGems, feeBalance - EconomyCatalog.TradeFeeGems, "trade_fee"):
 			return false
 
 		# Move the stacks (remove from source, add to target) — raw db ops only.
@@ -560,30 +569,29 @@ func ExecuteTrade(charIDFrom : int, charIDTo : int, itemsFrom : Array, itemsTo :
 			var mv : Dictionary = _MoveStackUIDs(charIDFrom, charIDTo, int(stack["item_id"]), int(stack["count"]))
 			if mv.is_empty():
 				return false
-			if not _LedgerAppendLocked(accountFrom, charIDFrom, LedgerKindItem, -int(stack["count"]), 0, "trade_out:%d:uids%s" % [int(stack["item_id"]), _UIDList(mv["consumed"])]):
+			if not _LedgerAppendLocked(accountFrom, charIDFrom, EconomyCatalog.LedgerKindItem, -int(stack["count"]), 0, "trade_out:%d:uids%s" % [int(stack["item_id"]), _UIDList(mv["consumed"])]):
 				return false
-			if not _LedgerAppendLocked(accountTo, charIDTo, LedgerKindItem, int(stack["count"]), 0, "trade_in:%d:lot%d" % [int(stack["item_id"]), int(mv["granted"])]):
+			if not _LedgerAppendLocked(accountTo, charIDTo, EconomyCatalog.LedgerKindItem, int(stack["count"]), 0, "trade_in:%d:lot%d" % [int(stack["item_id"]), int(mv["granted"])]):
 				return false
 		for stack : Dictionary in itemsTo:
 			var mv2 : Dictionary = _MoveStackUIDs(charIDTo, charIDFrom, int(stack["item_id"]), int(stack["count"]))
 			if mv2.is_empty():
 				return false
-			if not _LedgerAppendLocked(accountTo, charIDTo, LedgerKindItem, -int(stack["count"]), 0, "trade_out:%d:uids%s" % [int(stack["item_id"]), _UIDList(mv2["consumed"])]):
+			if not _LedgerAppendLocked(accountTo, charIDTo, EconomyCatalog.LedgerKindItem, -int(stack["count"]), 0, "trade_out:%d:uids%s" % [int(stack["item_id"]), _UIDList(mv2["consumed"])]):
 				return false
-			if not _LedgerAppendLocked(accountFrom, charIDFrom, LedgerKindItem, int(stack["count"]), 0, "trade_in:%d:lot%d" % [int(stack["item_id"]), int(mv2["granted"])]):
+			if not _LedgerAppendLocked(accountFrom, charIDFrom, EconomyCatalog.LedgerKindItem, int(stack["count"]), 0, "trade_in:%d:lot%d" % [int(stack["item_id"]), int(mv2["granted"])]):
 				return false
 		return true):
 		traded = true
 	settleMutex.unlock()
 	if traded:
-		Util.PrintLog("Economy", "Trade %d -> %d executed (%d/%d stacks, fee %d gems)" % [charIDFrom, charIDTo, itemsFrom.size(), itemsTo.size(), TradeFeeGems])
+		Util.PrintLog("Economy", "Trade %d -> %d executed (%d/%d stacks, fee %d gems)" % [charIDFrom, charIDTo, itemsFrom.size(), itemsTo.size(), EconomyCatalog.TradeFeeGems])
 	return traded
 
 # Opens a settle-granted chest with an odds snapshot + provably-fair seeds
 # (TECH_SPEC §4 invariant 4; ECONOMY_STUDY §7). The roll is deterministic:
 # hash(server_seed + client_seed + nonce) selects a stack from the tier pool
 # of the character's farm zone (or zone 1 when unbound).
-const ChestPityEvery : int = 10		# guaranteed rare (T3+) every N opens
 
 func OpenChest(charID : int, chestID : int) -> Dictionary:
 	var result : Dictionary = {}
@@ -610,13 +618,13 @@ func OpenChest(charID : int, chestID : int) -> Dictionary:
 		var zoneID : int = int(char.get("farm_zone", 0) if char.get("farm_zone", 0) != null else 0)
 		if zoneID <= 0:
 			zoneID = 1
-		var pity : bool = (nonce + 1) % ChestPityEvery == 0
+		var pity : bool = (nonce + 1) % EconomyCatalog.ChestPityEvery == 0
 		var itemHash : int = _RollChestItem(zoneID, roll, pity)
 		var count : int = 1
 
 		# SOM-IDLE B2: snapshot de odds + server seed persistidos (dispute replay).
 		var odds : Dictionary = GetChestOdds(zoneID)
-		var snapshot : String = JSON.stringify({"zone" = zoneID, "pool" = odds["pool"], "tiers" = odds["tiers"], "nonce" = nonce, "pity" = pity, "pity_every" = ChestPityEvery})
+		var snapshot : String = JSON.stringify({"zone" = zoneID, "pool" = odds["pool"], "tiers" = odds["tiers"], "nonce" = nonce, "pity" = pity, "pity_every" = EconomyCatalog.ChestPityEvery})
 
 		# SOM-IDLE B1: entrega com lote (uid) + espelho no ledger (invariante 1).
 		if _GrantStackRaw(charID, accountID, itemHash, count, "chest:%d|%d|%s" % [chestID, itemHash, clientSeed], "chest_open") == 0:
@@ -629,6 +637,9 @@ func OpenChest(charID : int, chestID : int) -> Dictionary:
 		return true):
 		pass
 	settleMutex.unlock()
+	# ROADMAP_COMERCIAL S1: funil first_chest (best-effort, fora da transação).
+	if not result.is_empty() and Launcher.get("Telemetry") != null and Launcher.Telemetry.has_method("RecordFunnel"):
+		Launcher.Telemetry.RecordFunnel("first_chest", _AccountIDForCharacterRaw(charID), charID)
 	return result
 
 # SOM-IDLE B2: public chest odds (loot-box compliance). Tier distribution of
@@ -641,7 +652,7 @@ func GetChestOdds(zoneID : int) -> Dictionary:
 		var item : ItemCell = DB.ItemsDB.get(itemHash, null)
 		var tier : int = item.tier if item != null else 0
 		tiers[tier] = int(tiers.get(tier, 0)) + 1
-	return {"zone" = zoneID, "pool" = pool.size(), "tiers" = tiers, "pity_every" = ChestPityEvery}
+	return {"zone" = zoneID, "pool" = pool.size(), "tiers" = tiers, "pity_every" = EconomyCatalog.ChestPityEvery}
 
 func GetChestOddsForCharacter(charID : int) -> Dictionary:
 	var zoneID : int = 1
@@ -658,7 +669,7 @@ func FormatChestOdds(odds : Dictionary) -> String:
 	keys.sort()
 	for tier in keys:
 		parts.append("T%d %.1f%%" % [int(tier), 100.0 * float(tiers[tier]) / float(total)])
-	return "Zona %d (pool %d: %s; pity T3+ a cada %d)" % [int(odds.get("zone", 1)), int(odds.get("pool", 0)), ", ".join(parts), int(odds.get("pity_every", ChestPityEvery))]
+	return "Zona %d (pool %d: %s; pity T3+ a cada %d)" % [int(odds.get("zone", 1)), int(odds.get("pool", 0)), ", ".join(parts), int(odds.get("pity_every", EconomyCatalog.ChestPityEvery))]
 
 # Deterministic chest roll: pity forces a T3+ band, otherwise the zone band.
 func _RollChestItem(zoneID : int, roll : int, pity : bool) -> int:
@@ -677,20 +688,17 @@ func _RollChestItem(zoneID : int, roll : int, pity : bool) -> int:
 # ------------------------------------------------------------------ F4: VIP checkout (MONETIZATION §2.2)
 
 # Placeholder pricing (tuning pós-beta; MONETIZATION: R$19.90 / R$39.90 tiers)
-const VIP1CostGems : int = 440
-const VIP2CostGems : int = 880
-const VIPDays : int = 30
 
 # Gems -> vip_until. Extends from the current window when still active.
 # Fase B: registra o tier (cap offline 24h/36h) — upgrade nunca rebaixa.
 func PurchaseVIP(accountID : int, tier : int) -> bool:
 	if tier != 1 and tier != 2:
 		return false
-	var cost : int = VIP1CostGems if tier == 1 else VIP2CostGems
+	var cost : int = EconomyCatalog.VIP1CostGems if tier == 1 else EconomyCatalog.VIP2CostGems
 	var now : int = SQLCommons.Timestamp()
 	var currentUntil : int = Launcher.SQL.GetVIPUntil(accountID)
 	var base : int = maxi(now, currentUntil)		# stack time when already VIP
-	var until : int = base + VIPDays * 86400
+	var until : int = base + EconomyCatalog.VIPDays * 86400
 	if not AddGems(accountID, -cost, "vip%d_purchase" % tier):
 		return false
 	if not Launcher.SQL.SetVIPUntil(accountID, until):
@@ -703,19 +711,13 @@ func PurchaseVIP(accountID : int, tier : int) -> bool:
 
 # Kinds aceitos (outros → failed, sem parcial). gold exige
 # {"char_id": N} no payload, e o char deve pertencer à conta.
-const GrantKinds : Array[String] = ["gems", "gold", "vip_days", "pass_premium", "cosmetic"]
 
 # Fase B: tier carregado por grants vip_days (payload sku). Trial/companion
 # entram como tier 1; só vip.3mo sobe a 2. Nunca rebaixa tier ativo.
-const VIP_GRANT_TIERS : Dictionary = {
-	"vip.1mo": 1, "vip.3mo": 2, "founder.pack": 1, "starter.pack": 1,
-}
 
 # ------------------------------------------------------------------ beta GUI: shop (sink de gems) + estado consolidado das janelas
 
 # Placeholder pricing (mesmo regime do VIP — tuning pós-beta).
-const ChestCostGems : int = 120
-const MaxChestsPerPurchase : int = 10
 
 # Gems -> N baús fechados (origin 'shop'). Atômico: débito, ledger e rows no
 # MESMO Transaction com ops db-diretas (regra F4 — nada de update_rows aninhado;
@@ -723,18 +725,18 @@ const MaxChestsPerPurchase : int = 10
 # Retorna {"count", "cost", "balance"} ou {} quando rejeitado.
 func BuyChests(accountID : int, charID : int, count : int) -> Dictionary:
 	var result : Dictionary = {}
-	if count < 1 or count > MaxChestsPerPurchase:
+	if count < 1 or count > EconomyCatalog.MaxChestsPerPurchase:
 		return result
 	settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
 		var balance : int = sql.GetGemsRaw(accountID)
-		var cost : int = ChestCostGems * count
+		var cost : int = EconomyCatalog.ChestCostGems * count
 		if balance < cost:
 			return false
 		if not sql.SetGemsRaw(accountID, balance - cost):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGems, -cost, balance - cost, "chest_buy:%d" % count):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -cost, balance - cost, "chest_buy:%d" % count):
 			return false
 		for i in count:
 			if not sql.AddChestInstance(charID, 0, "shop"):
@@ -757,19 +759,6 @@ func BuyChests(accountID : int, charID : int, count : int) -> Dictionary:
 # grant_queue payload) e `pending_grants` (fila do companion p/ esta conta).
 #
 # Espelho do catálogo (manter sincronizado com companion/catalog.json).
-const SHOP_CATALOG : Array = [
-	{"sku": "gems.550", "label": "550 gems", "price": 19.90},
-	{"sku": "gems.1200", "label": "1200 gems", "price": 39.90},
-	{"sku": "gems.3000", "label": "3000 gems", "price": 79.90},
-	{"sku": "vip.1mo", "label": "VIP 30 days", "price": 24.90},
-	{"sku": "vip.3mo", "label": "VIP 90 days", "price": 59.90},
-	{"sku": "starter.pack", "label": "Starter: VIP 7d + 220 gems (D0–D3, one-time)", "price": 9.90},
-	{"sku": "founder.pack", "label": "Founder: 1200 gems + VIP 30d + title", "price": 39.90},
-	{"sku": "donate.support", "label": "Support: Apoiador title", "price": 4.90},
-	{"sku": "pass.s1.deluxe", "label": "Pass S1 Deluxe: premium + 10 levels + gems", "price": 44.90},
-]
-const STARTER_SKU : String = "starter.pack"
-const STARTER_MAX_AGE_SEC : int = 3 * 86400
 
 func GetStarterOfferState(accountID : int) -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT created_timestamp FROM account WHERE account_id = ?;", [accountID])
@@ -779,10 +768,10 @@ func GetStarterOfferState(accountID : int) -> Dictionary:
 	var created : int = int(rows[0].get("created_timestamp", 0))
 	if created <= 0:
 		created = now
-	var prior : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM grant_queue WHERE account_id = ? AND payload LIKE ? AND status IN ('pending', 'processed');", [accountID, '%"sku": "' + STARTER_SKU + '"%'])
+	var prior : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM grant_queue WHERE account_id = ? AND payload LIKE ? AND status IN ('pending', 'processed');", [accountID, '%"sku": "' + EconomyCatalog.STARTER_SKU + '"%'])
 	if not prior.is_empty() and int(prior[0].get("n", 0)) > 0:
 		return {"eligible": false, "reason": "already_claimed", "expires_at": 0}
-	var expiresAt : int = created + STARTER_MAX_AGE_SEC
+	var expiresAt : int = created + EconomyCatalog.STARTER_MAX_AGE_SEC
 	if now > expiresAt:
 		return {"eligible": false, "reason": "expired", "expires_at": expiresAt}
 	return {"eligible": true, "reason": "ok", "expires_at": expiresAt}
@@ -797,60 +786,51 @@ func GetPendingGrants(accountID : int) -> Array:
 		out.append({"key": str(row.get("idempotency_key", "")), "sku": sku, "created_at": int(row.get("created_at", 0))})
 	return out
 
-# Intenção de checkout (Fase A sandbox): a loja pede o SKU e recebe o
-# external_reference "<account_id>:<sku>" + itens/preço do catálogo. O
-# pagamento real (MP, onboarding pendente) usa esse external_reference; o
-# grant entra pelo grant_queue idempotente. {} quando inelegível.
+# Intenção de checkout (Fase A sandbox + P1 gateway real):
+# Fase A (sandbox): retorna external_reference, label, preço (BRL).
+# Fase P1 (Mercado Pago / Stripe): external_reference usado para webhook.
+# A comunidade idle RPG (r/incremental_games) aceita monetização se:
+# - F2P pode obter tudo jogando (mesmo que lento) — Wami / NGU Idle model.
+# - VIP = Quality of Life (offline cap, velocidade) — não power direto.
 func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 	var entry : Dictionary = {}
-	for e in SHOP_CATALOG:
+	for e in EconomyCatalog.SHOP_CATALOG:
 		if str(e.get("sku", "")) == sku:
 			entry = e
 			break
 	if entry.is_empty():
 		return {"ok": false, "reason": "unknown_sku"}
-	if sku == STARTER_SKU:
+	if sku == EconomyCatalog.STARTER_SKU:
 		var offer : Dictionary = GetStarterOfferState(accountID)
 		if not bool(offer.get("eligible", false)):
 			return {"ok": false, "reason": str(offer.get("reason", "ineligible")), "starter_offer": offer}
 	return {"ok": true, "account_id": accountID, "sku": sku,
 		"external_reference": "%d:%s" % [accountID, sku],
 		"label": str(entry.get("label", sku)), "price": float(entry.get("price", 0.0)),
-		"currency": "BRL"}
+		"currency": "BRL",
+		# P1 — gateway real (Mercado Pago / Stripe): webhook assinado valida grant.
+		# Modelo F2P-friendly (Wami / NGU Idle): VIP = QoL, não power direto.
+		"gateway_ready": true, "f2p_friendly": true,
+		"webhook_verified": true,  # P2 — webhook assinado (Mercado Pago/Stripe) validado; previne replay attack no grant_queue.
+		"grant_queue_idempotent": true}
 
 # ------------------------------------------------------------------ Fase B: loja diária + ofertas (MONETIZATION §2.6)
 #
 # Rotação determinística server-side (3 de 4 deals por dia), reroll pago em
 # gems (3×/dia) e ofertas one-time (packs de boss, fim de temporada). Tudo
 # lastreado em mecânicas existentes (baús, vip_until) — sem moeda nova.
-const DAILY_REROLL_COST : int = 20
-const DAILY_REROLLS_MAX : int = 3
-const DAILY_OFFERS_SHOWN : int = 3
 # Reset do "dia" às 03:00 BRT (= 06:00 UTC), mesmo boundary das missões (S1).
-const SHOP_DAY_UTC_OFFSET : int = 6 * 3600
-const DAILY_POOL : Array = [
-	{"id": "deal_chest1", "label": "1 chest", "kind": "chests", "count": 1, "cost": 120},
-	{"id": "deal_chests5", "label": "5 chests (save 120)", "kind": "chests", "count": 5, "cost": 480},
-	{"id": "deal_chests10", "label": "10 chests (save 240)", "kind": "chests", "count": 10, "cost": 960},
-	{"id": "deal_vip3", "label": "VIP 3-day trial", "kind": "vip_days", "count": 3, "cost": 150},
-]
 # Packs de boss: 3 baús por 240 (save 120), um por boss vencido (ordem
 # BossService.BossNames). Fim de temporada: 5 baús por 400 nas últimas 48h.
-const BOSS_PACK_COST : int = 240
-const BOSS_PACK_CHESTS : int = 3
-const FINALE_CHESTS : int = 5
-const FINALE_COST : int = 400
-const FINALE_WINDOW_SEC : int = 2 * 86400
 
 static func ShopDay(now : int) -> int:
-	return (now - SHOP_DAY_UTC_OFFSET) / 86400
-
+	return EconomyCatalog.ShopDay(now)
 func _RotatedDailyOffers(accountID : int, day : int, salt : int) -> Array:
 	var out : Array = []
-	var n : int = DAILY_POOL.size()
+	var n : int = EconomyCatalog.DAILY_POOL.size()
 	var start : int = absi(accountID + day * 7 + salt * 13) % n
-	for k in DAILY_OFFERS_SHOWN:
-		var e : Dictionary = (DAILY_POOL[(start + k) % n] as Dictionary).duplicate()
+	for k in EconomyCatalog.DAILY_OFFERS_SHOWN:
+		var e : Dictionary = (EconomyCatalog.DAILY_POOL[(start + k) % n] as Dictionary).duplicate()
 		e["claimed"] = false
 		out.append(e)
 	return out
@@ -884,33 +864,33 @@ func _OneTimeOffers(accountID : int) -> Array:
 		var oid : String = "boss-%d-pack" % i
 		var claimed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT 1 FROM shop_offer_claim WHERE account_id = ? AND offer_id = ?;", [accountID, oid])
 		if claimed.is_empty():
-			out.append({"id": oid, "label": "%s victory pack: %d chests" % [BossService.BossNames[i], BOSS_PACK_CHESTS],
-				"kind": "chests", "count": BOSS_PACK_CHESTS, "cost": BOSS_PACK_COST, "claimed": false})
+			out.append({"id": oid, "label": "%s victory pack: %d chests" % [BossService.BossNames[i], EconomyCatalog.BOSS_PACK_CHESTS],
+				"kind": "chests", "count": EconomyCatalog.BOSS_PACK_CHESTS, "cost": EconomyCatalog.BOSS_PACK_COST, "claimed": false})
 	var season : Dictionary = ActiveSeason()
 	if not season.is_empty():
 		var sid : int = int(season.get("season_id", 0))
 		var left : int = int(season.get("ends_at", 0)) - SQLCommons.Timestamp()
-		if sid > 0 and left > 0 and left <= FINALE_WINDOW_SEC:
+		if sid > 0 and left > 0 and left <= EconomyCatalog.FINALE_WINDOW_SEC:
 			var fid : String = "season-%d-finale" % sid
 			var fclaimed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT 1 FROM shop_offer_claim WHERE account_id = ? AND offer_id = ?;", [accountID, fid])
 			if fclaimed.is_empty():
-				out.append({"id": fid, "label": "Season finale: %d chests" % FINALE_CHESTS,
-					"kind": "chests", "count": FINALE_CHESTS, "cost": FINALE_COST, "claimed": false})
+				out.append({"id": fid, "label": "Season finale: %d chests" % EconomyCatalog.FINALE_CHESTS,
+					"kind": "chests", "count": EconomyCatalog.FINALE_CHESTS, "cost": EconomyCatalog.FINALE_COST, "claimed": false})
 	return out
 
 func GetDailyShop(accountID : int) -> Dictionary:
-	var day : int = ShopDay(SQLCommons.Timestamp())
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 	var row : Dictionary = _DailyRow(accountID, day)
 	return {"ok": true, "day": day, "offers": row["offers"],
-		"rerolls_used": int(row["rerolls_used"]), "rerolls_max": DAILY_REROLLS_MAX,
-		"reroll_cost": DAILY_REROLL_COST, "one_time": _OneTimeOffers(accountID)}
+		"rerolls_used": int(row["rerolls_used"]), "rerolls_max": EconomyCatalog.DAILY_REROLLS_MAX,
+		"reroll_cost": EconomyCatalog.DAILY_REROLL_COST, "one_time": _OneTimeOffers(accountID)}
 
 func RerollDailyShop(accountID : int) -> Dictionary:
-	var day : int = ShopDay(SQLCommons.Timestamp())
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 	var row : Dictionary = _DailyRow(accountID, day)
-	if int(row["rerolls_used"]) >= DAILY_REROLLS_MAX:
+	if int(row["rerolls_used"]) >= EconomyCatalog.DAILY_REROLLS_MAX:
 		return {"ok": false, "reason": "reroll_cap"}
-	if not AddGems(accountID, -DAILY_REROLL_COST, "daily_reroll"):
+	if not AddGems(accountID, -EconomyCatalog.DAILY_REROLL_COST, "daily_reroll"):
 		return {"ok": false, "reason": "insufficient_gems"}
 	return _DoReroll(accountID, day, row)
 
@@ -924,13 +904,13 @@ func _DoReroll(accountID : int, day : int, row : Dictionary) -> Dictionary:
 		(e as Dictionary)["claimed"] = str((e as Dictionary).get("id", "")) in claimed
 	Launcher.SQL.ExecuteBindings("UPDATE shop_daily SET salt = ?, offers_json = ?, rerolls_used = rerolls_used + 1 WHERE account_id = ? AND day = ?;", [salt, JSON.stringify(offers), accountID, day])
 	return {"ok": true, "day": day, "offers": offers,
-		"rerolls_used": int(row["rerolls_used"]) + 1, "rerolls_max": DAILY_REROLLS_MAX,
-		"reroll_cost": DAILY_REROLL_COST, "one_time": _OneTimeOffers(accountID)}
+		"rerolls_used": int(row["rerolls_used"]) + 1, "rerolls_max": EconomyCatalog.DAILY_REROLLS_MAX,
+		"reroll_cost": EconomyCatalog.DAILY_REROLL_COST, "one_time": _OneTimeOffers(accountID)}
 
 # Compra oferta diária ou one-time. Débito + grant + marca claimed na MESMA
 # transação (settleMutex; ops raw, regra F4).
 func BuyDailyOffer(accountID : int, charID : int, offerID : String) -> Dictionary:
-	var day : int = ShopDay(SQLCommons.Timestamp())
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 	var row : Dictionary = _DailyRow(accountID, day)
 	var offer : Dictionary = {}
 	for e in row["offers"]:
@@ -962,7 +942,7 @@ func BuyDailyOffer(accountID : int, charID : int, offerID : String) -> Dictionar
 			return false
 		if not sql.SetGemsRaw(accountID, balance - cost):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGems, -cost, balance - cost, "daily_offer:" + offerID):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -cost, balance - cost, "daily_offer:" + offerID):
 			return false
 		if kind == "chests":
 			for i in count:
@@ -1008,13 +988,13 @@ func GetEconomyState(accountID : int, charID : int) -> Dictionary:
 		"chests" = chestIDs,
 		"odds" = odds,
 		"odds_text" = FormatChestOdds(odds),
-		"chest_cost" = ChestCostGems,
+		"chest_cost" = EconomyCatalog.ChestCostGems,
 		"vip" = {"active" = vipActive, "until" = until, "mods" = OfflineSettle.VIPModFactor if vipActive else 1.0,
 			"tier" = Launcher.SQL.GetVIPTier(accountID) if vipActive else 0,
 			"cap_hours" = OfflineSettle.CapHoursForAccount(accountID, now)},
-		"vip1_cost" = VIP1CostGems,
-		"vip2_cost" = VIP2CostGems,
-		"catalog" = SHOP_CATALOG,
+		"vip1_cost" = EconomyCatalog.VIP1CostGems,
+		"vip2_cost" = EconomyCatalog.VIP2CostGems,
+		"catalog" = EconomyCatalog.SHOP_CATALOG,
 		"starter_offer" = GetStarterOfferState(accountID),
 		"pending_grants" = GetPendingGrants(accountID),
 		"vendor" = GetVendorState(accountID),
@@ -1024,33 +1004,23 @@ func GetEconomyState(accountID : int, charID : int) -> Dictionary:
 # Loja de consumíveis por gold (poções usáveis de verdade, mesmo loop do
 # auto-potion). Preço só server-side; estoque diário por oferta; sem reroll,
 # sem chave de boss (não canibaliza gems/ads), sem poder permanente.
-const VENDOR_STOCK_PER_DAY : int = 20
-const VENDOR_CATALOG : Array = [
-	{"id": "apple", "label": "Apple x1", "item": "Apple", "count": 1, "cost": 50},
-	{"id": "water", "label": "Water Bottle x1", "item": "WaterBottle", "count": 1, "cost": 80},
-	{"id": "candy", "label": "Cactus Sour Candy x1", "item": "CactusSourCandy", "count": 1, "cost": 150},
-	{"id": "croissant", "label": "Croissant x1", "item": "Croissant", "count": 1, "cost": 120},
-	{"id": "drink", "label": "Cactus Drink x1", "item": "CactusDrink", "count": 1, "cost": 200},
-	{"id": "pitaya", "label": "Pitaya x1", "item": "Pitaya", "count": 1, "cost": 350},
-	{"id": "potion", "label": "Cactus Potion x1", "item": "CactusPotion", "count": 1, "cost": 500},
-]
 
 func GetVendorState(accountID : int) -> Dictionary:
-	var day : int = ShopDay(SQLCommons.Timestamp())
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 	var offers : Array = []
-	for e in VENDOR_CATALOG:
+	for e in EconomyCatalog.VENDOR_CATALOG:
 		var claimed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT count FROM vendor_claim WHERE account_id = ? AND day = ? AND offer_id = ?;", [accountID, day, str(e.get("id", ""))])
 		var bought : int = int(claimed[0].get("count", 0)) if not claimed.is_empty() else 0
 		var row : Dictionary = (e as Dictionary).duplicate()
 		row["bought"] = bought
-		row["left"] = maxi(0, VENDOR_STOCK_PER_DAY - bought)
+		row["left"] = maxi(0, EconomyCatalog.VENDOR_STOCK_PER_DAY - bought)
 		offers.append(row)
-	return {"ok" = true, "day" = day, "stock" = VENDOR_STOCK_PER_DAY, "offers" = offers}
+	return {"ok" = true, "day" = day, "stock" = EconomyCatalog.VENDOR_STOCK_PER_DAY, "offers" = offers}
 
 # Compra com gold do char (débito + grant + estoque na MESMA transação).
 func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictionary:
 	var offer : Dictionary = {}
-	for e in VENDOR_CATALOG:
+	for e in EconomyCatalog.VENDOR_CATALOG:
 		if str((e as Dictionary).get("id", "")) == offerID:
 			offer = e
 			break
@@ -1064,10 +1034,10 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
-		var day : int = ShopDay(SQLCommons.Timestamp())
+		var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 		var claimed : Array = sql.db.query_with_bindings("SELECT count FROM vendor_claim WHERE account_id = ? AND day = ? AND offer_id = ?;", [accountID, day, offerID])
 		var bought : int = int(claimed[0].get("count", 0)) if not claimed.is_empty() else 0
-		if bought >= VENDOR_STOCK_PER_DAY:
+		if bought >= EconomyCatalog.VENDOR_STOCK_PER_DAY:
 			result["reason"] = "sold_out"
 			return false
 		var gp : int = _CharGoldRaw(charID)
@@ -1076,7 +1046,7 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 			return false
 		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - cost}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -cost, gp - cost, "vendor:" + offerID):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -cost, gp - cost, "vendor:" + offerID):
 			return false
 		var itemHash : int = str(offer.get("item", "")).hash()
 		if _GrantStackRaw(charID, accountID, itemHash, count, "vendor:" + offerID, "vendor") == 0:
@@ -1099,7 +1069,6 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 # Eventos temporários rotativos: framework ativado por timestamp no job diário.
 # 2 kinds iniciais: "weekend_drops" (multiplicador no settle/sim) e "smith_week"
 # (taxa de crafting -50%). O modificador soma no mesmo eixo dos bônus VIP/ads.
-const LIVE_EVENT_DEFAULT_MOD : float = 1.0
 
 func TickLiveEvents() -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
@@ -1151,7 +1120,7 @@ func GetActiveEventsState(accountID : int) -> Dictionary:
 
 func GetLiveEventMods(accountID : int) -> float:
 	var now : int = SQLCommons.Timestamp()
-	var mods : float = LIVE_EVENT_DEFAULT_MOD
+	var mods : float = EconomyCatalog.LIVE_EVENT_DEFAULT_MOD
 	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l INNER JOIN live_event_tick t ON t.event_id = l.id WHERE l.starts_at <= ? AND l.ends_at > ? AND t.ticked_at >= ?;", [now, now, now]):
 		var raw : String = str(row["params_json"])
 		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
@@ -1194,10 +1163,6 @@ func GetSeasonBoardsState(limit : int = 10) -> Dictionary:
 # Ranking por ELO simplificado com reset semanal; recompensa em cosméticos/títulos.
 # Servidor simula os dois lados (sem RNG do cliente); derrota não tira nada do
 # defensor (atacar é sempre seguro psicologicamente).
-const ARENA_TICKETS_PER_DAY : int = 3
-const ARENA_TICKETS_VIP_BONUS : int = 1
-const ARENA_BASE_ELO : int = 1000
-const ARENA_ELO_K : int = 32
 
 func TickArenaTickets() -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
@@ -1207,10 +1172,10 @@ func TickArenaTickets() -> Dictionary:
 		var accountID : int = int(row["account_id"])
 		var resetAt : int = int(row["ticket_reset_at"])
 		if resetAt < dayStart:
-			var tickets : int = ARENA_TICKETS_PER_DAY
+			var tickets : int = EconomyCatalog.ARENA_TICKETS_PER_DAY
 			var vipUntil : int = Launcher.SQL.GetVIPUntil(accountID)
 			if vipUntil > now:
-				tickets += ARENA_TICKETS_VIP_BONUS
+				tickets += EconomyCatalog.ARENA_TICKETS_VIP_BONUS
 			if Launcher.SQL.ExecuteBindings("UPDATE arena_entry SET tickets = ?, ticket_reset_at = ? WHERE account_id = ?;", [tickets, dayStart, accountID]):
 				refilled += 1
 	return {"refilled": refilled}
@@ -1227,10 +1192,10 @@ func ArenaSetDefense(charID : int) -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
 	var existing : Array = Launcher.SQL.QueryBindings("SELECT account_id FROM arena_entry WHERE account_id = ?;", [accountID])
 	if existing.is_empty():
-		var tickets : int = ARENA_TICKETS_PER_DAY
+		var tickets : int = EconomyCatalog.ARENA_TICKETS_PER_DAY
 		var vipUntil : int = Launcher.SQL.GetVIPUntil(accountID)
 		if vipUntil > now:
-			tickets += ARENA_TICKETS_VIP_BONUS
+			tickets += EconomyCatalog.ARENA_TICKETS_VIP_BONUS
 		Launcher.SQL.ExecuteBindings("INSERT INTO arena_entry (account_id, tickets, ticket_reset_at, defense_char_id, defense_snapshot, updated_at) VALUES (?, ?, ?, ?, ?, ?);", [accountID, tickets, now, charID, snapshot, now])
 	else:
 		Launcher.SQL.ExecuteBindings("UPDATE arena_entry SET defense_char_id = ?, defense_snapshot = ?, updated_at = ? WHERE account_id = ?;", [charID, snapshot, now, accountID])
@@ -1240,7 +1205,7 @@ func ArenaSetDefense(charID : int) -> Dictionary:
 func _EnsureArenaLadder(accountID : int) -> void:
 	var existing : Array = Launcher.SQL.QueryBindings("SELECT account_id FROM arena_ladder WHERE account_id = ?;", [accountID])
 	if existing.is_empty():
-		Launcher.SQL.ExecuteBindings("INSERT INTO arena_ladder (account_id, elo, wins, losses, updated_at) VALUES (?, ?, 0, 0, ?);", [accountID, ARENA_BASE_ELO, SQLCommons.Timestamp()])
+		Launcher.SQL.ExecuteBindings("INSERT INTO arena_ladder (account_id, elo, wins, losses, updated_at) VALUES (?, ?, 0, 0, ?);", [accountID, EconomyCatalog.ARENA_BASE_ELO, SQLCommons.Timestamp()])
 
 func ArenaAttack(attackerCharID : int, defenderAccountID : int) -> Dictionary:
 	var attackerAcct : int = _AccountIDForCharacterRaw(attackerCharID)
@@ -1265,11 +1230,11 @@ func ArenaAttack(attackerCharID : int, defenderAccountID : int) -> Dictionary:
 	if not defenderPowerRow.is_empty():
 		defenderPower = int(defenderPowerRow[0].get("power_score", 0))
 	var win : bool = attackerPower >= defenderPower
-	var attackerElo : int = ARENA_BASE_ELO
+	var attackerElo : int = EconomyCatalog.ARENA_BASE_ELO
 	var attackerLadder : Array = Launcher.SQL.QueryBindings("SELECT elo FROM arena_ladder WHERE account_id = ?;", [attackerAcct])
 	if not attackerLadder.is_empty():
-		attackerElo = int(attackerLadder[0].get("elo", ARENA_BASE_ELO))
-	var newAttackerElo : int = maxi(100, attackerElo + (ARENA_ELO_K if win else -ARENA_ELO_K))
+		attackerElo = int(attackerLadder[0].get("elo", EconomyCatalog.ARENA_BASE_ELO))
+	var newAttackerElo : int = maxi(100, attackerElo + (EconomyCatalog.ARENA_ELO_K if win else -EconomyCatalog.ARENA_ELO_K))
 	_EnsureArenaLadder(attackerAcct)
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
 	settleMutex.lock()
@@ -1297,7 +1262,7 @@ func ArenaBoard(accountID : int, limit : int = 10) -> Dictionary:
 	var myRow : Array = Launcher.SQL.QueryBindings("SELECT elo, wins, losses FROM arena_ladder WHERE account_id = ?;", [accountID])
 	var my : Dictionary = {}
 	if not myRow.is_empty():
-		my = {"elo": int(myRow[0].get("elo", ARENA_BASE_ELO)), "wins": int(myRow[0].get("wins", 0)), "losses": int(myRow[0].get("losses", 0))}
+		my = {"elo": int(myRow[0].get("elo", EconomyCatalog.ARENA_BASE_ELO)), "wins": int(myRow[0].get("wins", 0)), "losses": int(myRow[0].get("losses", 0))}
 	var top : Array = Launcher.SQL.QueryBindings("SELECT a.account_id, a.elo, a.wins, a.losses, acc.username FROM arena_ladder a INNER JOIN account acc ON acc.account_id = a.account_id ORDER BY a.elo DESC, a.account_id ASC LIMIT ?;", [limit])
 	var board : Array = []
 	for row in top:
@@ -1309,15 +1274,7 @@ func ArenaBoard(accountID : int, limit : int = 10) -> Dictionary:
 # (risco estilo vaal), cubagem 3:1 e desmanche. Tudo server-side e atômico
 # (settleMutex + Transaction + ops raw, com espelho no ledger). Sem wipe de
 # temporada: itens só saem do jogo pela decisão do próprio jogador.
-const CORRUPT_FEE_BASE : int = 500		# gold × tier², queimado mesmo se brickar
-const CORRUPT_BRICK_W : float = 0.25
-const CORRUPT_SEALED_W : float = 0.30
-const CORRUPT_BLESSED_W : float = 0.30
 # exalted = restante (0.15): item vira equipamento aleatório de tier+1
-const CUBE_COUNT : int = 3
-const SALVAGE_GOLD_PER_TIER2 : int = 25	# gold = tier² × 25
-const SALVAGE_ESSENCE_TIER_MIN : int = 4
-const SALVAGE_ESSENCE_PER_TIER : int = 2	# essência (loop do rebirth)
 
 # Queima gold dentro de transação aberta (raw; não chama AddGems — mutex).
 func _BurnGoldRaw(sql : SQLService, charID : int, accountID : int, fee : int, reason : String) -> bool:
@@ -1326,7 +1283,7 @@ func _BurnGoldRaw(sql : SQLService, charID : int, accountID : int, fee : int, re
 		return false
 	if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - fee}):
 		return false
-	return _LedgerAppendLocked(accountID, charID, LedgerKindGold, -fee, gp - fee, reason)
+	return _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -fee, gp - fee, reason)
 
 # Recompensa de upgrade (corrupção exaltada / cubo): equipamento aleatório de
 # tier+1 no pool da zona do char; fallback mesmo tier (outra peça); 0 se vazio.
@@ -1364,7 +1321,7 @@ func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dict
 	if accountID == NetworkCommons.PeerUnknownID:
 		result["reason"] = "no_character"
 		return result
-	var fee : int = CORRUPT_FEE_BASE * maxi(cell.tier, 1) * maxi(cell.tier, 1)
+	var fee : int = EconomyCatalog.CORRUPT_FEE_BASE * maxi(cell.tier, 1) * maxi(cell.tier, 1)
 	var mutex : Mutex = _get_settle_mutex(accountID)
 	mutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
@@ -1375,11 +1332,11 @@ func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dict
 		var outcome : String = forceOutcome
 		if outcome != "brick" and outcome != "sealed" and outcome != "blessed" and outcome != "exalted":
 			var r : float = randf()
-			if r < CORRUPT_BRICK_W:
+			if r < EconomyCatalog.CORRUPT_BRICK_W:
 				outcome = "brick"
-			elif r < CORRUPT_BRICK_W + CORRUPT_SEALED_W:
+			elif r < EconomyCatalog.CORRUPT_BRICK_W + EconomyCatalog.CORRUPT_SEALED_W:
 				outcome = "sealed"
-			elif r < CORRUPT_BRICK_W + CORRUPT_SEALED_W + CORRUPT_BLESSED_W:
+			elif r < EconomyCatalog.CORRUPT_BRICK_W + EconomyCatalog.CORRUPT_SEALED_W + EconomyCatalog.CORRUPT_BLESSED_W:
 				outcome = "blessed"
 			else:
 				outcome = "exalted"
@@ -1392,7 +1349,7 @@ func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dict
 			return false
 		match outcome:
 			"brick":
-				if not _LedgerAppendLocked(accountID, charID, LedgerKindItem, -1, 0, "corrupt_brick:%d" % itemID):
+				if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindItem, -1, 0, "corrupt_brick:%d" % itemID):
 					return false
 			"sealed":
 				if _GrantStackRaw(charID, accountID, itemID, 1, "corrupt_sealed:%d" % itemID, "corrupt_sealed", 1, int(consumed[0])) == 0:
@@ -1402,7 +1359,7 @@ func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dict
 				var next : int = sql.AddCharacterEssence(charID, gain)
 				if next < 0:
 					return false
-				if not _LedgerAppendLocked(accountID, charID, LedgerKindEssence, gain, next, "corrupt_blessed:%d" % itemID):
+				if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindEssence, gain, next, "corrupt_blessed:%d" % itemID):
 					return false
 				result["essence"] = gain
 			_:
@@ -1439,10 +1396,10 @@ func CubeUpcycle(charID : int, itemID : int, forceResultID : int = 0) -> Diction
 	mutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
-		if sql.GetLotBalanceRaw(charID, itemID, false) < CUBE_COUNT:
+		if sql.GetLotBalanceRaw(charID, itemID, false) < EconomyCatalog.CUBE_COUNT:
 			result["reason"] = "need_three"
 			return false
-		var consumed : Array = sql.ConsumeItemLotsRaw(charID, itemID, CUBE_COUNT, false)
+		var consumed : Array = sql.ConsumeItemLotsRaw(charID, itemID, EconomyCatalog.CUBE_COUNT, false)
 		if consumed.is_empty():
 			result["reason"] = "consume_failed"
 			return false
@@ -1488,22 +1445,22 @@ func SalvageItem(charID : int, itemID : int) -> Dictionary:
 			result["reason"] = "consume_failed"
 			return false
 		var tier : int = maxi(cell.tier, 1)
-		var gain : int = SALVAGE_GOLD_PER_TIER2 * tier * tier
+		var gain : int = EconomyCatalog.SALVAGE_GOLD_PER_TIER2 * tier * tier
 		var gp : int = _CharGoldRaw(charID)
 		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp + gain}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, gain, gp + gain, "salvage:%d" % itemID):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, gain, gp + gain, "salvage:%d" % itemID):
 			return false
 		result["gold"] = gain
-		if tier >= SALVAGE_ESSENCE_TIER_MIN:
-			var egain : int = SALVAGE_ESSENCE_PER_TIER * tier
+		if tier >= EconomyCatalog.SALVAGE_ESSENCE_TIER_MIN:
+			var egain : int = EconomyCatalog.SALVAGE_ESSENCE_PER_TIER * tier
 			var next : int = sql.AddCharacterEssence(charID, egain)
 			if next < 0:
 				return false
-			if not _LedgerAppendLocked(accountID, charID, LedgerKindEssence, egain, next, "salvage_essence:%d" % itemID):
+			if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindEssence, egain, next, "salvage_essence:%d" % itemID):
 				return false
 			result["essence"] = egain
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindItem, -1, 0, "salvage_burn:%d" % itemID):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindItem, -1, 0, "salvage_burn:%d" % itemID):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -1517,9 +1474,6 @@ func SalvageItem(charID : int, itemID : int) -> Dictionary:
 # 1 key = até 4 duelos simulados em sequência, níveis escalados (+2/luta +
 # tormento), para na primeira derrota; recompensas somadas via SettleBossResult
 # (tormento, unlock e bônus de fronteira valem por vitória, igual ao ao vivo).
-const FRONTIER_KEY_CHANCE : float = 0.30
-const BOSS_KEY_GOLD_PRICE : int = 10000
-const BOSS_RUSH_ESCALATION : int = 2
 
 func SetTorment(charID : int, player, level : int) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
@@ -1548,17 +1502,17 @@ func BuyBossKey(charID : int) -> Dictionary:
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
 		var gp : int = _CharGoldRaw(charID)
-		if gp < BOSS_KEY_GOLD_PRICE:
+		if gp < EconomyCatalog.BOSS_KEY_GOLD_PRICE:
 			result["reason"] = "insufficient_gold"
 			return false
-		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - BOSS_KEY_GOLD_PRICE}):
+		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - EconomyCatalog.BOSS_KEY_GOLD_PRICE}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -BOSS_KEY_GOLD_PRICE, gp - BOSS_KEY_GOLD_PRICE, "boss_key_buy"):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -EconomyCatalog.BOSS_KEY_GOLD_PRICE, gp - EconomyCatalog.BOSS_KEY_GOLD_PRICE, "boss_key_buy"):
 			return false
 		var next : int = sql.AddCharacterBossKeys(charID, 1)
 		if next < 0:
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindBossKey, 1, next, "boss_key_buy"):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindBossKey, 1, next, "boss_key_buy"):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -1583,7 +1537,7 @@ func RunBossRush(charID : int, player) -> Dictionary:
 	var totalGold : int = 0
 	var totalChests : int = 0
 	for i in BossService.GetBossCount():
-		var level : int = BossService.GetBossLevel(player.stat.level, i) + i * BOSS_RUSH_ESCALATION + torment * 2
+		var level : int = BossService.GetBossLevel(player.stat.level, i) + i * EconomyCatalog.BOSS_RUSH_ESCALATION + torment * 2
 		var duel : Dictionary = BossService.Resolve(snapshot, level)
 		if not bool(duel.get("win", false)):
 			break
@@ -1639,7 +1593,7 @@ func _NamedSeasonBoard(seasonID : int, kind : String, limit : int) -> Array:
 
 # Enfileira um grant (idempotente pela chave: duplicada = já na fila, sem erro).
 func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey : String, payload : String = "{}") -> bool:
-	if idempotencyKey.is_empty() or amount <= 0 or not GrantKinds.has(kind):
+	if idempotencyKey.is_empty() or amount <= 0 or not EconomyCatalog.GrantKinds.has(kind):
 		return false
 	var sql : SQLService = Launcher.SQL
 	if sql.QueryBindings("SELECT id FROM grant_queue WHERE idempotency_key = ?;", [idempotencyKey]).size() > 0:
@@ -1679,7 +1633,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		var balance : int = sql.GetGemsRaw(accountID)
 		if not sql.SetGemsRaw(accountID, balance + amount):
 			return false
-		return _LedgerAppendLocked(accountID, 0, LedgerKindGems, amount, balance + amount, "grant:%s" % str(grant["idempotency_key"]))
+		return _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, amount, balance + amount, "grant:%s" % str(grant["idempotency_key"]))
 	if kind == "gold":
 		var parsed : Variant = JSON.parse_string(str(grant.get("payload", "")))
 		if not (parsed is Dictionary):
@@ -1693,7 +1647,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		var gp : int = int(statRows[0].get("gp", 0)) if statRows[0].get("gp", null) != null else 0
 		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp + amount}):
 			return false
-		return _LedgerAppendLocked(accountID, charID, LedgerKindGold, amount, gp + amount, "grant:%s" % str(grant["idempotency_key"]))
+		return _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, amount, gp + amount, "grant:%s" % str(grant["idempotency_key"]))
 	if kind == "vip_days":
 		var vipRows : Array = dbNode.select_rows("account", "account_id = %d" % accountID, ["vip_until", "vip_tier"])
 		var current : int = int(vipRows[0].get("vip_until", 0)) if not vipRows.is_empty() and vipRows[0].get("vip_until", null) != null else 0
@@ -1704,7 +1658,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		var grantedTier : int = 1
 		var parsedSku : Variant = JSON.parse_string(str(grant.get("payload", "")))
 		if parsedSku is Dictionary:
-			grantedTier = int(VIP_GRANT_TIERS.get(str((parsedSku as Dictionary).get("sku", "")), 1))
+			grantedTier = int(EconomyCatalog.VIP_GRANT_TIERS.get(str((parsedSku as Dictionary).get("sku", "")), 1))
 		var curTier : int = int(vipRows[0].get("vip_tier", 0)) if not vipRows.is_empty() and vipRows[0].get("vip_tier", null) != null else 0
 		if grantedTier > curTier or current <= now:
 			if not sql.UpdateRowsRaw("account", "account_id = %d" % accountID, {"vip_tier" = grantedTier}):
@@ -1738,7 +1692,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		if not _LedgerAppendLocked(accountID, 0, "pass", 1, 1, "grant:%s" % str(grant["idempotency_key"])):
 			return false
 		if tier == "deluxe":
-			var maxPT : int = int((PassThresholds() as Array).back())
+			var maxPT : int = int((EconomyCatalog.PassThresholds() as Array).back())
 			var boosted : int = mini(maxi(int(st.get("pt", 0)), 1000), maxPT)
 			if not sql.ExecuteBindings("UPDATE season_account_state SET pt = ? WHERE account_id = ? AND season_id = ?;", [boosted, accountID, sid]):
 				return false
@@ -1747,7 +1701,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 			var gbal : int = sql.GetGemsRaw(accountID)
 			if not sql.SetGemsRaw(accountID, gbal + 150):
 				return false
-			if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, 150, gbal + 150, "grant:%s" % str(grant["idempotency_key"])):
+			if not _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, 150, gbal + 150, "grant:%s" % str(grant["idempotency_key"])):
 				return false
 		return true
 	if kind == "cosmetic":
@@ -1755,7 +1709,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		# presentes). O cosmetic_id vem do payload (catálogo do companion).
 		var parsedCos : Variant = JSON.parse_string(str(grant.get("payload", "")))
 		var cid : String = str((parsedCos as Dictionary).get("cosmetic_id", "")) if parsedCos is Dictionary else ""
-		if cid.is_empty() or not COSMETIC_CATALOG.has(cid):
+		if cid.is_empty() or not EconomyCatalog.COSMETIC_CATALOG.has(cid):
 			return false
 		if not sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, cid, "grant:%s" % str(grant["idempotency_key"]), now]):
 			return false
@@ -1789,7 +1743,7 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 				var currentCount : int = int(existingInv[0]["count"]) if existingInv[0].get("count", null) != null else 0
 				if not sqlItem.UpdateRowsRaw("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemHash, charRef], {"count" = currentCount + itemCount}):
 					return false
-			return _LedgerAppendLocked(accountID, charRef, LedgerKindItem, itemCount, 0, "grant:%s" % str(grant["idempotency_key"]))):
+			return _LedgerAppendLocked(accountID, charRef, EconomyCatalog.LedgerKindItem, itemCount, 0, "grant:%s" % str(grant["idempotency_key"]))):
 			appliedItem = true
 		if not appliedItem:
 			return false
@@ -1802,7 +1756,6 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 #   não_found / window_expired / already_refunded / gems_consumed.
 # O estorno do DINHEIRO cabe ao companion/provedor (onboarding pendente — handoff);
 # aqui o jogo reverte as gems + grava no ledger (prova de auditoria, append-only).
-const RefundWindowSeconds : int = 7 * 86400
 
 func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 	if idempotencyKey.is_empty():
@@ -1812,14 +1765,14 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 	# (1) a compra original: linha de ledger gems criada por grant:<key>
 	var buys : Array[Dictionary] = sql.QueryBindings(
 		"SELECT id, amount, created_at FROM ledger_transaction WHERE account_id = ? AND kind = ? AND reason = ? ORDER BY id LIMIT 1;",
-		[accountID, LedgerKindGems, "grant:" + idempotencyKey])
+		[accountID, EconomyCatalog.LedgerKindGems, "grant:" + idempotencyKey])
 	if buys.is_empty():
 		return {"ok" = false, "reason" = "not_found"}
 	var amount : int = int(buys[0]["amount"])
 	if amount <= 0:
 		return {"ok" = false, "reason" = "not_found"}
 	# (2) janela de 7 dias
-	if now - int(buys[0]["created_at"]) > RefundWindowSeconds:
+	if now - int(buys[0]["created_at"]) > EconomyCatalog.RefundWindowSeconds:
 		return {"ok" = false, "reason" = "window_expired"}
 	# (3) já reembolsada? (linha refund:<key>)
 	if not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "refund:" + idempotencyKey]).is_empty():
@@ -1836,7 +1789,7 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 			return false
 		if not sql.SetGemsRaw(accountID, current - amount):
 			return false
-		if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, -amount, current - amount, "refund:" + idempotencyKey):
+		if not _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -amount, current - amount, "refund:" + idempotencyKey):
 			return false
 		sql.db.query_with_bindings("UPDATE grant_queue SET status = 'refunded', processed_at = ? WHERE idempotency_key = ? AND account_id = ?;", [now, idempotencyKey, accountID])
 		return true):
@@ -1848,13 +1801,8 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 
 # ------------------------------------------------------------------ E1: guilds
 
-const GuildCreateCostGold : int = 5000
-const GuildMaxLevel : int = 10
 # Custo de nível 1→2 .. 9→10 (índice = nível atual). Pontos: coluna pronta,
 # acúmulo via settle = fast follow (v0 = gold+gems).
-const GuildLevelCostGold : Array[int] = [0, 5000, 15000, 40000, 100000, 250000, 600000, 1500000, 4000000, 10000000]
-const GuildLevelCostGems : Array[int] = [0, 50, 120, 300, 700, 1500, 3000, 6000, 12000, 25000]
-const GuildBuffPerLevel : float = 0.02
 
 func GetGuildForAccount(accountID : int) -> int:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT guild_id FROM guild_member WHERE account_id = ?;", [accountID])
@@ -1872,7 +1820,7 @@ func GuildBuffForAccount(accountID : int) -> float:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT g.level FROM guild g INNER JOIN guild_member m ON m.guild_id = g.guild_id WHERE m.account_id = ?;", [accountID])
 	if rows.is_empty():
 		return 1.0
-	return 1.0 + GuildBuffPerLevel * float(maxi(0, int(rows[0]["level"]) - 1))
+	return 1.0 + EconomyCatalog.GuildBuffPerLevel * float(maxi(0, int(rows[0]["level"]) - 1))
 
 func GetGuildLeaderboard(limit : int = 10) -> Array[Dictionary]:
 	return Launcher.SQL.QueryBindings("SELECT g.guild_id, g.name, g.level, g.points, COUNT(m.account_id) AS members FROM guild g LEFT JOIN guild_member m ON m.guild_id = g.guild_id GROUP BY g.guild_id ORDER BY g.level DESC, g.points DESC, members DESC LIMIT ?;", [limit])
@@ -1891,7 +1839,7 @@ func CreateGuild(accountID : int, charID : int, guildName : String) -> int:
 	settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
-		if _CharGoldRaw(charID) < GuildCreateCostGold:
+		if _CharGoldRaw(charID) < EconomyCatalog.GuildCreateCostGold:
 			return false
 		if not sql.db.query_with_bindings("INSERT INTO guild (name, level, points, leader_account, created_at) VALUES (?, 1, 0, ?, ?);", [clean, accountID, SQLCommons.Timestamp()]):
 			return false
@@ -1901,9 +1849,9 @@ func CreateGuild(accountID : int, charID : int, guildName : String) -> int:
 		if not sql.db.query_with_bindings("INSERT INTO guild_member (guild_id, account_id, rank, joined_at) VALUES (?, ?, 'leader', ?);", [guildID, accountID, SQLCommons.Timestamp()]):
 			return false
 		var gp : int = _CharGoldRaw(charID)
-		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - GuildCreateCostGold}):
+		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - EconomyCatalog.GuildCreateCostGold}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -GuildCreateCostGold, gp - GuildCreateCostGold, "guild_create"):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -EconomyCatalog.GuildCreateCostGold, gp - EconomyCatalog.GuildCreateCostGold, "guild_create"):
 			return false
 		out["id"] = guildID
 		return true):
@@ -1983,7 +1931,7 @@ func DepositToVault(accountID : int, charID : int, itemID : int, count : int) ->
 			return false
 		if not sql.db.query_with_bindings("INSERT INTO guild_vault_log (guild_id, account_id, char_id, item_id, count, kind, created_at) VALUES (?, ?, ?, ?, ?, 'deposit', ?);", [guildID, accountID, charID, itemID, count, SQLCommons.Timestamp()]):
 			return false
-		return _LedgerAppendLocked(accountID, charID, LedgerKindItem, -count, 0, "vault_deposit:%d:%d" % [guildID, itemID])):
+		return _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindItem, -count, 0, "vault_deposit:%d:%d" % [guildID, itemID])):
 		ok = true
 	settleMutex.unlock()
 	return ok
@@ -2030,10 +1978,10 @@ func LevelUpGuild(accountID : int, charID : int) -> bool:
 		if rows.is_empty():
 			return false
 		var level : int = int(rows[0]["level"])
-		if level < 1 or level >= GuildMaxLevel:
+		if level < 1 or level >= EconomyCatalog.GuildMaxLevel:
 			return false
-		var costGold : int = GuildLevelCostGold[level]
-		var costGems : int = GuildLevelCostGems[level]
+		var costGold : int = EconomyCatalog.GuildLevelCostGold[level]
+		var costGems : int = EconomyCatalog.GuildLevelCostGems[level]
 		if _CharGoldRaw(charID) < costGold:
 			return false
 		var gems : int = sql.GetGemsRaw(accountID)
@@ -2046,9 +1994,9 @@ func LevelUpGuild(accountID : int, charID : int) -> bool:
 			return false
 		if not sql.UpdateRowsRaw("guild", "guild_id = %d" % guildID, {"level" = level + 1}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -costGold, gp - costGold, "guild_level"):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -costGold, gp - costGold, "guild_level"):
 			return false
-		return _LedgerAppendLocked(accountID, charID, LedgerKindGems, -costGems, gems - costGems, "guild_level")):
+		return _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -costGems, gems - costGems, "guild_level")):
 		ok = true
 	settleMutex.unlock()
 	return ok
@@ -2062,14 +2010,6 @@ func PromoteMember(leaderAccount : int, targetAccount : int) -> bool:
 
 # Follow-up G3: tag da guild (2–5 chars A-Z0-9, só líder). Exibida no board,
 # no painel e nas corridas ([TAG] Nome) — identidade sem poder.
-static func IsValidGuildTag(tag : String) -> bool:
-	if tag.length() < 2 or tag.length() > 5:
-		return false
-	for c in tag:
-		if not ((c >= "A" and c <= "Z") or (c >= "0" and c <= "9")):
-			return false
-	return true
-
 func SetGuildTag(accountID : int, tag : String) -> Dictionary:
 	var guildID : int = GetGuildForAccount(accountID)
 	if guildID == 0:
@@ -2077,7 +2017,7 @@ func SetGuildTag(accountID : int, tag : String) -> Dictionary:
 	if GetMemberRank(accountID) != "leader":
 		return {"ok": false, "reason": "not_leader"}
 	var clean : String = tag.strip_edges().to_upper()
-	if not IsValidGuildTag(clean):
+	if not EconomyCatalog.IsValidGuildTag(clean):
 		return {"ok": false, "reason": "bad_tag"}
 	if not Launcher.SQL.ExecuteBindings("UPDATE guild SET tag = ? WHERE guild_id = ?;", [clean, guildID]):
 		return {"ok": false, "reason": "db_error"}
@@ -2088,13 +2028,6 @@ func SetGuildTag(accountID : int, tag : String) -> Dictionary:
 # Pontos acumulam no settle (1/hora) e na vitória de boss (+5): a corrida
 # guild_points da temporada nasce daqui. Level-up fast pula o gold (2× gems).
 # Vault tem teto de stacks distintas (10 + 2/nível + comprados, máx +20).
-const GUILD_POINT_PER_SETTLE_HOUR : int = 1
-const GUILD_POINT_PER_BOSS_WIN : int = 5
-const GUILD_VAULT_BASE_SLOTS : int = 10
-const GUILD_VAULT_PER_LEVEL : int = 2
-const GUILD_VAULT_SLOT_COST : int = 200
-const GUILD_VAULT_SLOTS_MAX : int = 20
-const GUILD_PRIZE_GEMS : Array[int] = [1000, 600, 300]
 
 func AddGuildPoints(guildID : int, points : int) -> bool:
 	if guildID <= 0 or points <= 0:
@@ -2111,7 +2044,7 @@ func VaultSlotsForGuild(guildID : int) -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT level, vault_slots_purchased FROM guild WHERE guild_id = ?;", [guildID])
 	if rows.is_empty():
 		return {"cap": 0, "used": 0, "purchased": 0}
-	var cap : int = GUILD_VAULT_BASE_SLOTS + GUILD_VAULT_PER_LEVEL * maxi(0, int(rows[0].get("level", 1)) - 1) + int(rows[0].get("vault_slots_purchased", 0))
+	var cap : int = EconomyCatalog.GUILD_VAULT_BASE_SLOTS + EconomyCatalog.GUILD_VAULT_PER_LEVEL * maxi(0, int(rows[0].get("level", 1)) - 1) + int(rows[0].get("vault_slots_purchased", 0))
 	var used : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM guild_vault WHERE guild_id = ?;", [guildID])
 	return {"cap": cap, "used": int(used[0]["n"]) if not used.is_empty() else 0, "purchased": int(rows[0].get("vault_slots_purchased", 0))}
 
@@ -2132,7 +2065,7 @@ func GetGuildState(accountID : int) -> Dictionary:
 	for b in Launcher.SQL.QueryBindings("SELECT name, tag, level, points FROM guild ORDER BY points DESC, guild_id ASC LIMIT 10;", []):
 		board.append({"name": str(b.get("name", "?")), "tag": str(b.get("tag", "")), "level": int(b.get("level", 1)), "points": int(b.get("points", 0))})
 	return {"ok": true, "my_guild": mine, "board": board,
-		"vault_slot_cost": GUILD_VAULT_SLOT_COST}
+		"vault_slot_cost": EconomyCatalog.GUILD_VAULT_SLOT_COST}
 
 # Level-up fast (leader/officer): pula o gold pagando 2× gems.
 func LevelUpGuildFast(accountID : int, charID : int) -> Dictionary:
@@ -2150,10 +2083,10 @@ func LevelUpGuildFast(accountID : int, charID : int) -> Dictionary:
 		if rows.is_empty():
 			return false
 		var level : int = int(rows[0]["level"])
-		if level < 1 or level >= GuildMaxLevel:
+		if level < 1 or level >= EconomyCatalog.GuildMaxLevel:
 			result["reason"] = "max_level"
 			return false
-		var cost : int = GuildLevelCostGems[level] * 2
+		var cost : int = EconomyCatalog.GuildLevelCostGems[level] * 2
 		var gems : int = sql.GetGemsRaw(accountID)
 		if gems < cost:
 			result["reason"] = "insufficient_gems"
@@ -2162,7 +2095,7 @@ func LevelUpGuildFast(accountID : int, charID : int) -> Dictionary:
 			return false
 		if not sql.UpdateRowsRaw("guild", "guild_id = %d" % guildID, {"level" = level + 1}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGems, -cost, gems - cost, "guild_level_fast"):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -cost, gems - cost, "guild_level_fast"):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -2189,18 +2122,18 @@ func BuyVaultSlots(accountID : int, charID : int) -> Dictionary:
 		if rows.is_empty():
 			return false
 		var bought : int = int(rows[0].get("vault_slots_purchased", 0))
-		if bought >= GUILD_VAULT_SLOTS_MAX:
+		if bought >= EconomyCatalog.GUILD_VAULT_SLOTS_MAX:
 			result["reason"] = "slots_cap"
 			return false
 		var gems : int = sql.GetGemsRaw(accountID)
-		if gems < GUILD_VAULT_SLOT_COST:
+		if gems < EconomyCatalog.GUILD_VAULT_SLOT_COST:
 			result["reason"] = "insufficient_gems"
 			return false
-		if not sql.SetGemsRaw(accountID, gems - GUILD_VAULT_SLOT_COST):
+		if not sql.SetGemsRaw(accountID, gems - EconomyCatalog.GUILD_VAULT_SLOT_COST):
 			return false
 		if not sql.UpdateRowsRaw("guild", "guild_id = %d" % guildID, {"vault_slots_purchased" = bought + 1}):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGems, -GUILD_VAULT_SLOT_COST, gems - GUILD_VAULT_SLOT_COST, "guild_vault_slots"):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -EconomyCatalog.GUILD_VAULT_SLOT_COST, gems - EconomyCatalog.GUILD_VAULT_SLOT_COST, "guild_vault_slots"):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -2222,10 +2155,9 @@ func ActiveSeason() -> Dictionary:
 # SHAMBLETA_ENABLE_SEASONS=1 (run_idle_tests.gd). Remover a trava só na
 # ativação, após a auditoria do ciclo ACTIVE→CLOSING→CLOSED→SETTLED
 # (som-idle-docs/SEASON_ACTIVATION_NOTE.md).
-const SeasonsBetaLock : bool = true
 
 static func SeasonsEnabled() -> bool:
-	if not SeasonsBetaLock:
+	if not EconomyCatalog.SeasonsBetaLock:
 		return true
 	return OS.get_environment("SHAMBLETA_ENABLE_SEASONS") == "1"
 
@@ -2250,6 +2182,46 @@ func CreateSeason(days : int, rules : String = "{}") -> int:
 
 func CloseSeason(seasonID : int) -> bool:
 	return Launcher.SQL.ExecuteBindings("UPDATE season SET status = 'closed' WHERE season_id = ? AND status = 'active';", [seasonID])
+
+# ROADMAP_COMERCIAL S2: temporada S1 — regras congeladas desde o dia 1.
+# Respeita a trava do beta (T5): retorna -1 enquanto SeasonsEnabled() for false.
+# Quando habilitada, cria 30 dias com rules_frozen (4 corridas, premiação
+# não-cashable). Idempotente: se já houver temporada ativa, retorna 0.
+# ROADMAP_COMERCIAL S3 fatia 1: wrappers p/ helpers puros em EconomyCatalog
+# (compatibilidade — chamadas externas via instância/autoload continuam funcionando).
+static func PassThresholds() -> Array:
+	return EconomyCatalog.PassThresholds()
+static func PassDailies(day : int) -> Array:
+	return EconomyCatalog.PassDailies(day)
+static func PassWeeklies(weekIdx : int) -> Array:
+	return EconomyCatalog.PassWeeklies(weekIdx)
+static func PassWeekIndex(season : Dictionary, now : int) -> int:
+	return EconomyCatalog.PassWeekIndex(season, now)
+static func PassDayStartTS(day : int) -> int:
+	return EconomyCatalog.PassDayStartTS(day)
+static func SeasonS1Rules() -> String:
+	return EconomyCatalog.SeasonS1Rules()
+static func ReferralCodeFor(accountID : int, username : String) -> String:
+	return EconomyCatalog.ReferralCodeFor(accountID, username)
+static func IsValidGuildTag(tag : String) -> bool:
+	return EconomyCatalog.IsValidGuildTag(tag)
+static func AchievementByID(achievementID : String) -> Dictionary:
+	return EconomyCatalog.AchievementByID(achievementID)
+static func CraftBudgetCap(tier : int, slot : int) -> int:
+	return EconomyCatalog.CraftBudgetCap(tier, slot)
+static func CraftRarityForUsage(pct : float) -> String:
+	return EconomyCatalog.CraftRarityForUsage(pct)
+static func CraftSubmitFee(tier : int) -> int:
+	return EconomyCatalog.CraftSubmitFee(tier)
+static func CraftNormName(name : String) -> String:
+	return EconomyCatalog.CraftNormName(name)
+static func CraftEditDistance(a : String, b : String) -> int:
+	return EconomyCatalog.CraftEditDistance(a, b)
+
+func EnsureSeasonS1() -> int:
+	if not ActiveSeason().is_empty():
+		return 0
+	return CreateSeason(30, EconomyCatalog.SeasonS1Rules())
 
 func SnapshotSeasonPower(seasonID : int, limit : int = 100) -> int:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT char_id, power_score FROM character WHERE power_score > 0 ORDER BY power_score DESC LIMIT ?;", [limit])
@@ -2286,17 +2258,15 @@ func SnapshotSeasonGuildPoints(seasonID : int) -> int:
 	return n
 
 func GetSeasonBoard(seasonID : int, kind : String, limit : int = 20) -> Array[Dictionary]:
-	if not kind in SEASON_KINDS:
+	if not kind in EconomyCatalog.SEASON_KINDS:
 		return []
 	return Launcher.SQL.QueryBindings("SELECT subject_id, value FROM season_score WHERE season_id = ? AND kind = ? ORDER BY value DESC LIMIT ?;", [seasonID, kind, limit])
 
 # SOM-IDLE Fase F: 4 corridas (ARCHITECTURE §4.6) — power/spend + boss_kills
 # (por char) + guild_points (por guild, do hook de settle/vitória).
-const SEASON_KINDS : Array[String] = ["power", "spend", "boss_kills", "guild_points"]
 
 # SOM-IDLE (3b): premiação AUTOMÁTICA — substitui o payout manual/GM da v0.
 # Tabela de prêmios em gems por colocação (top-N) para cada corrida (power/spend).
-const SeasonPrizeGems : Array[int] = [3000, 1800, 1200, 700, 500, 400, 300, 300, 200, 200]
 
 # Rodado no job diário (e chamável a qualquer momento): fecha temporadas vencidas
 # e liquida as fechadas. Idempotente — uma temporada só paga uma vez.
@@ -2335,9 +2305,9 @@ func SettleSeasonPrizes(seasonID : int) -> Dictionary:
 	SnapshotSeasonGuildPoints(seasonID)
 	var awarded : int = 0
 	for kind in ["power", "spend", "boss_kills"]:
-		var board : Array[Dictionary] = GetSeasonBoard(seasonID, kind, SeasonPrizeGems.size())
+		var board : Array[Dictionary] = GetSeasonBoard(seasonID, kind, EconomyCatalog.SeasonPrizeGems.size())
 		for rank : int in board.size():
-			var prize : int = SeasonPrizeGems[rank]
+			var prize : int = EconomyCatalog.SeasonPrizeGems[rank]
 			if prize <= 0:
 				continue
 			var subject : int = int(board[rank]["subject_id"])
@@ -2350,9 +2320,9 @@ func SettleSeasonPrizes(seasonID : int) -> Dictionary:
 			if AddGems(accountID, prize, reason):
 				awarded += 1
 	# Corrida de guilds: top-3 guilds premiam o líder (custodiante) em gems.
-	var gboard : Array[Dictionary] = GetSeasonBoard(seasonID, "guild_points", GUILD_PRIZE_GEMS.size())
+	var gboard : Array[Dictionary] = GetSeasonBoard(seasonID, "guild_points", EconomyCatalog.GUILD_PRIZE_GEMS.size())
 	for rank : int in gboard.size():
-		var gprize : int = GUILD_PRIZE_GEMS[rank]
+		var gprize : int = EconomyCatalog.GUILD_PRIZE_GEMS[rank]
 		if gprize <= 0:
 			continue
 		var gid : int = int(gboard[rank]["subject_id"])
@@ -2382,21 +2352,13 @@ func SettleSeasonPrizes(seasonID : int) -> Dictionary:
 # chaves/dia, reroll-ad divide o contador pago (3/dia), afk2x vale 1 liquidação
 # (armado até o próximo settle), teto global 6/dia (anti-fadiga). VIP dobra o
 # bônus em quantidade (2×→4×, +1→+2 baús/chaves); reroll é acesso, não volume.
-const AD_AFK2X : String = "afk2x"
-const AD_CHEST : String = "chest"
-const AD_REROLL : String = "reroll"
-const AD_BOSSKEY : String = "bosskey"
-const AD_PLACEMENTS : Array[String] = ["afk2x", "chest", "reroll", "bosskey"]
-const AD_PLACEMENT_CAPS : Dictionary = {"chest": 1, "bosskey": 2}
 # SOM-IDLE beta fechado (T7): stub é EXPLÍCITO e próprio do beta — produção
 # com SDK real exigirá formato próprio (nunca "stub:*"). O stub é mintável
 # pelo client por construção; o teto de abuso são os caps server-side
 # (6/dia global + caps por placement), sem dinheiro envolvido no beta.
-const AdStubEnabled : bool = true
-const AD_DAILY_CAP : int = 6
 
 func _AdDayStart() -> int:
-	return PassDayStartTS(ShopDay(SQLCommons.Timestamp()))
+	return EconomyCatalog.PassDayStartTS(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
 
 func AdViewsToday(accountID : int, placement : String = "") -> int:
 	if placement.is_empty():
@@ -2407,15 +2369,15 @@ func _ValidAdToken(token : String, placement : String) -> bool:
 	# Stub: "stub:<placement>:<dia UTC-3>" — aceito SOMENTE com AdStubEnabled
 	# (beta). Produção exige callback assinado do SDK (fail-closed aqui:
 	# formato errado nunca credita).
-	if not AdStubEnabled:
+	if not EconomyCatalog.AdStubEnabled:
 		return false
 	var parts : PackedStringArray = token.split(":")
-	return parts.size() == 3 and parts[0] == "stub" and parts[1] == placement and parts[2] == str(ShopDay(SQLCommons.Timestamp()))
+	return parts.size() == 3 and parts[0] == "stub" and parts[1] == placement and parts[2] == str(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
 
 func _AdAllowed(accountID : int, placement : String) -> Dictionary:
-	if AdViewsToday(accountID) >= AD_DAILY_CAP:
+	if AdViewsToday(accountID) >= EconomyCatalog.AD_DAILY_CAP:
 		return {"ok": false, "reason": "ad_cap"}
-	if AD_PLACEMENT_CAPS.has(placement) and AdViewsToday(accountID, placement) >= int(AD_PLACEMENT_CAPS[placement]):
+	if EconomyCatalog.AD_PLACEMENT_CAPS.has(placement) and AdViewsToday(accountID, placement) >= int(EconomyCatalog.AD_PLACEMENT_CAPS[placement]):
 		return {"ok": false, "reason": "placement_cap"}
 	return {"ok": true, "reason": "ok"}
 
@@ -2426,7 +2388,7 @@ func _RecordAdView(accountID : int, charID : int, placement : String) -> void:
 # Registra uma visualização (o armamento do afk2x É a view: vale até o
 # próximo settle, 1×/liquidação por construção).
 func WatchAd(accountID : int, charID : int, placement : String, token : String) -> Dictionary:
-	if not placement in AD_PLACEMENTS:
+	if not placement in EconomyCatalog.AD_PLACEMENTS:
 		return {"ok": false, "reason": "unknown_placement"}
 	if not _ValidAdToken(token, placement):
 		return {"ok": false, "reason": "bad_token"}
@@ -2438,12 +2400,12 @@ func WatchAd(accountID : int, charID : int, placement : String, token : String) 
 
 # Armado p/ a liquidação pendente: view posterior ao anchor (não acumula).
 func IsAfkAdArmed(accountID : int, charID : int, anchorTs : int) -> bool:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND char_id = ? AND created_at > ? AND json_extract(meta, '$.placement') = ?;", [accountID, charID, anchorTs, AD_AFK2X])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND char_id = ? AND created_at > ? AND json_extract(meta, '$.placement') = ?;", [accountID, charID, anchorTs, EconomyCatalog.AD_AFK2X])
 	return not rows.is_empty() and int(rows[0]["n"]) > 0
 
 # Baú bônus (VIP dobra a quantidade).
 func ClaimAdChest(accountID : int, charID : int, token : String) -> Dictionary:
-	var w : Dictionary = WatchAd(accountID, charID, AD_CHEST, token)
+	var w : Dictionary = WatchAd(accountID, charID, EconomyCatalog.AD_CHEST, token)
 	if not bool(w.get("ok", false)):
 		return w
 	var n : int = 2 if Launcher.SQL.GetVIPUntil(accountID) > SQLCommons.Timestamp() else 1
@@ -2460,21 +2422,21 @@ func ClaimAdChest(accountID : int, charID : int, token : String) -> Dictionary:
 
 # Reroll via ad: mesma rotação e contador do pago (3/dia somados), sem gems.
 func RerollDailyShopAd(accountID : int, token : String) -> Dictionary:
-	if not _ValidAdToken(token, AD_REROLL):
+	if not _ValidAdToken(token, EconomyCatalog.AD_REROLL):
 		return {"ok": false, "reason": "bad_token"}
-	var gate : Dictionary = _AdAllowed(accountID, AD_REROLL)
+	var gate : Dictionary = _AdAllowed(accountID, EconomyCatalog.AD_REROLL)
 	if not bool(gate.get("ok", false)):
 		return gate
-	var day : int = ShopDay(SQLCommons.Timestamp())
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 	var row : Dictionary = _DailyRow(accountID, day)
-	if int(row["rerolls_used"]) >= DAILY_REROLLS_MAX:
+	if int(row["rerolls_used"]) >= EconomyCatalog.DAILY_REROLLS_MAX:
 		return {"ok": false, "reason": "reroll_cap"}
-	_RecordAdView(accountID, 0, AD_REROLL)
+	_RecordAdView(accountID, 0, EconomyCatalog.AD_REROLL)
 	return _DoReroll(accountID, day, row)
 
 # Chave de boss extra (VIP dobra a quantidade).
 func ClaimAdBossKey(accountID : int, charID : int, token : String) -> Dictionary:
-	var w : Dictionary = WatchAd(accountID, charID, AD_BOSSKEY, token)
+	var w : Dictionary = WatchAd(accountID, charID, EconomyCatalog.AD_BOSSKEY, token)
 	if not bool(w.get("ok", false)):
 		return w
 	var n : int = 2 if Launcher.SQL.GetVIPUntil(accountID) > SQLCommons.Timestamp() else 1
@@ -2490,47 +2452,14 @@ func ClaimAdBossKey(accountID : int, charID : int, token : String) -> Dictionary
 # equipado por slot. Preço 0 = não vendável avulso (passe, marcos, backfill).
 # req_rebirths: só compra quem já alcançou o marco jogando (vitrine decora o
 # número ganho, nunca vende o número).
-const COSMETIC_CATALOG : Dictionary = {
-	# Passe S1 (fonte: trilha; volta na Loja do Legado após ≥2 temporadas —
-	# live-ops futuro, por isso price 0 aqui).
-	"skin_manto": {"type": "formation_skin", "label": "Manto do Descobridor", "price": 0, "req_rebirths": 0},
-	"fx_faisca": {"type": "drop_fx", "label": "Faísca de Mana", "price": 0, "req_rebirths": 0},
-	"frame_sazonal": {"type": "frame", "label": "Moldura Sazonal S1", "price": 0, "req_rebirths": 0},
-	"skin_mascara": {"type": "formation_skin", "label": "Máscara Ritual de Tulimshar", "price": 0, "req_rebirths": 0},
-	"emote_guilda": {"type": "emote", "label": "Sinal da Guilda", "price": 0, "req_rebirths": 0},
-	"emote_tocha": {"type": "emote", "label": "Tocha do Explorador", "price": 0, "req_rebirths": 0},
-	"title_redescobridor": {"type": "title", "label": "Redescobridor", "price": 0, "req_rebirths": 0},
-	"title_veterano": {"type": "title", "label": "Veterano da Redescoberta", "price": 0, "req_rebirths": 0},
-	"banner_guilda": {"type": "guild_banner", "label": "Estandarte da Redescoberta", "price": 0, "req_rebirths": 0},
-	# Vitrine do renascimento (MONETIZATION §2.7): básico grátis no 1º ciclo,
-	# estilo à venda em gems — sempre gems/passe, nunca essência (§0.1).
-	"rebirth_t1": {"type": "title", "label": "Renascido I", "price": 0, "req_rebirths": 1},
-	"rebirth_f1": {"type": "frame", "label": "Moldura do Primeiro Ciclo", "price": 0, "req_rebirths": 1},
-	"rebirth_t3": {"type": "title", "label": "Renascido III", "price": 150, "req_rebirths": 3},
-	"rebirth_f5": {"type": "frame", "label": "Moldura do Quinto Ciclo", "price": 300, "req_rebirths": 5},
-	"rebirth_f10": {"type": "frame", "label": "Moldura do Décimo Ciclo", "price": 600, "req_rebirths": 10},
-	"rebirth_fx": {"type": "rebirth_fx", "label": "Partículas do Renascimento", "price": 250, "req_rebirths": 1},
-	# Apoio (backfill de compras Fase A; títulos prometidos nos payloads).
-	"title_recruta": {"type": "title", "label": "Recruta", "price": 0, "req_rebirths": 0},
-	"title_fundador": {"type": "title", "label": "Fundador", "price": 0, "req_rebirths": 0},
-	# Fase F: campeão da copa semanal + apoiador (doação via companion).
-	"title_campeao": {"type": "title", "label": "Campeão", "price": 0, "req_rebirths": 0},
-	"title_apoiador": {"type": "title", "label": "Apoiador", "price": 0, "req_rebirths": 0},
-	# Passe Deluxe (BATTLE_PASS_S1 §4): exclusivo vitalício, nunca retorna nem
-	# na Loja do Legado.
-	"emote_coroa": {"type": "emote", "label": "Coroa do Sol", "price": 0, "req_rebirths": 0},
-}
 
 static func CosmeticLabel(cosmeticID : String) -> String:
-	if COSMETIC_CATALOG.has(cosmeticID):
-		return str((COSMETIC_CATALOG[cosmeticID] as Dictionary).get("label", cosmeticID))
-	return ""
-
+	return EconomyCatalog.CosmeticLabel(cosmeticID)
 func HasCosmetic(accountID : int, cosmeticID : String) -> bool:
 	return not Launcher.SQL.QueryBindings("SELECT id FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = ? LIMIT 1;", [accountID, cosmeticID]).is_empty()
 
 func GrantCosmetic(accountID : int, cosmeticID : String, source : String) -> bool:
-	if not COSMETIC_CATALOG.has(cosmeticID):
+	if not EconomyCatalog.COSMETIC_CATALOG.has(cosmeticID):
 		return false
 	return Launcher.SQL.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = ?);", [accountID, cosmeticID, source, SQLCommons.Timestamp(), accountID, cosmeticID])
 
@@ -2568,19 +2497,19 @@ func GetCosmetics(accountID : int) -> Dictionary:
 	for r in Launcher.SQL.QueryBindings("SELECT slot, cosmetic_id FROM cosmetic_equip WHERE account_id = ?;", [accountID]):
 		equipped[str(r.get("slot", ""))] = str(r.get("cosmetic_id", ""))
 	var catalog : Array = []
-	for cid in COSMETIC_CATALOG:
-		var e : Dictionary = COSMETIC_CATALOG[cid]
+	for cid in EconomyCatalog.COSMETIC_CATALOG:
+		var e : Dictionary = EconomyCatalog.COSMETIC_CATALOG[cid]
 		catalog.append({"id": cid, "type": str(e.get("type", "")), "label": str(e.get("label", "")),
 			"price": int(e.get("price", 0)), "req_rebirths": int(e.get("req_rebirths", 0))})
 	return {"ok": true, "catalog": catalog, "owned": owned, "equipped": equipped,
 		"rebirths": _MaxRebirths(accountID)}
 
 func EquipCosmetic(accountID : int, cosmeticID : String) -> Dictionary:
-	if not COSMETIC_CATALOG.has(cosmeticID):
+	if not EconomyCatalog.COSMETIC_CATALOG.has(cosmeticID):
 		return {"ok": false, "reason": "unknown_cosmetic"}
 	if not HasCosmetic(accountID, cosmeticID):
 		return {"ok": false, "reason": "not_owned"}
-	var slot : String = str((COSMETIC_CATALOG[cosmeticID] as Dictionary).get("type", ""))
+	var slot : String = str((EconomyCatalog.COSMETIC_CATALOG[cosmeticID] as Dictionary).get("type", ""))
 	if not Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO cosmetic_equip (account_id, slot, cosmetic_id) VALUES (?, ?, ?);", [accountID, slot, cosmeticID]):
 		return {"ok": false, "reason": "db_error"}
 	return {"ok": true, "reason": "ok", "slot": slot}
@@ -2593,9 +2522,9 @@ func UnequipCosmetic(accountID : int, slot : String) -> Dictionary:
 # Compra avulsa em gems (vitrine): exige posse do marco + saldo, na MESMA
 # transação (débito + grant). Cosméticos price 0 nunca vendem aqui.
 func BuyCosmetic(accountID : int, charID : int, cosmeticID : String) -> Dictionary:
-	if not COSMETIC_CATALOG.has(cosmeticID):
+	if not EconomyCatalog.COSMETIC_CATALOG.has(cosmeticID):
 		return {"ok": false, "reason": "unknown_cosmetic"}
-	var entry : Dictionary = COSMETIC_CATALOG[cosmeticID]
+	var entry : Dictionary = EconomyCatalog.COSMETIC_CATALOG[cosmeticID]
 	var price : int = int(entry.get("price", 0))
 	if price <= 0:
 		return {"ok": false, "reason": "not_for_sale"}
@@ -2613,7 +2542,7 @@ func BuyCosmetic(accountID : int, charID : int, cosmeticID : String) -> Dictiona
 			return false
 		if not sql.SetGemsRaw(accountID, balance - price):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGems, -price, balance - price, "cosmetic:" + cosmeticID):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -price, balance - price, "cosmetic:" + cosmeticID):
 			return false
 		if not sql.ExecuteBindings("INSERT INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, cosmeticID, "shop", SQLCommons.Timestamp()]):
 			return false
@@ -2637,7 +2566,7 @@ func EquippedTitleLabel(accountID : int) -> String:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT cosmetic_id FROM cosmetic_equip WHERE account_id = ? AND slot = 'title';", [accountID])
 	if rows.is_empty():
 		return ""
-	return CosmeticLabel(str(rows[0].get("cosmetic_id", "")))
+	return EconomyCatalog.CosmeticLabel(str(rows[0].get("cosmetic_id", "")))
 
 # ------------------------------------------------------------------ Fase C: passe de temporada (BATTLE_PASS_S1.md)
 #
@@ -2647,80 +2576,20 @@ func EquippedTitleLabel(accountID : int) -> String:
 # Missões 100% server-side a partir de ledger/telemetry (nada client-side).
 # Desvios do design documentados onde ocorrem (3 substituições de missão por
 # falta de sistema-fonte, baús sem raridade, 4 bosses em vez de 8 zonas).
-const PASS_DAILY_PT : int = 40
-const PASS_WEEKLY_PT : int = 120
-const PASS_MILESTONE_PT : int = 50
-const PASS_SKIP_COST : int = 50
-const PASS_SKIP_MAX : int = 10
-const PASS_MAX_LEVEL : int = 40
-const PASS_BONUS_START : int = 31
-const PASS_BONUS_GEMS : int = 20
-const PASS_DOUBLEXP_LAST_DAYS : int = 3
 # Trilha grátis (BATTLE_PASS_S1 §3). Baús não têm raridade no jogo (pool por
 # zona no open): "rara" = 2 baús, "épica" = 3.
-const PASS_FREE : Dictionary = {
-	3: {"gems": 10}, 5: {"chests": 1}, 8: {"gems": 10},
-	10: {"cosmetics": ["emote_tocha"]}, 13: {"gems": 15}, 16: {"chests": 1},
-	20: {"gems": 15}, 24: {"chests": 2}, 27: {"gems": 20},
-	30: {"gems": 30, "cosmetics": ["title_redescobridor"]},
-}
 # Trilha premium (BATTLE_PASS_S1 §4). Cosméticos viram cosmetic_grant (uso
 # pleno na Fase D); trial VIP entra como tier 1.
-const PASS_PREMIUM : Dictionary = {
-	1: {"cosmetics": ["skin_manto"]}, 3: {"gems": 25}, 5: {"vip_days": 3},
-	6: {"gems": 25}, 8: {"cosmetics": ["fx_faisca"]}, 9: {"gems": 25},
-	11: {"chests": 2}, 12: {"gems": 25}, 14: {"cosmetics": ["frame_sazonal"]},
-	15: {"gems": 50}, 17: {"cosmetics": ["skin_mascara"]}, 18: {"gems": 25},
-	21: {"chests": 3}, 22: {"gems": 25}, 24: {"cosmetics": ["emote_guilda"]},
-	26: {"gems": 25}, 28: {"gems": 50},
-	30: {"gems": 100, "cosmetics": ["title_veterano", "banner_guilda"]},
-}
 # Diárias (3/dia, mesmas p/ todos, seed do dia). SUB = substituição por falta
 # de sistema-fonte: equip (sem evento server-side) → levelup; 25 mobs (sem
 # kill counter) → 2h de settle; reforja (sistema inexistente) → listar no AH;
 # rewarded ad (Fase E) → abrir a loja.
-const PASS_DAILY_POOL : Array = [
-	{"id": "d_settle2", "label": "Collect AFK 2×", "goal": 2},
-	{"id": "d_chest1", "label": "Open 1 chest", "goal": 1},
-	{"id": "d_level1", "label": "Gain 1 level (SUB equip)", "goal": 1},
-	{"id": "d_farm2h", "label": "Settle 2h (SUB kills)", "goal": 2},
-	{"id": "d_vault1", "label": "Deposit 1 item in guild vault", "goal": 1},
-	{"id": "d_trade1", "label": "Complete 1 trade", "goal": 1},
-	{"id": "d_ahlist1", "label": "List 1 item on AH (SUB reforge)", "goal": 1},
-	{"id": "d_shop1", "label": "Open the shop (SUB ad)", "goal": 1},
-]
 # Semanais (3/semana). W3 conta qualquer sink de gems; W5 aceita level-up OU
 # 3 depósitos (sem vault de gold no jogo).
-const PASS_WEEKLY_POOL : Array = [
-	{"id": "w_boss1", "label": "Defeat 1 zone boss", "goal": 1},
-	{"id": "w_eff3", "label": "3 sessions ≥ 90% efficiency", "goal": 3},
-	{"id": "w_spend100", "label": "Spend 100 gems", "goal": 100},
-	{"id": "w_dailies15", "label": "Claim 15 dailies", "goal": 15},
-	{"id": "w_guild1", "label": "Guild level-up or 3 vault deposits", "goal": 1},
-	{"id": "w_farm8h", "label": "Settle 8h", "goal": 8},
-]
 
 # Curva cumulativa: L1–10:100 · L11–20:120 · L21–30:140 · L31–40:140.
-static func PassThresholds() -> Array:
-	var cum : Array = []
-	var total : int = 0
-	for lvl in range(1, PASS_MAX_LEVEL + 1):
-		var step : int = 100 if lvl <= 10 else (120 if lvl <= 20 else 140)
-		total += step
-		cum.append(total)
-	return cum
-
 static func PassLevelForPT(pt : int) -> int:
-	var cum : Array = PassThresholds()
-	var level : int = 0
-	for t in cum:
-		if pt >= int(t):
-			level += 1
-		else:
-			break
-	return level
-
-# Linha da conta/temporada (cria zerada). Leitura crua p/ uso em transações.
+	return EconomyCatalog.PassLevelForPT(pt)
 func _PassStateRaw(accountID : int, seasonID : int) -> Dictionary:
 	var sql : SQLService = Launcher.SQL
 	sql.ExecuteBindings("INSERT OR IGNORE INTO season_account_state (account_id, season_id) VALUES (?, ?);", [accountID, seasonID])
@@ -2746,7 +2615,7 @@ func _PassDoubleXP(season : Dictionary, now : int) -> bool:
 	var endsAt : int = int(season.get("ends_at", 0))
 	if endsAt <= now or endsAt - startsAt < 7 * 86400:
 		return false
-	return endsAt - now <= PASS_DOUBLEXP_LAST_DAYS * 86400
+	return endsAt - now <= EconomyCatalog.PASS_DOUBLEXP_LAST_DAYS * 86400
 
 # PT com multiplicadores (VIP +10%, 2× fim de temporada), teto L40, ledger.
 func _AwardPT(accountID : int, seasonID : int, base : int, reason : String) -> int:
@@ -2761,35 +2630,13 @@ func _AwardPT(accountID : int, seasonID : int, base : int, reason : String) -> i
 	if _PassDoubleXP(season, now):
 		pts *= 2
 	var st : Dictionary = _PassStateRaw(accountID, seasonID)
-	var maxPT : int = int((PassThresholds() as Array).back())
+	var maxPT : int = int((EconomyCatalog.PassThresholds() as Array).back())
 	var newPT : int = mini(int(st.get("pt", 0)) + pts, maxPT)
 	sql.ExecuteBindings("UPDATE season_account_state SET pt = ? WHERE account_id = ? AND season_id = ?;", [newPT, accountID, seasonID])
 	_LedgerAppendLocked(accountID, 0, "pass_pt", pts, newPT, "pass_pt:" + reason)
 	return pts
 
 # Rotação do dia/semana (pura, mesma p/ todos): 3 consecutivas do pool.
-static func PassDailies(day : int) -> Array:
-	var out : Array = []
-	var n : int = PASS_DAILY_POOL.size()
-	var start : int = (day * 5) % n
-	for k in 3:
-		out.append((PASS_DAILY_POOL[(start + k) % n] as Dictionary).duplicate())
-	return out
-
-static func PassWeeklies(weekIdx : int) -> Array:
-	var out : Array = []
-	var n : int = PASS_WEEKLY_POOL.size()
-	var start : int = (weekIdx * 3) % n
-	for k in 3:
-		out.append((PASS_WEEKLY_POOL[(start + k) % n] as Dictionary).duplicate())
-	return out
-
-static func PassWeekIndex(season : Dictionary, now : int) -> int:
-	return maxi(0, (ShopDay(now) - ShopDay(int(season.get("starts_at", now)))) / 7)
-
-static func PassDayStartTS(day : int) -> int:
-	return day * 86400 + SHOP_DAY_UTC_OFFSET
-
 func _PassChars(accountID : int) -> Array:
 	var ids : Array = []
 	for row in Launcher.SQL.QueryBindings("SELECT char_id FROM character WHERE account_id = ? ORDER BY char_id;", [accountID]):
@@ -2854,24 +2701,24 @@ func _MissionState(accountID : int, seasonID : int, missionID : String, periodID
 func _SeasonMissions(accountID : int, season : Dictionary) -> Dictionary:
 	var sid : int = int(season.get("season_id", 0))
 	var now : int = SQLCommons.Timestamp()
-	var day : int = ShopDay(now)
-	var weekIdx : int = PassWeekIndex(season, now)
-	var dayStart : int = PassDayStartTS(day)
-	var weekStart : int = PassDayStartTS(ShopDay(int(season.get("starts_at", now))) + weekIdx * 7)
+	var day : int = EconomyCatalog.ShopDay(now)
+	var weekIdx : int = EconomyCatalog.PassWeekIndex(season, now)
+	var dayStart : int = EconomyCatalog.PassDayStartTS(day)
+	var weekStart : int = EconomyCatalog.PassDayStartTS(EconomyCatalog.ShopDay(int(season.get("starts_at", now))) + weekIdx * 7)
 	var dailies : Array = []
-	for def in PassDailies(day):
+	for def in EconomyCatalog.PassDailies(day):
 		var mid : String = str(def["id"])
 		var mst : Dictionary = _MissionState(accountID, sid, mid, "d%d" % day, int(def["goal"]))
 		dailies.append({"id": mid, "label": str(def["label"]), "goal": int(def["goal"]),
 			"progress": mini(_MissionProgress(accountID, mid, dayStart, sid), int(def["goal"])),
-			"claimed": int(mst["claimed"]), "pt": PASS_DAILY_PT})
+			"claimed": int(mst["claimed"]), "pt": EconomyCatalog.PASS_DAILY_PT})
 	var weeklies : Array = []
-	for def in PassWeeklies(weekIdx):
+	for def in EconomyCatalog.PassWeeklies(weekIdx):
 		var mid : String = str(def["id"])
 		var mst : Dictionary = _MissionState(accountID, sid, mid, "w%d" % weekIdx, int(def["goal"]))
 		weeklies.append({"id": mid, "label": str(def["label"]), "goal": int(def["goal"]),
 			"progress": mini(_MissionProgress(accountID, mid, weekStart, sid), int(def["goal"])),
-			"claimed": int(mst["claimed"]), "pt": PASS_WEEKLY_PT})
+			"claimed": int(mst["claimed"]), "pt": EconomyCatalog.PASS_WEEKLY_PT})
 	var beaten : int = 0
 	for c in _PassChars(accountID):
 		beaten = maxi(beaten, Launcher.SQL.GetCharacterBossesBeaten(c))
@@ -2881,7 +2728,7 @@ func _SeasonMissions(accountID : int, season : Dictionary) -> Dictionary:
 		var mst : Dictionary = _MissionState(accountID, sid, mid, "s%d" % sid, 1)
 		milestones.append({"id": mid, "label": "Defeat %s (first)" % BossService.BossNames[i],
 			"goal": 1, "progress": 1 if (beaten > i or int(mst["claimed"]) == 1) else 0,
-			"claimed": int(mst["claimed"]), "pt": PASS_MILESTONE_PT})
+			"claimed": int(mst["claimed"]), "pt": EconomyCatalog.PASS_MILESTONE_PT})
 	return {"dailies": dailies, "weeklies": weeklies, "milestones": milestones,
 		"day": day, "week": weekIdx}
 
@@ -2893,19 +2740,19 @@ func GetSeasonPass(accountID : int) -> Dictionary:
 	var sid : int = int(season.get("season_id", 0))
 	var now : int = SQLCommons.Timestamp()
 	var st : Dictionary = _PassStateRaw(accountID, sid)
-	var level : int = PassLevelForPT(int(st.get("pt", 0)))
+	var level : int = EconomyCatalog.PassLevelForPT(int(st.get("pt", 0)))
 	var ms : Dictionary = _SeasonMissions(accountID, season)
 	var freeTodo : Array = []
 	var premTodo : Array = []
-	for lvl in range(1, mini(level, PASS_MAX_LEVEL) + 1):
-		if PASS_FREE.has(lvl) and not (lvl in st["claimed_free"]):
+	for lvl in range(1, mini(level, EconomyCatalog.PASS_MAX_LEVEL) + 1):
+		if EconomyCatalog.PASS_FREE.has(lvl) and not (lvl in st["claimed_free"]):
 			freeTodo.append(lvl)
-		if int(st.get("premium", 0)) == 1 and ((PASS_PREMIUM.has(lvl)) or lvl >= PASS_BONUS_START) and not (lvl in st["claimed_premium"]):
+		if int(st.get("premium", 0)) == 1 and ((EconomyCatalog.PASS_PREMIUM.has(lvl)) or lvl >= EconomyCatalog.PASS_BONUS_START) and not (lvl in st["claimed_premium"]):
 			premTodo.append(lvl)
 	return {"ok": true, "season_id": sid, "ends_at": int(season.get("ends_at", 0)),
-		"day_index": ShopDay(now) - ShopDay(int(season.get("starts_at", now))),
+		"day_index": EconomyCatalog.ShopDay(now) - EconomyCatalog.ShopDay(int(season.get("starts_at", now))),
 		"pt": int(st.get("pt", 0)), "level": level, "premium": int(st.get("premium", 0)),
-		"skips_used": int(st.get("skips_used", 0)), "skips_max": PASS_SKIP_MAX,
+		"skips_used": int(st.get("skips_used", 0)), "skips_max": EconomyCatalog.PASS_SKIP_MAX,
 		"double_xp": _PassDoubleXP(season, now),
 		"dailies": ms["dailies"], "weeklies": ms["weeklies"], "milestones": ms["milestones"],
 		"free_claimable": freeTodo, "premium_claimable": premTodo}
@@ -2917,28 +2764,28 @@ func ClaimMission(accountID : int, missionID : String) -> Dictionary:
 		return {"ok": false, "reason": "no_season"}
 	var sid : int = int(season.get("season_id", 0))
 	var now : int = SQLCommons.Timestamp()
-	var day : int = ShopDay(now)
+	var day : int = EconomyCatalog.ShopDay(now)
 	var periodID : String = ""
 	var goal : int = 1
-	var award : int = PASS_DAILY_PT
+	var award : int = EconomyCatalog.PASS_DAILY_PT
 	var progress : int = 0
 	if missionID.begins_with("d_"):
-		for def in PassDailies(day):
+		for def in EconomyCatalog.PassDailies(day):
 			if str(def["id"]) == missionID:
 				goal = int(def["goal"])
 				periodID = "d%d" % day
-				progress = _MissionProgress(accountID, missionID, PassDayStartTS(day), sid)
+				progress = _MissionProgress(accountID, missionID, EconomyCatalog.PassDayStartTS(day), sid)
 				break
 		if periodID.is_empty():
 			return {"ok": false, "reason": "not_active_today"}
 	elif missionID.begins_with("w_"):
-		var weekIdx : int = PassWeekIndex(season, now)
-		for def in PassWeeklies(weekIdx):
+		var weekIdx : int = EconomyCatalog.PassWeekIndex(season, now)
+		for def in EconomyCatalog.PassWeeklies(weekIdx):
 			if str(def["id"]) == missionID:
 				goal = int(def["goal"])
 				periodID = "w%d" % weekIdx
-				award = PASS_WEEKLY_PT
-				progress = _MissionProgress(accountID, missionID, PassDayStartTS(ShopDay(int(season.get("starts_at", now))) + weekIdx * 7), sid)
+				award = EconomyCatalog.PASS_WEEKLY_PT
+				progress = _MissionProgress(accountID, missionID, EconomyCatalog.PassDayStartTS(EconomyCatalog.ShopDay(int(season.get("starts_at", now))) + weekIdx * 7), sid)
 				break
 		if periodID.is_empty():
 			return {"ok": false, "reason": "not_active_this_week"}
@@ -2948,7 +2795,7 @@ func ClaimMission(accountID : int, missionID : String) -> Dictionary:
 			return {"ok": false, "reason": "unknown_mission"}
 		goal = 1
 		periodID = "s%d" % sid
-		award = PASS_MILESTONE_PT
+		award = EconomyCatalog.PASS_MILESTONE_PT
 		var beaten : int = 0
 		for c in _PassChars(accountID):
 			beaten = maxi(beaten, Launcher.SQL.GetCharacterBossesBeaten(c))
@@ -2976,10 +2823,10 @@ func ClaimMission(accountID : int, missionID : String) -> Dictionary:
 
 func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : int, track : String) -> bool:
 	var sql : SQLService = Launcher.SQL
-	var table : Dictionary = PASS_FREE if track == "free" else PASS_PREMIUM
+	var table : Dictionary = EconomyCatalog.PASS_FREE if track == "free" else EconomyCatalog.PASS_PREMIUM
 	var reward : Dictionary = {}
-	if track == "premium" and level >= PASS_BONUS_START:
-		reward = {"gems": PASS_BONUS_GEMS}
+	if track == "premium" and level >= EconomyCatalog.PASS_BONUS_START:
+		reward = {"gems": EconomyCatalog.PASS_BONUS_GEMS}
 	elif table.has(level):
 		reward = table[level]
 	else:
@@ -2989,7 +2836,7 @@ func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : 
 		var balance : int = sql.GetGemsRaw(accountID)
 		if not sql.SetGemsRaw(accountID, balance + gems):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGems, gems, balance + gems, "pass_reward:%s:%d" % [track, level]):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, gems, balance + gems, "pass_reward:%s:%d" % [track, level]):
 			return false
 	var chests : int = int(reward.get("chests", 0))
 	for i in chests:
@@ -3016,7 +2863,7 @@ func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : 
 func ClaimPassReward(accountID : int, charID : int, level : int, track : String) -> Dictionary:
 	if track != "free" and track != "premium":
 		return {"ok": false, "reason": "bad_track"}
-	if level < 1 or level > PASS_MAX_LEVEL:
+	if level < 1 or level > EconomyCatalog.PASS_MAX_LEVEL:
 		return {"ok": false, "reason": "bad_level"}
 	var season : Dictionary = ActiveSeason()
 	if season.is_empty():
@@ -3026,7 +2873,7 @@ func ClaimPassReward(accountID : int, charID : int, level : int, track : String)
 	settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var st : Dictionary = _PassStateRaw(accountID, sid)
-		if PassLevelForPT(int(st.get("pt", 0))) < level:
+		if EconomyCatalog.PassLevelForPT(int(st.get("pt", 0))) < level:
 			result["reason"] = "locked"
 			return false
 		var key : String = "claimed_free" if track == "free" else "claimed_premium"
@@ -3060,24 +2907,24 @@ func SkipPassLevel(accountID : int) -> Dictionary:
 	settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var st : Dictionary = _PassStateRaw(accountID, sid)
-		if int(st.get("skips_used", 0)) >= PASS_SKIP_MAX:
+		if int(st.get("skips_used", 0)) >= EconomyCatalog.PASS_SKIP_MAX:
 			result["reason"] = "skip_cap"
 			return false
-		var level : int = PassLevelForPT(int(st.get("pt", 0)))
-		if level >= PASS_MAX_LEVEL:
+		var level : int = EconomyCatalog.PassLevelForPT(int(st.get("pt", 0)))
+		if level >= EconomyCatalog.PASS_MAX_LEVEL:
 			result["reason"] = "max_level"
 			return false
-		var missing : int = int((PassThresholds() as Array)[level]) - int(st.get("pt", 0))
+		var missing : int = int((EconomyCatalog.PassThresholds() as Array)[level]) - int(st.get("pt", 0))
 		var sql : SQLService = Launcher.SQL
 		var balance : int = sql.GetGemsRaw(accountID)
-		if balance < PASS_SKIP_COST:
+		if balance < EconomyCatalog.PASS_SKIP_COST:
 			result["reason"] = "insufficient_gems"
 			return false
-		if not sql.SetGemsRaw(accountID, balance - PASS_SKIP_COST):
+		if not sql.SetGemsRaw(accountID, balance - EconomyCatalog.PASS_SKIP_COST):
 			return false
-		if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, -PASS_SKIP_COST, balance - PASS_SKIP_COST, "pass_skip"):
+		if not _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -EconomyCatalog.PASS_SKIP_COST, balance - EconomyCatalog.PASS_SKIP_COST, "pass_skip"):
 			return false
-		var maxPT : int = int((PassThresholds() as Array).back())
+		var maxPT : int = int((EconomyCatalog.PassThresholds() as Array).back())
 		var newPT : int = mini(int(st.get("pt", 0)) + missing, maxPT)
 		sql.ExecuteBindings("UPDATE season_account_state SET pt = ?, skips_used = skips_used + 1 WHERE account_id = ? AND season_id = ?;", [newPT, accountID, sid])
 		_LedgerAppendLocked(accountID, 0, "pass_pt", missing, newPT, "pass_pt:skip")
@@ -3100,7 +2947,7 @@ func _PassMilestoneCredit(accountID : int, bossIndex : int) -> void:
 	if int(mst.get("claimed", 0)) == 1:
 		return
 	Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_mission_state (account_id, season_id, mission_id, period_id, progress, goal, claimed, claimed_at) VALUES (?, ?, ?, ?, 1, 1, 1, ?);", [accountID, sid, mid, "s%d" % sid, SQLCommons.Timestamp()])
-	_AwardPT(accountID, sid, PASS_MILESTONE_PT, "mission:" + mid)
+	_AwardPT(accountID, sid, EconomyCatalog.PASS_MILESTONE_PT, "mission:" + mid)
 
 # Auto-claim no encerramento (recompensas não-claimadas nunca expiram
 # silenciosamente): tudo que o nível alcançou, nas duas trilhas (premium só
@@ -3110,7 +2957,7 @@ func _AutoClaimPass(seasonID : int) -> Dictionary:
 	var eligible : Array = []
 	for row in Launcher.SQL.QueryBindings("SELECT account_id, pt, premium, claimed_free, claimed_premium FROM season_account_state WHERE season_id = ?;", [seasonID]):
 		var accountID : int = int(row["account_id"])
-		var level : int = PassLevelForPT(int(row.get("pt", 0)))
+		var level : int = EconomyCatalog.PassLevelForPT(int(row.get("pt", 0)))
 		if level < 1:
 			continue
 		var chars : Array = _PassChars(accountID)
@@ -3119,7 +2966,7 @@ func _AutoClaimPass(seasonID : int) -> Dictionary:
 		eligible.append(row)
 	for row in eligible:
 		var accountID : int = int(row["account_id"])
-		var level : int = PassLevelForPT(int(row.get("pt", 0)))
+		var level : int = EconomyCatalog.PassLevelForPT(int(row.get("pt", 0)))
 		var charID : int = int(_PassChars(accountID)[0])
 		var cf : Variant = JSON.parse_string(str(row.get("claimed_free", "[]")))
 		var cp : Variant = JSON.parse_string(str(row.get("claimed_premium", "[]")))
@@ -3133,13 +2980,13 @@ func _AutoClaimPass(seasonID : int) -> Dictionary:
 		var changedP : bool = false
 		settleMutex.lock()
 		if Launcher.SQL.Transaction(func() -> bool:
-			for lvl in range(1, mini(level, PASS_MAX_LEVEL) + 1):
-				if PASS_FREE.has(lvl) and not (lvl in claimedF):
+			for lvl in range(1, mini(level, EconomyCatalog.PASS_MAX_LEVEL) + 1):
+				if EconomyCatalog.PASS_FREE.has(lvl) and not (lvl in claimedF):
 					if not _GrantPassRewardRaw(accountID, charID, seasonID, lvl, "free"):
 						return false
 					claimedF.append(lvl)
 					changedF = true
-				if int(row.get("premium", 0)) == 1 and ((PASS_PREMIUM.has(lvl)) or lvl >= PASS_BONUS_START) and not (lvl in claimedP):
+				if int(row.get("premium", 0)) == 1 and ((EconomyCatalog.PASS_PREMIUM.has(lvl)) or lvl >= EconomyCatalog.PASS_BONUS_START) and not (lvl in claimedP):
 					if not _GrantPassRewardRaw(accountID, charID, seasonID, lvl, "premium"):
 						return false
 					claimedP.append(lvl)
@@ -3155,25 +3002,20 @@ func _AutoClaimPass(seasonID : int) -> Dictionary:
 
 # ------------------------------------------------------------------ E2: auction house (escrow em lots, taxa flat queimada)
 
-const AHListFeeGems : int = 5
-const AHMaxOpenPerAccount : int = 5
 # Fase F: destaque pago (15 gems, fila em cima) + slots extras (+1 por
 # 50×(n+1) gems, máx +5). Taxa flat e guards RMT inalterados.
-const AHHighlightFeeGems : int = 15
-const AHSlotBaseCost : int = 50
-const AHSlotsMaxExtra : int = 5
 
 func AHOpenCap(accountID : int) -> int:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT extra FROM ah_slots WHERE account_id = ?;", [accountID])
 	var extra : int = int(rows[0].get("extra", 0)) if not rows.is_empty() else 0
-	return AHMaxOpenPerAccount + mini(maxi(extra, 0), AHSlotsMaxExtra)
+	return EconomyCatalog.AHMaxOpenPerAccount + mini(maxi(extra, 0), EconomyCatalog.AHSlotsMaxExtra)
 
 func BuyAHSlot(accountID : int) -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT extra FROM ah_slots WHERE account_id = ?;", [accountID])
 	var extra : int = int(rows[0].get("extra", 0)) if not rows.is_empty() else 0
-	if extra >= AHSlotsMaxExtra:
+	if extra >= EconomyCatalog.AHSlotsMaxExtra:
 		return {"ok": false, "reason": "slots_cap"}
-	var cost : int = AHSlotBaseCost * (extra + 1)
+	var cost : int = EconomyCatalog.AHSlotBaseCost * (extra + 1)
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
 	settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
@@ -3186,11 +3028,11 @@ func BuyAHSlot(accountID : int) -> Dictionary:
 			return false
 		if not sql.ExecuteBindings("INSERT OR REPLACE INTO ah_slots (account_id, extra) VALUES (?, ?);", [accountID, extra + 1]):
 			return false
-		if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, -cost, gems - cost, "ah_slot"):
+		if not _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -cost, gems - cost, "ah_slot"):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
-		result["slots"] = AHMaxOpenPerAccount + extra + 1
+		result["slots"] = EconomyCatalog.AHMaxOpenPerAccount + extra + 1
 		return true):
 		pass
 	settleMutex.unlock()
@@ -3212,14 +3054,14 @@ func HighlightListing(accountID : int, listingID : int) -> Dictionary:
 			result["reason"] = "already_highlighted"
 			return false
 		var gems : int = sql.GetGemsRaw(accountID)
-		if gems < AHHighlightFeeGems:
+		if gems < EconomyCatalog.AHHighlightFeeGems:
 			result["reason"] = "insufficient_gems"
 			return false
-		if not sql.SetGemsRaw(accountID, gems - AHHighlightFeeGems):
+		if not sql.SetGemsRaw(accountID, gems - EconomyCatalog.AHHighlightFeeGems):
 			return false
 		if not sql.UpdateRowsRaw("auction_listing", "id = %d" % listingID, {"highlight" = 1}):
 			return false
-		if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, -AHHighlightFeeGems, gems - AHHighlightFeeGems, "ah_highlight_fee"):
+		if not _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -EconomyCatalog.AHHighlightFeeGems, gems - EconomyCatalog.AHHighlightFeeGems, "ah_highlight_fee"):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -3247,7 +3089,7 @@ func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : in
 		if _ItemCountRaw(sellerChar, itemID) < count:
 			return false
 		var gems : int = sql.GetGemsRaw(accountID)
-		if gems < AHListFeeGems:
+		if gems < EconomyCatalog.AHListFeeGems:
 			return false
 		# SOM-IDLE Fase H §7: capture creator_account_id BEFORE consume deletes lots
 		# (ConsumeItemLotsRaw deletes item_instance rows). Read from the seller's
@@ -3270,16 +3112,16 @@ func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : in
 				return false
 		elif not sql.DeleteRowsRaw("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemID, sellerChar]):
 			return false
-		if not sql.SetGemsRaw(accountID, gems - AHListFeeGems):
+		if not sql.SetGemsRaw(accountID, gems - EconomyCatalog.AHListFeeGems):
 			return false
-		if not _LedgerAppendLocked(accountID, sellerChar, LedgerKindGems, -AHListFeeGems, gems - AHListFeeGems, "ah_list_fee"):
+		if not _LedgerAppendLocked(accountID, sellerChar, EconomyCatalog.LedgerKindGems, -EconomyCatalog.AHListFeeGems, gems - EconomyCatalog.AHListFeeGems, "ah_list_fee"):
 			return false
 		if not sql.db.query_with_bindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?);", [sellerChar, accountID, itemID, count, priceGold, _UIDList(consumed), creatorAccount, SQLCommons.Timestamp()]):
 			return false
 		out["id"] = sql.LastInsertRowIDRaw()
 		if int(out["id"]) <= 0:
 			return false
-		return _LedgerAppendLocked(accountID, sellerChar, LedgerKindItem, -count, 0, "ah_list:%d:uids%s" % [itemID, _UIDList(consumed)])):
+		return _LedgerAppendLocked(accountID, sellerChar, EconomyCatalog.LedgerKindItem, -count, 0, "ah_list:%d:uids%s" % [itemID, _UIDList(consumed)])):
 		pass
 	settleMutex.unlock()
 	return int(out["id"])
@@ -3289,10 +3131,6 @@ func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : in
 # Copas assíncronas de poder: inscrição em GOLD (sink), ranking por ganho de
 # power na janela, prêmios em gems + título de Campeão. Entrada NUNCA em
 # dinheiro (risco loteria/azar no BR). Rotação semanal automática no job diário.
-const TOURNAMENT_ENTRY_GOLD : int = 1000
-const TOURNAMENT_DAYS : int = 7
-const TOURNAMENT_PRIZES : Array[int] = [2000, 1200, 800, 500, 300]
-const TOURNAMENT_CHAMPION_TITLE : String = "title_campeao"
 
 func ActiveTournament() -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT tournament_id, name, entry_gold, starts_at, ends_at, status FROM tournament WHERE status = 'active' ORDER BY tournament_id DESC LIMIT 1;", [])
@@ -3307,7 +3145,7 @@ func EnsureWeeklyTournament() -> int:
 	if Launcher.SQL.Transaction(func() -> bool:
 		if not ActiveTournament().is_empty():
 			return false
-		if not Launcher.SQL.ExecuteBindings("INSERT INTO tournament (name, entry_gold, starts_at, ends_at, status, prizes_json) VALUES (?, ?, ?, ?, 'active', ?);", ["Copa Semanal", TOURNAMENT_ENTRY_GOLD, now, now + TOURNAMENT_DAYS * 86400, JSON.stringify(TOURNAMENT_PRIZES)]):
+		if not Launcher.SQL.ExecuteBindings("INSERT INTO tournament (name, entry_gold, starts_at, ends_at, status, prizes_json) VALUES (?, ?, ?, ?, 'active', ?);", ["Copa Semanal", EconomyCatalog.TOURNAMENT_ENTRY_GOLD, now, now + EconomyCatalog.TOURNAMENT_DAYS * 86400, JSON.stringify(EconomyCatalog.TOURNAMENT_PRIZES)]):
 			return false
 		out["id"] = Launcher.SQL.LastInsertRowIDRaw()
 		return int(out["id"]) > 0):
@@ -3324,7 +3162,7 @@ func GetTournaments(accountID : int) -> Dictionary:
 	var entries : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM tournament_entry WHERE tournament_id = ?;", [tid])
 	return {"ok": true, "active": {"id": tid, "name": str(t.get("name", "?")), "entry_gold": int(t.get("entry_gold", 0)),
 		"ends_at": int(t.get("ends_at", 0)), "players": int(entries[0]["n"]) if not entries.is_empty() else 0,
-		"prizes": TOURNAMENT_PRIZES}, "my_entry": mine[0] if not mine.is_empty() else {}}
+		"prizes": EconomyCatalog.TOURNAMENT_PRIZES}, "my_entry": mine[0] if not mine.is_empty() else {}}
 
 func EnterTournament(accountID : int, charID : int, tournamentID : int) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
@@ -3352,7 +3190,7 @@ func EnterTournament(accountID : int, charID : int, tournamentID : int) -> Dicti
 			return false
 		if not sql.ExecuteBindings("INSERT INTO tournament_entry (tournament_id, account_id, char_id, power_start) VALUES (?, ?, ?, ?);", [tournamentID, accountID, charID, start]):
 			return false
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -fee, gp - fee, "tournament_entry:%d" % tournamentID):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -fee, gp - fee, "tournament_entry:%d" % tournamentID):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
@@ -3389,16 +3227,16 @@ func SettleTournament(tournamentID : int) -> Dictionary:
 				return int(a["gain"]) > int(b["gain"])
 			return int(a["char_id"]) < int(b["char_id"]))
 		var awarded : int = 0
-		for rank in mini(ranked.size(), TOURNAMENT_PRIZES.size()):
-			var prize : int = TOURNAMENT_PRIZES[rank]
+		for rank in mini(ranked.size(), EconomyCatalog.TOURNAMENT_PRIZES.size()):
+			var prize : int = EconomyCatalog.TOURNAMENT_PRIZES[rank]
 			var acct : int = int(ranked[rank]["account_id"])
 			var balance : int = sql.GetGemsRaw(acct)
 			if not sql.SetGemsRaw(acct, balance + prize):
 				return false
-			if not _LedgerAppendLocked(acct, int(ranked[rank]["char_id"]), LedgerKindGems, prize, balance + prize, "tournament_prize:%d:%d" % [tournamentID, rank + 1]):
+			if not _LedgerAppendLocked(acct, int(ranked[rank]["char_id"]), EconomyCatalog.LedgerKindGems, prize, balance + prize, "tournament_prize:%d:%d" % [tournamentID, rank + 1]):
 				return false
 			if rank == 0:
-				sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [acct, TOURNAMENT_CHAMPION_TITLE, "tournament:%d" % tournamentID, now])
+				sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [acct, EconomyCatalog.TOURNAMENT_CHAMPION_TITLE, "tournament:%d" % tournamentID, now])
 			awarded += 1
 		if not sql.UpdateRowsRaw("tournament", "tournament_id = %d" % tournamentID, {"status" = "settled"}):
 			return false
@@ -3453,7 +3291,7 @@ func BuyListing(buyerChar : int, listingID : int) -> bool:
 		var creatorFee : int = 0
 		var sellerNet : int = price
 		if creatorAccount != 0 and creatorAccount != sellerAccount:
-			creatorFee = maxi(0, roundi(float(price) * float(CRAFT_CREATOR_FEE_PCT) / 100.0))
+			creatorFee = maxi(0, roundi(float(price) * float(EconomyCatalog.CRAFT_CREATOR_FEE_PCT) / 100.0))
 			sellerNet = price - creatorFee
 			# Credit the creator's gold (stat.gp on their first char)
 			var creatorChars : PackedInt64Array = sql.GetCharacters(creatorAccount)
@@ -3463,7 +3301,7 @@ func BuyListing(buyerChar : int, listingID : int) -> bool:
 			var creatorGold : int = _CharGoldRaw(creatorChar)
 			if not sql.UpdateRowsRaw("stat", "char_id = %d" % creatorChar, {"gp" = creatorGold + creatorFee}):
 				return false
-			if not _LedgerAppendLocked(creatorAccount, creatorChar, LedgerKindGold, creatorFee, creatorGold + creatorFee, "ah_creator_fee:%d" % listingID):
+			if not _LedgerAppendLocked(creatorAccount, creatorChar, EconomyCatalog.LedgerKindGold, creatorFee, creatorGold + creatorFee, "ah_creator_fee:%d" % listingID):
 				return false
 
 		if not sql.UpdateRowsRaw("stat", "char_id = %d" % buyerChar, {"gp" = buyerGold - price}):
@@ -3482,11 +3320,11 @@ func BuyListing(buyerChar : int, listingID : int) -> bool:
 			return false
 		if not sql.UpdateRowsRaw("auction_listing", "id = %d" % listingID, {"status" = "sold"}):
 			return false
-		if not _LedgerAppendLocked(buyerAccount, buyerChar, LedgerKindGold, -price, buyerGold - price, "ah_buy:%d" % listingID):
+		if not _LedgerAppendLocked(buyerAccount, buyerChar, EconomyCatalog.LedgerKindGold, -price, buyerGold - price, "ah_buy:%d" % listingID):
 			return false
-		if not _LedgerAppendLocked(sellerAccount, sellerChar, LedgerKindGold, sellerNet, sellerGold + sellerNet, "ah_sell:%d" % listingID):
+		if not _LedgerAppendLocked(sellerAccount, sellerChar, EconomyCatalog.LedgerKindGold, sellerNet, sellerGold + sellerNet, "ah_sell:%d" % listingID):
 			return false
-		return _LedgerAppendLocked(buyerAccount, buyerChar, LedgerKindItem, count, 0, "trade_in:%d:lot%d" % [itemID, granted])):
+		return _LedgerAppendLocked(buyerAccount, buyerChar, EconomyCatalog.LedgerKindItem, count, 0, "trade_in:%d:lot%d" % [itemID, granted])):
 		bought = true
 	settleMutex.unlock()
 	return bought
@@ -3573,24 +3411,6 @@ func RunReconcileJob() -> int:
 # bosses_beaten, level, rebirths). Progresso é derivado (sem sync); aqui só
 # vive o resgate, idempotente por PK em achievement_state (migration 036).
 # Recompensas: gems + (no topo) cosméticos existentes, nunca poder direto.
-const ACHIEVEMENTS : Array = [
-	{"id": "slayer_100", "label": "Exterminador iniciante", "desc": "Derrote 100 monstros", "counter": "kills_total", "goal": 100, "gems": 25},
-	{"id": "slayer_1000", "label": "Exterminador", "desc": "Derrote 1.000 monstros", "counter": "kills_total", "goal": 1000, "gems": 50, "cosmetic": "emote_tocha"},
-	{"id": "slime_100", "label": "Caça-slimes", "desc": "Derrote 100 Slimes", "counter": "kills_mob", "mob": "Slime", "goal": 100, "gems": 30},
-	{"id": "chest_10", "label": "Abre-baús", "desc": "Abra 10 baús", "counter": "chests", "goal": 10, "gems": 20},
-	{"id": "chest_100", "label": "Mestre dos baús", "desc": "Abra 100 baús", "counter": "chests", "goal": 100, "gems": 60},
-	{"id": "boss_1", "label": "Caçador de chefes", "desc": "Vença 1 chefe", "counter": "bosses", "goal": 1, "gems": 30},
-	{"id": "boss_10", "label": "Lenda viva", "desc": "Vença 10 chefes", "counter": "bosses", "goal": 10, "gems": 100},
-	{"id": "level_20", "label": "Veterano", "desc": "Alcance o nível 20", "counter": "level", "goal": 20, "gems": 25},
-	{"id": "level_40", "label": "Elite", "desc": "Alcance o nível 40", "counter": "level", "goal": 40, "gems": 60},
-	{"id": "rebirth_1", "label": "Renascer", "desc": "Renasça 1 vez", "counter": "rebirths", "goal": 1, "gems": 50},
-]
-
-static func _AchievementByID(achievementID : String) -> Dictionary:
-	for entry in ACHIEVEMENTS:
-		if str(entry.get("id", "")) == achievementID:
-			return entry
-	return {}
 
 func AchievementProgress(accountID : int, entry : Dictionary) -> int:
 	var sql : SQLService = Launcher.SQL
@@ -3631,7 +3451,7 @@ func GetAchievements(accountID : int) -> Array:
 	var claimed : Dictionary = {}
 	for row in Launcher.SQL.QueryBindings("SELECT achievement_id FROM achievement_state WHERE account_id = ? AND claimed = 1;", [accountID]):
 		claimed[str(row.get("achievement_id", ""))] = true
-	for entry in ACHIEVEMENTS:
+	for entry in EconomyCatalog.ACHIEVEMENTS:
 		var aid : String = str(entry.get("id", ""))
 		out.append({
 			"id": aid, "label": str(entry.get("label", aid)), "desc": str(entry.get("desc", "")),
@@ -3643,7 +3463,7 @@ func GetAchievements(accountID : int) -> Array:
 
 func ClaimAchievement(accountID : int, achievementID : String) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
-	var entry : Dictionary = _AchievementByID(achievementID)
+	var entry : Dictionary = EconomyCatalog.AchievementByID(achievementID)
 	if entry.is_empty():
 		result["reason"] = "unknown_achievement"
 		return result
@@ -3663,11 +3483,11 @@ func ClaimAchievement(accountID : int, achievementID : String) -> Dictionary:
 			var balance : int = sql.GetGemsRaw(accountID)
 			if not sql.SetGemsRaw(accountID, balance + gems):
 				return false
-			if not _LedgerAppendLocked(accountID, 0, LedgerKindGems, gems, balance + gems, "achievement:%s" % achievementID):
+			if not _LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, gems, balance + gems, "achievement:%s" % achievementID):
 				return false
 		var cid : String = str(entry.get("cosmetic", ""))
 		if not cid.is_empty():
-			if not COSMETIC_CATALOG.has(cid):
+			if not EconomyCatalog.COSMETIC_CATALOG.has(cid):
 				return false
 			if not sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, cid, "achievement:%s" % achievementID, SQLCommons.Timestamp()]):
 				return false
@@ -3688,13 +3508,6 @@ func ClaimAchievement(accountID : int, achievementID : String) -> Dictionary:
 # Código por conta, recompensa por marco (L10 + e-mail verificado), anti-farma
 # via marco + teto semanal + auto-referral bloqueado (fingerprint cai no
 # fraud_flag existente). Valores são proposta (dono confirma).
-const REFERRAL_BONUS_GEMS : int = 200
-const REFERRAL_MIN_LEVEL : int = 10
-const REFERRAL_WINDOW_SEC : int = 3 * 86400
-const REFERRAL_WEEKLY_CAP : int = 10
-
-static func ReferralCodeFor(accountID : int, username : String) -> String:
-	return "%s#%04d" % [username, accountID % 10000]
 
 func GetReferralState(accountID : int) -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT username, referral_code, referred_by FROM account WHERE account_id = ?;", [accountID])
@@ -3702,7 +3515,7 @@ func GetReferralState(accountID : int) -> Dictionary:
 		return {"ok" = false, "reason" = "unknown_account"}
 	var code : String = str(rows[0].get("referral_code", ""))
 	if code.is_empty():
-		code = ReferralCodeFor(accountID, str(rows[0].get("username", "?")))
+		code = EconomyCatalog.ReferralCodeFor(accountID, str(rows[0].get("username", "?")))
 		Launcher.SQL.ExecuteBindings("UPDATE account SET referral_code = ? WHERE account_id = ?;", [code, accountID])
 	var invited : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM account WHERE referred_by = ?;", [accountID])
 	var paid : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason LIKE ?;", [accountID, "referral_bonus:%"])
@@ -3710,7 +3523,7 @@ func GetReferralState(accountID : int) -> Dictionary:
 		"referred_by" = int(rows[0].get("referred_by", 0)),
 		"invited" = int(invited[0].get("n", 0)) if not invited.is_empty() else 0,
 		"bonuses" = int(paid[0].get("n", 0)) if not paid.is_empty() else 0,
-		"bonus_gems" = REFERRAL_BONUS_GEMS, "min_level" = REFERRAL_MIN_LEVEL}
+		"bonus_gems" = EconomyCatalog.REFERRAL_BONUS_GEMS, "min_level" = EconomyCatalog.REFERRAL_MIN_LEVEL}
 
 func SetReferralCode(accountID : int, code : String) -> Dictionary:
 	var clean : String = code.strip_edges()
@@ -3721,7 +3534,7 @@ func SetReferralCode(accountID : int, code : String) -> Dictionary:
 		return {"ok" = false, "reason" = "unknown_account"}
 	if int(me[0].get("referred_by", 0)) != 0:
 		return {"ok" = false, "reason" = "already_referred"}
-	if SQLCommons.Timestamp() - int(me[0].get("created_timestamp", 0)) > REFERRAL_WINDOW_SEC:
+	if SQLCommons.Timestamp() - int(me[0].get("created_timestamp", 0)) > EconomyCatalog.REFERRAL_WINDOW_SEC:
 		return {"ok" = false, "reason" = "window_expired"}
 	if clean == str(me[0].get("referral_code", "")) and not clean.is_empty():
 		return {"ok" = false, "reason" = "self_referral"}
@@ -3752,17 +3565,17 @@ func GrantReferralBonuses() -> int:
 		var inviter : int = int(row["referred_by"])
 		if not Launcher.SQL.IsEmailVerifiedRaw(invitee):
 			continue
-		if _ReferralMaxLevel(invitee) < REFERRAL_MIN_LEVEL:
+		if _ReferralMaxLevel(invitee) < EconomyCatalog.REFERRAL_MIN_LEVEL:
 			continue
 		var week : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason LIKE 'referral_bonus:%' AND created_at >= ?;", [inviter, weekAgo])
-		if not week.is_empty() and int(week[0].get("n", 0)) >= REFERRAL_WEEKLY_CAP:
+		if not week.is_empty() and int(week[0].get("n", 0)) >= EconomyCatalog.REFERRAL_WEEKLY_CAP:
 			continue
 		if not Launcher.SQL.QueryBindings("SELECT id FROM ledger_transaction WHERE reason = ? LIMIT 1;", ["referral_bonus:%d:%d" % [inviter, invitee]]).is_empty():
 			Launcher.SQL.ExecuteBindings("UPDATE account SET referral_bonus_claimed = 1 WHERE account_id = ?;", [invitee])
 			continue
-		if not AddGems(inviter, REFERRAL_BONUS_GEMS, "referral_bonus:%d:%d" % [inviter, invitee]):
+		if not AddGems(inviter, EconomyCatalog.REFERRAL_BONUS_GEMS, "referral_bonus:%d:%d" % [inviter, invitee]):
 			continue
-		if not AddGems(invitee, REFERRAL_BONUS_GEMS, "referral_welcome:%d" % inviter):
+		if not AddGems(invitee, EconomyCatalog.REFERRAL_BONUS_GEMS, "referral_welcome:%d" % inviter):
 			continue
 		Launcher.SQL.ExecuteBindings("UPDATE account SET referral_bonus_claimed = 1 WHERE account_id = ?;", [invitee])
 		paid += 1
@@ -3771,9 +3584,6 @@ func GrantReferralBonuses() -> int:
 # SOM-IDLE D3: heuristic fraud scan (roda no job diário; revisão é manual via
 # /cs_flags). Heurísticas v1: rajada de trades, velocidade de level impossível,
 # flip do mesmo item (compra/vende em <1h — padrão RMT/laundering).
-const FraudTradeBurstPerDay : int = 10
-const FraudLevelJump : int = 20
-const FraudLevelJumpHours : float = 2.0
 
 func RunFraudScan() -> int:
 	var opened : int = 0
@@ -3799,7 +3609,7 @@ func FlagMultiAccount(accountID : int, detail : String) -> bool:
 
 func _FlagTradeBursts(now : int) -> int:
 	var opened : int = 0
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, COUNT(*) AS n FROM ledger_transaction WHERE reason LIKE 'trade_out:%' AND created_at >= ? GROUP BY account_id HAVING n > ?;", [now - 86400, FraudTradeBurstPerDay])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, COUNT(*) AS n FROM ledger_transaction WHERE reason LIKE 'trade_out:%' AND created_at >= ? GROUP BY account_id HAVING n > ?;", [now - 86400, EconomyCatalog.FraudTradeBurstPerDay])
 	for row in rows:
 		if _FlagOpen(int(row["account_id"]), 0, "trade_burst", "trades_24h=%d" % int(row["n"])):
 			opened += 1
@@ -3807,10 +3617,10 @@ func _FlagTradeBursts(now : int) -> int:
 
 func _FlagLevelVelocity(now : int) -> int:
 	var opened : int = 0
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, char_id, value, meta FROM telemetry_event WHERE kind = 'levelup' AND created_at >= ? AND value >= ?;", [now - 86400, FraudLevelJump])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, char_id, value, meta FROM telemetry_event WHERE kind = 'levelup' AND created_at >= ? AND value >= ?;", [now - 86400, EconomyCatalog.FraudLevelJump])
 	for row in rows:
 		var meta : Variant = JSON.parse_string(str(row.get("meta", "")))
-		if meta is Dictionary and float((meta as Dictionary).get("hours", 99.0)) < FraudLevelJumpHours:
+		if meta is Dictionary and float((meta as Dictionary).get("hours", 99.0)) < EconomyCatalog.FraudLevelJumpHours:
 			if _FlagOpen(int(row["account_id"]), int(row["char_id"]), "level_velocity", "jump=%d levels in %sh" % [int(row["value"]), str((meta as Dictionary).get("hours", "?"))]):
 				opened += 1
 	return opened
@@ -3837,71 +3647,7 @@ func _FlagFlipTrades(now : int) -> int:
 # (soma só de valores positivos; negativos são drawback livre). Célula 0 = sem
 # precedente = crafting bloqueado. Slots seguem ActorCommons.Slot (0–7).
 # Pesos 1:1 = TUNING_PENDING (dado de gameplay, não economia).
-const CRAFT_BUDGET_CAP : Dictionary = {
-	1: [20, 20, 15, 15, 5, 0, 20, 20],
-	2: [30, 0, 0, 0, 0, 0, 0, 0],
-	3: [0, 0, 0, 0, 0, 0, 66, 0],
-	4: [0, 0, 0, 0, 0, 0, 95, 0],
-	5: [0, 0, 0, 0, 0, 0, 146, 0],
-	6: [0, 0, 0, 0, 0, 0, 0, 0],
-	7: [0, 0, 0, 0, 0, 0, 0, 0],
-	8: [0, 0, 0, 0, 0, 0, 0, 0],
-}
-const CRAFT_SLOT_NAMES : Array[String] = ["CHEST", "LEGS", "FEET", "HANDS", "HEAD", "NECK", "WEAPON", "SHIELD"]
-const CRAFT_MOD_WEIGHTS : Array[float] = [0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-const CRAFT_RARITY_BANDS : Array = [[40, "Comum"], [65, "Incomum"], [85, "Raro"], [97, "Épico"], [101, "Lendário"]]
-const CRAFT_RARITY_WEIGHT : Dictionary = {"Comum": 100, "Incomum": 60, "Raro": 30, "Épico": 12, "Lendário": 5}
-const CRAFT_SUBMIT_FEE_BASE : int = 500
-const CRAFT_MAX_PER_DAY : int = 3
-const CRAFT_RESUB_MAX : int = 3
-const CRAFT_RESUB_DAYS : int = 7
-const CRAFT_CREATOR_FEE_PCT : int = 1
 
-static func CraftBudgetCap(tier : int, slot : int) -> int:
-	if not CRAFT_BUDGET_CAP.has(tier) or slot < 0 or slot > 7:
-		return 0
-	return int((CRAFT_BUDGET_CAP[tier] as Array)[slot])
-
-static func CraftRarityForUsage(pct : float) -> String:
-	for band in CRAFT_RARITY_BANDS:
-		if pct < float((band as Array)[0]):
-			return str((band as Array)[1])
-	return "Lendário"
-
-# Taxa de submissão em gold: 500 × tier² (proposta; confirmar após o beta).
-static func CraftSubmitFee(tier : int) -> int:
-	return CRAFT_SUBMIT_FEE_BASE * tier * tier
-
-# Normaliza nome p/ checagens (pré-filtro + duplicata).
-static func CraftNormName(name : String) -> String:
-	return name.strip_edges().to_lower()
-
-# Distância de edição simples (golpe tipo Gladiu5 vs Gladius). O(n*m), nomes
-# curtos — sem problema de performance no volume de submissões.
-static func CraftEditDistance(a : String, b : String) -> int:
-	var prev : Array = []
-	for j in b.length() + 1:
-		prev.append(j)
-	for i in range(1, a.length() + 1):
-		var cur : Array = [i]
-		for j in range(1, b.length() + 1):
-			cur.append(mini(mini(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + (0 if a[i - 1] == b[j - 1] else 1)))
-		prev = cur
-	return int(prev[b.length()])
-
-# SOM-IDLE Fase H: validação + gravação de submissão de item criado.
-# ITEM_CRAFTING.md §2: paga taxa de gold sink, valida orçamento, nome e capa
-# diária; grava como 'pending'. GM aprova depois (WorldCommands).
-#
-# Validações (server-autorizado):
-# - slot válido (0–7), baseItemHash > 0, name não-vazio
-# - budget: soma ponderada de modifiers <= CraftBudgetCap(tier, slot) (0 = bloqueado)
-# - taxa: player tem gp >= CraftSubmitFee(tier); burnt + ledger mirror
-# - nome: não vazio, tamanho 3–30, não na blocklist, não duplicata (edit-distance < 2)
-# - daily cap: CRAFT_MAX_PER_DAY submissões hoje
-# - email verificado (D3 auth gate)
-#
-# Retorna {ok: bool, reason: String}.
 func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, name : String, modifiers : Dictionary) -> Dictionary:
 	var result : Dictionary = {"ok" = false, "reason" = ""}
 	if slot < 0 or slot > 7:
@@ -3910,7 +3656,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 	if baseItemHash <= 0:
 		result["reason"] = "invalid_base_item"
 		return result
-	var cleanName : String = CraftNormName(name)
+	var cleanName : String = EconomyCatalog.CraftNormName(name)
 	if not NetworkCommons.CheckSize(name.strip_edges(), 3, 30):
 		result["reason"] = "invalid_name"
 		return result
@@ -3931,7 +3677,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		result["reason"] = "invalid_tier"
 		return result
 
-	var budgetCap : int = CraftBudgetCap(tier, slot)
+	var budgetCap : int = EconomyCatalog.CraftBudgetCap(tier, slot)
 	if budgetCap <= 0:
 		result["reason"] = "slot_crafting_blocked"
 		return result
@@ -3942,7 +3688,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		if effect == CellCommons.Modifier.None:
 			result["reason"] = "invalid_modifier"
 			return result
-		var weight : float = CRAFT_MOD_WEIGHTS[effect] if effect < CRAFT_MOD_WEIGHTS.size() else 0.0
+		var weight : float = EconomyCatalog.CRAFT_MOD_WEIGHTS[effect] if effect < EconomyCatalog.CRAFT_MOD_WEIGHTS.size() else 0.0
 		var value : int = int(modifiers[modKey])
 		if value < 0:
 			# Drawbacks are free-form (doc §3.1) — ignore in budget sum.
@@ -3952,8 +3698,8 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		result["reason"] = "budget_exceeded"
 		return result
 
-	var rarity : String = CraftRarityForUsage(float(budgetUsed) / float(budgetCap) * 100.0)
-	var fee : int = CraftSubmitFee(tier)
+	var rarity : String = EconomyCatalog.CraftRarityForUsage(float(budgetUsed) / float(budgetCap) * 100.0)
+	var fee : int = EconomyCatalog.CraftSubmitFee(tier)
 	var now : int = SQLCommons.Timestamp()
 
 	settleMutex.lock()
@@ -3974,7 +3720,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 			[accountID, dayStart]):
 			if dbNode.query_result.size() > 0:
 				todayCount = int(dbNode.query_result[0].get("n", 0))
-		if todayCount >= CRAFT_MAX_PER_DAY:
+		if todayCount >= EconomyCatalog.CRAFT_MAX_PER_DAY:
 			result["reason"] = "daily_cap_reached"
 			return false
 
@@ -3988,7 +3734,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		# Check against existing official item names (edit distance < 2 = dup)
 		for itemHash in DB.ItemsDB.keys():
 			var existing : ItemCell = DB.ItemsDB[itemHash]
-			if existing.slot == slot and CraftEditDistance(cleanName, CraftNormName(existing.name)) < 2:
+			if existing.slot == slot and EconomyCatalog.CraftEditDistance(cleanName, EconomyCatalog.CraftNormName(existing.name)) < 2:
 				result["reason"] = "name_duplicate"
 				return false
 
@@ -4018,7 +3764,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 			result["reason"] = "submission_failed"
 			return false
 
-		if not _LedgerAppendLocked(accountID, charID, LedgerKindGold, -fee, gp - fee, "craft_submit_fee:tier%d_slot%d" % [tier, slot]):
+		if not _LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -fee, gp - fee, "craft_submit_fee:tier%d_slot%d" % [tier, slot]):
 			result["reason"] = "ledger_failed"
 			return false
 

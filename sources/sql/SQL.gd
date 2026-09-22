@@ -546,11 +546,11 @@ func ConsumeItemLotsRaw(charID : int, itemID : int, count : int, allowBound : bo
 	var lots : Array = (db.query_result as Array).duplicate()
 	var consumed : Array = []
 	var remaining : int = count
-	for lot in lots:
+	for lotRow in lots:
 		if remaining <= 0:
 			break
-		var uid : int = int(lot["uid"])
-		var have : int = int(lot["count"])
+		var uid : int = int(lotRow["uid"])
+		var have : int = int(lotRow["count"])
 		var take : int = mini(have, remaining)
 		if take >= have:
 			if not DeleteRowsRaw("item_instance", "uid = %d" % uid):
@@ -777,12 +777,14 @@ func GetClosedChests(charID : int) -> Array[Dictionary]:
 	return QueryBindings("SELECT id, chest_hash, origin, created_at FROM chest_instance WHERE char_id = ? AND item_state = 'closed' ORDER BY id;", [charID])
 
 func GetChestStats(charID : int) -> Dictionary:
-  var rows : Array[Dictionary] = QueryBindings("SELECT SUM(CASE WHEN item_state='opened' THEN 1 ELSE 0 END) AS opened, SUM(CASE WHEN item_state='closed' THEN 1 ELSE 0 END) AS closed FROM chest_instance WHERE char_id = ?;", [charID])
-  if rows.is_empty():
-    return {"opened" = 0, "closed" = 0}
-  var opened : int = int(rows[0].get("opened", 0))
-  var closed : int = int(rows[0].get("closed", 0))
-  return {"opened" = opened, "closed" = closed}
+	var rows : Array[Dictionary] = QueryBindings("SELECT SUM(CASE WHEN item_state='opened' THEN 1 ELSE 0 END) AS opened, SUM(CASE WHEN item_state='closed' THEN 1 ELSE 0 END) AS closed FROM chest_instance WHERE char_id = ?;", [charID])
+	if rows.is_empty():
+		return {"opened" = 0, "closed" = 0}
+	var openedRaw : Variant = rows[0].get("opened", 0)
+	var closedRaw : Variant = rows[0].get("closed", 0)
+	var opened : int = 0 if openedRaw == null else int(openedRaw)
+	var closed : int = 0 if closedRaw == null else int(closedRaw)
+	return {"opened" = opened, "closed" = closed}
 
 func GetGems(accountID : int) -> int:
 	var rows : Array[Dictionary] = QueryBindings("SELECT gems FROM wallet WHERE account_id = ?;", [accountID])
@@ -1167,12 +1169,12 @@ func _post_launch():
 	if not db.open_db():
 		push_error("Failed to open database: "+ db.error_message); return
 	else:
-	if not LauncherCommons.isWeb:
-		Query("PRAGMA journal_mode=WAL;")
-		Query("PRAGMA busy_timeout=5000;")
-		Query("PRAGMA synchronous=NORMAL;")
-		if not Launcher.Debug and not LauncherCommons.isWeb:
-			backups = SQLBackups.new()
+		if not LauncherCommons.isWeb:
+			Query("PRAGMA journal_mode=WAL;")
+			Query("PRAGMA busy_timeout=5000;")
+			Query("PRAGMA synchronous=NORMAL;")
+			if not Launcher.Debug and not LauncherCommons.isWeb:
+				backups = SQLBackups.new()
 
 	ApplyMigrations()
 	CleanExpiredTwoFactorTokens()
@@ -1189,11 +1191,11 @@ func Destroy():
 		db.close_db()
 
 func Wipe():
-  assert(OS.is_debug_build(), "Wipe() só pode ser chamada em debug build")
-  if not OS.is_debug_build():
-    push_error("SQL.Wipe(): recusado em produção")
-    return
-  db.delete_rows("account", "")
+	assert(OS.is_debug_build(), "Wipe() só pode ser chamada em debug build")
+	if not OS.is_debug_build():
+		push_error("SQL.Wipe(): recusado em produção")
+		return
+	db.delete_rows("account", "")
 	db.delete_rows("attribute", "")
 	db.delete_rows("auth_token", "")
 	db.delete_rows("ban", "")

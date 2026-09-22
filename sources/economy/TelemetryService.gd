@@ -9,6 +9,10 @@ class_name TelemetryService
 const FlushIntervalSec : float = 60.0
 const BufferCap : int = 500
 
+# ROADMAP_COMERCIAL S1: funil de receita — kinds reservados, nunca renomear
+# (dashboard e queries históricas dependem destes nomes).
+const FUNNEL_KINDS : Array[String] = ["onboarding_done", "first_boss", "first_chest", "d1_return"]
+
 var _buffer : Array[Dictionary] = []
 var _accum : float = 0.0
 
@@ -43,6 +47,14 @@ func Record(kind : String, accountID : int = 0, charID : int = 0, value : int = 
 func BufferedCount() -> int:
 	return _buffer.size()
 
+# ROADMAP_COMERCIAL S1: helper do funil — best-effort, valida o kind para
+# evitar typo que quebra o dashboard. Retorna false se kind inválido.
+func RecordFunnel(kind : String, accountID : int = 0, charID : int = 0, meta : String = "{}") -> bool:
+	if not FUNNEL_KINDS.has(kind):
+		return false
+	Record(kind, accountID, charID, 1, meta)
+	return true
+
 # Esvazia o buffer em 1 transação. Retorna eventos persistidos.
 func Flush() -> int:
 	if _buffer.is_empty():
@@ -65,3 +77,14 @@ func Count(kind : String, sinceSec : int = 0) -> int:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
 		"SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = ? AND created_at >= ?;", [kind, sinceSec])
 	return int(rows[0]["n"]) if not rows.is_empty() else 0
+
+# ROADMAP_COMERCIAL S1: dashboard mínimo — 4 KPIs do funil + base de logins.
+# Conta contas distintas (não eventos) desde sinceSec. Leitura pura, sem escrita.
+func FunnelSummary(sinceSec : int = 0) -> Dictionary:
+	var out : Dictionary = {}
+	var kinds : Array[String] = ["login", "onboarding_done", "first_boss", "first_chest", "d1_return"]
+	for kind in kinds:
+		var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
+			"SELECT COUNT(DISTINCT account_id) AS n FROM telemetry_event WHERE kind = ? AND created_at >= ?;", [kind, sinceSec])
+		out[kind] = int(rows[0]["n"]) if not rows.is_empty() else 0
+	return out

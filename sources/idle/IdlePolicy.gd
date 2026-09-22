@@ -77,6 +77,7 @@ var _deathDownAccumulator : float			= 0.0
 var _lastEfficiencySample : float			= 0.0
 var _retargets : int						= 0
 var _attackedTarget : bool					= false
+var _killRegistered : bool					= false
 
 #
 func Setup(pAgent : PlayerAgent, pZoneID : int):
@@ -256,40 +257,40 @@ func _setTarget(target : AIAgent):
 # ------------------------------------------------------------------ combat
 
 func _tickCombat(delta : float):
-  var target : BaseAgent = WorldAgent.GetAgent(currentTargetRID) as AIAgent if currentTargetRID != 0 else null
-  if target == null or not is_instance_valid(target) or not ActorCommons.IsAlive(target):
-    if _attackedTarget and not _killRegistered:
-      sessionKills += 1
-      _killRegistered = true
-    _attackedTarget = false
-    currentTargetRID = 0
-    state = State.SEEK
-    return
+	var target : BaseAgent = WorldAgent.GetAgent(currentTargetRID) as AIAgent if currentTargetRID != 0 else null
+	if target == null or not is_instance_valid(target) or not ActorCommons.IsAlive(target):
+		if _attackedTarget and not _killRegistered:
+			sessionKills += 1
+			_killRegistered = true
+		_attackedTarget = false
+		currentTargetRID = 0
+		state = State.SEEK
+		return
 
-  var skill : SkillCell = _getSkill()
-  if skill == null:
-    state = State.SEEK
-    return
+	var skill : SkillCell = _getSkill()
+	if skill == null:
+		state = State.SEEK
+		return
 
-  var range : float = float(ActorCommons.GetSkillRange(agent, skill)) - AttackRangeBuffer
-  var dist : float = agent.position.distance_to(target.position)
+	var range : float = float(ActorCommons.GetSkillRange(agent, skill)) - AttackRangeBuffer
+	var dist : float = agent.position.distance_to(target.position)
 
-  if dist > range:
-    if not SkillCommons.IsCasting(agent) and not SkillCommons.HasAnyActionInProgress(agent):
-      agent.WalkToward(target.position)
-  else:
-    if not SkillCommons.HasAnyActionInProgress(agent) and not SkillCommons.IsCasting(agent) and not SkillCommons.IsCoolingDown(agent, skill):
-      Skill.Cast(agent, target, skill)
-      _attackedTarget = true
-      metricAttacksCast += 1
+	if dist > range:
+		if not SkillCommons.IsCasting(agent) and not SkillCommons.HasAnyActionInProgress(agent):
+			agent.WalkToward(target.position)
+	else:
+		if not SkillCommons.HasAnyActionInProgress(agent) and not SkillCommons.IsCasting(agent) and not SkillCommons.IsCoolingDown(agent, skill):
+			Skill.Cast(agent, target, skill)
+			_attackedTarget = true
+			metricAttacksCast += 1
 
-  if not ActorCommons.IsAlive(target):
-    if _attackedTarget and not _killRegistered:
-      sessionKills += 1
-      _killRegistered = true
-    _attackedTarget = false
-    currentTargetRID = 0
-    state = State.LOOT
+	if not ActorCommons.IsAlive(target):
+		if _attackedTarget and not _killRegistered:
+			sessionKills += 1
+			_killRegistered = true
+		_attackedTarget = false
+		currentTargetRID = 0
+		state = State.LOOT
 
 # ------------------------------------------------------------------ loot
 

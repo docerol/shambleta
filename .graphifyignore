@@ -1,0 +1,5 @@
+# ROADMAP_COMERCIAL S3: exclui SDK vendorado e assets do grafo.
+# O grafo estava com 2674 nodes poluídos por Sentry (god-nodes) e sprites.
+addons/sentry/
+data/graphics/
+graphify-out/

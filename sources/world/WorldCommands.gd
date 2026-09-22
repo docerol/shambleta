@@ -248,7 +248,7 @@ func CommandTrade(caller : PlayerAgent, arg : String = "") -> bool:
 		return false
 	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
 	if parts.size() < 2:
-		Network.CommandFeedback("Usage: /trade <player> <item_id> [count=1] (fee: %d gems, paid by you)" % Launcher.Economy.TradeFeeGems, caller.peerID)
+		Network.CommandFeedback("Usage: /trade <player> <item_id> [count=1] (fee: %d gems, paid by you)" % EconomyCatalog.TradeFeeGems, caller.peerID)
 		return false
 	var targetNick : String = parts[0]
 	var itemID : int = parts[1].to_int()
@@ -264,7 +264,7 @@ func CommandTrade(caller : PlayerAgent, arg : String = "") -> bool:
 			Network.CommandFeedback("You cannot trade with yourself", caller.peerID)
 			return false
 		if Launcher.Economy.ExecuteTrade(caller.GetCharacterID(), targetCharID, [{"item_id" = itemID, "count" = count}], []):
-			Network.CommandFeedback("Traded %dx item %d to %s (fee %d gems burned)" % [count, itemID, targetNick, Launcher.Economy.TradeFeeGems], caller.peerID)
+			Network.CommandFeedback("Traded %dx item %d to %s (fee %d gems burned)" % [count, itemID, targetNick, EconomyCatalog.TradeFeeGems], caller.peerID)
 			return true
 		Network.CommandFeedback("Trade failed: check your items and gem balance", caller.peerID)
 		return false
@@ -637,7 +637,7 @@ func CommandRush(caller : PlayerAgent, arg : String = "") -> bool:
 	var charID : int = caller.GetCharacterID()
 	var accountID : int = Peers.GetAccount(caller.peerID)
 	if parts.is_empty() or parts[0] == "info":
-		Network.CommandFeedback("Boss rush: %d keys, %d/4 beaten, key = %d gold (/rush key)" % [Launcher.SQL.GetCharacterBossKeys(charID), Launcher.SQL.GetCharacterBossesBeaten(charID), EconomyService.BOSS_KEY_GOLD_PRICE], caller.peerID)
+		Network.CommandFeedback("Boss rush: %d keys, %d/4 beaten, key = %d gold (/rush key)" % [Launcher.SQL.GetCharacterBossKeys(charID), Launcher.SQL.GetCharacterBossesBeaten(charID), EconomyCatalog.BOSS_KEY_GOLD_PRICE], caller.peerID)
 		return true
 	if parts[0] == "key":
 		var r : Dictionary = Launcher.Economy.BuyBossKey(charID)
