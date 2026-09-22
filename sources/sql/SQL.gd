@@ -1044,7 +1044,12 @@ func ConsumeTwoFactorToken(accountID : int, token : String, ttlSec : int = 600) 
 	var now : int = SQLCommons.Timestamp()
 	ExecuteBindings("DELETE FROM two_factor_used_token WHERE expires_at <= ?;", [now])
 	var tokenHash : String = TwoFactorAuth.HashToken(token)
-	return ExecuteBindings("INSERT OR IGNORE INTO two_factor_used_token(account_id, token_hash, expires_at) VALUES (?, ?, ?);", [accountID, tokenHash, now + ttlSec])
+	# INSERT OR IGNORE retorna sucesso mesmo quando a linha já existe
+	# (replay) — changes() distingue inserção real (1) de replay (0).
+	if not ExecuteBindings("INSERT OR IGNORE INTO two_factor_used_token(account_id, token_hash, expires_at) VALUES (?, ?, ?);", [accountID, tokenHash, now + ttlSec]):
+		return false
+	var changed : Array[Dictionary] = QueryBindings("SELECT changes() AS c;", [])
+	return not changed.is_empty() and int(changed[0].get("c", 0)) > 0
 
 func CleanExpiredTwoFactorTokens():
 	ExecuteBindings("DELETE FROM two_factor_used_token WHERE expires_at <= ?;", [SQLCommons.Timestamp()])

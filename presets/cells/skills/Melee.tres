@@ -32,3 +32,4 @@ type = 2
 weight = 0.0
 usable = true
 modifiers = SubResource("Resource_kmmav")
+castWalk = true

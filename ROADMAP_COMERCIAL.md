@@ -46,6 +46,16 @@
 - [ ] Soft-launch web + Android, custo infra < meta, uptime ≥ 99.5%
 - **Gate S3 (LAUNCH):** ToS/LGPD auditados, sink/faucet gems 0.8–1.2/semana, conversão paga ≥ 2%.
 
+## Status de validação (2026-09-22, headless real)
+
+- **Suíte idle: 1232 checks, 0 failures** (era FATAL → 25 → 26 → 20 → **0**)
+- **Benchmarks: 0 failures** · **Companion: 75+25 checks, 0 failures**
+- Últimas 20 corrigidas com causa raiz: goldens sem newbie ×5, vendor
+- (`query_with_bindings` retorna bool), anti-replay TOTP (`INSERT OR IGNORE`
+- sempre true → `changes()`), snapshot global sem isolamento, `_killRegistered`
+- sem reset por alvo (só 1º kill contava), `_tickStuck` abortando kills colados,
+- melee static + sem-grude (fizzle), floor idle 3.5%→8%, realtime movido p/ cedo
+
 ## Métricas 30/90 dias (mesmas do roadmap técnico, cobradas aqui)
 
 - Jogo: D1 ≥ 35%, D7 ≥ 20%, D30 ≥ 8%; 1ª coleta offline < 30min

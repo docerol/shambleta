@@ -253,6 +253,9 @@ func _setTarget(target : AIAgent):
 	currentTargetRID = target.get_rid().get_id()
 	_retargets += 1
 	_lastPosition = agent.position
+	# Alvo novo, janela nova de crédito: sem isso só o 1º kill da sessão conta.
+	_attackedTarget = false
+	_killRegistered = false
 
 # ------------------------------------------------------------------ combat
 
@@ -279,6 +282,11 @@ func _tickCombat(delta : float):
 		if not SkillCommons.IsCasting(agent) and not SkillCommons.HasAnyActionInProgress(agent):
 			agent.WalkToward(target.position)
 	else:
+		# SOM-IDLE: grude no alvo — SÓ se a skill é castWalk (ex.: Melee).
+		# Andar com cast static cancela o próprio golpe (Stopped); sem o grude
+		# o mob passeia para fora do re-check do Process e o golpe fizzla.
+		if skill.castWalk and not SkillCommons.IsCasting(agent) and not SkillCommons.HasAnyActionInProgress(agent):
+			agent.WalkToward(target.position)
 		if not SkillCommons.HasAnyActionInProgress(agent) and not SkillCommons.IsCasting(agent) and not SkillCommons.IsCoolingDown(agent, skill):
 			Skill.Cast(agent, target, skill)
 			_attackedTarget = true
@@ -351,6 +359,14 @@ func _tickDead(delta : float):
 func _tickStuck(delta : float):
 	if state == State.DEAD or agent == null:
 		return
+	# Engajado num alvo vivo não é stuck: o melee colado mal se move (<1px) e
+	# derrubar o alvo aqui abortava todo kill (só burst de <8s matava).
+	if state == State.COMBAT:
+		var t : BaseAgent = WorldAgent.GetAgent(currentTargetRID) as AIAgent if currentTargetRID != 0 else null
+		if t and is_instance_valid(t) and ActorCommons.IsAlive(t):
+			_stuckAccumulator = 0.0
+			_lastPosition = agent.position
+			return
 
 	if agent.position.distance_squared_to(_lastPosition) < 1.0:
 		_stuckAccumulator += delta

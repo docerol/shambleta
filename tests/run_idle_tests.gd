@@ -86,6 +86,11 @@ func _run_tests():
 	if suites.Check(dbReady, "DB initialized (maps/items/skills loaded)"):
 		suites.SuiteDBBacked(sql, economy)
 
+		# SOM-IDLE D1: realtime pacing PRIMEIRO (processo fresco). O probe usa
+		# fixture L1 própria; no fim da suíte o physics starvation derruba a
+		# leitura (12/h vs 60/h standalone) e o gate vira loteria.
+		await suites.SuiteIdlePolicyRealTime(sql)
+
 		# SOM-IDLE: F3 suites (tiers, spawn table, VIP, leaderboard, slots)
 		suites.SuiteItemTiers()
 		suites.SuiteItemSets()
@@ -184,7 +189,6 @@ func _run_tests():
 		suites.SuiteFaucetHarness(sql)
 		await suites.SuiteOnboarding(sql)
 		await suites.SuiteBossLadder(sql, economy)
-		await suites.SuiteIdlePolicyRealTime(sql)
 	else:
 		print("FATAL: DB not initialized — DB-backed suites skipped")
 

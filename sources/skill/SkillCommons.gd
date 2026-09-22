@@ -96,7 +96,9 @@ const DeadlyCap : float = 0.5
 
 # SOM-IDLE: piso de dano do idle — FarmMinDamagePct do HP máximo do alvo, só
 # para jogadores em sessão de farm. Retorna 0 fora desse contexto.
-const FarmMinDamagePct : float = 0.035
+# 8%: mobs que fogem <25% HP + regen 1/s estagnavam o farmer L1 em ~12/h
+# (gate de onboarding 30/h, par de design 150/h). Só afeta o farm idle.
+const FarmMinDamagePct : float = 0.08
 static func FarmDamageFloor(agent : BaseAgent, target : BaseAgent) -> int:
 	if agent is PlayerAgent and (agent as PlayerAgent).idlePolicy != null:
 		return ceili(target.stat.current.maxHealth * FarmMinDamagePct)

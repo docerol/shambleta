@@ -1035,7 +1035,9 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
 		var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
-		var claimed : Array = sql.db.query_with_bindings("SELECT count FROM vendor_claim WHERE account_id = ? AND day = ? AND offer_id = ?;", [accountID, day, offerID])
+		var claimed : Array = []
+		if sql.db.query_with_bindings("SELECT count FROM vendor_claim WHERE account_id = ? AND day = ? AND offer_id = ?;", [accountID, day, offerID]):
+			claimed = sql.db.query_result
 		var bought : int = int(claimed[0].get("count", 0)) if not claimed.is_empty() else 0
 		if bought >= EconomyCatalog.VENDOR_STOCK_PER_DAY:
 			result["reason"] = "sold_out"

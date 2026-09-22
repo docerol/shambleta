@@ -50,6 +50,11 @@ func CheckEq(value : int, expected : int, label : String) -> bool:
 
 # ------------------------------------------------------------------ fixture
 
+# Newbie ×5 (OfflineSettle): goldens must include it — same rule as the code.
+static func ExpectedNewbieMult(sql : SQLService, charID : int) -> float:
+	var level : int = int(sql.GetCharacter(charID).get("level", 1))
+	return float(FarmZoneData.NewbieBoostFactor) if level < FarmZoneData.NewbieBoostMaxLevel else 1.0
+
 # Creates a fully wired fixture row set (account + character with Melee skill).
 # Returns charID or 0 on failure.
 func CreateFixture(sql : SQLService, accountName : String, nickname : String, gp : int = 5000) -> int:
@@ -191,8 +196,9 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 
 	var h : float = 12.0
 	var eff : float = 0.8
-	var expectedXp : int = roundi(float(zone5.xpPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor)
-	var expectedGold : int = roundi(float(zone5.goldPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor)
+	var nb : float = ExpectedNewbieMult(sql, charID)
+	var expectedXp : int = roundi(float(zone5.xpPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor * nb)
+	var expectedGold : int = roundi(float(zone5.goldPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor * nb)
 	var expectedTax : int = roundi(float(expectedGold) * 0.05)	# 5% — eff < 1.0
 	var expectedDrop : int = floori(float(zone5.dropRatePPM) * h * 3600.0 * eff * OfflineSettle.OfflineFactor / 1000000.0)
 
@@ -1968,6 +1974,9 @@ func SuiteSeasonRaces(sql : SQLService) -> void:
 	var gid : int = economy.CreateGuild(accountID, charID, "IdleRaceGuild")
 	Check(gid > 0, "race guild created")
 	sql.ExecuteBindings("UPDATE guild SET points = 42 WHERE guild_id = ?;", [gid])
+	# Snapshot é global (todos os chars com beaten>0): zera o resíduo das
+	# suites anteriores para a asserção de 1 linha ser determinística.
+	sql.ExecuteBindings("UPDATE character SET bosses_beaten = 0;", [])
 	Check(sql.SetCharacterBossesBeaten(charID, 2), "beaten = 2")
 	CheckEq(economy.SnapshotSeasonBossKills(seasonID), 1, "boss snapshot 1 row")
 	CheckEq(economy.SnapshotSeasonGuildPoints(seasonID), 1, "guild snapshot 1 row")
@@ -2677,7 +2686,7 @@ func SuiteGuilds(sql : SQLService) -> void:
 	Check(not rep.is_empty(), "buffed settle applied")
 	if not rep.is_empty():
 		var zone1 : FarmZoneData = FarmZoneData.GetZone(1)
-		var expected : int = roundi(float(zone1.xpPerKill) * float(zone1.parKillsPerHour) * 1.0 * 1.0 * OfflineSettle.OfflineFactor * 1.04)
+		var expected : int = roundi(float(zone1.xpPerKill) * float(zone1.parKillsPerHour) * 1.0 * 1.0 * OfflineSettle.OfflineFactor * 1.04 * ExpectedNewbieMult(sql, charA))
 		CheckEq(int(rep["xp_earned"]), expected, "settle applies guild buff")
 
 	# Leave: member out, leader promotes oldest, disband blocked w/ vault
@@ -3126,7 +3135,7 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 		var xp : int = int(capped["xp_earned"])
 		# favor_xp = 1 comprado acima compõe o faucet offline (×1,05)
 		var expectedXp : int = roundi(float(z1.xpPerKill) * float(z1.parKillsPerHour) * 12.0 * 1.0 \
-			* OfflineSettle.OfflineFactor * float(capped["mods"]) * RebirthData.XpMult(1))
+			* OfflineSettle.OfflineFactor * float(capped["mods"]) * RebirthData.XpMult(1) * ExpectedNewbieMult(sql, charID))
 		CheckEq(xp, expectedXp, "offline income carries the bought favor_xp (x1.05)")
 		var gain : int = int(capped.get("essence_earned", -1))
 		CheckEq(gain, xp / RebirthData.EssenceDivisor, "capped offline XP converts 1:100 into essence")
