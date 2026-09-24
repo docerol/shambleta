@@ -40,6 +40,33 @@ const BossAttackCycle : float = 1.5		# segundos por golpe do boss
 const PlayerAttackCycle : float = 1.2	# fallback se o char não tiver ciclo próprio
 const MeleeSkillValue : int = 6			# dano básico da skill do auto-combat
 
+# Mecânica ativa: interromper o cast do boss (janela de timing 0.0–1.0 do ciclo
+# de ataque). Acerto perfeito [0.4–0.6] = 1.5x dano; bom [0.25–0.75] = 1.25x;
+# fora = 1.0x. Puro e determinístico (testável sem RNG, sem cena).
+const InterruptPerfectMin : float = 0.4
+const InterruptPerfectMax : float = 0.6
+const InterruptGoodMin : float = 0.25
+const InterruptGoodMax : float = 0.75
+const InterruptPerfectMult : float = 1.5
+const InterruptGoodMult : float = 1.25
+
+static func InterruptBonus(timing : float) -> float:
+	if timing >= InterruptPerfectMin and timing <= InterruptPerfectMax:
+		return InterruptPerfectMult
+	if timing >= InterruptGoodMin and timing <= InterruptGoodMax:
+		return InterruptGoodMult
+	return 1.0
+
+# Classificação textual do mesmo timing (fonte única de verdade p/ caminho live
+# e sim): o servidor usa na hora do toque p/ o feedback da UI; o sim só aplica
+# o multiplicador. timing ∈ [0,1] = fase da janela aberta.
+static func InterruptQuality(timing : float) -> String:
+	if timing >= InterruptPerfectMin and timing <= InterruptPerfectMax:
+		return "perfect"
+	if timing >= InterruptGoodMin and timing <= InterruptGoodMax:
+		return "good"
+	return "miss"
+
 static func GetBossCount() -> int:
 	return BossNames.size()
 
@@ -96,7 +123,9 @@ static func GetBossDefense(level : int) -> int:
 # Resolve o duelo char-vs-boss como corrida de TTK. `player` é um dicionário com
 # attack/defense/maxHealth/cycle (vindo do stat.current do agent online, ou de um
 # snapshot em teste). Determinístico: sem RNG, sem críticos, dmg min 1.
-static func Resolve(player : Dictionary, bossLevel : int) -> Dictionary:
+# `interruptMult` (default 1.0) é o bônus da mecânica ativa de interrupt —
+# ver InterruptBonus(timing). Chamadas antigas sem o 3º arg não mudam.
+static func Resolve(player : Dictionary, bossLevel : int, interruptMult : float = 1.0) -> Dictionary:
 	var bossHP : int = GetBossMaxHealth(bossLevel)
 	var bossAtk : int = GetBossAttack(bossLevel)
 	var bossDef : int = GetBossDefense(bossLevel)
@@ -106,7 +135,7 @@ static func Resolve(player : Dictionary, bossLevel : int) -> Dictionary:
 	var playerHP : int = maxi(1, int(player.get("maxHealth", 1)))
 	var playerCycle : float = float(player.get("cycle", PlayerAttackCycle))
 
-	var dmgToBoss : int = maxi(1, playerAtk + MeleeSkillValue - bossDef)
+	var dmgToBoss : int = maxi(1, int(float(maxi(1, playerAtk + MeleeSkillValue - bossDef)) * maxf(1.0, interruptMult)))
 	var dmgToPlayer : int = maxi(1, bossAtk - playerDef)
 
 	var playerTTK : float = (float(bossHP) / float(dmgToBoss)) * playerCycle
@@ -120,7 +149,12 @@ static func Resolve(player : Dictionary, bossLevel : int) -> Dictionary:
 		"duration" = playerTTK if win else bossTTK,
 		"playerTTK" = playerTTK,
 		"bossTTK" = bossTTK,
+		"interruptMult" = interruptMult,
 	}
+
+# Conveniência: resolve aplicando o bônus de timing diretamente.
+static func ResolveWithInterrupt(player : Dictionary, bossLevel : int, timing : float) -> Dictionary:
+	return Resolve(player, bossLevel, InterruptBonus(timing))
 
 # Snapshot das stats do jogador para Resolve(). cycle = castDelay + cooldownAttack
 # (o ciclo real do auto-combat), com fallback para PlayerAttackCycle.

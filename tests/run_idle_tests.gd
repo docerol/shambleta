@@ -174,6 +174,12 @@ func _run_tests():
 			suites.SuiteI18n(sql)
 			suites.SuiteUIScale()
 
+		# SOM-IDLE: P4 regression — Network facade dispatch (sem DB, sempre roda)
+		suites.SuiteNetworkDispatch(self.root)
+
+		# ROADMAP_COMERCIAL S2: AH bot seed (gated; DB + reconcile invariants)
+		suites.SuiteAHBots(sql, economy)
+
 		# SOM-IDLE: A1 auth hardening + A2 ops hardening
 		suites.SuiteAuthHardening(sql)
 		suites.SuiteTwoFactor(sql)
@@ -189,6 +195,9 @@ func _run_tests():
 		suites.SuiteFaucetHarness(sql)
 		await suites.SuiteOnboarding(sql)
 		await suites.SuiteBossLadder(sql, economy)
+		# SOM-IDLE: arena do interrupt AO VIVO (drena o _consumeBossInterrupt real
+		# contra um mob da instância; mesmo harness de agente do ladder)
+		await suites.SuiteBossInterruptLive(sql, economy)
 	else:
 		print("FATAL: DB not initialized — DB-backed suites skipped")
 

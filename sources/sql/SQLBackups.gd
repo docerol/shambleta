@@ -141,6 +141,12 @@ func Stop():
 		stopRequested = true
 		thread.wait_to_finish()
 
+# The worker calls back into Launcher.World/Economy/SQL. Left running, its Thread
+# is destroyed unjoined at teardown and races the tree it is reaching into, so
+# every holder joins here instead of relying on SQL.Destroy() being reachable.
+func _exit_tree():
+	Stop()
+
 #
 func _init():
 	var backupPath : String = SQLCommons.GetBackupPath()

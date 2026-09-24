@@ -210,3 +210,9 @@ func _post_launch():
 
 func _quit():
 	Quit()
+
+func _exit_tree():
+	# SOM-IDLE A2: quit() landing during the DB preload used to segfault the
+	# engine — the threaded loads were still parsing while teardown freed the
+	# script cache under them. Last hook that still runs on a live tree.
+	DB.DrainPendingPreloads()

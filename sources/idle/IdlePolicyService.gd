@@ -351,6 +351,7 @@ static func _BeginArena(player : PlayerAgent, map : WorldMap, binstID : int, ind
 	if player.idlePolicy != null:
 		player.idlePolicy.bossRID = boss.get_rid().get_id()
 		player.idlePolicy.bossIndex = index
+		player.idlePolicy.InterruptBossReset()
 	Util.PrintLog("Idle", "Player %s challenges boss #%d (%s L%d) in arena %d" % [player.nick, index, BossService.GetBossName(index), player.stat.level, binstID])
 
 # Escala o mob do boss ao nível do char + tanque de HP (×BossHpMult) pra a luta
@@ -384,6 +385,7 @@ static func OnBossResult(player : PlayerAgent, index : int, victory : bool):
 	var zoneID : int = policy.zoneID
 	policy.bossIndex = -1
 	policy.bossRID = 0
+	policy.InterruptBossReset()
 
 	var result : Dictionary = {}
 	if Launcher.Economy != null:

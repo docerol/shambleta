@@ -217,9 +217,25 @@ static func PreloadUpdate():
 		if ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
 			Launcher.get_tree().process_frame.connect(PreloadUpdate, CONNECT_ONE_SHOT)
 			return
-	preloadPaths = []
+	_FinishPreload()
 	isInitialized = true
 	Load()
+
+# An unjoined threaded load is not a benign leak: the engine destroys the worker
+# while it is still parsing, under a script cache that teardown is already
+# freeing. That is why any quit() landing mid-preload printed failed
+# `script = ExtResource(...)` parses and then segfaulted on exit.
+static func DrainPendingPreloads():
+	for path in preloadPaths:
+		ResourceLoader.load_threaded_get(path)
+	_FinishPreload()
+
+static func _FinishPreload():
+	preloadPaths = []
+	if Launcher == null or Launcher.get_tree() == null:
+		return
+	if Launcher.get_tree().process_frame.is_connected(PreloadUpdate):
+		Launcher.get_tree().process_frame.disconnect(PreloadUpdate)
 
 static func Load():
 	Populate()
@@ -269,9 +285,7 @@ static func Clear():
 	QuestsDB.clear()
 	hashDB.clear()
 
-	preloadPaths.clear()
-	if Launcher.get_tree().process_frame.is_connected(PreloadUpdate):
-		Launcher.get_tree().process_frame.disconnect(PreloadUpdate)
+	DrainPendingPreloads()
 	isInitialized = false
 
 static func Init():

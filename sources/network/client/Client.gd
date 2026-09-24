@@ -566,6 +566,16 @@ func BossResult(result : Dictionary, _peerID : int):
 	w.ShowResult(result)
 	w.ExitSpectate()				# reabre com o desfecho (se estávamos assistindo)
 
+# SOM-IDLE: janela de interrupt do duelo — mostra/esconde o botão do overlay.
+func BossInterruptWindow(open : bool, _peerID : int):
+	if Launcher.GUI and Launcher.GUI.has_method("ShowBossInterruptWindow"):
+		Launcher.GUI.ShowBossInterruptWindow(open)
+
+# SOM-IDLE: veredito do toque (banner quality/miss) no overlay.
+func BossInterruptFeedback(quality : String, mult : float, _peerID : int):
+	if Launcher.GUI and Launcher.GUI.has_method("ShowBossInterruptFeedback"):
+		Launcher.GUI.ShowBossInterruptFeedback(quality, mult)
+
 # Hub Atividades: estados das abas (refresh silencioso + janela, se aberta).
 func AchievementsState(state : Array, _peerID : int):
 	LastAchievements = state

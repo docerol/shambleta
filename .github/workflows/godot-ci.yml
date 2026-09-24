@@ -113,6 +113,37 @@ jobs:
           name: ${{ matrix.name }}
           path: build/${{ matrix.name }}
 
+  # SOM-IDLE code health: gate anti-god-node (>800 linhas, legado em allowlist).
+  code-health:
+    runs-on: ubuntu-latest
+    name: Code Health (god-node gate)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run god-node gate
+        run: |
+          bash scripts/check_god_nodes.sh
+
+  # SOM-IDLE: companion (fronteira de dinheiro real) — webhook HMAC, idempotência
+  # do grant, refund sweep, checkout com binding de sessão. stdlib puro (sem
+  # requirements). Rodar em CI é gate P0: bug aqui = prejuízo silencioso.
+  companion-tests:
+    runs-on: ubuntu-latest
+    name: Companion Money Tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Run webhook hardening tests
+        run: python3 companion/test_webhook.py
+
+      - name: Run security tests (checkout/session binding)
+        run: python3 companion/test_security.py
+
+      - name: Run refund CLI e2e (ROADMAP S1 dry-run gate)
+        run: python3 companion/test_refund_cli.py
+
   # SOM-IDLE: F2 idle-spike headless test suite (XP curve, zones, settle, ledger)
   # Beta fechado (2026-09-18): sem liuyuzui/godot-action-setup (setup quebrava
   # antes dos testes) — mesmo container barichello/godot-ci:4.7.1 dos jobs de

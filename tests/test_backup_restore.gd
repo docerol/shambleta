@@ -46,6 +46,12 @@ func _run_probe():
     root.add_child(backupsService)
     var backupPath: String = backupsService.CreateDailyBackup()
 
+    # SQLBackups._init() dispara um worker; se ele sobreviver ao quit() é
+    # destruído sem join e passa a racar contra a árvore que ele mesmo acessa.
+    # Reapós aqui (mesmo fora do caminho de produção, que passa por SQL.Destroy()).
+    backupsService.Stop()
+    backupsService.free()
+
     if backupPath.is_empty():
         print("FATAL: Backup creation failed")
         quit(1)

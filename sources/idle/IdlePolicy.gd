@@ -78,6 +78,15 @@ var _lastEfficiencySample : float			= 0.0
 var _retargets : int						= 0
 var _attackedTarget : bool					= false
 var _killRegistered : bool					= false
+# SOM-IDLE (2026-09-23): mecânica ativa no duelo de boss. Durante a luta ao vivo
+# uma janela de interrupt abre em ciclo; tocar nela (RequestBossInterrupt) pula o
+# cooldown do auto-ataque — DPS ~2x para quem aprende a janela, idêntico ao auto
+# para quem ignora (o idle continua 100% funcional, sem input obrigatório).
+const InterruptCycleSec : float				= 3.0
+const InterruptWindowSec : float			= 1.2
+var _interruptTimer : float					= 0.0		# avança só em duelo
+var _interruptWindow : bool					= false		# janela aberta (server-side)
+var _interruptRequest : bool				= false		# toque do jogador pendente
 
 #
 func Setup(pAgent : PlayerAgent, pZoneID : int):
@@ -148,6 +157,7 @@ func _tickStep(delta : float):
 		bossIndex = -1
 		bossRID = 0
 		currentTargetRID = 0
+		InterruptBossReset()
 		IdlePolicyService.OnBossResult(agent, lostIndex, false)
 		return
 
@@ -270,6 +280,18 @@ func _tickCombat(delta : float):
 		state = State.SEEK
 		return
 
+	# SOM-IDLE: janela de interrupt só existe em duelo de boss (nunca no farm).
+	if bossIndex >= 0:
+		_interruptTimer += delta
+		if not _interruptWindow and _interruptTimer >= InterruptCycleSec:
+			_interruptTimer = 0.0
+			_interruptWindow = true
+			NotifyInterruptWindow(target, true)
+		elif _interruptWindow and _interruptTimer >= InterruptWindowSec:
+			_interruptWindow = false
+			NotifyInterruptWindow(target, false)
+		_consumeBossInterrupt(target)
+
 	var skill : SkillCell = _getSkill()
 	if skill == null:
 		state = State.SEEK
@@ -299,6 +321,55 @@ func _tickCombat(delta : float):
 		_attackedTarget = false
 		currentTargetRID = 0
 		state = State.LOOT
+
+# ------------------------------------------------------------------ boss interrupt (ativa)
+
+# Consome o toque pendente na janela atual. Exposto (não-inlined) para a arena
+# de teste drive-lo com fase controlada — é a MESMA função que o tick chama.
+# Regras (espelham a sim): fora da janela = ignora; miss fecha a janela sem hit
+# (spam tem custo); good/perfect = hit extra com damageMult da fase.
+func _consumeBossInterrupt(target : BaseAgent) -> void:
+	if not _interruptRequest:
+		return
+	_interruptRequest = false
+	if not _interruptWindow or target == null or not is_instance_valid(target) or not ActorCommons.IsAlive(target):
+		return
+	_interruptWindow = false
+	NotifyInterruptWindow(target, false)
+	var phase : float = clampf(_interruptTimer / InterruptWindowSec, 0.0, 1.0)
+	var quality : String = BossService.InterruptQuality(phase)
+	var mult : float = BossService.InterruptBonus(phase)
+	NotifyInterruptFeedback(quality, mult)
+	if quality == "miss":
+		return
+	var iskill : SkillCell = _getSkill()
+	if iskill != null:
+		# hit-bônus server-side pelo mesmo caminho do auto-ataque (clamp, AI
+		# aggro, TargetAlteration, procs); rng fixo 0.5 = sem crit/dodge forçado.
+		Skill.Damaged(agent, target, iskill, 0.5, mult)
+
+# Push da janela p/ o assistente (se houver); offline/bot é no-op seguro.
+func NotifyInterruptWindow(boss : BaseAgent, open : bool):
+	if agent != null and agent.peerID != NetworkCommons.PeerUnknownID:
+		Network.CallClient("BossInterruptWindow", [open], agent.peerID)
+
+# Push do veredito do toque (quality + mult) p/ o banner da UI.
+func NotifyInterruptFeedback(quality : String, mult : float):
+	if agent != null and agent.peerID != NetworkCommons.PeerUnknownID:
+		Network.CallClient("BossInterruptFeedback", [quality, mult], agent.peerID)
+
+# Chamado pelo servidor quando o jogador toca no botão. Só vale em duelo; a
+# resolução (janela aberta? hit-bônus?) acontece no próximo tick, server-side.
+func RequestBossInterrupt() -> bool:
+	if bossIndex < 0:
+		return false
+	_interruptRequest = true
+	return true
+
+func InterruptBossReset():
+	_interruptTimer = 0.0
+	_interruptWindow = false
+	_interruptRequest = false
 
 # ------------------------------------------------------------------ loot
 

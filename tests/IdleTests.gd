@@ -768,6 +768,28 @@ func SuiteBossService() -> void:
 	CheckEq(BossService.ConsolationXp(1000), 1000 * BossService.ConsolationXpKills, "boss consolation xp")
 	CheckEq(BossService.VictoryGold(1000), roundi(float(BossService.VictoryXp(1000)) / float(FarmZoneData.GoldPerKillDiv) * BossService.BossGoldBonus), "boss victory gold")
 	CheckEq(BossService.GetBossCount(), FarmZoneData.BossMapNames.size(), "boss roster matches boss map names")
+	# Mecânica ativa: interrupt por timing (puro, determinístico).
+	CheckEq(BossService.InterruptBonus(0.5), BossService.InterruptPerfectMult, "interrupt: perfect timing 0.5")
+	CheckEq(BossService.InterruptBonus(0.3), BossService.InterruptGoodMult, "interrupt: good timing 0.3")
+	CheckEq(BossService.InterruptBonus(0.0), 1.0, "interrupt: miss timing 0.0")
+	CheckEq(BossService.InterruptBonus(0.9), 1.0, "interrupt: miss timing 0.9")
+	# Qualidade textual (fonte única p/ feedback da UI live + sim).
+	Check(BossService.InterruptQuality(0.5) == "perfect", "interrupt quality: perfect 0.5")
+	Check(BossService.InterruptQuality(0.3) == "good", "interrupt quality: good 0.3")
+	Check(BossService.InterruptQuality(0.1) == "miss", "interrupt quality: miss 0.1")
+	Check(BossService.InterruptQuality(0.95) == "miss", "interrupt quality: miss 0.95")
+	# Bordas exatas (min/max inclusive) — perfect e good.
+	CheckEq(BossService.InterruptBonus(BossService.InterruptPerfectMin), BossService.InterruptPerfectMult, "interrupt: perfect min edge")
+	CheckEq(BossService.InterruptBonus(BossService.InterruptPerfectMax), BossService.InterruptPerfectMult, "interrupt: perfect max edge")
+	CheckEq(BossService.InterruptBonus(BossService.InterruptGoodMin), BossService.InterruptGoodMult, "interrupt: good min edge")
+	CheckEq(BossService.InterruptBonus(BossService.InterruptGoodMax), BossService.InterruptGoodMult, "interrupt: good max edge")
+	var mid : Dictionary = {"attack" = 200, "defense" = 40, "maxHealth" = 5000, "cycle" = 1.2}
+	var base : Dictionary = BossService.Resolve(mid, 10)
+	var perfect : Dictionary = BossService.ResolveWithInterrupt(mid, 10, 0.5)
+	Check(float(perfect["playerTTK"]) < float(base["playerTTK"]), "interrupt: perfect timing reduz playerTTK")
+	CheckEq(float(perfect["interruptMult"]), BossService.InterruptPerfectMult, "interrupt: mult registrado no resultado")
+	# Compat: chamadas antigas sem o 3º arg mantêm mult 1.0.
+	CheckEq(float(BossService.Resolve(mid, 10)["interruptMult"]), 1.0, "interrupt: default mult 1.0")
 
 # SOM-IDLE: boss-key ladder — fluxo DB + challenge end-to-end (agente real).
 func SuiteBossLadder(sql : SQLService, economy : EconomyService) -> void:
@@ -1335,13 +1357,13 @@ func SuiteEconomyShop(sql : SQLService, charID : int, accountID : int) -> void:
 	sql.SetGems(accountID, 1000)
 	var result : Dictionary = economy.BuyChests(accountID, charID, 5)
 	Check(not result.is_empty(), "buy 5 accepted")
-	CheckEq(int(result.get("cost", 0)), economy.ChestCostGems * 5, "cost = 5x unit")
-	CheckEq(economy.GetGems(accountID), 1000 - economy.ChestCostGems * 5, "gems debited")
+	CheckEq(int(result.get("cost", 0)), EconomyCatalog.ChestCostGems * 5, "cost = 5x unit")
+	CheckEq(economy.GetGems(accountID), 1000 - EconomyCatalog.ChestCostGems * 5, "gems debited")
 	CheckEq(int(sql.GetChestStats(charID)["closed"]), openBefore + 5, "5 closed chests created")
 	var shopRows : int = int(sql.QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND origin = 'shop';", [charID])[0]["n"])
 	CheckEq(shopRows, 5, "origin 'shop' marked")
 	var ledger : Array[Dictionary] = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = 'chest_buy:5';", [accountID])
-	Check(ledger.size() == 1 and int(ledger[0]["amount"]) == -economy.ChestCostGems * 5, "ledger mirror chest_buy")
+	Check(ledger.size() == 1 and int(ledger[0]["amount"]) == -EconomyCatalog.ChestCostGems * 5, "ledger mirror chest_buy")
 
 	# Baú comprado abre (drop cai, estado vira opened)
 	var shopChest : int = 0
@@ -1358,7 +1380,7 @@ func SuiteEconomyShop(sql : SQLService, charID : int, accountID : int) -> void:
 	var state : Dictionary = economy.GetEconomyState(accountID, charID)
 	Check(state.has("gems") and state.has("chests") and state.has("odds_text"), "economy state has wallet/chests/odds")
 	Check(state.has("vip") and int(state.get("vip1_cost", 0)) > 0 and int(state.get("vip2_cost", 0)) > 0, "economy state has vip pricing")
-	CheckEq(int(state.get("chest_cost", 0)), economy.ChestCostGems, "economy state chest cost")
+	CheckEq(int(state.get("chest_cost", 0)), EconomyCatalog.ChestCostGems, "economy state chest cost")
 
 	# Boards da temporada: sem temporada → {}; criada → shaped com nomes
 	Check(economy.GetSeasonBoardsState(10).is_empty(), "no season → empty boards")
@@ -2277,7 +2299,7 @@ func SuiteDailyShop(sql : SQLService, charID : int, accountID : int) -> void:
 		var cb : int = int(sql.GetChestStats(charID)["closed"])
 		var bb : Dictionary = economy.BuyDailyOffer(accountID, charID, "boss-0-pack")
 		Check(bool(bb.get("ok", false)) and int(bb.get("cost", 0)) == EconomyCatalog.BOSS_PACK_COST, "boss pack bought at deal price")
-		CheckEq(int(sql.GetChestStats(charID)["closed"]), cb + economy.BOSS_PACK_CHESTS, "boss pack chests granted")
+		CheckEq(int(sql.GetChestStats(charID)["closed"]), cb + EconomyCatalog.BOSS_PACK_CHESTS, "boss pack chests granted")
 		Check(not bool(economy.BuyDailyOffer(accountID, charID, "boss-0-pack").get("ok", true)), "boss pack one-time")
 
 	# Fim de temporada: season de 1 dia → finale elegível nas últimas 48h
@@ -2400,6 +2422,31 @@ func SuiteChestOdds(sql : SQLService) -> void:
 	if not result.is_empty() and snap is Dictionary:
 		var replay : int = Hasher.HashPassword(str(row[0]["server_seed"]), str(result["client_seed"])).substr(0, 8).hex_to_int()
 		CheckEq(economy._RollChestItem(int(snap.get("zone", 1)), replay, bool(snap.get("pity", false))), int(result["item_id"]), "dispute replay matches drop")
+
+	# Pity status: 1 baú aberto → faltam 9 para o raro garantido (pity_every 10).
+	var pity : Dictionary = economy.GetChestPityStatus(charID)
+	CheckEq(int(pity.get("opened", -1)), 1, "pity: 1 chest opened")
+	CheckEq(int(pity.get("to_pity", -1)), int(pity.get("pity_every", 10)) - 1, "pity: to_pity = every - 1")
+	# Sufixo da UI (via load: Chests.gd não tem class_name).
+	var chestsScript : GDScript = load("res://sources/gui/Chests.gd")
+	Check(str(chestsScript._PitySuffix({"to_pity" = 1})).find("PRÓXIMO") >= 0, "pity: sufixo destaca próximo garantido")
+	Check(str(chestsScript._PitySuffix({"to_pity" = 9})).find("9") >= 0, "pity: sufixo mostra contagem")
+	# Leilão: filtro client-side puro (busca/tipo/teto, ordenado por preço).
+	var ahScript : GDScript = load("res://sources/gui/AuctionHouseWindow.gd")
+	var listings : Array = [
+		{"name" = "Iron Sword", "type" = "weapon", "qty" = 1, "price" = 100},
+		{"name" = "Iron Shield", "type" = "armor", "qty" = 1, "price" = 50},
+		{"name" = "Health Potion", "type" = "consumable", "qty" = 5, "price" = 10},
+	]
+	var ah = ahScript.new()
+	var filtered : Array = ah.FilterListings(listings, "iron", "", 0)
+	CheckEq(filtered.size(), 2, "ah: busca 'iron' retorna 2")
+	CheckEq(int(filtered[0].get("price", -1)), 50, "ah: ordenado por preço crescente")
+	CheckEq(ah.FilterListings(listings, "", "consumable", 0).size(), 1, "ah: filtro por tipo")
+	CheckEq(ah.FilterListings(listings, "", "", 20).size(), 1, "ah: teto de preço")
+	ah.RecordSale({"name" = "Iron Sword", "qty" = 1, "price" = 100})
+	CheckEq(ah.GetHistory().size(), 1, "ah: histórico registra venda")
+	ah.free()
 
 	sql.db.delete_rows("character", "nickname = 'IdleB2Tester'")
 	sql.db.delete_rows("account", "username = 'idle_b2_account'")
@@ -2927,6 +2974,170 @@ func SuiteUIScale() -> void:
 	Check(absf(float(gui.get("uiScaleFactor")) - 2.0) < 0.001, "uiscale: factor clamps at max")
 	gui.ApplyUIScale(1.0)
 	CheckEq(ThemeDB.fallback_font_size, base, "uiscale: back to 100% restores base font")
+
+# SOM-IDLE: arena do interrupt AO VIVO — exercita _consumeBossInterrupt (a
+# MESMA função que o tick de produção chama) com a fase da janela controlada,
+# contra um mob real da instância de farm, sem depender de física.
+# Mede deltas de HP: perfect > good > miss(=0); toque fora da janela é no-op;
+# miss fecha a janela (anti-spam).
+func _tapInterrupt(policy : IdlePolicy, target : AIAgent, phase : float) -> int:
+	policy._interruptWindow = true
+	policy._interruptTimer = phase * IdlePolicy.InterruptWindowSec
+	policy._interruptRequest = true
+	var hpBefore : int = target.stat.health
+	policy._consumeBossInterrupt(target)
+	return hpBefore - target.stat.health
+
+func _reviveTarget(target : AIAgent) -> void:
+	target.stat.SetHealth(10000000)
+
+# Puxa a skill da policy (pode estar vazia p/ chars sem loadout); injeta melee.
+func _ensureMeleeSkill(agent : PlayerAgent, policy : IdlePolicy) -> void:
+	if not policy.skillLoadout.is_empty():
+		return
+	var melee : SkillCell = DB.GetSkill(SkillCommons.SkillMeleeName.hash())
+	if melee != null:
+		policy.skillLoadout = [SkillCommons.SkillMeleeName.hash()]
+
+func SuiteBossInterruptLive(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] boss interrupt live (arena)")
+	var charID : int = CreateFixture(sql, "idle_intr_account", "IdleIntrTester")
+	if not Check(charID != 0, "interrupt fixture created"):
+		return
+	var agent : PlayerAgent = await _SpawnSimAgent(charID, 985, 1)
+	if not Check(agent != null, "interrupt agent spawned"):
+		return
+	IdlePolicyService.StopIdleSession(agent)
+	IdlePolicyService.StartIdleSession(agent, 1)
+	for i in 16:
+		await Launcher.get_tree().process_frame
+	var policy : IdlePolicy = agent.idlePolicy
+	if not Check(policy != null, "interrupt: policy attached"):
+		return
+
+	var inst : WorldInstance = IdlePolicyService.GetFarmInstance(1)
+	if not Check(inst != null and not inst.mobs.is_empty(), "interrupt: farm instance has mobs"):
+		return
+	var target : AIAgent = inst.mobs[0]
+	if not Check(target != null and is_instance_valid(target) and ActorCommons.IsAlive(target), "interrupt: live target"):
+		return
+
+	# fabrica o estado de duelo (mesmo padrão do LIVE contract do ladder)
+	policy.bossIndex = 0
+	policy.bossRID = target.get_rid().get_id()
+	_ensureMeleeSkill(agent, policy)
+	agent.stat.current.attack = 100000	# hit grande p/ delta mensurável
+	target.stat.current.maxHealth = 10000000	# tanque: nunca morre na arena
+
+	_reviveTarget(target)
+	var perfect : int = _tapInterrupt(policy, target, 0.5)
+	_reviveTarget(target)
+	var good : int = _tapInterrupt(policy, target, 0.3)
+	_reviveTarget(target)
+	var miss : int = _tapInterrupt(policy, target, 0.05)
+
+	Check(perfect > 0, "interrupt live: perfect lands a hit (%d)" % perfect)
+	Check(good > 0, "interrupt live: good lands a hit (%d)" % good)
+	CheckEq(miss, 0, "interrupt live: miss lands NOTHING (no free hit)")
+	Check(perfect > good, "interrupt live: perfect beats good (%d>%d)" % [perfect, good])
+	if good > 0:
+		CheckNear(float(perfect) / float(good), BossService.InterruptPerfectMult / BossService.InterruptGoodMult, 2.0, "interrupt live: perfect/good ≈ 1.2×")
+
+	# miss fechou a janela (anti-spam): segundo toque com request pendente no-op
+	_reviveTarget(target)
+	policy._interruptWindow = false
+	var hpMid : int = target.stat.health
+	policy._interruptRequest = true
+	policy._consumeBossInterrupt(target)
+	CheckEq(target.stat.health, hpMid, "interrupt live: window closed = tap is no-op")
+
+	if is_instance_valid(agent):
+		IdlePolicyService.StopIdleSession(agent)
+		WorldAgent.RemoveAgent(agent)
+	sql.db.delete_rows("character", "nickname = 'IdleIntrTester'")
+	sql.db.delete_rows("account", "username = 'idle_intr_account'")
+
+# SOM-IDLE: regressão P4 — todos os call-sites Network.<método>( da base devem
+# resolver na facade (o dispatch @rpc do motor mira o nó autoload Network;
+# fragmentar em outros autoloads quebrou silenciosamente o jogo online).
+func SuiteNetworkDispatch(root : Node) -> void:
+	print("[suite] Network facade dispatch (P4 regression)")
+	var facade : Node = root.get_node_or_null(NodePath("Network"))
+	if not Check(facade != null and facade.has_method("CallServer"), "facade: Network present with dispatcher"):
+		return
+	# Prova positiva: métodos que o P4 removeu e o servidor/client exigem.
+	for must : String in ["ChallengeBoss", "GetBossState", "BossState", "BossResult", "TargetAlteration", "EconomyState", "OpenChest", "CommandFeedback"]:
+		Check(facade.has_method(must), "facade exposes %s (P4 regression)" % must)
+	var re : RegEx = RegEx.new()
+	re.compile("Network\\.([A-Za-z_][A-Za-z0-9_]*)\\(")
+	var missing : Dictionary = {}
+	var filesChecked : int = 0
+	var stack : Array[String] = ["res://sources", "res://tests"]
+	while not stack.is_empty():
+		var dirPath : String = stack.pop_back()
+		var d := DirAccess.open(dirPath)
+		if d == null:
+			continue
+		d.list_dir_begin()
+		var fname : String = d.get_next()
+		while fname != "":
+			var full : String = dirPath.path_join(fname)
+			if d.current_is_dir():
+				stack.append(full)
+			elif fname.ends_with(".gd"):
+				filesChecked += 1
+				var f := FileAccess.open(full, FileAccess.READ)
+				if f != null:
+					for m in re.search_all(f.get_as_text()):
+						var methodName : String = m.get_string(1)
+						if not facade.has_method(methodName):
+							if not missing.has(methodName):
+								missing[methodName] = full
+							print("  [dispatch-miss] %s (first: %s)" % [methodName, missing[methodName]])
+			fname = d.get_next()
+		d.list_dir_end()
+	Check(filesChecked > 150, "dispatch scan covered codebase (%d .gd files)" % filesChecked)
+	Check(missing.is_empty(), "no Network method call resolves outside the facade (%d missing)" % missing.size())
+
+# ROADMAP_COMERCIAL S2: AH bot seed — idempotente, gated, buy path real,
+# invariantes de lots/ledger intactos (reconcile verde depois do fluxo).
+func SuiteAHBots(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] AH bot seed (S2)")
+	# Gated off: sem env, Ensure não faz nada.
+	OS.set_environment("SHAMBLETA_AH_BOTS", "")
+	Check(not economy.AHBotsEnabled(), "ah bots: locked without the env")
+	CheckEq(economy.EnsureAuctionBots(), 0, "ah bots: gated off creates nothing")
+	# Gated on: primeira rodada cria; segunda não duplica (idempotência).
+	OS.set_environment("SHAMBLETA_AH_BOTS", "1")
+	Check(economy.AHBotsEnabled(), "ah bots: enabled with the env")
+	var created : int = economy.EnsureAuctionBots()
+	Check(created > 0, "ah bots: seed created %d listings" % created)
+	var again : int = economy.EnsureAuctionBots()
+	CheckEq(again, 0, "ah bots: idempotent (no duplicates)")
+	var listings : Array = economy.BrowseListings(50)
+	Check(listings.size() >= created, "ah bots: listings visible via BrowseListings")
+	# Buy path real: jogador com gold compra um bot listing. Gold via _GrantGold
+	# (ledger-mirror) — CreateFixture semeia gp direto no stat, o que deixaria a
+	# soma gold do ledger negativa após a compra e quebraria o ReconcileDaily.
+	var charID : int = CreateFixture(sql, "idle_ah_buyer", "IdleAHBuyer", 0)
+	if Check(charID != 0, "ah buyer fixture created"):
+		var buyerAccount : int = sql.GetAccountIDForCharacter(charID)
+		_GrantGold(sql, charID, buyerAccount, 100000, "ah_buyer_seed")
+		var listing : Dictionary = listings[0]
+		var price : int = int(listing["price_gold"])
+		var listingID : int = int(listing["id"])
+		Check(economy.BuyListing(charID, listingID), "ah bots: player buys listing")
+		CheckEq(economy.BrowseListings(50).size(), created - 1, "ah bots: listing consumed by buy (finite stock)")
+		CheckEq(economy.EnsureAuctionBots(), 0, "ah bots: no reseed after purchase (no faucet)")
+	# Reconcile continua verde (lote do buyer + agregado + ledger espelhados).
+	CheckEq(economy.ReconcileDaily(), 0, "ah bots: reconcile clean after seed+buy")
+	sql.db.delete_rows("character", "nickname = 'IdleAHBuyer'")
+	sql.db.delete_rows("account", "username = 'idle_ah_buyer'")
+	for botUser in EconomyCatalog.AH_BOT_ACCOUNTS:
+		sql.db.delete_rows("auction_listing", "seller_account IN (SELECT account_id FROM account WHERE username = '%s')" % botUser)
+		sql.db.delete_rows("character", "nickname = '%s'" % botUser)
+		sql.db.delete_rows("account", "username = '%s'" % botUser)
+	OS.set_environment("SHAMBLETA_AH_BOTS", "")
 
 # Auth hardening (SOM-IDLE A1): KDF, lockout, e-mail único, LGPD.
 func SuiteAuthHardening(sql : SQLService) -> void:
@@ -3573,10 +3784,10 @@ func SuiteArena(sql : SQLService) -> void:
 	# board
 	var boardA : Dictionary = economy.ArenaBoard(acctA)
 	Check(bool(boardA.get("ok", false)), "board A ok")
-	CheckEq(boardA.get("my", {}).get("elo", 0), economy.ARENA_BASE_ELO + economy.ARENA_ELO_K, "A ELO after win")
+	CheckEq(boardA.get("my", {}).get("elo", 0), EconomyCatalog.ARENA_BASE_ELO + EconomyCatalog.ARENA_ELO_K, "A ELO after win")
 	var boardB : Dictionary = economy.ArenaBoard(acctB)
 	Check(bool(boardB.get("ok", false)), "board B ok")
-	CheckEq(boardB.get("my", {}).get("elo", 0), economy.ARENA_BASE_ELO - economy.ARENA_ELO_K, "B ELO after loss")
+	CheckEq(boardB.get("my", {}).get("elo", 0), EconomyCatalog.ARENA_BASE_ELO - EconomyCatalog.ARENA_ELO_K, "B ELO after loss")
 	for nick in ["IdleArenaA", "IdleArenaB"]:
 		sql.db.delete_rows("character", "nickname = '%s'" % nick)
 	for uname in ["idle_arena_a", "idle_arena_b"]:
@@ -3876,7 +4087,7 @@ func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
 	if Check(bool(buy.get("ok", false)), "key bought with gold"):
 		CheckEq(int(buy.get("keys", -1)), 1, "first key")
 		var gp1 : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
-		CheckEq(gp0 - gp1, economy.BOSS_KEY_GOLD_PRICE, "key price burned")
+		CheckEq(gp0 - gp1, EconomyCatalog.BOSS_KEY_GOLD_PRICE, "key price burned")
 	# Rush sem key → rejeita (gasta a key comprada primeiro)
 	Check(economy.SpendBossKey(charID, 1, "test"), "key spent")
 	Check(not bool(economy.RunBossRush(charID, null).get("ok", false)), "rush without agent rejected")

@@ -105,6 +105,9 @@ var fullModeWindows : Array[WindowPanel] = []
 @onready var progressionTracker : Control		= $Overlay/VSections/Indicators/Info/ProgressionTracker
 @onready var bossTracker : Control				= $Overlay/VSections/Indicators/Info/BossTracker
 
+# SOM-IDLE: overlay do duelo (botão + flash) — instanciado em _ready.
+var bossInterruptOverlay : BossInterruptOverlay = null
+
 # Contexts
 @onready var loadingControl : Control			= $Overlay/VSections/Contexts/Loading
 @onready var dialogueWindow : VBoxContainer		= $Overlay/VSections/Contexts/Dialogue
@@ -735,6 +738,26 @@ func _ready():
 		if saved == null:
 			_adjust_for_mobile_web()
 	DB.WarmShaders()
+
+	# SOM-IDLE: overlay do duelo (botão de interrupt + flash) — extraído p/
+	# BossInterruptOverlay.gd (gate anti-god-node); as delegações abaixo só
+	# roteiam p/ ele.
+	bossInterruptOverlay = BossInterruptOverlay.new()
+	bossInterruptOverlay.name = "BossInterruptOverlay"
+	add_child(bossInterruptOverlay)
+	bossInterruptOverlay.Setup(notificationLabel)
+
+func ShowBossInterruptWindow(open : bool):
+	if bossInterruptOverlay:
+		bossInterruptOverlay.SetWindowVisible(open)
+
+func ShowBossInterruptFeedback(quality : String, mult : float):
+	if bossInterruptOverlay:
+		bossInterruptOverlay.ShowFeedback(quality, mult)
+
+func FlashOverlay(color : Color):
+	if bossInterruptOverlay:
+		bossInterruptOverlay.Flash(color)
 
 func _on_ui_margin_resized():
 	if CRTShader and CRTShader.material:

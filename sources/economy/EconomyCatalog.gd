@@ -132,6 +132,21 @@ const VENDOR_CATALOG : Array = [
 # (de EconomyService.gd:1131)
 const LIVE_EVENT_DEFAULT_MOD : float = 1.0
 
+# ROADMAP_COMERCIAL S2: seed de bots na AH no lançamento (a AH nasce morta sem
+# oferta; OSRS/Albion seedam o GE via NPCs). Vende consumíveis do vendor com
+# ~20% de margem — preço-âncora honesto, sem farm infinito (bots não recompram;
+# quando o estoque zera, some da vitrine). Gold do vendedor é creditado no
+# BuyListing normal do motor (sem caminho paralelo).
+const AH_BOT_ACCOUNTS : Array[String] = ["ah_bot_trader", "ah_bot_farmhand", "ah_bot_merchant"]
+const AH_BOT_LISTINGS : Array = [
+	{"item": "Apple", "count": 5, "price": 60},
+	{"item": "WaterBottle", "count": 5, "price": 95},
+	{"item": "Croissant", "count": 5, "price": 145},
+	{"item": "CactusSourCandy", "count": 5, "price": 180},
+	{"item": "CactusDrink", "count": 5, "price": 240},
+	{"item": "CactusPotion", "count": 3, "price": 600},
+]
+
 # (de EconomyService.gd:1226)
 const ARENA_TICKETS_PER_DAY : int = 3
 

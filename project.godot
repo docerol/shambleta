@@ -32,14 +32,8 @@ Launcher="*res://sources/launcher/Launcher.gd"
 Network="*res://sources/network/Network.gd"
 FSM="*res://sources/launcher/FSM.gd"
 Monitoring="*res://sources/system/Monitoring.gd"
-
 WebPush="*res://sources/web/WebPush.gd"
-NetworkAuth="*res://sources/network/NetworkAuth.gd"
-NetworkSocial="*res://sources/network/NetworkSocial.gd"
-NetworkCharacter="*res://sources/network/NetworkCharacter.gd"
-NetworkCombat="*res://sources/network/NetworkCombat.gd"
-NetworkEconomy="*res://sources/network/NetworkEconomy.gd"
-NetworkGuild="*res://sources/network/NetworkGuild.gd"
+
 [debug]
 
 settings/gdscript/always_track_call_stacks=true
@@ -53,11 +47,10 @@ gdscript/completion/autocomplete_setters_and_getters=true
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/stretch/mode="canvas_items"
-window/stretch/aspect="ignore"
+window/stretch/aspect="expand"
 mouse_cursor/tooltip_position_offset=Vector2(16, 16)
 window/size/width=1600
 window/size/height=900
-window/size/resizable=true
 
 [editor]
 
@@ -101,11 +94,6 @@ texture={
 "stream": false,
 "svg/scale": 1.0
 }
-
-[internationalization]
-
-locale/translations=PackedStringArray("res://data/i18n/ui.en.translation", "res://data/i18n/ui.pt_BR.translation")
-locale/fallback="en"
 
 [input]
 
@@ -482,6 +470,10 @@ ui_fullscreen={
 
 pointing/android/enable_pan_and_scale_gestures=true
 pointing/emulate_touch_from_mouse=true
+
+[internationalization]
+
+locale/translations=PackedStringArray("res://data/i18n/ui.en.translation", "res://data/i18n/ui.pt_BR.translation")
 
 [navigation]
 

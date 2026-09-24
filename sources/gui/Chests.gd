@@ -29,7 +29,7 @@ func RefreshState():
 func ShowState(state : Dictionary):
 	if state.is_empty():
 		return
-	oddsLabel.text = "Odds: %s" % str(state.get("odds_text", "—"))
+	oddsLabel.text = "Odds: %s%s" % [str(state.get("odds_text", "—")), _PitySuffix(state.get("pity", {}))]
 	bonusAdButton.disabled = false
 	for child in chestList.get_children():
 		child.queue_free()
@@ -42,12 +42,26 @@ func ShowState(state : Dictionary):
 		btn.pressed.connect(_on_chest_pressed.bind(int(chestID)))
 		chestList.add_child(btn)
 
+# Sufixo de pity ("raro garantido em N") a partir do bloco `pity` do
+# EconomyState. Fallback: extrai `pity_every` do odds_text quando o state
+# antigo não traz o bloco (compat com pushes antigos).
+static func _PitySuffix(pity : Dictionary) -> String:
+	if pity.is_empty():
+		return ""
+	var toPity : int = int(pity.get("to_pity", 0))
+	if toPity <= 1:
+		return "  •  PRÓXIMO BAÚ: RARO GARANTIDO!"
+	return "  •  Raro garantido em %d baús" % toPity
+
 # Chamado pela NetClient.ChestOpened antes do EconomyState fresco chegar.
 func ShowLastDrop(result : Dictionary):
 	if result.is_empty():
 		return
 	var pityTag : String = " [PITY!]" if bool(result.get("pity", false)) else ""
 	lastDropLabel.text = "Last drop: %s x%d%s" % [str(result.get("item_name", "?")), int(result.get("count", 1)), pityTag]
+	# SOM-IDLE: juice raro — drop T3+ (pity) ganha flash dourado na tela.
+	if bool(result.get("pity", false)) and Launcher.GUI != null and Launcher.GUI.has_method("FlashOverlay"):
+		Launcher.GUI.FlashOverlay(Color(1.0, 0.85, 0.25, 0.35))
 
 func _on_chest_pressed(chestID : int):
 	Network.OpenChest(chestID)

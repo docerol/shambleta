@@ -103,8 +103,10 @@ static func CooledDown(agent : BaseAgent, target : BaseAgent, skill : SkillCell)
 	if skill.repeat and ActorCommons.IsAlive(target) and not SkillCommons.HasAnyActionInProgress(agent):
 		Skill.Cast(agent, target, skill)
 
-static func Damaged(agent : BaseAgent, target : BaseAgent, skill : SkillCell, rng : float):
+static func Damaged(agent : BaseAgent, target : BaseAgent, skill : SkillCell, rng : float, damageMult : float = 1.0):
 	var info : AlterationInfo = SkillCommons.GetDamage(agent, target, skill, rng)
+	if damageMult != 1.0:
+		info.value = maxi(1, roundi(float(info.value) * damageMult))
 	if target is AIAgent:
 		target.AddAttacker(agent, clampi(info.value, 0, target.stat.health))
 		AI.Refresh(target)

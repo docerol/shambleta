@@ -658,7 +658,7 @@ func WatchAd(placement : String, token : String, peerID : int):
 		return
 	var result : Dictionary = Launcher.Economy.WatchAd(accountID, charID, placement, token)
 	Network.AdFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
-	if bool(result.get("ok", false)) and placement == Launcher.Economy.AD_AFK2X:
+	if bool(result.get("ok", false)) and placement == EconomyCatalog.AD_AFK2X:
 		Network.AFKReport(OfflineSettle.BuildReport(charID).to_dictionary(), peerID)
 
 func ClaimAdChest(token : String, peerID : int):
@@ -967,6 +967,14 @@ func ChallengeBoss(peerID : int):
 	Network.BossResult(result, peerID)
 	if bool(result.get("ok", false)):
 		Network.BossState(Launcher.Economy.GetBossState(charID, player.stat.level), peerID)
+
+# SOM-IDLE: toque do jogador na janela de interrupt do duelo (2026-09-23).
+# Rate-limit já está no facade (200ms); sem sessão de duelo é no-op silencioso.
+func BossInterrupt(peerID : int):
+	var player : PlayerAgent = Peers.GetAgent(peerID)
+	if player == null or not is_instance_valid(player) or player.idlePolicy == null:
+		return
+	player.idlePolicy.RequestBossInterrupt()
 
 # SOM-IDLE: rebirth (B+C). Estado/cache/mutação vivem em EconomyService; aqui só
 # o roteamento peers→charID com o mesmo formato do ladder de bosses.

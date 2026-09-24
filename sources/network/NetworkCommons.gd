@@ -75,34 +75,19 @@ const CharSelectionTimeout : float		= 15
 static var ProtocolVersion : int		= 0
 
 static func ComputeProtocolVersion(network : Node) -> int:
-	# Passo 2 (P4): protocolo agora agrega todos os módulos fragmentados,
-	# não apenas Network.gd. Cada módulo (NetworkAuth, NetworkSocial, etc.)
-	# contribui com seus @rpc; a facade Network.gd não tem mais RPCs.
-	var all_rpc : Dictionary = {}
-	var modules : Array = [
-		network,
-		Engine.get_singleton("NetworkAuth"),
-		Engine.get_singleton("NetworkSocial"),
-		Engine.get_singleton("NetworkCharacter"),
-		Engine.get_singleton("NetworkCombat"),
-		Engine.get_singleton("NetworkEconomy"),
-		Engine.get_singleton("NetworkGuild"),
-	]
-	for mod in modules:
-		if mod == null or not mod.get_script():
-			continue
-		var rpc_config = mod.get_script().get_rpc_config()
-		for method in rpc_config.keys():
-			all_rpc[method] = rpc_config[method]
-
+	# RPCs vivem TODOS na facade Network (autoload alvo do multiplayerAPI.rpc);
+	# fragmentar em autoloads separados quebra o dispatch do motor (P4 revertido
+	# 2026-09-23). O hash abaixo é a assinatura client/server: qualquer mudança
+	# de assinatura RPC deve ser acompanhada de bump de versão de pacote.
+	var rpcConfig : Dictionary = network.get_script().get_rpc_config()
 	var methods : Array = []
-	for method in all_rpc.keys():
+	for method in rpcConfig.keys():
 		methods.append(str(method))
 	methods.sort()
 
 	var serialized : String = ""
 	for method in methods:
-		var config : Dictionary = all_rpc[StringName(method)]
+		var config : Dictionary = rpcConfig[StringName(method)]
 		var keys : Array = config.keys()
 		keys.sort()
 		serialized += method
