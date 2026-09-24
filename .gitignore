@@ -28,3 +28,6 @@ __pycache__/
 
 # graphify tool output
 graphify-out/
+
+# Qoder CLI: estado local da sessão (settings per-machine, não é fonte)
+.qoder/
