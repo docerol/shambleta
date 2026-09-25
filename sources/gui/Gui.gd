@@ -263,30 +263,16 @@ func DisplayActions(actions : PackedStringArray, duration : float = -1.0):
 func IsDialogueContextOpened() -> bool:
 	return dialogueContainer.is_visible()
 
-func OpenDiscord():
-	# Terceiro site de navegação externa, mesmo ramo dos outros dois (`Checkout.gd`
-	# e `Scrollable.gd`): sem o `isWeb` o botão simplesmente não abre nada no export
-	# Web, que é onde o beta roda.
-	if LauncherCommons.isWeb:
-		JavaScriptBridge.eval("window.open(%s, '_blank');" % JSON.stringify(LauncherCommons.SocialLink))
-	else:
-		OS.shell_open(LauncherCommons.SocialLink)
-
 func DisplayFirstLogin():
-	if LauncherCommons.isWeb:
-		UICommons.MessageBox("""Welcome to Shambleta!
+	# O diálogo de boas-vindas era o mesmo nos dois ramos de plataforma; o único
+	# conteúdo que diferenciava (`OpenDiscord`, removido em 2026-09-25 junto da
+	# ponte e do addon) não tem destino próprio para apontar até o dono publicar
+	# um canal de suporte — ver deploy/LAUNCH_HANDOFF.md §"Destinos de suporte".
+	UICommons.MessageBox("""Welcome to Shambleta!
 
 Shambleta is an idle auto battler: build your fighter, pick a farm zone and your team fights on its own — online or offline. Loot, gear up, open chests and climb the leaderboards.
 """,
-			settingsWindow.set_sessionfirstlogin.bind(false), "OK",
-			OpenDiscord, "Join our Discord")
-	else:
-		UICommons.MessageBox("""Welcome to Shambleta!
-
-Shambleta is an idle auto battler: build your fighter, pick a farm zone and your team fights on its own — online or offline. Loot, gear up, open chests and climb the leaderboards.
-""",
-			settingsWindow.set_sessionfirstlogin.bind(false), "OK",
-			OpenDiscord, "Join our Discord")
+			settingsWindow.set_sessionfirstlogin.bind(false), "OK")
 
 	# SOM-IDLE U2: onboarding tutorial for new players.
 	if settingsWindow.get_sessionfirstlogin():

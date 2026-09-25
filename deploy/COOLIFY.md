@@ -133,7 +133,7 @@ public bind`. Veja `deploy/TLS.md` para o guia completo.
    que o Coolify o trate como volume persistente (não remova em redeploys).
 5. Deploy. O build do `web` leva vários minutos (import + export Godot).
 
-## 3. Credenciais do game server (e-mail/Discord)
+## 3. Credenciais do game server (e-mail)
 
 O server lê `user://credential.cfg` = `/data/.local/share/Shambleta/credential.cfg`
 (`HOME=/data` no container). Sem esse arquivo o server sobe normalmente, mas
@@ -143,10 +143,6 @@ reset de senha não envia e-mail.
    arquivo montado no caminho acima com o conteúdo:
 
    ```ini
-   [Discord]
-   Discord-Enabled=false
-   Discord-Token=""
-   Discord-ChannelID=""
    [Email]
    Email-ApiKey="<brevo api key>"
    Email-SenderName="Shambleta"

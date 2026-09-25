@@ -92,7 +92,7 @@ DAY = 86400
 # no boot (`EconomyCatalog.ValidatePaidCatalog`) e na suíte, então bumpar
 # `AgreementTosVersion` sem bumpar o arquivo é erro de boot, não porta aberta.
 DEFAULT_CATALOG = {
-    "_agreements": {"tos": "2026-09-b", "privacy": "2026-09-b", "age": "2026-09-a"},
+    "_agreements": {"tos": "2026-09-c", "privacy": "2026-09-b", "age": "2026-09-a"},
     "gems.550":   {"kind": "gems",     "amount": 550,   "currency": "BRL", "price": 19.90},
     "gems.1200":  {"kind": "gems",     "amount": 1200,  "currency": "BRL", "price": 39.90},
     "gems.3000":  {"kind": "gems",     "amount": 3000,  "currency": "BRL", "price": 79.90},

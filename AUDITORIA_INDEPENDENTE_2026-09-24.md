@@ -1105,7 +1105,8 @@ um problema de cliente inteiro.
 logo depois da régua de ponteiros, pelo mesmo motivo — só lê a árvore, nenhum estado tocado). A régua é
 por **bloco**: varre os `.gd` de `sources/`, e para cada `OS.shell_open(` exige que a função contenedora
 tenha `JavaScriptBridge` **e** `isWeb`; linha de comentário não conta como ramo. Medido: 3 sítios em
-`sources/`, todos com ramo, 360–420 ms (quatro medições: 283 na escrita, 396, 399 e 361 na re-medida). Discriminação provada com duas sondas, cada uma revertida
+`sources/`, todos com ramo — **dois** na árvore de hoje, porque o terceiro era o botão do Discord e ele
+saiu com a ponte (retificação (4) no rodapé) —, 360–420 ms (quatro medições: 283 na escrita, 396, 399 e 361 na re-medida). Discriminação provada com duas sondas, cada uma revertida
 byte-idêntica: arrancar o ramo de `OpenDiscord` devolve `sem ramo: res://sources/gui/Gui.gd:270 em
 OpenDiscord` (digest `fb5f899…` antes e depois), e trocar o ramo de `Scrollable` por um comentário que
 contém as duas palavras devolve a mesma falha em `_richtextlabel_on_meta_clicked` (digest `0aefcc4…`
@@ -1130,14 +1131,16 @@ Consequência para o jogador brasileiro: a caixa que ele marca está em portugu�
 idioma. Não escrevo texto legal inventado nesta casa.
 
 **(r) Os dois destinos de suporte que o produto oferece não são o mesmo destino, e nenhum é verificável
-aqui.** `[HIPÓTESE]` — **não reduz nota.** `sources/launcher/LauncherCommons.gd:6` fixa um Discord
+aqui.** `[HIPÓTESE]` — **não reduz nota.** ~~`sources/launcher/LauncherCommons.gd:6` fixa um Discord
 numérico (servidor + canal), usado pelo botão e pela mensagem de erro de rede; `data/db/agreement.json:63`
-fixa um invite vanity e um canal Libera (`#sourceofmana`). A linha do próprio Termos diz
-"Shambleta is an open-source project built on the Source of Mana codebase" — ou seja, o canal IRC não é
-um link perdido, é a comunidade **upstream** para onde o texto legal manda o jogador. A pergunta que
-sobrou é de dono, não de código: se o beta vai dar suporte na comunidade de quem forneceu o código, ou
-num canal do projeto; e se os dois Discords são do projeto. Verificação que fecharia: o dono abrir os
-dois links e disser de quem são. Nenhuma ferramenta desta máquina decide isso.
+fixa um invite vanity e um canal Libera (`#sourceofmana`).~~ A hipótese foi **confirmada pelo dono em
+2026-09-25 e resolvida por remoção**: nenhum dos destinos é do projeto — os links eram do upstream do
+fork, e o projeto não tem servidor Discord. A ponte (`sources/discord/`), o addon `addons/discord_gd`,
+o botão, o endereço horneado em `LauncherCommons` e as duas frases de erro que o apontavam saíram da
+árvore; o aceite parou de oferecer invite e canal IRC e `AgreementTosVersion` foi bumpado a `2026-09-c`.
+O que este item **não** resolveu é a parte que era do dono: o jogo agora não tem destino de suporte
+nenhum, e publicar um continua em aberto (`deploy/LAUNCH_HANDOFF.md` §"Destinos de suporte"). Nenhuma
+ferramenta desta máquina decide isso.
 
 **(s) A "heurística multi-conta" coletava a impressão digital do próprio servidor.** `[CÓDIGO]`
 `[TESTE]` — **corrigido (coleta removida).** `sources/network/server/Peers.gd:248` é o que sobrou de um
@@ -1294,3 +1297,9 @@ incluindo o gate de estrutura que antes só existia na CI.*
 > "`git log --all -S"X"` retorna zero commits" (ex.: `func StartSpan`, §13 e §19) o zero é **até essa
 > fronteira**. As negativas continuam bem fundamentadas para o período em que as decisões foram tomadas,
 > mas não são prova sobre o histórico anterior a 2026-08-14, que não existe neste clone.
+> (4) O achado **(r)** — os dois destinos de suporte serem do upstream — foi decidido pelo dono e
+> resolvido por remoção na passada seguinte: a ponte do Discord, o addon, o botão, o endereço horneado
+> e as duas frases de erro que o apontavam saíram da árvore, e o aceite parou de mandar o jogador para
+> o Discord/IRC de outra pessoa. A linha "canais/Discord 1" da tabela de notas do item 14 e a menção à
+> "ponte com Discord" do §14 descrevem o jogo **antes** dessa passada. O que o item não resolveu —
+> publicar um canal de suporte — continua entrega do dono.

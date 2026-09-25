@@ -125,7 +125,7 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 			isWarn = false
 			SetRecoveryState(RecoveryState.NONE)
 		_:
-			warn = "Could not connect to the server (Error %d).\nPlease contact us via our [url=%s][color=#%s]Discord server[/color][/url].\nCheck your connection and try again!" % [err, LauncherCommons.SocialLink, UICommons.DarkTextColor]
+			warn = "Could not connect to the server (Error %d).\nCheck your connection and try again!" % err
 
 	var textColor : Color = UICommons.WarnTextColor if isWarn else UICommons.TextColor
 

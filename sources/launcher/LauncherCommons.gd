@@ -3,7 +3,6 @@ class_name LauncherCommons
 
 # Project
 const ProjectName : String				= "Shambleta"
-const SocialLink : String				= "https://discord.com/channels/581622549566193664/1013487216493854780"
 
 # Map
 static var DefaultStartMapID : int		= "Tulimshar".hash()

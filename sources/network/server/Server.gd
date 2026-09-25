@@ -1161,7 +1161,7 @@ func TriggerChat(channelName : String, text : String, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
 		# SOM-IDLE C1: o texto segue pelo caminho de disseminação (vizinhos,
-		# global, Discord, whisper) sem passar por nenhum cliente antes, então é
+		# global, whisper) sem passar por nenhum cliente antes, então é
 		# aqui que ele ganha teto de tamanho; vazio depois do corte não é frase.
 		var message : String = NetworkCommons.ClipChat(text)
 		if message.is_empty():
@@ -1179,8 +1179,6 @@ func TriggerChat(channelName : String, text : String, peerID : int):
 			Network.NotifyNeighbours(player, "ChatPlayer", [str(GUICommons.ChatChannel.LOCAL), player.nick, message, player.get_rid().get_id()])
 		elif channelName == str(GUICommons.ChatChannel.GLOBAL):
 			Network.NotifyGlobal("ChatPlayer", [str(GUICommons.ChatChannel.GLOBAL), player.nick, message, player.get_rid().get_id()])
-			if Launcher.Discord:
-				Launcher.Discord.SendToDiscord(player.nick, message)
 		else:
 			var target : PlayerAgent = Launcher.World.GetGlobalPlayer(channelName)
 			if not target:

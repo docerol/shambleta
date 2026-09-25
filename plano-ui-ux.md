@@ -69,7 +69,7 @@ Todas as tarefas abaixo são **puro código/design de interface** — nenhuma ex
 |---|---|---|
 | Redesign completo do HUD (não polimento) | Escopo maior que polimento; requer redesign de arte e layout | Nenhuma — mas sai do escopo do usuário ("polimento, não redesign") |
 | Themes CRT/HQ4x simplificados | Já funcionais; simplificar é opcional | Nenhuma |
-| Discord bot / social extra | `FEATURE_MATRIX.md`: desligado; não é gap UI/UX | Nenhuma — fora de escopo |
+| ~~Discord bot / social extra~~ | **Removido em 2026-09-25**: ponte, addon `discord_gd` e botão saíram do jogo com o projeto (o dono não tem servidor e os links eram do upstream do fork) | Nenhuma |
 | Tutorial avançado (vídeos, animações) | `Onboarding.gd` básico funciona; conteúdo avançado requer arte | Nenhuma — mas além de polimento |
 
 ---

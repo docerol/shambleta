@@ -6,7 +6,7 @@
 #     no proxy do Coolify — NUNCA expor a 6108 direto na internet).
 #   - live.db e backups ficam em $HOME (user://) → volume /data (persistente
 #     no Coolify). SHAMBLETA_OFFSITE_BACKUPS aponta p/ segunda montagem.
-#   - Credenciais (Email/Discord): user://credential.cfg — criar como "File
+#   - Credenciais (Email): user://credential.cfg — criar como "File
 #     Config" do Coolify e montar em
 #     /data/.local/share/Shambleta/credential.cfg
 #     (HOME=/data e Godot 4 com use_custom_user_dir → $HOME/.local/share/Shambleta;

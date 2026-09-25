@@ -4777,10 +4777,10 @@ func SuiteChatHardening() -> void:
 		var disseminators : int = 0
 		for line in chatBody:
 			var raw : String = String(line)
-			if raw.contains("NotifyNeighbours") or raw.contains("NotifyGlobal") or raw.contains("Network.ChatPlayer") or raw.contains("SendToDiscord"):
+			if raw.contains("NotifyNeighbours") or raw.contains("NotifyGlobal") or raw.contains("Network.ChatPlayer"):
 				disseminators += 1
 				Check(raw.contains("message") and not raw.contains(" text,") and not raw.contains(" text]"), "servidor: propaga a versão cortada, nunca a crua (%s)" % raw.strip_edges())
-		CheckEq(disseminators, 5, "servidor: local + global + discord + 2 whispers cobertos")
+		CheckEq(disseminators, 4, "servidor: local + global + 2 whispers cobertos")
 
 	var createBody : Array = _RawFuncBody(serverText, "CreateCharacter")
 	if Check(not createBody.is_empty(), "servidor: corpo de CreateCharacter localizado"):
@@ -7103,10 +7103,12 @@ func SuiteEvidencePointers() -> void:
 # Navegação externa no export Web. O beta roda no navegador, e no navegador
 # `OS.shell_open` não leva a URL para lugar nenhum — por isso a porta do dinheiro
 # (`Checkout.gd`, `_launch_payment_url`) faz `window.open` por `JavaScriptBridge` quando
-# `LauncherCommons.isWeb`. Os outros dois sites que navegam para fora — o clique de link
-# dentro do texto do ACEITE (`Scrollable.gd`, o painel que o gate de idade obriga o
-# jogador a ler antes de marcar a caixa de 18+) e o botão do Discord (`Gui.gd`,
-# `OpenDiscord`) — chamavam `OS.shell_open` crus. A régua é por BLOCO e varre `sources/`
+# `LauncherCommons.isWeb`. O outro sítio que navega para fora é o clique de link dentro do
+# texto do ACEITE (`Scrollable.gd`, o painel que o gate de idade obriga o jogador a ler
+# antes de marcar a caixa de 18+), que chamava `OS.shell_open` cru. Um terceiro — o botão
+# do Discord em `Gui.gd` — saiu do jogo em 2026-09-25 junto da ponte e do addon, porque o
+# endereço horneado em `LauncherCommons` era o do upstream de que o projeto fez fork e o
+# projeto não tem servidor próprio. A régua é por BLOCO e varre `sources/`
 # inteira, não por arquivo: a guarda antiga lia o corpo de uma função do checkout e por
 # construção não podia ver o resto do cliente. Linha de comentário não conta como ramo —
 # senão dá para passar na régua escrevendo a palavra na prosa.

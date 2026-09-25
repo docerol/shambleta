@@ -44,6 +44,6 @@ func OnEndPrototype():
 	Mes("The road ends here, for now.")
 	Mes("The people who built this world are still working on what comes next. You have caught up to them.")
 	Mes("Congratulation for getting this far and thank you for being part of this journey with us!")
-	Mes("Stay as long as you like and please do come visit us and come say hi on our Discord.")
+	Mes("Stay as long as you like, and come back whenever the road brings you here.")
 	Mes("Until then, Bagdá and the Homs region is yours to continue to explore.")
 	Choice("I'll stay a while.", Farewell)

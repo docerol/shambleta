@@ -279,7 +279,7 @@ enum AccountStatus {
 # Versões dos textos legais que o cliente está exibindo/aceitando. bump a cada
 # revisão jurídica — força re-aceite dos ativos (handoff: sincronizar com o
 # conteúdo de data/db/agreement.json e a política de privacidade publicada).
-const AgreementTosVersion : String = "2026-09-b"		# bumped: AFK-farm rule + BR jurisdiction (agreement.json)
+const AgreementTosVersion : String = "2026-09-c"		# bumped: canal de suporte do aceite (era Discord/IRC do upstream)
 const AgreementPrivacyVersion : String = "2026-09-b"
 # Gate de idade (§21/§24-11): terceira cláusula do mesmo aceite afirmativo — o
 # jogador declara ter 18+. Bump aqui força re-afirmação dos ativos, como os dois

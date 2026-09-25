@@ -8,7 +8,7 @@
 #   SHAMBLETA_SERVER_PORT    — opcional (default 0 = URL sem porta, usa 443).
 #
 # O [Network] gravado aqui vai no settings.cfg embutido no pck — sem segredos.
-# Credenciais reais (Email/Discord) são exclusivas do container `server`.
+# Credenciais reais (Email) são exclusivas do container `server`.
 FROM barichello/godot-ci:4.7.1 AS build
 ARG SHAMBLETA_SERVER_ADDRESS=""
 ARG SHAMBLETA_SERVER_PORT="0"

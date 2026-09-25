@@ -44,7 +44,7 @@ func FillWarningLabel(err : NetworkCommons.CharacterError):
 		NetworkCommons.CharacterError.ERR_EMPTY_ACCOUNT:
 			EnableCharacterCreator(true)
 		_:
-			warn = "Unknown character issue (Error %d).\nPlease contact us via our [url=%s][color=#%s]Discord server[/color][/url].\n" % [err, LauncherCommons.SocialLink, UICommons.DarkTextColor]
+			warn = "Unknown character issue (Error %d)." % err
 
 	if not warn.is_empty():
 		warn = "[color=#%s]%s[/color]" % [UICommons.WarnTextColor.to_html(false), warn]

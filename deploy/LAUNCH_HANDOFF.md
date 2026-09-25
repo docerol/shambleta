@@ -222,17 +222,23 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   `sqlite3 /data/.local/share/Shambleta/live.db "SELECT version FROM migration;"` = 46. O 46 no
   primeiro boot é a prova de que o pacote trouxe o schema; número menor é o filtro de export,
   não o código.
-- **Destinos de suporte: dois, e `[HIPÓTESE]` de que nem um dos dois seja do projeto.**
-  A primeira mensagem que um jogador sem conexão lê (`sources/gui/Login.gd:128`, o erro de
-  rede com link) e o botão do Discord (`sources/gui/Gui.gd:266-273`) apontam para o endereço
-  horneado em `sources/launcher/LauncherCommons.gd:6`. O corpo do aceite manda procurar
-  suporte em outro lugar: `data/db/agreement.json:63` oferece `discord.com/invite/UnY77dR`
-  e o canal de IRC `#sourceofmana` na Libera — o upstream de que o próprio texto diz que
-  Shambleta deriva, na frase imediatamente acima. Se os dois caminhos caem no servidor de
-  outra pessoa, o beta manda jogador brasileiro a um suporte que não pode responder, e o
-  acordo que ele assinou é a coisa mais longe de um canal que ele consegue usar. **Não dá
-  para decidir isto daqui**: os dois links não são resolvidos sem navegador. Entrega do dono:
-  confirmar a posse dos dois destinos e unificar num só que o projeto controle.
+- **Destinos de suporte: a hipótese confirmar-se, e o destino resolveu-se por remoção.**
+  Em 2026-09-25 o dono confirmou que **nenhum** dos caminhos é do projeto: os links são do
+  upstream de que Shambleta fez fork, e não existe servidor Discord próprio. A função saiu
+  inteira do jogo com isso — a ponte (`sources/discord/`, 2 arquivos), o addon
+  `addons/discord_gd` (33 arquivos, 224 KB, que iam dentro do pacote Web porque nenhum
+  `exclude_filter` dos presets os tirava de lá), o botão `OpenDiscord`, o endereço
+  horneado em `LauncherCommons` e as duas frases de erro que o apontavam (`Login.gd`,
+  `Character.gd`). O corpo do aceite parou de oferecer `discord.com/invite/UnY77dR` e o
+  canal `#sourceofmana` na Libera e passou a dizer que perguntas sobre as políticas —
+  reembolso incluso — se resolvem pelo canal de suporte publicado pelo projeto; como o
+  texto que o jogador aceita mudou, `AgreementTosVersion` foi bumpado a `2026-09-c` nas
+  três pontas que o guard amarra (const do jogo, `_agreements` do `paid_catalog.json`,
+  fallback do companion), o que força re-aceite dos ativos. **O custo da limpeza é a
+  entrega que fica:** hoje o jogo não tem canal de contato nenhum — não no aceite, não no
+  erro de rede, não no `CONTRIBUTING.md`. Antes de abrir o beta o dono precisa publicar
+  um destino (e-mail, formulário, o que for) e escrever os três lugares que precisam dele;
+  até lá, quem leva o erro de rede lê um código e não tem para onde ir.
 - **Backups offsite (T6 parcial)**: `SHAMBLETA_OFFSITE_BACKUPS` + restore probe
   existem e o mecanismo é testado (`SuiteOpsA2` + job CI); procedimento de
   restore S3 documentado em `som-idle-docs/archive/reports/

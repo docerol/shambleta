@@ -58,7 +58,7 @@ We work in chapters, each one within its own milestone.
 
 ## Proposing a change
 
-Talk to us on Discord or comment on an existing issue before you start anything. Your time is worth a lot, so let's make sure it goes where it's most useful. Even a small fix might have a better solution, and a change that doesn't fit the roadmap can be turned down no matter how good it is.
+Comment on an existing issue — or open one — before you start anything. Your time is worth a lot, so let's make sure it goes where it's most useful. Even a small fix might have a better solution, and a change that doesn't fit the roadmap can be turned down no matter how good it is.
 
 ## Scope
 

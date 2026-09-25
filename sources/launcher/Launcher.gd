@@ -15,7 +15,6 @@ var Map : ServiceBase				= null
 # Server services
 var World : ServiceBase				= null
 var SQL : ServiceBase				= null
-var Discord : DiscordService		= null
 var Email : EmailService			= null
 # SOM-IDLE: F2 — economy/settle service (settle-path ledger writes)
 var Economy : EconomyService		= null
@@ -32,7 +31,7 @@ var Player : Entity					= null
 # volta quando a conexão com o servidor remoto cai: hardcodar `Mode(true, true)` no
 # teardown do cliente ligava um servidor que o boot nunca ligou — no browser isso
 # tentava bind TCP em 127.0.0.1:9400 (`ERR_CANT_CREATE`, medido 2026-09-25) e
-# re-entrava `DB.Init`; num desktop de release criava World/SQL/Discord/Email/
+# re-entrava `DB.Init`; num desktop de release criava World/SQL/Email/
 # Economy/Telemetry que ninguém pediu. Em dev o boot já é client+server, então o
 # comportamento medido até aqui não muda.
 var BootClient : bool				= false
@@ -74,7 +73,6 @@ func Client():
 func Server():
 	World			= WorldService.new()
 	SQL				= SQLService.new()
-	Discord			= DiscordService.new()
 	Email			= EmailService.new()
 	# SOM-IDLE: F2 — economy service lives with the other server services
 	Economy			= EconomyService.new()
@@ -86,7 +84,6 @@ func Server():
 
 	add_child.call_deferred(World)
 	add_child.call_deferred(SQL)
-	add_child.call_deferred(Discord)
 	add_child.call_deferred(Email)
 	add_child.call_deferred(Economy)
 	add_child.call_deferred(Telemetry)
@@ -139,11 +136,6 @@ func Reset(clientStarted : bool, serverStarted : bool):
 			SQL.Destroy()
 			SQL.queue_free()
 			SQL = null
-		if Discord:
-			Discord.set_name("DiscordDestroyed")
-			Discord.Destroy()
-			Discord.queue_free()
-			Discord = null
 		if Email:
 			Email.queue_free()
 			Email = null
@@ -235,7 +227,6 @@ func _post_launch():
 	if Debug and not Debug.isInitialized:		Debug._post_launch()
 	if World and not World.isInitialized:		World._post_launch()
 	if SQL and not SQL.isInitialized:			SQL._post_launch()
-	if Discord and not Discord.isInitialized:	Discord._post_launch()
 	if Audio:									Audio._post_launch()
 	# SOM-IDLE: F2 — economy service after SQL (it only wraps SQL calls)
 	if Economy and not Economy.isInitialized:	Economy._post_launch()
