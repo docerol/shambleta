@@ -1277,3 +1277,20 @@ dados, companion, deploy e documentação). Nada disso está commitado — só c
 precisa de ordem do dono. Verificação: a CI do GitHub **não roda** (dono sem créditos no Actions, avisado
 em 2026-09-25), então o portão autoritativo é o `./scripts/test.sh all` desta máquina — nove gates, agora
 incluindo o gate de estrutura que antes só existia na CI.*
+
+> **Retificação de 2026-09-25 (passada seguinte), porque este relatório é usado para priorizar e dois
+> fatos do rodapé acima deixaram de valer.**
+> (1) *"Nada disso está commitado"* — a passada inteira entrou em `6277671` com push em `origin/master`
+> (motivo de entrar junta em `deploy/LAUNCH_HANDOFF.md` §5). O veredito "a uma semana de engenharia"
+> foi consumido pela passada de conserto, não por nova arquitetura.
+> (2) *"A CI não roda"* — ela roda, e o primeiro run do beta derrubou uma coisa que **nenhuma**
+> autoavaliação e nem este relatório verificaram: `./scripts/test.sh` está no índice sem o bit de
+> execução, então o job da fronteira do dinheiro morria com **exit 126** e um clone novo não consegue
+> rodar a régua que este próprio documento cita como autoritativa. Reproduzido em checkout limpo,
+> consertado em `ccc927a` (só modo), run verde nos 12 jobs. É o tipo de defeito que só aparece onde o
+> disco não é o do autor — a mesma lição do achado (b) sobre layout `user://`.
+> (3) Uma limitação que vale para as negativas deste relatório e que não estava registrada:
+> **o repositório é shallow** — a fronteira é `c727e69` (2026-08-14), 107 commits. Onde está escrito
+> "`git log --all -S"X"` retorna zero commits" (ex.: `func StartSpan`, §13 e §19) o zero é **até essa
+> fronteira**. As negativas continuam bem fundamentadas para o período em que as decisões foram tomadas,
+> mas não são prova sobre o histórico anterior a 2026-08-14, que não existe neste clone.

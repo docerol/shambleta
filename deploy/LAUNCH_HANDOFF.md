@@ -479,21 +479,41 @@ estes dezoito mais `build/`; qualquer outro caminho novo é scratch que não dev
 `??` é obrigatório junto com o `M` do rastreado que o chama pelo nome (parágrafo acima) —
 `M` sem o seu `??` é boot que referencia arquivo que ninguém versionou.
 
-**CI**: os workflows existem no repo (`godot-ci.yml` com idle-tests,
-backup-restore, benchmarks e export Web; `staging.yml` p/ `develop`), mas **nenhum job
-roda: o dono está sem créditos no GitHub Actions desde 2026-09-25**. Timeout do `idle-tests`
-segue ajustado p/ 1200s (a suíte com sims reais não cabe em 300s), para quando houver
-créditos. Os produtores reais do beta, medidos nos arquivos, são três e nenhum é a CI:
+**CI — os créditos voltaram e os jobs rodam (medido em 2026-09-25, nesta máquina).** O que
+este parágrafo afirmava antes ("nenhum job roda") está superado, e a primeira execução do
+beta serviu exatamente para nada: o run de `6277671` falhou em `Companion Money Tests` com
+**exit 126**. Não era o companion — era o bit de execução. O step roda `./scripts/test.sh
+companion` e `scripts/test.sh` vivia no índice como `100644`; localmente funcionava porque o
+disco desta máquina está 755 em tudo (artefato da cópia de HD) e `core.fileMode=false` manda
+o git ignorar a divergência. Ou seja: **um clone novo não conseguia rodar a régua de
+lançamento**, invocada por caminho em 29 lugares da documentação. Reproduzi a falha em
+checkout limpo ("Permissão negada"), corrigi só o modo em `ccc927a` (mesmos blobs) e provei
+partindo do clone. **O run de `ccc927a` fechou verde nos 12 jobs**, incluindo
+`Companion Money Tests` e `SOM-IDLE Idle Tests` — a suíte de 2257 checks passando num
+checkout limpo, em Godot 4.7.1. É a primeira vez que o beta tem evidência construída fora da
+máquina de quem o escreveu; antes, a única prova eram logs em `/tmp`, que morreram com a
+máquina antiga junto de `/tmp/suite_beta_final28.log`, `/tmp/web_export_4.log` e
+`/tmp/qa_web_3.log` (as re-medidas atuais: `/tmp/export_web_remedia.log`, mais os runs em
+`gh run list --repo docerol/shambleta`). Radar de segurança conferido no mesmo run: o passo
+`Publish snap` ficou **skipped** (sem `SNAPCRAFT_STORE_CREDENTIALS`), então nenhum push
+publicou artefato público — mas o `if` dele é `github.ref == 'refs/heads/master'` com o
+segredo, então publicar a cada master push é o que acontece assim que alguém preencher a
+credencial. Timeout do `idle-tests` segue em 1200 s (a suíte com sims reais não cabe em 300 s).
+
+**CI não é produtor do artefato** — continua vero, e agora com a ressalva de que ela *prova*
+sem *produzir*: os produtores reais do beta, medidos nos arquivos, são três e nenhum é a CI:
 `deploy/server/Dockerfile` (export headless), `deploy/web/Dockerfile` (multi-stage que
 horneia `SHAMBLETA_SERVER_ADDRESS` no `settings.cfg` antes do `--export-release "Web"` —
 é ele que o Coolify builda) e `scripts/export_web.sh` (pacote local + régua de peso +
 boot no navegador via `scripts/qa_web.mjs`). Sobre o peso: o export Web emite
 `::nota::`, não aviso-gate — os 25 MB são meta de arte pós-beta, ver `deploy/WEB_SLIM.md`.
-**Pendente (dono, só com acesso ao GitHub)**: confirmar em Settings → Actions que as
-execuções voltem a aparecer p/ os commits recentes — e notar que o `da2531c` que está
-lá não exercita nenhum dos nove gates desta passada, e nenhum commit futuro vai ter
-evidência de CI até os créditos voltarem: a evidência verde desta passada são os logs
-locais (`/tmp/suite_beta_final28.log`, `/tmp/web_export_4.log`, `/tmp/qa_web_3.log`).
+**Fechado (era "pendente, só com acesso ao GitHub")**: as execuções foram confirmadas pela
+API, e a régua de "a CI não exercita os gates desta passada" não vale mais — `ccc927a` é o
+beta inteiro nos doze jobs. Histórico medido dos runs, do mais antigo ao mais novo:
+`f781f71` / `7d5e514` / `bd69275` falhando nos cinco jobs de export (keystore e templates —
+foi o que `da2531c` consertou, e ele fechou verde), `6277671` verde em onze e vermelho só
+em `Companion Money Tests` (o exit 126 acima), `ccc927a` **success**. A evidência do beta
+deixou de ser local: `gh run list --repo docerol/shambleta`.
 
 **Pós-beta: música na web (achado #69).** `Audio._StreamMusicFromWeb` está inerte por dois
 bloqueadores independentes (não investigados nesta passada — trabalho de beta é só o boot
