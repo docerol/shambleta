@@ -249,8 +249,8 @@ func _on_preference_done(result : int, body : PackedByteArray):
 	_open_payment_url(str(parsed.get("payment_url", "")))
 
 func _get_username() -> String:
-	if Launcher.nPanel:
-		return str(Launcher.nPanel.nameText)
+	if Launcher.GUI and Launcher.GUI.loginPanel:
+		return str(Launcher.GUI.loginPanel.nameText)
 	return ""
 
 func _get_auth_token() -> String:
@@ -263,8 +263,8 @@ func _get_auth_token() -> String:
 	# marcou. A porta de remember-me continua intacta: o server emite token só com
 	# rememberMe (sources/network/server/Peers.gd:286), então sem ele o conf está
 	# vazio e o aviso acionável lá em cima é o caminho certo.
-	var panelToken : String = str(Launcher.nPanel.savedToken) if Launcher.nPanel \
-		and "savedToken" in Launcher.nPanel else ""
+	var panel : Control = Launcher.GUI.loginPanel if Launcher.GUI else null
+	var panelToken : String = str(panel.savedToken) if panel and "savedToken" in panel else ""
 	if not panelToken.is_empty():
 		return panelToken
 	return str(Conf.GetString("auth", "token", Conf.Type.AUTH_TOKEN))

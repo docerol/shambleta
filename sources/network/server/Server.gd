@@ -999,8 +999,12 @@ func ArenaAttack(defenderAccountID : int, peerID : int):
 	Network.ArenaAttackResult(result, peerID)
 	Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(accountID), peerID)
 	if bool(result.get("ok", false)):
-		var defenderAcct : int = defenderAccountID
-		Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(defenderAcct), defenderAcct)
+		# O board pós-ataque vai para a SESSÃO do defensor, não para a conta dele:
+		# ArenaBoardResult termina em CallClient, cujo peerID é destino de transporte.
+		# Conta desconectada não tem peer — sem o gate, o rpc iria para -2.
+		var defenderPeer : int = Peers.accounts.get(defenderAccountID, NetworkCommons.PeerUnknownID)
+		if defenderPeer != NetworkCommons.PeerUnknownID:
+			Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(defenderAccountID), defenderPeer)
 
 # R4 async arena: board da conta da sessão.
 func ArenaBoard(peerID : int):

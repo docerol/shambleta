@@ -658,6 +658,55 @@ func SuiteAgentLifecycle(sql : SQLService) -> void:
 	CheckEq(destroy.count("is_instance_valid"), 3, "Destroy ignora entrada morta nas três listas")
 	Check(destroy.contains("is_inside_tree()"), "Destroy só tira da árvore quem está na árvore (o add_child do Create é adiado)")
 
+# Membros que existem num objeto vivo: propriedade declarada, herdados de Node,
+# método, sinal e constante de script. É a única lista que vale para `var SQL :
+# ServiceBase` e companhia — a anotação esconde o tipo real, então nem o compilador
+# nem `has_method` isolados respondem.
+func _ObjectMembers(node : Node) -> Dictionary:
+	var members : Dictionary = {}
+	for prop in node.get_property_list():
+		members[String(prop["name"])] = true
+	for method in node.get_method_list():
+		members[String(method["name"])] = true
+	for signal_ in node.get_signal_list():
+		members[String(signal_["name"])] = true
+	var script : Script = node.get_script()
+	if script != null:
+		for prop in script.get_script_property_list():
+			members[String(prop["name"])] = true
+		for method in script.get_script_method_list():
+			members[String(method["name"])] = true
+		for constant in script.get_script_constant_map().keys():
+			members[String(constant)] = true
+	return members
+
+func _IsIdentChar(c : String, allowDigit : bool) -> bool:
+	return c == "_" or (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") \
+		or (allowDigit and c >= "0" and c <= "9")
+
+# Todo acesso `Prefix.member` no fonte, como [nome, éChamada]. Varrido por String e
+# não RegEx porque `RegExMatch.get_string()` devolve fatia deslocada em fonte com
+# acento — medido nesta passada, o `Launcher.SQL` de sources/economy/GuildService.gd
+# chega como "SQ" por regex. Um guard de nome truncado reclama de membro que não
+# existe e deixa passar o que existe. Chamada e propriedade saem do mesmo andar: a
+# primeira é conferida em `has_method`, a segunda no conjunto de membros do objeto.
+func _MemberAccesses(prefix : String, body : String) -> Array:
+	var found : Array = []
+	var at : int = body.find(prefix)
+	while at >= 0:
+		var before : String = body[at - 1] if at > 0 else " "
+		var i : int = at + prefix.length()
+		if not _IsIdentChar(before, true) and i < body.length() and _IsIdentChar(body[i], false):
+			var j : int = i
+			while j < body.length() and _IsIdentChar(body[j], true):
+				j += 1
+			var k : int = j
+			while k < body.length() and (body[k] == " " or body[k] == "\t"):
+				k += 1
+			found.append([body.substr(i, j - i), k < body.length() and body[k] == "("])
+		at = body.find(prefix, at + prefix.length())
+	return found
+
 # SOM-IDLE R1: superfície pública dos autoloads. Perder uma função de autoload não
 # quebra o parse de quem chama — quebra em runtime, no caminho de um jogador. Foi
 # exatamente assim que Monitoring perdeu SetPlayer: f781f71 esvaziou o arquivo por
@@ -674,32 +723,45 @@ func SuiteAutoloadSurface() -> void:
 	if not Check(not names.is_empty(), "autoloads enumerados do project.godot"):
 		return
 	var sceneRoot : Node = (Engine.get_main_loop() as SceneTree).root
-	var patterns : Array[RegEx] = []
 	var live : Array[Node] = []
+	var members : Array[Dictionary] = []
 	var probed : Array[String] = []
 	for autoloadName in names:
 		var node : Node = sceneRoot.get_node_or_null(NodePath(autoloadName))
 		if not Check(node != null, "autoload %s vive em /root" % autoloadName):
 			continue
-		var pattern : RegEx = RegEx.new()
-		if Check(pattern.compile("\\b%s\\.([A-Za-z_]\\w*)\\s*\\(" % autoloadName) == OK, "regex de chamada %s compila" % autoloadName):
-			patterns.append(pattern)
-			live.append(node)
-			probed.append(autoloadName)
+		live.append(node)
+		members.append(_ObjectMembers(node))
+		probed.append(autoloadName)
 	# Um arquivo lido uma vez, todos os autoloads conferidos nele.
 	var checked : int = 0
 	var broken : int = 0
+	var propsChecked : int = 0
+	var propsBroken : int = 0
 	for filePath in _GdFilesUnder("res://sources"):
-		var body : String = _RepoFile(String(filePath))
-		for i in patterns.size():
-			for matchResult in patterns[i].search_all(body):
-				var method : String = matchResult.get_string(1)
-				checked += 1
-				if not live[i].has_method(method):
-					broken += 1
-					Check(false, "%s.%s é chamado em %s e não existe no autoload" % [probed[i], method, String(filePath)])
+		var body : String = _StripCommentLines(_RepoFile(String(filePath)))
+		for i in live.size():
+			for access in _MemberAccesses(probed[i] + ".", body):
+				var member : String = String(access[0])
+				if bool(access[1]):
+					checked += 1
+					if not live[i].has_method(member):
+						broken += 1
+						Check(false, "%s.%s é chamado em %s e não existe no autoload" % [probed[i], member, String(filePath)])
+				else:
+					propsChecked += 1
+					if not members[i].has(member):
+						propsBroken += 1
+						Check(false, "%s.%s é lido em %s e não existe no autoload" % [probed[i], member, String(filePath)])
 	Check(checked >= 40, "a varredura realmente olhou chamadas de autoload (%d)" % checked)
 	CheckEq(broken, 0, "nenhuma chamada de autoload aponta para função inexistente")
+	# A régua de chamada exige parêntese, então `Launcher.Peer.peerID` nunca foi
+	# olhada por ela — e acesso a propriedade não compila erro nenhum: o autoload é
+	# visto como Node, a busca pelo membro é em runtime, no clique do botão. Medido
+	# nesta passada: 3 sítios de 2FA em Settings.gd e 7 de nome/token de conta em
+	# Shop.gd/Checkout.gd apontavam para membros que não existem.
+	Check(propsChecked >= 200, "a varredura olhou propriedades de autoload, não só chamadas (%d)" % propsChecked)
+	CheckEq(propsBroken, 0, "nenhuma propriedade de autoload aponta para membro inexistente")
 
 # SOM-IDLE beta: superfície dos SERVIÇOS do Launcher. Mesma técnica do
 # SuiteAutoloadSurface — exame no objeto vivo, não no fonte — aplicada aos campos
@@ -5926,6 +5988,29 @@ func _FacadeFunctions(text : String) -> Array:
 		out.append(cur)
 	return out
 
+# Parâmetros de identidade de uma assinatura: os `int` com default
+# `NetworkCommons.PeerAuthorityID`. Casar pelo MARCADOR e não pelo nome literal
+# `peerID` é o que fecha a brecha — um wrapper declarando `who : int =
+# NetworkCommons.PeerAuthorityID` evade a régua antiga e continua assinando a própria
+# identidade com o valor que veio no pacote. É o default que define o slot: no client
+# ele é o destino do RPC, no servidor é sobrescrito pelo sender do transporte.
+func _FuncIdentityParams(header : String) -> Array:
+	var found : Array = []
+	var marker : String = " : int = NetworkCommons.PeerAuthorityID"
+	var at : int = header.find(marker)
+	while at >= 0:
+		var start : int = at
+		while start > 0:
+			var c : String = header[start - 1]
+			if c != "_" and not (c >= "a" and c <= "z") \
+			and not (c >= "A" and c <= "Z") and not (c >= "0" and c <= "9"):
+				break
+			start -= 1
+		if start < at:
+			found.append(header.substr(start, at - start))
+		at = header.find(marker, at + marker.length())
+	return found
+
 func _CountMatches(text : String, pattern : String) -> int:
 	var re : RegEx = RegEx.new()
 	if re.compile(pattern) != OK:
@@ -5951,6 +6036,8 @@ func SuiteRpcIdentity(facade : Node) -> void:
 	var pushed : Array = []
 	var misused : Array = []
 	var anyPeer : int = 0
+	var identitySites : int = 0
+	var anyPeerDispatch : int = 0
 	for entry in funcs:
 		var dec : Array = entry[0]
 		var header : String = String(entry[1])
@@ -5971,8 +6058,16 @@ func SuiteRpcIdentity(facade : Node) -> void:
 			anyPeer += 1
 			if not callsServer:
 				pushed.append(fname)
-			elif header.contains("peerID : int") and not body.contains("AuthPeerID(peerID)"):
-				bareIdentity.append(fname)
+			else:
+				anyPeerDispatch += 1
+				for slot in _FuncIdentityParams(header):
+					var identity : String = String(slot)
+					identitySites += 1
+					# Ou o valor é autenticado, ou é cru: destino do CallServer vindo
+					# direto do pacote é a mesma forged-session pela outra beirada.
+					if not body.contains("AuthPeerID(" + identity + ")") \
+					or _CountMatches(body, "CallServer\\([^)]*,\\s*" + identity + "\\s*[,)]") > 0:
+						bareIdentity.append(fname)
 		elif hasRpc and body.contains("AuthPeerID"):
 			misused.append(fname)
 
@@ -5983,11 +6078,14 @@ func SuiteRpcIdentity(facade : Node) -> void:
 	Check(undecorated.is_empty(), "rpc identity: nenhum wrapper de rede sem @rpc (%s)" % ", ".join(PackedStringArray(undecorated)))
 
 	# 2. any_peer = corpo controlado pelo client: a identidade tem que sair do
-	# transporte. Um só peerID cru no facade já basta para falsificar sessão.
+	# transporte. Um só peerID cru no facade já basta para falsificar sessão. A
+	# régua é pelo marcador de slot (` : int = NetworkCommons.PeerAuthorityID`), não
+	# pelo nome — `peerID : int` literal deixava `who : int` passar na mesma regra.
 	Check(anyPeer > 100, "rpc identity: varredura cobriu os wrappers any_peer (%d)" % anyPeer)
-	Check(bareIdentity.is_empty(), "rpc identity: nenhum any_peer passando peerID cru (%s)" % ", ".join(PackedStringArray(bareIdentity)))
+	CheckEq(identitySites, anyPeerDispatch, "rpc identity: todo any_peer que despacha tem exatamente um slot de identidade (%d/%d)" % [identitySites, anyPeerDispatch])
+	Check(bareIdentity.is_empty(), "rpc identity: nenhum any_peer passando identidade crua (%s)" % ", ".join(PackedStringArray(bareIdentity)))
 	CheckEq(_CountMatches(text, "CallServer\\([^)]*, peerID[,)]"), 0, "rpc identity: zero CallServer com destino cru no facade")
-	Check(_CountMatches(text, "AuthPeerID\\(peerID\\)") > 100, "rpc identity: identidade autenticada em todos os sites")
+	Check(identitySites > 100, "rpc identity: identidade autenticada em todos os sites (%d)" % identitySites)
 
 	# 3. any_peer que só empurra para outro client = mensagem arbitrária entre
 	# sessões com o servidor de carreto (PushNotification era esse caso).

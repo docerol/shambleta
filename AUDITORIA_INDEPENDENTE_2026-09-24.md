@@ -261,9 +261,9 @@ O exploit em si é `[INFERÊNCIA]` — não foi executado contra um servidor nes
 
 **V6 — menores.** `[CÓDIGO]` Não existe verificação de idade, gate 18+, nem restrição de acesso a menores no cliente ou no servidor. Relevante para a §21 e para a Play Store.
 
-**Baixo/latente:** `ArenaBoardResult(..., defenderAcct)` em `Server.gd:923` roteia usando accountID como se fosse peerID (`[CÓDIGO]`, misroute/leak menor); locks globais × por-shard protegendo o mesmo `wallet.gems` (`[HIPÓTESE]` de corrida — inerte enquanto a economia for single-thread, **não reduz nota**); o worker de backup chama `db.backup_to()` e `RunReconcileJob()` concorrentemente com `db.*` da main thread sobre o mesmo handle SQLite, área que `queryMutex` não cobre (`[INFERÊNCIA]`, janela diária de baixa frequência).
+**Baixo/latente:** `ArenaBoardResult(..., defenderAcct)` em `sources/network/server/Server.gd:1005` roteia usando accountID como se fosse peerID (`[CÓDIGO]`, misroute/leak menor) — **corrigido em 2026-09-25**: o destino passou a sair de `Peers.accounts` e o board só é enviado quando o defensor está conectado; locks globais × por-shard protegendo o mesmo `wallet.gems` (`[HIPÓTESE]` de corrida — inerte enquanto a economia for single-thread, **não reduz nota**); o worker de backup chama `db.backup_to()` e `RunReconcileJob()` concorrentemente com `db.*` da main thread sobre o mesmo handle SQLite, área que `queryMutex` não cobre (`[INFERÊNCIA]`, janela diária de baixa frequência).
 
-**Como a nota sobe:** (a) identidade derivada do transporte em um único ponto de despacho, com o parâmetro `peerID` **removido** das assinaturas `@rpc`; (b) TOTP em ±1 step; (c) stub de anúncio por env com default false e SSV real; (d) handlers de 2FA escritos; (e) chat renderizado como texto, com cap de tamanho.
+**Como a nota sobe:** (a) identidade derivada do transporte em um único ponto de despacho, com o parâmetro `peerID` **removido** das assinaturas `@rpc` — ~~removido~~ **media errado, desfeito por medição em 2026-09-25**: o parâmetro é o slot de identidade no fio e a aridade é o protocolo (ver linha 1 da tabela de itens do §24 e o item (6) da retificação do rodapé); o que fechou foi o guard, passado a casar o marcador do slot em vez do nome literal; (b) TOTP em ±1 step; (c) stub de anúncio por env com default false e SSV real; (d) handlers de 2FA escritos; (e) chat renderizado como texto, com cap de tamanho.
 
 **V7 — o cliente desligava a verificação do certificado do servidor.** `[CÓDIGO]` Achado **depois** desta auditoria, na passada de beta (2026-09-24), e ela não está na lista acima nem em (a)–(e): `sources/network/client/Client.gd:779` montava `TLSOptions.client_unsafe()` e entregava a opção tanto a `create_client(url, tlsOptions)` (WebSocket) quanto a `currentPeer.host.dtls_client_setup(serverAddress, tlsOptions)` (ENet/DTLS). `client_unsafe()` desliga as duas conferências — cadeia contra CA confiável **e** hostname. No mesmo ramo, `_ValidateServerAuth` faz `multiplayerAPI.complete_auth(peerID)` sem nenhum teste criptográfico, ou seja, o `auth_callback` não cobria o buraco. Isto não é hipótese: é a opção que o código pedia, e a linha está no histórico desde `c727e69` (2026-08-14).
 
@@ -553,7 +553,7 @@ Eixos 1–10: **Ip** impacto no jogador · **Re** receita · **Rt** retenção �
 ## 24. ROADMAP
 
 **Bloco 0 — antes de qualquer beta (dias).** Tudo aqui é correção pontual, nenhuma reescrita.
-1. S1 — identidade derivada da conexão no dispatcher único; remover `peerID` das assinaturas `@rpc`. Regressão por transporte.
+1. S1 — identidade derivada da conexão no dispatcher único; ~~remover `peerID` das assinaturas `@rpc`~~ *(desfeito por medição em 2026-09-25: o parâmetro é o slot de identidade no fio e a aridade é o protocolo; o que cabia era o guard, e ele passou a casar o marcador do slot, não o nome — §24 linha 1)*. Regressão por transporte.
 2. D1 — `production` no preset de release (e/ou `--features production` no `Dockerfile`), teste de boot asserindo `GetDBPath()` == o arquivo que o companion abre, e alinhar o `Dockerfile`/compose às portas que o servidor realmente binda.
 3. M1, C1, E3, M2 — 2FA funcional, chat como texto puro com cap, grant atômico, stub de anúncio por env.
 4. T1 — apagar `gut_runner.gd` (ou torná-lo real) e rebaixar publicamente as notas que o citavam como prova.
@@ -583,9 +583,9 @@ para em `042`, com 42 arquivos. Então **`HEAD` não é uma árvore quebrada: é
 ele boota o que era, e a CI dele roda o portão antigo. O que não existe fora desta máquina é o beta.
 **O risco concreto é o commit parcial**, porque os arquivos rastreados já chamam os soltos pelo nome:
 `scripts/test.sh:25,40` e `.github/workflows/godot-ci.yml:187,212,220,234,256,278` executam
-`ci_gate_log.sh` e o harness de identidade; `Server.gd:1173,1177`, `SQL.gd:1275` e
+`ci_gate_log.sh` e o harness de identidade; `Server.gd:1177,1181`, `SQL.gd:1275` e
 `WorldCommands.gd:1295` usam `class_name ChatModeration`; `Launcher.gd:26,75` e
-`IdleTests.gd:5252,5406,5412` usam `class_name MetricsServer`. Commitar o conjunto `M` sem o
+`IdleTests.gd:5314,5468,5474` usam `class_name MetricsServer`. Commitar o conjunto `M` sem o
 conjunto `??` entrega uma árvore que não parseia e um portão que não roda. A conta completa está em
 `deploy/LAUNCH_HANDOFF.md` §5, e fechar isso é commit — não
 código.
@@ -640,14 +640,14 @@ o que parsear.)
 
 | # | Item | Estado | Evidência |
 |---|---|---|---|
-| 1 | S1 identidade derivada do transporte | **vulnerabilidade fechada; limpeza literal não feita** | `Network.gd:982 TransportSenderID()` varre as três interfaces e só aceita sender ≠ 0; `:990 AuthPeerID()` devolve o sender real e usa o `peerID` declarado apenas onde não há borda de rede (offline/servidor local). Regressão ao vivo em `tests/run_rpc_identity_test.gd` (dois peers WebSocket reais, forja no corpo recusada, verificação na direção inversa). **Residual:** 106 assinaturas `@rpc` ainda declaram `peerID : int = PeerAuthorityID`. Elas não são mais enviadas no `Array` de args do `CallServer` — o parâmetro sobrevive só como o valor que `AuthPeerID` usa quando não há borda de rede. É cosmético, mas é superfície para uma regressão futura: um handler novo que ler `peerID` direto, sem passar por `AuthPeerID`, reabre a forja. |
+| 1 | S1 identidade derivada do transporte | **vulnerabilidade fechada; residual redefinido por medição** | `Network.gd:982 TransportSenderID()` varre as três interfaces e só aceita sender ≠ 0; `:990 AuthPeerID()` devolve o sender real e usa o `peerID` declarado apenas onde não há borda de rede (offline/servidor local). Regressão ao vivo em `tests/run_rpc_identity_test.gd` (dois peers WebSocket reais, forja no corpo recusada, verificação na direção inversa). ~~**Residual:** 106 assinaturas `@rpc` ainda declaram `peerID : int = PeerAuthorityID`. Elas não são mais enviadas no `Array` de args do `CallServer` — o parâmetro sobrevive só como o valor que `AuthPeerID` usa quando não há borda de rede. É cosmético, mas é superfície para uma regressão futura: um handler novo que ler `peerID` direto, sem passar por `AuthPeerID`, reabre a forja.~~ **A frase acima media errado e foi desfeita na passada seguinte, antes de servir de pauta:** os 106 parâmetros **estão** no fio. `CallServer` e `CallClient` acrescentam a identidade em `args + [identidade]` em **todas** as ramificações (`sources/network/Network.gd:994` dispatcher, `:1010` caminho do client) e o handler do servidor recebe exatamente esse último parâmetro — `Server.ArenaAttack(defenderAccountID, peerID)`, `Server.SetupTwoFactor(peerID)`. Logo a aridade é o protocolo: apagar os parâmetros não é limpeza cosmética, é quebrar 626 chamadas `Network.<envoltório>()` medidas no repositório e reescrever 106 assinaturas com 106 handlers de uma vez. O resíduo verdadeiro era outro, e menor: o guard de fronteira casava a **string literal** `peerID : int`, então um wrapper declarando `who : int = NetworkCommons.PeerAuthorityID` passava sem autenticar nada. Fechado na passada de 2026-09-25 por regra baseada no **marcador do slot** (` : int = NetworkCommons.PeerAuthorityID`, lido por String e não por regex) com `identitySites == anyPeerDispatch` como trava anti-degenerescência — 106/106 hoje, nenhum cru. |
 | 2 | D1 produção nos artefatos do deploy | **feito, e com um segundo defeito da mesma raiz encontrado ao verificar** | `export_presets.cfg` exporta `production`; `deploy/server/Dockerfile` liga `SHAMBLETA_PRODUCTION=1`; `EXPOSE 6108` == `NetworkCommons.WebSocketPort`; healthcheck sonda a porta que o servidor binda. Guard `SuiteDeployMode` compara `GetDBPath()` com o `--db` do companion por **igualdade derivada de `OS.get_user_data_dir()`**. Ao escrever esse guard descobriu-se que o caminho comparado antes era o layout `godot/app_userdata/` do **Godot 3** — `project.godot` usa `use_custom_user_dir`, então o real é `$HOME/.local/share/Shambleta` (medido). O companion abria arquivo inexistente (`server.py:1299` → exit 2): **nenhuma compra seria creditada**, e `tools/provision_tls.sh` gravava o certificado fora do `user://server.crt` que o bind cobra. Corrigidos os dois, mais TLS.md/COOLIFY.md/ROLLBACK.md/debugging.md/`scripts/test.sh clean`/exemplos do `server.py`. |
 | 3 | M1, C1, E3, M2 | **feito** | 2FA: `SuiteTwoFactor`, `SuiteTwoFactorSetup`, `SuiteTwoFactorVectors` (janela ±1 step V2 incl.). Chat: `SuiteChatHardening` (texto puro + cap) e C1b/C1c (balão morto reativado; denúncia/bloqueio server-side). Grant: `SuiteGrantQueue` com status dentro da transação (E3). Anúncio: `SuiteAds` + stub fechado por default, aberto só pelo compose (`SHAMBLETA_AD_STUB: "1"`), com guard que falha se a linha cair. |
 | 4 | T1 apagar `gut_runner.gd` e rebaixar as notas | **feito** | Arquivo removido; notas rebaixadas em `RELATORIO_FINAL_2026-09-21.md`, `auditoria-tecnica-shambleta.md` (claims 1193 checks e E2E de multiplayer riscados) e nos arquivos citados em §13. |
 | 5 | Conta PJ Mercado Pago + chaves | **não é código** | Gate de "existe receita" continua com o dono do projeto. Sem `SHAMBLETA_MP_ACCESS_TOKEN` a porta não abre em modo suave: `POST /checkout/preference` responde **503 `checkout_unavailable`** antes de chamar o gateway (`companion/server.py`) — a loja fica incapaz de cobrar, não "operando em sandbox" (sandbox é outra rota: `POST /checkout/simulate`, exigindo `allow_dev_checkout` + segredo compartilhado). A primeira versão desta linha apontava para um `gateway_ready` de `EconomyService`, que era um `"true"` literal sem consumidor nem verificador; removido, ver §13. |
 | 6 | Retenção reescrita para a realidade medida | **feito** | D1 ≥ 27% / D7 ≥ 7% / D30 ≥ 4% em `ROADMAP_COMERCIAL.md`, com a declaração explícita de que UA pago não fecha conta nesses benchmarks. |
 | 7 | Decidir G1/G2/G3 | **feito (ligado, com regras congeladas)** | `SHAMBLETA_ENABLE_SEASONS: "1"` no compose; `SuiteSeasonBootstrap` cobre abrir→congelar→liquidar→substituir; `EnsureWeeklyTournament` chamado no primeiro login (`sources/network/server/Peers.gd:270`) e não 24 h depois no job diário; live events com predicate de tick e semeadura por calendário. |
-| 8 | L1 healthcheck real + CI com grep | **feito — e a metade dos spans resolvida como "remover a ficção"** | Bind `:9400` (`MetricsServer`), probe HTTP ao vivo em `SuiteMetrics` (200/404/405/400/431 e `Destroy()` liberando a porta), `test:` na forma lista sem operador de shell, `curl` instalado na imagem (sem ele o `service_healthy` nunca passa). O item pedia "spans de verdade, **ou** remover a ficção": `git log --all -S"func StartSpan"` retorna **zero** commits (`StartSpan`/`FinishSpan`/`ActiveSpans` só existiam no texto do `archive/FEATURE_MATRIX.md`), e o único `RecordSpan` que chegou a ser declarado nunca teve chamador — medição em `git grep RecordSpan HEAD` devolve apenas a própria linha 14 de `Monitoring.gd`. O código órfão saiu da árvore e ficou um aviso no topo do arquivo (`sources/system/Monitoring.gd:18`) dizendo onde medir de verdade (`tests/benchmarks.gd`, profiler do editor, `MetricsServer`). A retificação das notas que citavam spans como prova está publicada em `RELATORIO_FINAL_2026-09-21.md:88`, `CONCLUSAO_FINAL_ROUND_19.md:22`, `auditoria-tecnica-shambleta.md:131`, `plano-ui-ux.md:91` e `ROADMAP_COMERCIAL.md:134`. |
+| 8 | L1 healthcheck real + CI com grep | **feito — e a metade dos spans resolvida como "remover a ficção"** | Bind `:9400` (`MetricsServer`), probe HTTP ao vivo em `SuiteMetrics` (200/404/405/400/431 e `Destroy()` liberando a porta), `test:` na forma lista sem operador de shell, `curl` instalado na imagem (sem ele o `service_healthy` nunca passa). O item pedia "spans de verdade, **ou** remover a ficção": `git log --all -S"func StartSpan"` retorna **zero** commits (`StartSpan`/`FinishSpan`/`ActiveSpans` só existiam no texto do `archive/FEATURE_MATRIX.md`), e o único `RecordSpan` que chegou a ser declarado nunca teve chamador — medição em `git grep RecordSpan HEAD` devolve apenas a própria linha 14 de `Monitoring.gd`. O código órfão saiu da árvore e ficou um aviso no topo do arquivo (`sources/system/Monitoring.gd:18`) dizendo onde medir de verdade (`tests/benchmarks.gd`, profiler do editor, `MetricsServer`). A retificação das notas que citavam spans como prova está publicada em `RELATORIO_FINAL_2026-09-21.md:88`, `CONCLUSAO_FINAL_ROUND_19.md:22`, `auditoria-tecnica-shambleta.md:131`, `plano-ui-ux.md:91` e `ROADMAP_COMERCIAL.md:131-145`. |
 | 9 | K1 dinheiro e coorte | **feito** | `044_grant_price_paid.sql` (`price_paid`/`currency`), eventos `checkout_intent`/`purchase`/`ah_*`/`trade`/`rebirth`/`pass_claim`, `045_cohort_view.sql` com a view `cohort_retention`; cobertos por `SuiteMoneyFunnel` (funil + coorte D1/D7/D30 na quinta metade) e `SuiteTelemetry`. |
 | 10 | M3 + catálogo único | **feito** | `data/conf/paid_catalog.json` é a fonte, copiado para a imagem do companion e validado no boot (`EconomyCatalog.ValidatePaidCatalog`); `SuiteCatalogConsistency` bate os dois lados. As chaves de comentário do arquivo (`_note`, `_agreements_note`, `_agreements`) não são SKU para nenhum leitor: `load_catalog` pula na validação e preserva no dict, o validador do boot compara `_agreements` com os três consts, e nenhuma das portas de dinheiro aceita uma delas como `sku` — ver achado (i), que foi aberto por esta linha. |
 | 11 | Gate de idade | **metade em código feita; parecer jurídico em aberto** | `046_age_gate.sql` + `SQL.IsConsentAccepted/SetConsentAccepted` exigem igualdade com `AgreementAgeVersion` (`NetworkCommons.gd:277`, predicate em `sources/sql/SQL.gd:101` — a versão de idade não é parâmetro porque só existe uma vigente); login barra sem aceite (`Server.gd:79,:185`) e checkout recusa com `reason "consent_required"` (`CheckoutService.gd:74-75`). **É autodeclaração afirmativa, não verificação de idade** — o checkbox de `Login.gd:466` declara "18 years old or older", mas nada em código impede mentir a data. O enquadramento legal dos baús (§21/§25) continua com o advogado. **Segunda porta fechada nesta passada:** a recusa existia só no processo do jogo, enquanto `POST /checkout/intents`, `/checkout/preference` e `/checkout/simulate` do companion aceitavam qualquer `auth_token` válido — e o nginx do serviço `web` expõe `/checkout/` na mesma origem do jogo. Uma conta pré-046 (`consent_age_version = ''`) ou com token emitido antes de um bump não conseguia logar e conseguia pagar. Hoje as três rotas chamam `consent_currently_accepted` (espelho de `IsConsentAccepted`: igualdade com as versões vigentes, fail-closed sem coluna ou sem declaração), o `/webhooks/payments` fica deliberadamente sem gate — recusar ali descartaria entrega já paga — e os dois lados são medidos em `companion/test_security.py` (C1–C5). As versões vigentes passaram a viajar em `data/conf/paid_catalog.json` (`_agreements`), validadas contra os consts no boot e na suíte, e uma SKU de comentário (`_agreements`, `_note`) deixou de ser cobrável — ver achado (i). **A fiação das portas passou a ter guard** (12 checks em `SuiteLGPD`, nesta passada): até aqui só o predicate era medido, e as três portas `@rpc` não têm peer em harness — hoje o guard exige `IsConsentAccepted`+`ERR_CONSENT_REQUIRED` nas duas portas de login, o gate **antes** da derivação de `ERR_2FA_REQUIRED` (é a ordem que torna a porta de 2FA segura), a gravação depois de credencial validada em `AcceptConsent`, o ramo de cliente (`Login.gd:105` → `OpenReconsentDialog`) e `AuthPeerID` nos dois RPCs. |
@@ -746,7 +746,7 @@ foi medido — e por isso a metade seguinte fica registrada como HIPÓTESE, sem 
 o caminho do servidor de produção: ele roda de um `.pck` exportado (`deploy/server/Dockerfile`) e
 a ordem dentro do pacote não é observável neste host (sem templates de export instalados), enquanto
 o teste de contrato (`boot: a base corrente chegou à versão do diretório de patches`,
-`tests/IdleTests.gd:4879`) enxerga só o source. Fechado por contrato explícito: `patches.sort()`
+`tests/IdleTests.gd:4966`) enxerga só o source. Fechado por contrato explícito: `patches.sort()`
 em `sources/system/FileSystem.gd:250`, que tem exatamente dois consumidores — o `ApplyMigrations`
 e o teste — e não muda nada do que roda hoje nos dois caminhos medidos.
 
@@ -805,7 +805,7 @@ lista subiu para seis nomes sem referência por classe, e cinco deles **estão v
 (1 cena cada) são carregados por caminho em `.tscn`/`.tres`, onde `class_name` não aparece. A
 conclusão que o número permite é estreita e escura ao mesmo tempo: `AuctionHouseWindow` é o único
 painel do repositório sem host de cena **e** sem chamador — e, ainda assim, a lógica pura dele já
-está sob a régua (cinco checks em `tests/IdleTests.gd:3405-3410`: busca, ordenação por preço,
+está sob a régua (cinco checks em `tests/IdleTests.gd:3492-3497`: busca, ordenação por preço,
 filtro de tipo, teto de preço e histórico). Falta host, não falta teste.
 
 **(m) a porta do dinheiro não tinha maçaneta — um `_ready` que abortava, e o buraco de cobertura
@@ -830,7 +830,7 @@ checkout do Mercado Pago abria com título, preço e detalhe, e **sem botão de 
 inteira do item 5 do §24 (chave PJ, `POST /checkout/preference`, intent assinado) terminava numa
 janela que não tinha o que apertar. Terceiro caso desta família registrado no repositório — os
 dois primeiros estão narrados na suíte que cuida do `Onboarding` (um `_label.autowrap` e um método
-que não existia, um em cima do outro): `tests/IdleTests.gd:1411-1427` narra
+que não existia, um em cima do outro): `tests/IdleTests.gd:1498-1504` narra
 exatamente a mesma coisa no `Onboarding` (`_label.autowrap` derrubando `_ready`, "os três botões
 nunca eram criados"), com uma segunda peça morta em cima (o `get_sessionfirstlogin` que não
 existia). Varredura da família em `sources/` — `.rect_*`, `.valign`, `.align =`, `.autowrap =`,
@@ -845,7 +845,7 @@ medidor de baixo o endereça por caminho). Dor de cabeça de cobertura é assim:
 (`Localizer` `Gui.gd:707`, `Onboarding` `Gui.gd:287`, `BossInterruptOverlay` `Gui.gd:722`,
 `UIHighlight` `Gui.gd:162) e portanto têm `_ready` rodado junto com o HUD; dois são adiados
 (`ActivitiesWindow` por `EnsureActivities()` `Gui.gd:75-77`, já montado na suíte em
-`tests/IdleTests.gd:785`, e `Checkout`). A fronteira é literal, e é o que dá peso à frase
+`tests/IdleTests.gd:850`, e `Checkout`). A fronteira é literal, e é o que dá peso à frase
 "rodado junto com o HUD": o boot do cliente faz `Root.add_child.call_deferred(Scene)` sobre a
 instância de `presets/Client.tscn` e depois **`await Scene.ready`** (`Launcher.gd:202-214`), com
 `Launcher.GUI = Scene.get_node("Canvas")` — `Canvas` é `presets/gui/Game.tscn`, que em
@@ -900,7 +900,7 @@ construídos por nenhum harness?" não merece uma resposta de memória, então v
 `_RuntimeBuiltGuiPanels()` varre `sources/**/*.gd` procurando `class_name` e os `preload` + `X.new()`
 correspondentes e devolve painel → construtores; o resultado (seis: `Activities`,
 `BossInterruptOverlay`, `Checkout`, `Localizer`, `Onboarding`, `UIHighlight`) está colado no const
-`runtimeBuiltGuiPanels` (`tests/IdleTests.gd:1042-1049`) e a suíte compara os dois. A primeira versão
+`runtimeBuiltGuiPanels` (`tests/IdleTests.gd:1104-1111`) e a suíte compara os dois. A primeira versão
 do medidor achou **um** dos seis: o PCRE do Godot não trata `^` como início de linha sem `(?m)`, e
 o padrão de `class_name` era ancorado. O const é a parte incômoda de propósito — nascer um painel
 novo em runtime faz a suíte falhar com os dois conjuntos impressos, e o que se faz quando ela falha
@@ -949,7 +949,7 @@ de eco** (`en == pt_BR == chave`: `"+%s XP"`, `"..."`, `"ARGH."`, `"Blackjack!"`
 falha: o `pt_BR` das strings de consentimento é cobrado uma a uma no bloco LGPD, e uma regra
 "eco = falha" derrubaria a suíte por linhas que estão certas.
 
-**A invariante.** `tests/IdleTests.gd:972-985`, dentro de `SuiteGuiPanels()` — que
+**A invariante.** `tests/IdleTests.gd:1038-1050`, dentro de `SuiteGuiPanels()` — que
 `tests/run_idle_tests.gd:258` chama, então ela roda no gate da CI e não só no harness rápido. Se o
 pt_BR compilado não carregar, o guard falha;
 senão varre as 95 chamadas e exige `semTraducao == 0`, imprimindo `arquivo :: chave` de cada uma. O
@@ -1101,7 +1101,7 @@ frente, e o corpo tem dois `[url=]` (`data/db/agreement.json:63`); e o botão do
 de quatro funções **de um arquivo** e afirmam que navegar mora num lugar só — régua de um arquivo para
 um problema de cliente inteiro.
 **O que entrou:** os dois ramos nos dois sites (mesma forma do checkout, sem abstração nova), e
-`SuiteExternalLinksWebBranch` (`tests/IdleTests.gd:7091-7123`, chamada em `tests/run_idle_tests.gd:268`
+`SuiteExternalLinksWebBranch` (`tests/IdleTests.gd:7213-7245`, chamada em `tests/run_idle_tests.gd:268`
 logo depois da régua de ponteiros, pelo mesmo motivo — só lê a árvore, nenhum estado tocado). A régua é
 por **bloco**: varre os `.gd` de `sources/`, e para cada `OS.shell_open(` exige que a função contenedora
 tenha `JavaScriptBridge` **e** `isWeb`; linha de comentário não conta como ramo. Medido: 3 sítios em
@@ -1162,8 +1162,8 @@ removeu o coletor, que ficou sem chamador. Amarrei a volta dele por fonte, em `S
 defeito era justamente uma chamada que *parecia* certa e nenhum comportamento desta suíte a distingue de
 uma coleta honesta. Dois checks, cada mensagem inteira na mesma linha do ponteiro — quebrada entre duas
 linhas a régua não acha na fonte e **pula a citação em silêncio**:
-`tests/IdleTests.gd:3846` "S5: o servidor não coleta hardware próprio como identidade do jogador"
-e `tests/IdleTests.gd:3848` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
+`tests/IdleTests.gd:3908` "S5: o servidor não coleta hardware próprio como identidade do jogador"
+e `tests/IdleTests.gd:3910` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
 `EconomyService.FlagMultiAccount` ficou (fila, dedupe e validação já cobertos por check), e o que falta
 agora é o produtor — o que não é fiação: exige entropia por instalação (um id persistido no cliente),
 coleta no cliente e base legal para levar esses campos. Decisão de dono, e pós-beta: sem detector, a fila
@@ -1192,9 +1192,9 @@ créditos no GitHub Actions e a CI não roda** (decisão registrada em 2026-09-2
 Espelhei o gate dentro do `all` pelo mesmo quádruplo de §24-8
 (`gate_sh`, marcador `Gate anti-god-node:` com a contagem de falhas lida DA LINHA de resultado,
 `scripts/check_god_nodes.sh:57`) e amarrei a divergência por fonte, em `SuiteOpsA2`:
-`tests/IdleTests.gd:4980` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
+`tests/IdleTests.gd:5042` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
 atrás de `scripts/*.sh`, descarta os dois que não são gate (o avaliador do quádruplo e o próprio `test.sh`)
-e exige o resto no runner; `tests/IdleTests.gd:4979` "portão: a CI roda exatamente um gate de script próprio"
+e exige o resto no runner; `tests/IdleTests.gd:5041` "portão: a CI roda exatamente um gate de script próprio"
 é o âncora do número, para o guard não passar verde por varredura vazia nem continuar verde quando alguém
 abre um segundo gate na CI. Verificado contra o estado que produziu a CI vermelha: com o `scripts/test.sh`
 de HEAD, a varredura devolve `mirrored=1`, `missing=[scripts/check_god_nodes.sh]` — o guard falha; com o
@@ -1216,7 +1216,7 @@ O buraco é o catálogo por dentro, e nenhum dos dois lados (nem o `tr()`, nem o
 Tirei as quatro linhas repetidas, regerei os dois `.translation` pelo mesmo passo da CI
 (`godot --headless --path . --import`) e bati no compilado: `Attack` → **Ataque**, zero `Atacar`.
 Amarrei por censo na mesma passada, com o tamanho ancorado de always-green que é a regra da casa:
-`tests/IdleTests.gd:1009` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `:1010` "i18n: nenhuma
+`tests/IdleTests.gd:1071` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `:1072` "i18n: nenhuma
 chave repetida no ui.csv". Re-medido no fim: **971** chaves, **971** distintas.
 
 **O que separa "beta" de "pronto" hoje, em uma linha por dono:** código — nada pendente em
@@ -1303,3 +1303,35 @@ incluindo o gate de estrutura que antes só existia na CI.*
 > o Discord/IRC de outra pessoa. A linha "canais/Discord 1" da tabela de notas do item 14 e a menção à
 > "ponte com Discord" do §14 descrevem o jogo **antes** dessa passada. O que o item não resolveu —
 > publicar um canal de suporte — continua entrega do dono.
+> (5) A régua mordiu a própria documentação: o run de `8b7459c` (só docs) falhou o job
+> `SOM-IDLE Idle Tests` com 1 falha em 2257 checks, porque o ponteiro que este relatório fazia para a
+> retificação das notas tinha derrapado três linhas quando o ROADMAP mudou de tamanho. É exatamente a
+> classe de defeito que o guard foi escrito para pegar, e a correção entrou nesta passada. O registro
+> fica: **o portão local não cobriu aquele run** — a falha é de prosa editada *depois* da medição
+> local, e só a CI a viu.
+> (6) A classe de defeito que **nenhum** gate desta máquina via, descoberta ao medir o item 1 acima:
+> acesso a **propriedade** de autoload. `SuiteAutoloadSurface` casa `Nome.metodo(` — com parêntese —,
+> então `Launcher.Peer.peerID` nunca foi olhado, e GDScript compila acesso a membro inexistente de um
+> autoload (o autoload é visto como `Node`; a busca pelo membro é em runtime): sete sentenças em três
+> painéis (`sources/gui/Settings.gd:654`, `:666`, `:707` — 2FA; `sources/gui/Shop.gd:173`,
+> `sources/gui/Checkout.gd:252`, `:266` — nome e token da conta no checkout) chamavam
+> `Launcher.Peer` / `Launcher.nPanel`, membros que não existem na árvore. Nem o preflight de parse,
+> nem o boot headless, nem os 2256 checks viram: o único caminho até elas é um jogador clicar.
+> Corrigidos os dois nomes (`Launcher.GUI.loginPanel`, o painel real), e o guard passou a varrer
+> chamada **e** propriedade contra o objeto vivo — 1678 acessos, zero quebrados. Duas lições
+> adicionais: `RegExMatch.get_string()` devolve fatia deslocada em fonte com acento (o `Launcher.SQL`
+> de `sources/economy/GuildService.gd:18` chega como `SQ`), então a varredura agora é por String; e um
+> `int` no lugar de um peerID viaja longe — `sources/network/server/Server.gd:1005` mandava o board
+> pós-ataque para `defenderAccountID` no slot de destino de transporte, agora resolvido por
+> `Peers.accounts` e só enviado quando o defensor está conectado.
+> (7) Inserir guard no meio de `tests/IdleTests.gd` moveu as citações que **este** documento faz a ele:
+> a passada somou 62 linhas antes de `:1009`/`:3846`/`:4979` e passou a somar 98 a partir de `:5990`,
+> e `SuiteEvidencePointers` devolveu seis derrapes na hora. Reapontados catorze ponteiros de código deste
+> relatório mais um do `ROADMAP_COMERCIAL.md`, e o bloco de histórico (`:1005-1009`) ficou intencional
+> — ele registra o reapontamento anterior, não o endereço de agora. Duas coisas a tirar disso: o bloco
+> de §Vulnerabilidades (V1–V5, itens (m)/(n)) cita linhas da revisão auditada em 2026-09-24 e **não**
+> da árvore atual, então serve como descrição do achado, não como ponteiro de trabalho; e a régua só
+> consegue ver o ponteiro cuja prosa cita uma mensagem de check entre aspas — dos 17 ponteiros a
+> `tests/IdleTests.gd` neste arquivo (quatro deles no próprio bloco de histórico), 6 tinham mensagem
+> citável e foram pegos; os outros 11 passam por cima de qualquer derrape. Enquanto um `arquivo:linha`
+> for a forma de evidência, a metade muda continua sendo conferida por mão.

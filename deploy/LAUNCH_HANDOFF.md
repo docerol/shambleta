@@ -80,7 +80,8 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   advogado** alinhados à LGPD e ao CDC. A jurisdição **já é brasileira** no texto
   em vigor (`data/db/agreement.json`: "governed by Brazilian law, including the
   Consumer Protection Code (CDC) and the General Data Protection Law (LGPD)"), e
-  o bump `AgreementTosVersion/AgreementPrivacyVersion = 2026-09-b` já força
+  o bump `AgreementPrivacyVersion = 2026-09-b` (e `AgreementTosVersion = 2026-09-c`, que
+  saiu do canal de suporte do aceite em 2026-09-25) já força
   re-aceite dos ativos. O que falta é a **revisão profissional** em si: o texto
   continua marcado como placeholder pendente de advogado. As versões gravam por
   conta (`account.consent_tos_version`, `consent_privacy_version`,
@@ -288,6 +289,18 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   jogador BR lia inglês justamente na tela que explica por que a cobrança não andou)
   — não o genérico "try again later". O lado server disso está coberto por
   `companion/test_security.py` (C1–C5); o que só existe navegando é a mensagem.
+- **Nome da conta e 2FA no navegador (defeito de membro inexistente, corrigido em 2026-09-25):**
+  três chamadas de 2FA em `sources/gui/Settings.gd:654` passavam `Launcher.Peer.peerID` e duas telas
+  de compra liam `Launcher.nPanel.nameText` / `.savedToken` (`sources/gui/Shop.gd:173`,
+  `sources/gui/Checkout.gd:252`). `Launcher` não tem `Peer` nem `nPanel` — GDScript **compila**
+  acesso a propriedade inexistente de um autoload, porque o autoload é visto como `Node` e a busca
+  pelo membro é em runtime: o erro nasce no clique do jogador, e nenhum gate desta máquina clica.
+  Hoje a identidade é omitida (o destino de uma chamada de conta é a authority, e o sender vem do
+  transporte) e o painel lido é `Launcher.GUI.loginPanel`. A varredura de superfície de autoload
+  passou a conferir chamada **e** propriedade contra o objeto vivo (`SuiteAutoloadSurface`, 1678
+  acessos, zero quebrados), então a volta dessa classe de defeito pega no portão — mas o clique em
+  si continua sendo teste de mão: Settings → ativar 2FA (botão → QR → código de 6 dígitos) e compra
+  em sandbox conferindo o nome da conta no recibo.
 - **Popup bloqueado na página de pagamento (a segunda porta)**: a URL que volta do
   `POST /checkout/preference` chega depois de um round trip, e `window.open` disparado
   fora da *user activation* é exatamente o que o bloqueador de popup come. Com o bloqueio

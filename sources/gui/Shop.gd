@@ -170,8 +170,8 @@ func _on_pay_sandbox_pressed():
 	if _pendingIntent.is_empty():
 		return
 	var username : String = ""
-	if Launcher.nPanel:
-		username = str(Launcher.nPanel.nameText)
+	if Launcher.GUI and Launcher.GUI.loginPanel:
+		username = str(Launcher.GUI.loginPanel.nameText)
 	if username.is_empty():
 		intentLabel.text = "Sandbox: login username unknown — log in with username first."
 		return

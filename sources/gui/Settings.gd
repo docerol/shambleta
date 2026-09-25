@@ -648,7 +648,10 @@ func _on_two_factor_pressed():
 	if _twoFactorEnabled:
 		_confirm_disable_two_factor()
 	else:
-		Network.SetupTwoFactor(Launcher.Peer.peerID)
+		# Identidade omitida em toda a fronteira de conta: no client o parâmetro é o
+		# DESTINO do RPC, e o destino de uma chamada de conta é a authority. Um peerID
+		# local mira um peer inexistente e a chamada some sem erro.
+		Network.SetupTwoFactor()
 
 func _confirm_disable_two_factor():
 	UICommons.MessageBox(
@@ -660,7 +663,7 @@ func _on_disable_two_factor_dialog():
 	var passwordText : String = ""
 	if passwordControl and passwordControl.has_node("Container/Text"):
 		passwordText = passwordControl.get_node("Container/Text").text
-	Network.DisableTwoFactor(passwordText, Launcher.Peer.peerID)
+	Network.DisableTwoFactor(passwordText)
 
 func show_two_factor_qr(qrURL : String):
 	if not _twoFactorQRDialog:
@@ -701,7 +704,7 @@ func _on_verify_two_factor_setup():
 	var code : String = codeControl.text.strip_edges()
 	if code.length() != 6 or not code.is_valid_int():
 		return
-	Network.VerifyTwoFactorSetup(code, Launcher.Peer.peerID)
+	Network.VerifyTwoFactorSetup(code)
 
 # SOM-IDLE parser (S4): o botão LGPD conectava _on_delete_account_pressed, que
 # nunca foi declarado (o diálogo de confirmação estava perdido no fim do
