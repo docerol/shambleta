@@ -65,8 +65,6 @@ func ShowSeason(data : Dictionary):
 	_FillBoard(seasonList, "Season spend (gems)", data.get("spend", []))
 	_FillBoard(seasonList, "Season boss kills", data.get("boss_kills", []))
 	_FillBoard(seasonList, "Season guild points", data.get("guild_points", []))
-	_FillBoard(seasonList, "Season boss kills", data.get("boss_kills", []))
-	_FillBoard(seasonList, "Season guild points", data.get("guild_points", []))
 
 # Fase F: copa semanal (inscrição em gold, rank por ganho de power).
 func ShowTournaments(data : Dictionary):

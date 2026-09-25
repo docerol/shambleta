@@ -1,12 +1,32 @@
 extends SceneTree
 
 # SOM-IDLE A2: backup restore probe — CI gate.
-# Creates a backup, verifies it can be read back, and checks migration integrity.
+# Cria um backup, relê, e confere a integridade do schema.
 # Usage: godot --headless --path . -s tests/test_backup_restore.gd
-# Exit code: 0 = green, 1 = failure.
+# Exit code: nº de checks falhos (0 = verde). A última linha é a contagem — é ela
+# que `scripts/ci_gate_log.sh` lê; crash antes dela não imprime nada e o job
+# rejeita. Antes o probe terminava em `quit(0)` com "PASSED" sem contagem, e um
+# segfault de shutdown saía 0: o job verde escondia exatamente a falha que ele
+# media (ROADMAP §"Radar").
+
+var checks: int = 0
+var failures: int = 0
 
 func _initialize():
     _run_probe()
+
+func Check(condition, message: String) -> bool:
+    checks += 1
+    if condition:
+        print("  [PASS] %s" % message)
+        return true
+    failures += 1
+    print("  [FAIL] %s" % message)
+    return false
+
+func _Finish() -> void:
+    print("== Backup Restore Probe: %d checks, %d failures ==" % [checks, failures])
+    quit(failures if failures > 0 else 0)
 
 func _getAutoload(nodeName: String) -> Node:
     return root.get_node_or_null(NodePath(nodeName))
@@ -15,9 +35,8 @@ func _run_probe():
     print("== Backup Restore Probe ==")
 
     var launcher: Node = _getAutoload("Launcher")
-    if launcher == null:
-        print("FATAL: Launcher autoload missing")
-        quit(1)
+    if not Check(launcher != null, "Launcher autoload presente"):
+        _Finish()
         return
 
     var waited: int = 0
@@ -29,17 +48,18 @@ func _run_probe():
         if sqlNode != null and sqlNode.isInitialized:
             break
 
-    if sqlNode == null or not sqlNode.isInitialized:
-        print("FATAL: SQL not initialized within timeout")
-        quit(1)
+    if not Check(sqlNode != null and sqlNode.isInitialized, "SQL inicializa dentro do timeout (%d ms)" % waited):
+        _Finish()
         return
-
-    print("SQL initialized after %d ms" % waited)
 
     # Beta fechado: script -s deve ser duck-typed (ver run_idle_tests.gd) —
     # refs estáticas a classes do projeto forçam compile antes dos autoloads.
     var sql: Node = sqlNode
     var backupsScript: GDScript = load("res://sources/sql/SQLBackups.gd")
+    if not Check(backupsScript != null, "SQLBackups carrega"):
+        _Finish()
+        return
+
     # O serviço sql.backups só sobe sem client-debug; no probe instanciamos
     # SQLBackups diretamente (mesmo code path de produção).
     var backupsService: Node = backupsScript.new()
@@ -52,51 +72,25 @@ func _run_probe():
     backupsService.Stop()
     backupsService.free()
 
-    if backupPath.is_empty():
-        print("FATAL: Backup creation failed")
-        quit(1)
-        return
+    var created: bool = Check(not backupPath.is_empty(), "backup diário criado (%s)" % backupPath)
+    var restorable: bool = created and backupsScript.VerifyBackupRestorable(backupPath)
+    Check(restorable, "backup é relível pelo verificador de restore")
 
-    print("Backup created: %s" % backupPath)
+    var version: int = -1
+    if restorable:
+        var probe: SQLite = SQLite.new()
+        probe.path = backupPath
+        probe.verbosity_level = SQLite.QUIET
+        if probe.open_db():
+            if probe.query("SELECT version FROM migration LIMIT 1;") and not probe.query_result.is_empty():
+                version = int(probe.query_result[0].get("version", -1))
+            probe.close_db()
 
-    if not backupsScript.VerifyBackupRestorable(backupPath):
-        print("FATAL: Backup restore probe failed — backup is not readable")
-        quit(1)
-        return
-
-    print("Backup restore probe passed: migration version readable")
-
-    var probe: SQLite = SQLite.new()
-    probe.path = backupPath
-    probe.verbosity_level = SQLite.QUIET
-    if not probe.open_db():
-        print("FATAL: Cannot open backup database")
-        quit(1)
-        return
-
-    var versionResult: Array = []
-    if probe.query("SELECT version FROM migration LIMIT 1;"):
-        versionResult = probe.query_result
-    probe.close_db()
-
-    if versionResult.is_empty():
-        print("FATAL: Backup database has no migration version")
-        quit(1)
-        return
-
-    var version: int = int(versionResult[0].get("version", -1))
-    print("Backup migration version: %d" % version)
-
-    if version < 0:
-        print("FATAL: Invalid migration version in backup")
-        quit(1)
-        return
-
+    Check(version >= 0, "backup carrega a versão de migration (%d)" % version)
     var liveVersion: int = sql.GetVersion()
-    print("Live migration version: %d" % liveVersion)
+    # Divergir não é aviso: backup com schema diferente do vivo não é o schema do
+    # beta. No probe é determinístico (mesma conexão, worker já recolhido).
+    Check(version == liveVersion, "schema do backup bate com o vivo (%d vs %d)" % [version, liveVersion])
+    Check(liveVersion > 0, "versão viva é positiva (%d)" % liveVersion)
 
-    if version != liveVersion:
-        print("WARNING: Backup version (%d) differs from live (%d)" % [version, liveVersion])
-
-    print("== Backup Restore Probe: PASSED ==")
-    quit(0)
+    _Finish()

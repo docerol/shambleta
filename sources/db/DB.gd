@@ -200,7 +200,15 @@ static func Preload():
 	preloadPaths.append_array(FileSystem.ParseResources(Path.RacesPst))
 	preloadPaths.append_array(FileSystem.ParseResources(Path.HairstylePst))
 	preloadPaths.append_array(FileSystem.ParseResources(Path.MapDataPst))
-	preloadPaths.append_array(FileSystem.ParseResources(Path.MusicPst))
+	# Conteúdo opcional de pacote: o preset Web exclui `presets/music/*` e
+	# `data/music/*` pelo filtro de export (corte de peso medido em
+	# deploy/WEB_SLIM.md) e o cliente tem caminho próprio para trilha ausente
+	# (`Audio._StreamMusicFromWeb`). `.pck` não guarda diretório vazio, então
+	# escanear mesmo assim empilhava `push_error` em todo boot web — medido no
+	# navegador em 2026-09-25. No desktop a pasta existe, e o erro de
+	# `ParseExtension` continua de pé se ela sumir lá.
+	if FileSystem.DirExists(Path.MusicPst):
+		preloadPaths.append_array(FileSystem.ParseResources(Path.MusicPst))
 	preloadPaths.append_array(FileSystem.ParseResources(Path.EmotePst))
 	preloadPaths.append_array(FileSystem.ParseResources(Path.ItemPst))
 	preloadPaths.append_array(FileSystem.ParseResources(Path.SkillPst))
@@ -261,7 +269,9 @@ static func Populate():
 	ParseFileDB(HairstylesDB, Path.HairstylePst)
 
 	ParseFileDB(MapsDB, Path.MapDataPst)
-	ParseFileDB(MusicDB, Path.MusicPst)
+	# Mesmo conteúdo opcional do filtro web: ver o guard em `Preload()`.
+	if FileSystem.DirExists(Path.MusicPst):
+		ParseFileDB(MusicDB, Path.MusicPst)
 
 	ParseCellDB(EmotesDB, Path.EmotePst)
 	ParseCellDB(ItemsDB, Path.ItemPst)

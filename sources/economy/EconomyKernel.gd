@@ -53,18 +53,6 @@ func GrantItem(accountID : int, itemHash : int, count : int, reason : String = "
 	mutex.unlock()
 	return ok
 
-func RemoveItem(uid : int) -> bool:
-	# Item rows are hard-owned by the item table; F2 does not delete items here.
-	return false
-
-# ------------------------------------------------------------------ settle path
-
-func SettleTransaction(charID : int, report : Dictionary) -> bool:
-	_eco.settleMutex.lock()
-	var ok : bool = not OfflineSettle.SettlePending(charID).is_empty()
-	_eco.settleMutex.unlock()
-	return ok
-
 # ------------------------------------------------------------------ wallet (gems; gold remains stat.gp per ARCHITECTURE §9)
 
 func GetGems(accountID : int) -> int:

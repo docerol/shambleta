@@ -9,11 +9,15 @@ set -euo pipefail
 #   ./provision_tls.sh --cert /path/to/cert.pem --key /path/to/key.pem
 #
 # Environment variables:
-#   SHAMBLETA_USER_DATA - Godot user data directory (default: /data/.local/share/godot/app_userdata/Shambleta)
+#   SHAMBLETA_USER_DATA - Godot user data directory (default: /data/.local/share/Shambleta)
+#                         Godot 4 + config/use_custom_user_dir=true escreve em
+#                         $HOME/.local/share/<custom_user_dir_name>; HOME=/data no
+#                         container. O layout godot/app_userdata/ do Godot 3 não
+#                         existe aqui, e cert gravado nele nunca é lido pelo server.
 #   SHAMBLETA_CERT_DAYS  - Validity days for self-signed cert (default: 365)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CERT_DIR="${SHAMBLETA_USER_DATA:-/data/.local/share/godot/app_userdata/Shambleta}"
+CERT_DIR="${SHAMBLETA_USER_DATA:-/data/.local/share/Shambleta}"
 CERT_PATH="${CERT_DIR}/server.crt"
 KEY_PATH="${CERT_DIR}/server.key"
 CERT_DAYS="${SHAMBLETA_CERT_DAYS:-365}"

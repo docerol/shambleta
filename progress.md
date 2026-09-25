@@ -35,8 +35,11 @@ Métrica: FPS 60 | Load < 3s | 30min zero crash | Comerciais end-to-end
 - [x] Rede: `CheckNetworkStability` (`Gui.gd`) | Performance: `RunPerformanceBenchmark` (`Gui.gd`)
 - [x] Parse errors corrigidos: `WorldAgent.gd` (elif-after-else), `IdlePolicyService.gd` (P3 sem shadowing, ZonePolicy com super.Tick), `Gui.gd` (const→helper, Peer guard), `FloatingWindows`/`Settings`/`Social`/`AfkReport` guards
 - [x] R3/R4 revividos sem os defeitos: live events + arena na EconomyService (sharding P4, wins incrementais, JSON seguro), RPCs Network/Server, suites SuiteLiveEvents/SuiteArena, migrations 033/034, hygiene anti-poluição entre runs
-- [x] E2E `tests/test_e2e_implementation.gd`: 10/10 PASS
+- [x] E2E `tests/test_e2e_implementation.gd`: 37 `PASS`, `== RESULT: 0 failures ==` (re-medido
+      2026-09-24 em `/tmp/shambleta-e2e.log`; o número anterior, 10/10, era de uma versão menor do
+      harness)
 - [x] Suite completa `run_idle_tests.gd`: 1124 checks, 0 failures | `benchmarks.gd`: 0 failures
+      (re-medido 2026-09-25: **2257 checks, 0 failures**, nove gates verdes em `/tmp/suite_beta_final28.log`)
 - [ ] Ações restantes (pós-beta): checkout real (gateway), staging/TLS direto, sharding eval, tuning de preços VIP por catálogo.
 
 ## Roadmap Comercial (2026-09-22 — lucrar)

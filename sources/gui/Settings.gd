@@ -13,6 +13,9 @@ const creditsJson : JSON						= preload("res://data/db/credits.json")
 var _twoFactorButton : Button					= null
 var _twoFactorQRDialog : AcceptDialog			= null
 var _verifyDialog : AcceptDialog				= null
+# SOM-IDLE M1: estado vem do servidor (RPC TwoFactorState), nunca do SQLite local
+# — um client fino não tem a tabela account do servidor.
+var _twoFactorEnabled : bool					= false
 
 @onready var renderAccessors : Dictionary = {
 	"Render-MinWindowSize": [init_minwinsize, set_minwinsize, apply_minwinsize, null],
@@ -298,6 +301,12 @@ func init_sessionfirstlogin(apply : bool):
 func set_sessionfirstlogin(firstTime : bool):
 	SetVal("Session-FirstLogin", firstTime)
 	apply_sessionfirstlogin(firstTime)
+# SOM-IDLE beta: Gui.DisplayFirstLogin() lê este getter para decidir se abre o
+# onboarding. A função não existia (nem em HEAD) — a chamada derrubava
+# DisplayFirstLogin com "Nonexistent function 'get_sessionfirstlogin'" e o
+# tutorial nunca abria para nenhum jogador novo.
+func get_sessionfirstlogin() -> bool:
+	return bool(GetVal("Session-FirstLogin"))
 func apply_sessionfirstlogin(firstTime : bool):
 	if Launcher.GUI and firstTime:
 		Launcher.GUI.DisplayFirstLogin()
@@ -542,7 +551,12 @@ func _ready():
 	renderAccessors["Network-Local"][ACC_TYPE.LABEL].set_visible(OS.is_debug_build())
 
 	# SOM-IDLE F3: web push toggle (web-only, created at runtime).
-	if LauncherCommons.isWeb:
+	# AUDITORIA_INDEPENDENTE W5: gated on actual delivery capability, not just on
+	# the platform. O sender (VAPID + subscription + companion) não existe, e com
+	# a aba em background o main loop do export web para — ou seja, o toggle
+	# prometia o re-engajamento e não entregava nem um balão. WebPushService
+	# .CanDeliver() volta a ser true quando o sender landar; ver o comentário lá.
+	if LauncherCommons.isWeb and WebPushService.CanDeliver():
 		var pushBox : HBoxContainer = HBoxContainer.new()
 		pushBox.name = "WebPushRow"
 		var pushLabel : Label = Label.new()
@@ -592,11 +606,46 @@ func _ready():
 		qrVBox.add_child(qrUrlLabel)
 		_twoFactorQRDialog.add_child(qrVBox)
 		add_child(_twoFactorQRDialog)
+		# SOM-IDLE M1: perguntar o estado ao servidor cada vez que o painel abre —
+		# o client não sabe (e não deve saber) ler a tabela account localmente.
+		visibility_changed.connect(_on_two_factor_visibility_changed)
+		request_two_factor_state()
+
+func request_two_factor_state():
+	if _twoFactorButton and Network.clientConnected:
+		Network.GetTwoFactorState()
+
+func _on_two_factor_visibility_changed():
+	if visible:
+		request_two_factor_state()
+
+# Canal de resposta (Client.TwoFactorState). `note` é chave estável do servidor.
+func set_two_factor_state(enabled : bool, note : String):
+	_twoFactorEnabled = enabled
+	if _twoFactorButton:
+		_twoFactorButton.text = tr("Disable Two-Factor Authentication") if enabled else tr("Enable Two-Factor Authentication")
+	if note.is_empty():
+		return
+	match note:
+		"setup_ok":
+			UICommons.MessageBox(tr("Two-factor authentication is enabled. Keep your authenticator app handy."), null, tr("OK"))
+		"disabled":
+			UICommons.MessageBox(tr("Two-factor authentication is disabled and your saved sessions were revoked."), null, tr("OK"))
+		"wrong_password":
+			UICommons.MessageBox(tr("Wrong password — two-factor authentication stays enabled."), null, tr("OK"))
+		"verify_failed":
+			UICommons.MessageBox(tr("That code did not match. Check your authenticator app and try again."), null, tr("OK"))
+		"already_enabled":
+			_twoFactorEnabled = true
+		"already_off":
+			_twoFactorEnabled = false
+		_:
+			Util.PrintLog("Settings", "2FA state note: %s" % note)
 
 func _on_two_factor_pressed():
 	if not _twoFactorButton:
 		return
-	if Launcher.SQL.IsTwoFactorEnabled(Launcher.Peer.accountID):
+	if _twoFactorEnabled:
 		_confirm_disable_two_factor()
 	else:
 		Network.SetupTwoFactor(Launcher.Peer.peerID)

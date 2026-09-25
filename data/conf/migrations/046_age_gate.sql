@@ -1,0 +1,20 @@
+-- 046 — Gate de idade no produto (AUDITORIA_INDEPENDENTE_2026-09-24 §21 e §24
+-- Bloco 1 item 11: "a distribuição web+Android é tratada pelas lojas como
+-- acessível a menores sem nenhum gate de idade no produto [CÓDIGO]").
+--
+-- Lei nº 15.211/2025: em jogo free-to-play de acesso misto, conteúdo aleatório
+-- pago só com restrição efetiva de acesso de menores. A resposta em código é uma
+-- autodeclaração maior de idade afirmativa, versionada e gravada junto do aceite
+-- LGPD já existente (`consent_tos_version` / `consent_privacy_version` da 020),
+-- para que o bump da cláusula force re-afirmação dos ativos do mesmo jeito que o
+-- bump dos textos força re-aceite.
+--
+-- É autodeclaração, não verificação de idade: não há em código nada que impeça um
+-- menor de mentir a data. O que existe é (a) o aceite afirmativo registrado com
+-- versão + timestamp + IP, (b) a recusa server-side de qualquer intenção de
+-- checkout sem esse registro. Enquadramento legal e controle parental continuam
+-- com o advogado (deploy/LAUNCH_HANDOFF.md §1).
+--
+-- DEFAULT '' é o que faz conta pré-046 ler como "não afirmou": o predicate de
+-- consentimento exige igualdade com a versão vigente, e versão vigente não é ''.
+ALTER TABLE account ADD COLUMN consent_age_version TEXT NOT NULL DEFAULT '';

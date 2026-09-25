@@ -11,7 +11,9 @@ func CreateAccount(accountName : String, password : String, email : String, reme
 		err = NetworkCommons.CheckAuthInformation(accountName, password)
 		if err == NetworkCommons.AuthError.ERR_OK:
 			err = NetworkCommons.CheckEmailInformation(email)
-		# SOM-IDLE LGPD: aceite afirmativo obrigatório antes de criar a conta.
+		# SOM-IDLE LGPD: aceite afirmativo obrigatório antes de criar a conta. O
+		# booleano carrega as três cláusulas exibidas no painel (Termos, Privacidade
+		# e a declaração de idade do §24-11) — gravadas por versão em AddAccount.
 		if err == NetworkCommons.AuthError.ERR_OK and not consentAccepted:
 			err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
 		if err == NetworkCommons.AuthError.ERR_OK:
@@ -96,6 +98,75 @@ func LoginWithTwoFactor(accountName : String, token : String, platform : int, pe
 		err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
 	Network.AuthError(err, peerID)
 
+# SOM-IDLE M1: os quatro handlers abaixo são o lado do servidor do setup de 2FA —
+# o facade declarava os RPCs mas o servidor não os implementava, então o painel
+# nunca recebia resposta. Regras: o segredo é gerado AQUI e fica PENDENTE
+# (two_factor_enabled = 0) até o usuário provar o código; queimar o código na
+# verificação usa o mesmo anti-replay do login; desligar re-autentica pela senha e
+# derruba os tokens de sessão (como ChangePassword). O estado volta por
+# TwoFactorState, que é o canal do painel — AuthError fica no fluxo de login.
+func SetupTwoFactor(peerID : int):
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer or peer.accountID == NetworkCommons.PeerUnknownID:
+		Network.TwoFactorState(false, "no_session", peerID)
+		return
+	if Launcher.SQL.IsTwoFactorEnabled(peer.accountID):
+		Network.TwoFactorState(true, "already_enabled", peerID)
+		return
+	var secret : String = TwoFactorAuth.GenerateSecret()
+	if not Launcher.SQL.SetTwoFactorSecret(peer.accountID, secret):
+		Network.TwoFactorState(false, "setup_failed", peerID)
+		return
+	Network.TwoFactorSetupResult(TwoFactorAuth.GetQRCodeURL(secret, Launcher.SQL.GetAccountName(peer.accountID)), peerID)
+
+func GetTwoFactorState(peerID : int):
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer or peer.accountID == NetworkCommons.PeerUnknownID:
+		Network.TwoFactorState(false, "no_session", peerID)
+		return
+	Network.TwoFactorState(Launcher.SQL.IsTwoFactorEnabled(peer.accountID), "", peerID)
+
+func VerifyTwoFactorSetup(token : String, peerID : int):
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer or peer.accountID == NetworkCommons.PeerUnknownID:
+		Network.TwoFactorState(false, "no_session", peerID)
+		return
+	if Launcher.SQL.IsTwoFactorEnabled(peer.accountID):
+		Network.TwoFactorState(true, "already_enabled", peerID)
+		return
+	var secret : String = Launcher.SQL.GetTwoFactorSecret(peer.accountID)
+	if secret.is_empty():
+		Network.TwoFactorState(false, "setup_missing", peerID)
+		return
+	if token.length() != 6 or not token.is_valid_int() or not TwoFactorAuth.VerifyTOTP(secret, token):
+		Network.TwoFactorState(false, "verify_failed", peerID)
+		return
+	if not Launcher.SQL.ConsumeTwoFactorToken(peer.accountID, token):
+		Network.TwoFactorState(false, "verify_failed", peerID)
+		return
+	if not Launcher.SQL.SetTwoFactorEnabled(peer.accountID, true):
+		Network.TwoFactorState(false, "setup_failed", peerID)
+		return
+	Util.PrintLog("Auth", "2FA: account %d enabled two-factor" % peer.accountID)
+	Network.TwoFactorState(true, "setup_ok", peerID)
+
+func DisableTwoFactor(password : String, peerID : int):
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not peer or peer.accountID == NetworkCommons.PeerUnknownID:
+		Network.TwoFactorState(false, "no_session", peerID)
+		return
+	if not Launcher.SQL.IsTwoFactorEnabled(peer.accountID):
+		Network.TwoFactorState(false, "already_off", peerID)
+		return
+	if not Launcher.SQL.CheckAccountPassword(peer.accountID, password):
+		Network.TwoFactorState(true, "wrong_password", peerID)
+		return
+	Launcher.SQL.SetTwoFactorEnabled(peer.accountID, false)
+	Launcher.SQL.SetTwoFactorSecret(peer.accountID, "")
+	Launcher.SQL.RemoveAllAuthTokens(peer.accountID)
+	Util.PrintLog("Auth", "2FA: account %d disabled two-factor (sessions revoked)" % peer.accountID)
+	Network.TwoFactorState(false, "disabled", peerID)
+
 func LoginWithToken(accountName : String, token : String, platform : int, peerID : int):
 	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
 	var peer : Peers.Peer = Peers.GetPeer(peerID)
@@ -123,7 +194,9 @@ func LoginWithToken(accountName : String, token : String, platform : int, peerID
 # or a remember-me token) and only then persists the CURRENT versions with the
 # audit timestamp/IP and completes the original login (the final ERR_OK drives
 # the client FSM through its normal path). Consent is never granted on a bare
-# accountName.
+# accountName. SetConsentAccepted re-estampa também a declaração de idade, que é a
+# terceira cláusula do mesmo aceite (§24-11) — por isso aqui só vivem duas versões
+# passadas: a vigente de idade é const do predicate.
 func AcceptConsent(accountName : String, password : String, token : String, rememberMe : bool, platform : int, peerID : int):
 	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
 	var peer : Peers.Peer = Peers.GetPeer(peerID)
@@ -152,7 +225,7 @@ func AcceptConsent(accountName : String, password : String, token : String, reme
 			if not Launcher.SQL.SetConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, ipAddress):
 				err = NetworkCommons.AuthError.ERR_AUTH
 			else:
-				Util.PrintLog("Auth", "LGPD: account %d accepted agreements %s/%s" % [accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion])
+				Util.PrintLog("Auth", "LGPD: account %d accepted agreements %s/%s + age %s" % [accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, NetworkCommons.AgreementAgeVersion])
 				if not password.is_empty():
 					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
 				else:
@@ -236,7 +309,14 @@ func CreateCharacter(charName : String, traits : Dictionary, attributes : Dictio
 		# para character.class_id (migration 035). Classe é obrigatória.
 		var heroClass : String = str(traits.get("hero_class", ""))
 		traits.erase("hero_class")
-		if Launcher.SQL.HasCharacter(charName):
+		# SOM-IDLE C1: CheckCharacterInformation só era chamada na GUI, i.e. um
+		# cliente adaptado gravava nick de qualquer tamanho (o nick é renderizado
+		# no chat de quem recebe). CreateAccount já valida no servidor; daqui
+		# ninguém escapa.
+		var nameErr : NetworkCommons.CharacterError = NetworkCommons.CheckCharacterInformation(charName)
+		if nameErr != NetworkCommons.CharacterError.ERR_OK:
+			err = nameErr
+		elif Launcher.SQL.HasCharacter(charName):
 			err = NetworkCommons.CharacterError.ERR_NAME_AVAILABLE
 		elif Launcher.SQL.GetCharacters(accountID).size() >= ActorCommons.MaxCharacterCount:
 			err = NetworkCommons.CharacterError.ERR_SLOT_AVAILABLE
@@ -1080,19 +1160,34 @@ func TriggerEmote(emoteID : int, peerID : int):
 func TriggerChat(channelName : String, text : String, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
+		# SOM-IDLE C1: o texto segue pelo caminho de disseminação (vizinhos,
+		# global, Discord, whisper) sem passar por nenhum cliente antes, então é
+		# aqui que ele ganha teto de tamanho; vazio depois do corte não é frase.
+		var message : String = NetworkCommons.ClipChat(text)
+		if message.is_empty():
+			return null
+		# SOM-IDLE C1c: o mute é cobrado aqui, no envio. Filtrar no recebimento é
+		# cosmético — quem recebe não é autoridade sobre si mesmo, e um cliente
+		# modificado continua lendo (e falando) normalmente.
+		var accountID : int = Peers.GetAccount(peerID)
+		var silenced : String = ChatModeration.CanSpeak(accountID)
+		if not silenced.is_empty():
+			Network.ChatSystem(channelName, silenced, peerID)
+			return null
+		ChatModeration.Note(accountID, player.nick, channelName, message)
 		if channelName == str(GUICommons.ChatChannel.LOCAL):
-			Network.NotifyNeighbours(player, "ChatPlayer", [str(GUICommons.ChatChannel.LOCAL), player.nick, text, player.get_rid().get_id()])
+			Network.NotifyNeighbours(player, "ChatPlayer", [str(GUICommons.ChatChannel.LOCAL), player.nick, message, player.get_rid().get_id()])
 		elif channelName == str(GUICommons.ChatChannel.GLOBAL):
-			Network.NotifyGlobal("ChatPlayer", [str(GUICommons.ChatChannel.GLOBAL), player.nick, text, player.get_rid().get_id()])
+			Network.NotifyGlobal("ChatPlayer", [str(GUICommons.ChatChannel.GLOBAL), player.nick, message, player.get_rid().get_id()])
 			if Launcher.Discord:
-				Launcher.Discord.SendToDiscord(player.nick, text)
+				Launcher.Discord.SendToDiscord(player.nick, message)
 		else:
 			var target : PlayerAgent = Launcher.World.GetGlobalPlayer(channelName)
 			if not target:
 				Network.ChatSystem(channelName, "Player '%s' is no longer online" % channelName, peerID)
 			else:
-				Network.ChatPlayer(player.nick, player.nick, text, player.get_rid().get_id(), target.peerID)
-				Network.ChatPlayer(target.nick, player.nick, text, player.get_rid().get_id(), player.peerID)
+				Network.ChatPlayer(player.nick, player.nick, message, player.get_rid().get_id(), target.peerID)
+				Network.ChatPlayer(target.nick, player.nick, message, player.get_rid().get_id(), player.peerID)
 
 func TriggerChoice(choiceID : int, peerID : int):
 	var player : PlayerAgent = Peers.GetAgent(peerID)

@@ -6,9 +6,14 @@
 
 O jogo imprime logs estruturados via `Util.PrintLog/PrintInfo/PrintWarning`.
 
-### Performance Monitor
+### Painel de performance
 
-Pressione **F3** no cliente para alternar o painel de debug de performance (FPS, frame time, memória, node count).
+Não existe atalho in-game: nenhum binding de F3 (ou de qualquer tecla) abre um
+painel de performance, e `sources/gui/ServerDisplay.gd` — o único script que lê o
+singleton `Performance` — é órfão: nenhuma cena `.tscn` o instancia e nenhum código
+o referencia, então ele não aparece em tela. Para medir frame time/FPS/memória use
+o **Profiler** e os **Monitors** do editor do Godot, ou leia `Performance.get_monitor(...)`
+num harness próprio (`./scripts/test.sh bench`).
 
 ### Diagnóstico de Pacing
 
@@ -20,11 +25,18 @@ Mede o kill rate em tempo real (1 simulação) para detectar desbalanceamento.
 
 ### Inspeção do SQLite
 
+`user://` do Godot 4 com `config/use_custom_user_dir=true` + `custom_user_dir_name="Shambleta"`
+resolve para `$XDG_DATA_HOME/Shambleta` (fallback `$HOME/.local/share/Shambleta`) — não
+para o layout `godot/app_userdata/<projeto>` do Godot 3. No fonte o banco é `testing.db`
+(produção é o que o `Dockerfile` liga, via `live.db`):
+
 ```bash
-sqlite3 ~/.local/share/godot/app_userdata/Shambleta/live.db
+sqlite3 ~/.local/share/Shambleta/testing.db
 sqlite3> .tables
 sqlite3> SELECT * FROM account LIMIT 10;
 ```
+
+Em container, o mesmo arquivo está em `/data/.local/share/Shambleta/live.db`.
 
 ### Sentry
 
@@ -61,13 +73,19 @@ export SOM_REALTIME_SECS=600
 
 Verifique se o proxy TLS está configurado e se a porta 6108 não está bloqueada.
 
-### Erros de compilação em `Network.gd` / `FSM.gd` (P4)
+### Erros de compilação em `Network.gd` / `FSM.gd`
 
-Se aparecer `Parse Error` relacionado a `NetworkCommons`, `OnlineList`, `NetServer` ou `Util`:
+`Util`, `NetworkCommons` e `OnlineList` são `class_name` globais sobre
+`RefCounted` — **não** são autoload, e não devem ser adicionados como um: o Godot 4
+recusa `RefCounted` como autoload, e foi exatamente isso que derrubou a tentativa do
+P4 de fragmentar `Network.gd` em seis módulos (revertida). Na ordem:
 
-1. Confirme que `project.godot` contém:
-   - `Util="*res://sources/util/Util.gd"`
-   - `OnlineList="*res://sources/network/server/OnlineList.gd"`
-   - `NetworkCommons="*res://sources/network/NetworkCommons.gd"`
-   - `NetworkAuth`, `NetworkSocial`, `NetworkCharacter`, `NetworkCombat`, `NetworkEconomy`, `NetworkGuild` (autoloads para protocolo)
-2. Verifique que `Network.gd` `_init()` e `FSM.gd` `EnterState` têm `Engine.has_singleton` guard.
+1. Rode a import uma vez neste ambiente — `godot --headless --path . --editor --import --quit`.
+   O cache `.godot/` (`global_script_class_cache.cfg`) é o que faz um `class_name`
+   resolver; sem ele nada resolve as classes globais e o erro parece "autoload
+   faltando". Esta foi a causa raiz real da suíte bloqueada.
+2. Confirme que nenhum `class_name` novo colide com os cinco autoloads de
+   `project.godot` (`Launcher`, `Network`, `FSM`, `Monitoring`, `WebPush`).
+3. `FSM.gd` `EnterState` e `Network.gd` `_init()` mantêm guard `Engine.has_singleton`
+   para quando rodam antes dos serviços existirem (modo `-s`, é assim que os testes
+   sobem).

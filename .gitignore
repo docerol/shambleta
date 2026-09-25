@@ -1,7 +1,13 @@
 *.DS_Store
 android/*
 binary/*
+# `.gdignore` volta rastreado de propósito: é ele que impede o importador do Godot
+# de tratar a saída do export anterior como recurso do jogo e re-empacotá-la no
+# próximo export (peso composto medido em 2026-09-25). Sem a exceção, o arquivo
+# morre na máquina de quem exporta e o clone seguinte repete o defeito.
+!binary/.gdignore
 build/*
+!build/.gdignore
 publishing/*
 
 # imported files
@@ -19,8 +25,15 @@ presets/maps/*
 # tmp files
 *.tmp
 
-# SOM-IDLE: local test sandbox (redirected XDG data for headless runs)
-.test-home/
+# SOM-IDLE: local test sandbox (redirected XDG data for headless runs). O sufixo
+# numérico por rodada é obrigatório: duas rodadas simultâneas compartilhando o
+# mesmo diretório fazem o `rm -rf` de uma derrubar a outra no meio.
+.test-home*/
+.test-*/
+
+# Artefato do harness: testing.db é recriado pelo runner (data/db/ é o caminho
+# resolvido por SQLCommons.GetDBPath em modo teste).
+data/db/testing.db*
 
 # Python bytecode (companion)
 __pycache__/

@@ -12,7 +12,7 @@
 #     tr() on a non-key returns the input, so the pass is always safe).
 # Not covered (accepted for phase 1 / polimento UI/UX — documentado):
 # OptionButton item labels and TabContainer tab titles (item APIs, not properties).
-# Logged as leftover in som-idle-docs/I18N_PHASE1_REPORT.md; aceito como gap residual.
+# Logged as leftover in archive/I18N_PHASE1_REPORT.md; aceito como gap residual.
 extends Node
 class_name Localizer
 

@@ -94,13 +94,24 @@ static func Create(_map : WorldMap, instanceID : int = 0) -> WorldInstance:
 	return inst
 
 func Destroy():
+	# Entrada já liberada chamava RemoveAgent com objeto morto, abortava a função
+	# e deixava a instância na árvore e em map.instances com os mobs dentro, para
+	# sempre. A limpeza tem que ser total mesmo com lista podre.
 	for i in range(players.size() - 1, -1, -1):
-		WorldAgent.RemoveAgent(players[i])
+		if is_instance_valid(players[i]):
+			WorldAgent.RemoveAgent(players[i])
 	for i in range(mobs.size() - 1, -1, -1):
-		WorldAgent.RemoveAgent(mobs[i])
+		if is_instance_valid(mobs[i]):
+			WorldAgent.RemoveAgent(mobs[i])
 	for i in range(npcs.size() - 1, -1, -1):
-		WorldAgent.RemoveAgent(npcs[i])
-	Launcher.Root.remove_child(self)
+		if is_instance_valid(npcs[i]):
+			WorldAgent.RemoveAgent(npcs[i])
+	# Create() adia o próprio add_child, então uma instância criada e esvaziada no
+	# mesmo frame (alguém entra numa zona nova e sai na hora) nunca chegou à árvore:
+	# remove_child nisso é erro no log do server, e log com erro de rotina é log que
+	# ninguém lê. queue_free() cuida dos dois casos.
+	if is_inside_tree():
+		Launcher.Root.remove_child(self)
 	queue_free()
 
 #

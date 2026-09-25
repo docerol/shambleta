@@ -53,7 +53,10 @@ func AddLine(channelID : GUICommons.ChatChannel, text : String, color : Color):
 	if tabContainer:
 		var tab : Control = tabContainer.get_tab_control(channelID)
 		if tab and tab is RichTextLabel:
-			tab.text += "[color=#" + color.to_html(false) + "]" + text + "[/color]"
+			# SOM-IDLE C1: `text` é conteúdo de terceiros (linha de chat, nick de
+			# quem fala) e o rótulo é bbcode_enabled → escapa o texto, mantém vivo
+			# só o [color=...] que a gente mesmo monta.
+			tab.text += "[color=#" + color.to_html(false) + "]" + Util.EscapeBBCode(text) + "[/color]"
 
 #
 func GetChannelIndex(channelName : String) -> GUICommons.ChatChannel:
@@ -182,6 +185,11 @@ func _ready():
 	tabBar.tab_close_display_policy = TabBar.CLOSE_BUTTON_SHOW_NEVER
 	tabBar.tab_close_pressed.connect(OnTabCloseRequested)
 	tabContainer.tab_changed.connect(OnTabChanged)
+
+	# SOM-IDLE C1: teto do lado do servidor também vale aqui (conforto: o
+	# jogador para de digitar no limite em vez de ver a linha sumir).
+	if lineEdit:
+		lineEdit.max_length = NetworkCommons.ChatMaxSize
 
 	for channelIdx in GUICommons.ChatChannel.DEFAULT_CHANNEL_COUNT:
 		channelTabs[str(channelIdx)] = channelIdx

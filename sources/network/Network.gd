@@ -35,13 +35,13 @@ enum EChannel
 # Auth
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func CreateAccount(accountName : String, password : String, email : String, rememberMe : bool, consentAccepted : bool, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("CreateAccount", [accountName, password, email, rememberMe, platform, consentAccepted], peerID, NetworkCommons.DelayLogin)
+	return CallServer("CreateAccount", [accountName, password, email, rememberMe, platform, consentAccepted], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 # SOM-IDLE LGPD: pedido de exclusão de conta (direito ao esquecimento) — só com
 # sessão ativa. Server anonimiza os dados e derruba a conexão.
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func DeleteAccount(peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("DeleteAccount", [], peerID, NetworkCommons.DelayLogin)
+	return CallServer("DeleteAccount", [], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func AccountErased(peerID : int = NetworkCommons.PeerOfflineID):
@@ -51,7 +51,7 @@ func AccountErased(peerID : int = NetworkCommons.PeerOfflineID):
 # idempotência recebida no ato da compra). Só com sessão ativa (dono da conta).
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RequestRefund(idempotencyKey : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("RequestRefund", [idempotencyKey], peerID, NetworkCommons.DelayLogin)
+	return CallServer("RequestRefund", [idempotencyKey], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func RefundResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -59,7 +59,7 @@ func RefundResult(result : Dictionary, peerID : int = NetworkCommons.PeerOffline
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func LoginWithPassword(accountName : String, password : String, rememberMe : bool, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("LoginWithPassword", [accountName, password, rememberMe, platform], peerID, NetworkCommons.DelayLogin)
+	return CallServer("LoginWithPassword", [accountName, password, rememberMe, platform], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func TwoFactorSetupResult(qrURL : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -75,30 +75,41 @@ func AuthError(err : NetworkCommons.AuthError, peerID : int = NetworkCommons.Pee
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func LoginWithToken(accountName : String, token : String, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("LoginWithToken", [accountName, token, platform], peerID, NetworkCommons.DelayLogin)
+	return CallServer("LoginWithToken", [accountName, token, platform], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 # SOM-IDLE S4: 2FA login step (after password validation).
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func LoginWithTwoFactor(accountName : String, token : String, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("LoginWithTwoFactor", [accountName, token, platform], peerID, NetworkCommons.DelayLogin)
+	return CallServer("LoginWithTwoFactor", [accountName, token, platform], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 # SOM-IDLE S4: 2FA setup for admin/GM accounts.
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func SetupTwoFactor(peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("SetupTwoFactor", [], peerID, NetworkCommons.DelayLogin)
+	return CallServer("SetupTwoFactor", [], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func VerifyTwoFactorSetup(token : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("VerifyTwoFactorSetup", [token], peerID, NetworkCommons.DelayLogin)
+	return CallServer("VerifyTwoFactorSetup", [token], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func DisableTwoFactor(password : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("DisableTwoFactor", [password], peerID, NetworkCommons.DelayLogin)
+	return CallServer("DisableTwoFactor", [password], AuthPeerID(peerID), NetworkCommons.DelayLogin)
+
+# SOM-IDLE M1: canal de estado do painel de 2FA (o cliente não lê o SQLite
+# local para saber se a própria conta tem 2FA — o servidor responde). `note` é
+# uma chave estável ("setup_ok", "wrong_password", ...) traduzida no GUI.
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func GetTwoFactorState(peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("GetTwoFactorState", [], AuthPeerID(peerID), NetworkCommons.DelayLogin)
+
+@rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
+func TwoFactorState(enabled : bool, note : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("TwoFactorState", [enabled, note], peerID)
 
 # SOM-IDLE LGPD: re-accept updated agreements at login (server re-verifies).
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func AcceptConsent(accountName : String, password : String, token : String, rememberMe : bool, platform : int = NetworkCommons.Platform.UNKNOWN, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("AcceptConsent", [accountName, password, token, rememberMe, platform], peerID, NetworkCommons.DelayLogin)
+	return CallServer("AcceptConsent", [accountName, password, token, rememberMe, platform], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func AuthTokenResult(accountName : String, token : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -106,19 +117,19 @@ func AuthTokenResult(accountName : String, token : String, peerID : int = Networ
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RequestPasswordReset(accountName : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("RequestPasswordReset", [accountName], peerID, NetworkCommons.DelayLogin)
+	return CallServer("RequestPasswordReset", [accountName], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func ConfirmPasswordReset(accountName : String, code : String, newPassword : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("ConfirmPasswordReset", [accountName, code, newPassword], peerID, NetworkCommons.DelayLogin)
+	return CallServer("ConfirmPasswordReset", [accountName, code, newPassword], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func ChangePassword(currentPassword : String, newPassword : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("ChangePassword", [currentPassword, newPassword], peerID, NetworkCommons.DelayLogin)
+	return CallServer("ChangePassword", [currentPassword, newPassword], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func DisconnectAccount(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("DisconnectAccount", [], peerID)
+	CallServer("DisconnectAccount", [], AuthPeerID(peerID))
 
 # Character
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
@@ -127,15 +138,15 @@ func CharacterInfo(info : Dictionary, equipment : Dictionary, peerID : int = Net
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func CreateCharacter(charName : String, traits : Dictionary, attributes : Dictionary, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("CreateCharacter", [charName, traits, attributes], peerID, NetworkCommons.DelayLogin)
+	return CallServer("CreateCharacter", [charName, traits, attributes], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func DeleteCharacter(charName : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("DeleteCharacter", [charName], peerID, NetworkCommons.DelayLogin)
+	return CallServer("DeleteCharacter", [charName], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func ConnectCharacter(nickname : String, peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
-	return CallServer("ConnectCharacter", [nickname], peerID, NetworkCommons.DelayLogin)
+	return CallServer("ConnectCharacter", [nickname], AuthPeerID(peerID), NetworkCommons.DelayLogin)
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func CharacterError(err : NetworkCommons.CharacterError, peerID : int = NetworkCommons.PeerOfflineID):
@@ -143,16 +154,16 @@ func CharacterError(err : NetworkCommons.CharacterError, peerID : int = NetworkC
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func DisconnectCharacter(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("DisconnectCharacter", [], peerID)
+	CallServer("DisconnectCharacter", [], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func CharacterListing(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("CharacterListing", [], peerID)
+	CallServer("CharacterListing", [], AuthPeerID(peerID))
 
 # Online list
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RequestOnlineList(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RequestOnlineList", [], peerID)
+	CallServer("RequestOnlineList", [], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func RefreshOnlineList(players : PackedStringArray, peerID : int = NetworkCommons.PeerOfflineID):
@@ -169,7 +180,7 @@ func RemoveOnlinePlayer(playerName : String, peerID : int = NetworkCommons.PeerO
 # WebRTC signaling
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RequestRtcUpgrade(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RequestRtcUpgrade", [], peerID)
+	CallServer("RequestRtcUpgrade", [], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func RtcConfig(iceServers : Array, peerID : int = NetworkCommons.PeerOfflineID):
@@ -181,7 +192,7 @@ func RtcOffer(sdp : String, peerID : int = NetworkCommons.PeerOfflineID):
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RtcAnswer(sdp : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RtcAnswer", [sdp], peerID)
+	CallServer("RtcAnswer", [sdp], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.CONNECT)
 func RtcCandidateToClient(media : String, index : int, candidateName : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -189,16 +200,16 @@ func RtcCandidateToClient(media : String, index : int, candidateName : String, p
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RtcCandidateToServer(media : String, index : int, candidateName : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RtcCandidateToServer", [media, index, candidateName], peerID)
+	CallServer("RtcCandidateToServer", [media, index, candidateName], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
 func RtcReady(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RtcReady", [], peerID)
+	CallServer("RtcReady", [], AuthPeerID(peerID))
 
 # Respawn
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerRespawn(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerRespawn", [], peerID)
+	CallServer("TriggerRespawn", [], AuthPeerID(peerID))
 
 # Warp
 @rpc("authority", "call_remote", "reliable", EChannel.MAP)
@@ -233,18 +244,21 @@ func DisplayActions(actions : PackedStringArray, peerID : int = NetworkCommons.P
 	CallClient("DisplayActions", [actions], peerID)
 
 # Notification
-@rpc("any_peer", "call_remote", "unreliable_ordered", EChannel.MAP_UNRELIABLE)
+# authority: empurrão server→client. Como o corpo carrega o peerID de destino,
+# qualquer client com "any_peer" faria o servidor entregar notificação arbitrária
+# a qualquer outra sessão.
+@rpc("authority", "call_remote", "unreliable_ordered", EChannel.MAP_UNRELIABLE)
 func PushNotification(notif : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("PushNotification", [notif], peerID)
 
 # Navigation
 @rpc("any_peer", "call_remote", "unreliable_ordered", EChannel.NAVIGATION_UNRELIABLE)
 func SetClickPos(pos : Vector2, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetClickPos", [pos], peerID)
+	CallServer("SetClickPos", [pos], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.NAVIGATION)
 func SetMovePos(pos : Vector2, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetMovePos", [pos], peerID, NetworkCommons.DelayInstant)
+	CallServer("SetMovePos", [pos], AuthPeerID(peerID), NetworkCommons.DelayInstant)
 
 @rpc("authority", "call_remote", "unreliable_ordered", EChannel.ENTITY_UNRELIABLE)
 func UpdateEntity(agentRID : int, velocity : Vector2, position : Vector2, frameID : int, peerID : int = NetworkCommons.PeerOfflineID):
@@ -256,16 +270,16 @@ func FullUpdateEntity(agentRID : int, velocity : Vector2, position : Vector2, or
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.NAVIGATION)
 func ClearNavigation(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClearNavigation", [], peerID)
+	CallServer("ClearNavigation", [], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func SetViewportSize(halfWidth : float, halfHeight : float, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetViewportSize", [halfWidth, halfHeight], peerID, NetworkCommons.DelayInstant)
+	CallServer("SetViewportSize", [halfWidth, halfHeight], AuthPeerID(peerID), NetworkCommons.DelayInstant)
 
 # Emote
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerEmote(emoteID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerEmote", [emoteID], peerID)
+	CallServer("TriggerEmote", [emoteID], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION) 
 func Emote(senderagentRID : int, emoteID : int, peerID : int = NetworkCommons.PeerOfflineID):
@@ -274,7 +288,7 @@ func Emote(senderagentRID : int, emoteID : int, peerID : int = NetworkCommons.Pe
 # Sit
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerSit(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerSit", [], peerID)
+	CallServer("TriggerSit", [], AuthPeerID(peerID))
 
 # Chat
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
@@ -283,7 +297,7 @@ func Express(agentRID : int, text : String, peerID : int = NetworkCommons.PeerOf
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerChat(channelName : String, text : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerChat", [channelName, text], peerID)
+	CallServer("TriggerChat", [channelName, text], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ChatQuery(channelName : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -324,15 +338,15 @@ func ContextChoice(texts : PackedStringArray, peerID : int = NetworkCommons.Peer
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerChoice(choiceID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerChoice", [choiceID], peerID)
+	CallServer("TriggerChoice", [choiceID], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerCloseContext(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerCloseContext", [], peerID)
+	CallServer("TriggerCloseContext", [], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerNextContext(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerNextContext", [], peerID)
+	CallServer("TriggerNextContext", [], AuthPeerID(peerID))
 
 # Tutorial
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
@@ -355,16 +369,16 @@ func CameraReset(peerID : int = NetworkCommons.PeerOfflineID):
 # Interact
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerInteract(targetRID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerInteract", [targetRID], peerID)
+	CallServer("TriggerInteract", [targetRID], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerExplore(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerExplore", [], peerID)
+	CallServer("TriggerExplore", [], AuthPeerID(peerID))
 
 # Combat
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func TriggerSkill(targetRID : int, skillID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerSkill", [targetRID, skillID], peerID, NetworkCommons.DelayShort)
+	CallServer("TriggerSkill", [targetRID, skillID], AuthPeerID(peerID), NetworkCommons.DelayShort)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func TargetAlteration(agentRID : int, targetRID : int, value : int, alteration : ActorCommons.Alteration, skillID : int, hasFeedback : bool, peerID : int = NetworkCommons.PeerOfflineID):
@@ -397,11 +411,11 @@ func UpdateAttributes(strength : int, vitality : int, agility : int, endurance :
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func TriggerSelect(agentRID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerSelect", [agentRID], peerID)
+	CallServer("TriggerSelect", [agentRID], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func SetAttributes(strength : int, vitality : int, agility : int, endurance : int, concentration : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetAttributes", [strength, vitality, agility, endurance, concentration], peerID)
+	CallServer("SetAttributes", [strength, vitality, agility, endurance, concentration], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)
 func LevelUp(agentRID : int, peerID : int = NetworkCommons.PeerOfflineID):
@@ -410,23 +424,23 @@ func LevelUp(agentRID : int, peerID : int = NetworkCommons.PeerOfflineID):
 # SOM-IDLE: F2 idle-spike RPCs (TECH_SPEC_CORE §5)
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SetFormation(slot : int, charID : int, skillLoadout : PackedInt64Array, autoPotionPct : float, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetFormation", [slot, charID, skillLoadout, autoPotionPct], peerID, NetworkCommons.DelayConfig)
+	CallServer("SetFormation", [slot, charID, skillLoadout, autoPotionPct], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SetFarmZone(zoneID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetFarmZone", [zoneID], peerID, NetworkCommons.DelayConfig)
+	CallServer("SetFarmZone", [zoneID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ClaimOfflineSettle(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClaimOfflineSettle", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("ClaimOfflineSettle", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetAFKReport(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetAFKReport", [], peerID, NetworkCommons.DelayMinute)
+	CallServer("GetAFKReport", [], AuthPeerID(peerID), NetworkCommons.DelayMinute)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetSeasonPass(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetSeasonPass", [], peerID, NetworkCommons.DelayMinute)
+	CallServer("GetSeasonPass", [], AuthPeerID(peerID), NetworkCommons.DelayMinute)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func AFKReport(report : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -443,7 +457,7 @@ func SeasonPassState(state : Dictionary, peerID : int = NetworkCommons.PeerOffli
 # SOM-IDLE: F3 — VIP state, power leaderboard, formation slot selector
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetVIPState(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetVIPState", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetVIPState", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func VIPState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -451,7 +465,7 @@ func VIPState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetLeaderboard(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetLeaderboard", [], peerID, NetworkCommons.DelayMinute)
+	CallServer("GetLeaderboard", [], AuthPeerID(peerID), NetworkCommons.DelayMinute)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func Leaderboard(entries : Array, peerID : int = NetworkCommons.PeerOfflineID):
@@ -459,13 +473,13 @@ func Leaderboard(entries : Array, peerID : int = NetworkCommons.PeerOfflineID):
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SetFormationSlot(slot : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetFormationSlot", [slot], peerID, NetworkCommons.DelayConfig)
+	CallServer("SetFormationSlot", [slot], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 # SOM-IDLE beta GUI — janelas de economia (Shop/Chests/Leaderboard). Toda ação
 # devolve EconomyState fresco: as janelas se atualizam sem re-poll.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetEconomyState(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetEconomyState", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetEconomyState", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func EconomyState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -474,7 +488,7 @@ func EconomyState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineI
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func OpenChest(chestID : int, peerID : int = NetworkCommons.PeerAuthorityID):
 	# Burst de abertura é o fluxo normal (baús acumulam no settle) — delta curto.
-	CallServer("OpenChest", [chestID], peerID, 1500)
+	CallServer("OpenChest", [chestID], AuthPeerID(peerID), 1500)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ChestOpened(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -482,11 +496,11 @@ func ChestOpened(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineI
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyChests(count : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyChests", [count], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyChests", [count], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func PurchaseVIP(tier : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("PurchaseVIP", [tier], peerID, NetworkCommons.DelayConfig)
+	CallServer("PurchaseVIP", [tier], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ShopFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -498,7 +512,7 @@ func ShopFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.Peer
 # Fase B (loja diária): rotação do dia + reroll pago + ofertas one-time.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetDailyShop", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetDailyShop", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func DailyShop(shop : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -507,7 +521,7 @@ func DailyShop(shop : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 # R1 referral: estado do código + vínculo (conta da sessão; 72h p/ informar).
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetReferralState(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetReferralState", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetReferralState", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ReferralState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -515,41 +529,46 @@ func ReferralState(state : Dictionary, peerID : int = NetworkCommons.PeerOffline
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SetReferralCode(code : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetReferralCode", [code], peerID, NetworkCommons.DelayConfig)
+	CallServer("SetReferralCode", [code], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyDailyOffer", [offerID], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyDailyOffer", [offerID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 # R2 vendor gold: consumíveis por gold (preço e estoque server-side).
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyVendorOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyVendorOffer", [offerID], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyVendorOffer", [offerID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 # R3 live events: estado de eventos ativos (banner + modificadores).
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetActiveEvents(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetActiveEvents", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetActiveEvents", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ActiveEvents(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("ActiveEvents", [state], peerID)
 
 # R4 async arena: defesa salva + ataque por ticket + board.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ArenaSetDefense(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ArenaSetDefense", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("ArenaSetDefense", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ArenaDefenseResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("ArenaDefenseResult", [result], peerID)
 
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ArenaAttack(defenderAccountID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ArenaAttack", [defenderAccountID], peerID, NetworkCommons.DelayConfig)
+	CallServer("ArenaAttack", [defenderAccountID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ArenaAttackResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("ArenaAttackResult", [result], peerID)
 
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ArenaBoard(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ArenaBoard", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("ArenaBoard", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ArenaBoardResult(board : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -557,25 +576,25 @@ func ArenaBoardResult(board : Dictionary, peerID : int = NetworkCommons.PeerOffl
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RerollDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RerollDailyShop", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("RerollDailyShop", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 # Fase C (passe S1, BATTLE_PASS_S1 §7): estado, claim de recompensa/missão,
 # compra do premium via intent do companion e skip de nível.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ClaimPassReward(level : int, track : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClaimPassReward", [level, track], peerID, NetworkCommons.DelayConfig)
+	CallServer("ClaimPassReward", [level, track], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyPass(tier : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyPass", [tier], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyPass", [tier], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SkipPassLevel(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SkipPassLevel", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("SkipPassLevel", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ClaimMission(missionID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClaimMission", [missionID], peerID, NetworkCommons.DelayConfig)
+	CallServer("ClaimMission", [missionID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func PassFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -584,7 +603,7 @@ func PassFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.Peer
 # Fase D (cosméticos, MONETIZATION §2.4/§2.7): coleção, equipar e vitrine.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetCosmetics(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetCosmetics", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetCosmetics", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func Cosmetics(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -592,15 +611,15 @@ func Cosmetics(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func EquipCosmetic(cosmeticID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("EquipCosmetic", [cosmeticID], peerID, NetworkCommons.DelayConfig)
+	CallServer("EquipCosmetic", [cosmeticID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func UnequipCosmetic(slot : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("UnequipCosmetic", [slot], peerID, NetworkCommons.DelayConfig)
+	CallServer("UnequipCosmetic", [slot], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyCosmetic(cosmeticID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyCosmetic", [cosmeticID], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyCosmetic", [cosmeticID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func CosmeticFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -610,7 +629,7 @@ func CosmeticFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.
 # /rush /corrupt /cube /salvage — resultados saem no chat + pushes de estado).
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetAchievements(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetAchievements", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetAchievements", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func AchievementsState(state : Array, peerID : int = NetworkCommons.PeerOfflineID):
@@ -618,11 +637,11 @@ func AchievementsState(state : Array, peerID : int = NetworkCommons.PeerOfflineI
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ClaimAchievement(achievementID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClaimAchievement", [achievementID], peerID, NetworkCommons.DelayConfig)
+	CallServer("ClaimAchievement", [achievementID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetTorment(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetTorment", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetTorment", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func TormentState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -630,45 +649,45 @@ func TormentState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineI
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SetTorment(level : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SetTorment", [level], peerID, NetworkCommons.DelayConfig)
+	CallServer("SetTorment", [level], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RunBossRush(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RunBossRush", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("RunBossRush", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyBossKey(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyBossKey", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyBossKey", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func CorruptItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("CorruptItem", [itemID], peerID, NetworkCommons.DelayConfig)
+	CallServer("CorruptItem", [itemID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func CubeUpcycle(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("CubeUpcycle", [itemID], peerID, NetworkCommons.DelayConfig)
+	CallServer("CubeUpcycle", [itemID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SalvageItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SalvageItem", [itemID], peerID, NetworkCommons.DelayConfig)
+	CallServer("SalvageItem", [itemID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 # Fase E (rewarded ads, MONETIZATION §2.5): 4 placements opt-in. O token vem
 # do AdProvider (stub agora, SDK depois); o servidor valida e credita.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func WatchAd(placement : String, token : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("WatchAd", [placement, token], peerID, NetworkCommons.DelayConfig)
+	CallServer("WatchAd", [placement, token], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ClaimAdChest(token : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClaimAdChest", [token], peerID, NetworkCommons.DelayConfig)
+	CallServer("ClaimAdChest", [token], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RerollDailyShopAd(token : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RerollDailyShopAd", [token], peerID, NetworkCommons.DelayConfig)
+	CallServer("RerollDailyShopAd", [token], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ClaimAdBossKey(token : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("ClaimAdBossKey", [token], peerID, NetworkCommons.DelayConfig)
+	CallServer("ClaimAdBossKey", [token], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func AdFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -678,7 +697,7 @@ func AdFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOf
 # slots, copas semanais.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetGuildState(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetGuildState", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetGuildState", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func GuildState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -690,15 +709,15 @@ func GuildFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.Pee
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func LevelUpGuildFast(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("LevelUpGuildFast", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("LevelUpGuildFast", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyVaultSlots(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyVaultSlots", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("BuyVaultSlots", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetTournaments(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetTournaments", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetTournaments", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func Tournaments(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -706,14 +725,14 @@ func Tournaments(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func EnterTournament(tournamentID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("EnterTournament", [tournamentID], peerID, NetworkCommons.DelayConfig)
+	CallServer("EnterTournament", [tournamentID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func TournamentFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("TournamentFeedback", [ok, reason], peerID)
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetCheckoutIntent(sku : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetCheckoutIntent", [sku], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetCheckoutIntent", [sku], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func CheckoutIntent(intent : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -721,7 +740,7 @@ func CheckoutIntent(intent : Dictionary, peerID : int = NetworkCommons.PeerOffli
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetSeasonBoards(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetSeasonBoards", [], peerID, NetworkCommons.DelayMinute)
+	CallServer("GetSeasonBoards", [], AuthPeerID(peerID), NetworkCommons.DelayMinute)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func SeasonBoards(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -731,7 +750,7 @@ func SeasonBoards(data : Dictionary, peerID : int = NetworkCommons.PeerOfflineID
 # depois BossState fresco (chaves/progresso mudam a cada tentativa).
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetBossState(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetBossState", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetBossState", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func BossState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -740,13 +759,13 @@ func BossState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func ChallengeBoss(peerID : int = NetworkCommons.PeerAuthorityID):
 	# Sem burst: o desafio gasta uma chave e resolve a luta numa tacada.
-	CallServer("ChallengeBoss", [], peerID, 1500)
+	CallServer("ChallengeBoss", [], AuthPeerID(peerID), 1500)
 
 # SOM-IDLE: mecânica ativa do duelo (2026-09-23). Toque do jogador na janela de
 # interrupt; a resolução (janela aberta? dano?) acontece server-side no tick.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BossInterrupt(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BossInterrupt", [], peerID, 200)
+	CallServer("BossInterrupt", [], AuthPeerID(peerID), 200)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func BossInterruptWindow(open : bool, peerID : int = NetworkCommons.PeerOfflineID):
@@ -765,7 +784,7 @@ func BossResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID
 # devolvem RebirthResult e depois RebirthState fresco (essência/custos mudam).
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetRebirthState(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("GetRebirthState", [], peerID, NetworkCommons.DelayConfig)
+	CallServer("GetRebirthState", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func RebirthState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -773,11 +792,11 @@ func RebirthState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineI
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RebirthNow(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RebirthRequest", [], peerID, 1500)
+	CallServer("RebirthRequest", [], AuthPeerID(peerID), 1500)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyRebirthUpgrade(upgradeID : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("BuyRebirthUpgrade", [upgradeID], peerID, 1500)
+	CallServer("BuyRebirthUpgrade", [upgradeID], AuthPeerID(peerID), 1500)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func RebirthResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
@@ -789,7 +808,7 @@ func RebirthResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflin
 # (WorldCommands SubmitCraftReview) — fora do escopo deste RPC.
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SubmitCraft(slot : int, baseItemHash : int, name : String, modifiers : Dictionary, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("SubmitCraft", [slot, baseItemHash, name, modifiers], peerID, 1500)
+	CallServer("SubmitCraft", [slot, baseItemHash, name, modifiers], AuthPeerID(peerID), 1500)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func CraftSubmitFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
@@ -810,23 +829,23 @@ func ItemEquiped(agentRID : int, itemID : int, customfield : StringName, state :
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func UseItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("UseItem", [itemID], peerID)
+	CallServer("UseItem", [itemID], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func DropItem(itemID : int, customfield : StringName, itemCount : int, itemIndex : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("DropItem", [itemID, customfield, itemCount, itemIndex], peerID)
+	CallServer("DropItem", [itemID, customfield, itemCount, itemIndex], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func EquipItem(itemID : int, customfield : StringName, itemIndex : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("EquipItem", [itemID, customfield, itemIndex], peerID)
+	CallServer("EquipItem", [itemID, customfield, itemIndex], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func UnequipItem(itemID : int, customfield : StringName, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("UnequipItem", [itemID, customfield], peerID)
+	CallServer("UnequipItem", [itemID, customfield], AuthPeerID(peerID))
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func RetrieveInventory(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RetrieveInventory", [], peerID)
+	CallServer("RetrieveInventory", [], AuthPeerID(peerID))
 
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)
 func RefreshInventory(cells : Array[Dictionary], peerID : int = NetworkCommons.PeerOfflineID):
@@ -847,7 +866,7 @@ func DropRemoved(dropID : int, peerID : int = NetworkCommons.PeerOfflineID):
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func PickupDrop(dropID : int, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("PickupDrop", [dropID], peerID)
+	CallServer("PickupDrop", [dropID], AuthPeerID(peerID))
 
 # Progress
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)
@@ -868,7 +887,7 @@ func RefreshProgress(skills : Dictionary, quests : Dictionary, bestiary : Dictio
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func RetrieveCharacterInformation(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("RetrieveCharacterInformation", [], peerID)
+	CallServer("RetrieveCharacterInformation", [], AuthPeerID(peerID))
 
 # Commands
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)
@@ -881,7 +900,7 @@ func CommandModifier(effect : CellCommons.Modifier, value : float, peerID : int 
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ENTITY)
 func TriggerCommand(command : String, peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("TriggerCommand", [command], peerID)
+	CallServer("TriggerCommand", [command], AuthPeerID(peerID))
 
 # Bulk RPC calls
 @rpc("authority", "call_remote", "reliable", EChannel.ENTITY)
@@ -955,6 +974,23 @@ func NotifyGlobal(callbackName : StringName, args : Array):
 		NotifyArea(area, callbackName, args)
 
 # Peer calls
+# S1: identidade do chamador NUNCA vem do corpo do pacote — quem escreve o
+# pacote escolhe o peerID. Dentro do processamento de um RPC recebido, exatamente
+# uma interface de servidor reporta o sender real do transporte; as outras e
+# qualquer chamada fora desse contexto reportam 0. Sem borda de rede (offline /
+# servidor local) não há o que falsificar: o valor informado fica.
+func TransportSenderID() -> int:
+	for iface : NetServer in [WebRTCServer, WebSocketServer, ENetServer]:
+		if iface and iface.multiplayerAPI and iface.multiplayerAPI.has_multiplayer_peer():
+			var sender : int = iface.multiplayerAPI.get_remote_sender_id()
+			if sender != 0:
+				return sender
+	return NetworkCommons.PeerUnknownID
+
+func AuthPeerID(declared : int) -> int:
+	var sender : int = TransportSenderID()
+	return declared if sender == NetworkCommons.PeerUnknownID else sender
+
 func CallServer(methodName : StringName, args : Array, peerID : int, actionDelta : int = NetworkCommons.DelayDefault) -> bool:
 	if not Peers.Footprint(peerID, methodName, actionDelta):
 		return false

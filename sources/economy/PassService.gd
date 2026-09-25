@@ -331,6 +331,11 @@ func ClaimPassReward(accountID : int, charID : int, level : int, track : String)
 		return true):
 		pass
 	_eco.settleMutex.unlock()
+	# K1: resgate do passe, por trilha. "pass_premium processado" diz que o dinheiro
+	# entrou; isto diz que alguém abriu e usou — a diferença entre os dois é o churn
+	# que o roadmap chama de D30.
+	if bool(result.get("ok", false)) and Launcher.Telemetry != null:
+		Launcher.Telemetry.RecordFunnel("pass_claim", accountID, charID, JSON.stringify({"season" = sid, "level" = level, "track" = track}))
 	return result
 
 # Skip de nível (catch-up justo): compra o PT faltante p/ o próximo nível,

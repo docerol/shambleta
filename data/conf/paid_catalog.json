@@ -1,5 +1,7 @@
 {
-  "_note": "SHAMBLETA_CATALOG_FILE — catálogo real (Pix + cartão via Mercado Pago). Preço anunciado = preço cobrado (CDC); o grant usa kind/contents. Bundles decompõem em N grants. starter/founder one-time; cosmético do starter entra como entitlement na Fase D. pass.s1 = premium da temporada ativa (Fase C). donate.support = título Apoiador (Fase F).",
+  "_note": "Catálogo pago canônico (Pix + cartão via Mercado Pago): UMA fonte, dois leitores. O companion cobra daqui (SHAMBLETA_CATALOG_FILE, default /app/paid_catalog.json); o jogo valida daqui no boot do servidor e na suíte (SuiteCatalogConsistency) contra EconomyCatalog.SHOP_CATALOG. Preço anunciado = preço cobrado (CDC); o grant usa kind/contents. Bundles decompõem em N grants. starter/founder one-time; cosmético do starter entra como entitlement na Fase D. pass.s1 = premium da temporada ativa (Fase C). donate.support = título Apoiador (Fase F).",
+  "_agreements_note": "Versões vigentes de ToS/privacidade/idade que a fronteira do dinheiro cobra (Lei 15.211/2025, migration 046). O jogo valida este bloco contra NetworkCommons.Agreement*Version no boot e na suíte; o companion recusa intent/preferência/sandbox com 403 consent_required quando o aceite gravado na conta não é igual a ele. Bumpar os consts sem bumpar aqui é erro de boot — não porta aberta.",
+  "_agreements": {"tos": "2026-09-b", "privacy": "2026-09-b", "age": "2026-09-a"},
   "gems.550": {"kind": "gems", "amount": 550, "currency": "BRL", "price": 19.90},
   "gems.1200": {"kind": "gems", "amount": 1200, "currency": "BRL", "price": 39.90},
   "gems.3000": {"kind": "gems", "amount": 3000, "currency": "BRL", "price": 79.90},

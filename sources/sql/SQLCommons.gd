@@ -14,6 +14,21 @@ const DailyBackupIntervalSec : int		= 60 * 60 * 24
 const WeeklyBackupIntervalSec : int		= 60 * 60 * 24 * 7
 const MonthlyBackupIntervalSec : int	= 60 * 60 * 24 * 7 * 4
 
+# #28 (AUDITORIA item 7 / G3): timer próprio para a rotação meta — reconcile,
+# fraud scan, copas, referral, live events e tickets de arena. Ela heredava o
+# intervalo E a condição de sucesso do backup, então um disco cheio desligava o
+# meta game inteiro.
+const MetaJobIntervalSec : int			= 60 * 60 * 24
+
+# G1 (auditoria 2026-09-24, Bloco 1 #7): relógio próprio para a espinha sazonal
+# (fechar vencida → congelar placar → liquidar → abrir a próxima). O ciclo saiu do
+# job diário porque `power_score`, `bosses_beaten` e pontos de guild são contadores
+# correntes, sem histórico: o placar é congelado no instante do fechamento, então
+# cada hora entre `ends_at` e o fechamento é hora de jogo pós-temporada contando
+# como se fosse da temporada. Cinco minutos deixam uma janela irredutível de
+# fração do ciclo de jogo; o custo por passada é um `SELECT` por status.
+const SeasonClockIntervalSec : int		= 60 * 5
+
 enum BackupFrequency {DAILY, WEEKLY, MONTHLY}
 
 const BackupLimits : Dictionary[BackupFrequency, int] = {

@@ -39,10 +39,13 @@ func IsGameState() -> bool:
 	return currentState == States.IN_GAME
 
 func EnterState(state : States):
-	# Corrigido P4: evitar erro quando singleton Util não está disponível no escopo (ex: modo -s / headless).
-	# Referência: auditoria-tecnica-shambleta.md (§3); RELATORIO_FINAL_2026-09-21.md.
-	if Engine.has_singleton("Util"):
-		Engine.get_singleton("Util").PrintLog("Launcher", "Entering new FSM state: %s" % str(States.keys()[state]))
+	# O guard que existia aqui (`Engine.has_singleton("Util")`) nunca foi verdadeiro:
+	# `Util` é `class_name` sobre `RefCounted`, não autoload — e a chamada estática
+	# direta resolve em qualquer contexto, inclusive em scripts `-s` (é o que os
+	# outros 64 call sites de `Util.PrintLog` já fazem). Resultado: o log de
+	# transição de estado, a primeira linha que se procura quando o cliente não
+	# chega em IN_GAME, não saía em build nenhum.
+	Util.PrintLog("Launcher", "Entering new FSM state: %s" % str(States.keys()[state]))
 	nextState = state
 	UpdateStates.call_deferred()
 

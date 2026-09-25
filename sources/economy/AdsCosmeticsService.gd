@@ -20,10 +20,12 @@ var _eco : EconomyService = null
 # chaves/dia, reroll-ad divide o contador pago (3/dia), afk2x vale 1 liquidação
 # (armado até o próximo settle), teto global 6/dia (anti-fadiga). VIP dobra o
 # bônus em quantidade (2×→4×, +1→+2 baús/chaves); reroll é acesso, não volume.
-# SOM-IDLE beta fechado (T7): stub é EXPLÍCITO e próprio do beta — produção
-# com SDK real exigirá formato próprio (nunca "stub:*"). O stub é mintável
-# pelo client por construção; o teto de abuso são os caps server-side
-# (6/dia global + caps por placement), sem dinheiro envolvido no beta.
+# SOM-IDLE M2 (era T7): o stub não é mais compilar-para-abrir — ele vive atrás
+# de SHAMBLETA_AD_STUB=1 com default fechado, ligado pelo deploy do beta. O
+# token stub é mintável pelo client por construção (é isso que a env controla);
+# enquanto não houver SSV no servidor, o teto de abuso são os caps server-side
+# (6/dia global + caps por placement), sem dinheiro envolvido no beta. Produção
+# sem a env não credita nada.
 
 func _AdDayStart() -> int:
 	return EconomyCatalog.PassDayStartTS(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
@@ -34,10 +36,11 @@ func AdViewsToday(accountID : int, placement : String = "") -> int:
 	return int(Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND created_at >= ? AND json_extract(meta, '$.placement') = ?;", [accountID, _AdDayStart(), placement])[0]["n"])
 
 func _ValidAdToken(token : String, placement : String) -> bool:
-	# Stub: "stub:<placement>:<dia UTC-3>" — aceito SOMENTE com AdStubEnabled
-	# (beta). Produção exige callback assinado do SDK (fail-closed aqui:
-	# formato errado nunca credita).
-	if not EconomyCatalog.AdStubEnabled:
+	# Stub: "stub:<placement>:<dia UTC-3>" — aceito SOMENTE com o stub ligado por
+	# env (SHAMBLETA_AD_STUB=1, o deploy do beta). Default do servidor é fechado:
+	# sem a env, nenhum token stub credita, em nenhum placement. Produção com SDK
+	# real exige callback verificado no servidor (formato próprio), nunca "stub:".
+	if not EconomyCatalog.AdStubEnabled():
 		return false
 	var parts : PackedStringArray = token.split(":")
 	return parts.size() == 3 and parts[0] == "stub" and parts[1] == placement and parts[2] == str(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))

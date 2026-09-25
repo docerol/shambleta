@@ -1,7 +1,9 @@
 # Shambleta Commercial Launch — Implementation Summary
 
 **Date:** 2026-09-17
-**Plan:** `.kilo/plans/1789659178562-audit-commercial-launch.md`
+**Plan:** `.kilo/plans/1789659178562-audit-commercial-launch.md` (a pasta `.kilo/`
+foi removida do repositório em 2026-09-25; o plano continua legível em
+`git show HEAD:.kilo/plans/1789659178562-audit-commercial-launch.md`)
 
 ---
 

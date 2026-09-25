@@ -5,6 +5,12 @@ class_name FileSystem
 static func FileExists(path : String) -> bool:
 	return FileAccess.file_exists(path)
 
+# Pasta dentro do pacote exportado. `.pck` não guarda diretório vazio, então uma
+# pasta cujo conteúdo foi excluído pelo filtro do preset simplesmente não existe
+# em `res://` — e é preciso distinguir isso de caminho errado antes de reclamar.
+static func DirExists(path : String) -> bool:
+	return DirAccess.dir_exists_absolute(path)
+
 static func ResourceExists(path : String) -> bool:
 	return ResourceLoader.exists(path)
 
@@ -238,4 +244,14 @@ static func ParseResources(path : String) -> PackedStringArray:
 	return ParseExtension(path, Path.RscExt)
 
 static func ParseSQL(path : String) -> PackedStringArray:
-	return ParseExtension(path, Path.SQLExt)
+	var patches : PackedStringArray = ParseExtension(path, Path.SQLExt)
+	# Ordem de listagem não é contrato de `DirAccess`, e `SQL.ApplyMigrations()` usa o
+	# índice do array como número de versão (`patches[currentVersion]`): desordem ou
+	# buraco aplica patches fora de sequência sem que nada reclame alto. No source
+	# tree medido em 2026-09-24 a listagem veio ordenada (001..046, 0 pares fora de
+	# ordem) e o CI roda assim; o servidor de produção roda de .pck exportado, e a
+	# ordem dentro do pacote não foi medida nesta máquina (sem templates de export) —
+	# o teste de contrato em `IdleTests` enxerga só o caminho do source. Ordenar aqui
+	# fecha a questão nos dois caminhos sem mudar nada do que roda hoje.
+	patches.sort()
+	return patches

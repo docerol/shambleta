@@ -622,6 +622,12 @@ func TwoFactorSetupResult(qrURL : String, _peerID : int):
 	if Launcher.GUI and Launcher.GUI.settingsWindow:
 		Launcher.GUI.settingsWindow.show_two_factor_qr(qrURL)
 
+# SOM-IDLE M1: resposta do setup/verify/disable — o painel só sabe o estado da
+# própria conta pelo servidor.
+func TwoFactorState(enabled : bool, note : String, _peerID : int):
+	if Launcher.GUI and Launcher.GUI.settingsWindow:
+		Launcher.GUI.settingsWindow.set_two_factor_state(enabled, note)
+
 # SOM-IDLE LGPD: o servidor confirmou a exclusão/anonimização da conta; avisa o
 # jogador e a queda de sessão (DisconnectAccount) leva ao LOGIN_SCREEN.
 func AccountErased(_peerID : int):
@@ -735,7 +741,13 @@ func DisconnectServer():
 	if Network.webRTCActive:
 		Util.PrintLog("Client", "WebSocket dropped, continuing on WebRTC")
 		return
-	Launcher.Mode(true, true)
+	# Volta para o modo com que o processo nasceu, não para um hardcoded
+	# client+server: no browser o boot é client-only (`Launcher.gd:207`) e "ligar o
+	# servidor" aqui tentava bind TCP em 127.0.0.1:9400 (`ERR_CANT_CREATE`, medido
+	# 2026-09-25), criava World/SQL/Discord/Email/Economy/Telemetry que ninguém pediu
+	# e re-entrava `DB.Init` — tudo no caminho de uma ação normal do jogador (a
+	# conexão cair). Em dev o boot já é client+server, então o que roda não muda.
+	Launcher.Mode(Launcher.BootClient, Launcher.BootServer)
 	FSM.EnterState(FSM.States.LOGIN_SCREEN)
 	Peers.RemovePeer(NetworkCommons.PeerOfflineID)
 
@@ -770,7 +782,13 @@ func _enter_tree():
 		serverPort = NetworkCommons.WebSocketPortTesting if useWebSocket else NetworkCommons.ENetPortTesting
 
 	var ret : Error = FAILED
-	var tlsOptions : TLSOptions = TLSOptions.client_unsafe()
+	# SOM-IDLE beta (V7): verificação de certificado NO CLIENTE. Era
+	# `TLSOptions.client_unsafe()`, que desliga cadeia e hostname no canal por onde
+	# viajam senha, token de "lembrar" e o código 2FA. A montagem das opções (e o
+	# porquê da âncora vir da store do sistema explicitamente) está em
+	# `NetworkCommons.ClientTLSOptions`. No bind local o URL é ws:// plain e o Godot
+	# ignora estas opções.
+	var tlsOptions : TLSOptions = NetworkCommons.ClientTLSOptions()
 	if useWebSocket:
 		var prefix : String = "ws://" if isLocal else "wss://"
 		# SOM-IDLE beta deploy: no browser o proxy reverso (Coolify) termina o

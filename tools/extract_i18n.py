@@ -34,7 +34,7 @@ IDENTITY = {"⏎", "\n", "+", "-", "<", ">", "?", "~", "0", "1", "2", "3", "4", 
 	"PC", "Slot", "Slots", "VIP: —", "Visual", "★ Local Server",
     "Johanne Laliberté, 2011", "Nard, 2011",
     # pontuação/interjeições/loanwords de mesa usados crus pela comunidade BR
-    "...", "Blackjack!", "ARGH.",
+    "...", "Blackjack!", "ARGH.", "OK",
 }
 
 def unesc(s):

@@ -67,6 +67,12 @@ func GetPendingGrants(accountID : int) -> Array:
 # - F2P pode obter tudo jogando (mesmo que lento) — Wami / NGU Idle model.
 # - VIP = Quality of Life (offline cap, velocidade) — não power direto.
 func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
+	# §24-11 (Lei 15.211/2025): sem a declaração maior de idade vigente não existe
+	# checkout — nem preço. O gate de login (`IsConsentAccepted` em Server.gd) barra
+	# a entrada, mas dinheiro é decidido aqui, e um client que pule o diálogo de
+	# re-aceite não pode pular isto.
+	if not Launcher.SQL.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
+		return {"ok": false, "reason": "consent_required"}
 	var entry : Dictionary = {}
 	for e in EconomyCatalog.SHOP_CATALOG:
 		if str(e.get("sku", "")) == sku:
@@ -78,15 +84,29 @@ func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 		var offer : Dictionary = GetStarterOfferState(accountID)
 		if not bool(offer.get("eligible", false)):
 			return {"ok": false, "reason": str(offer.get("reason", "ineligible")), "starter_offer": offer}
-	return {"ok": true, "account_id": accountID, "sku": sku,
+	var intent : Dictionary = {"ok": true, "account_id": accountID, "sku": sku,
 		"external_reference": "%d:%s" % [accountID, sku],
 		"label": str(entry.get("label", sku)), "price": float(entry.get("price", 0.0)),
 		"currency": "BRL",
-		# P1 — gateway real (Mercado Pago / Stripe): webhook assinado valida grant.
-		# Modelo F2P-friendly (Wami / NGU Idle): VIP = QoL, não power direto.
-		"gateway_ready": true, "f2p_friendly": true,
-		"webhook_verified": true,  # P2 — webhook assinado (Mercado Pago/Stripe) validado; previne replay attack no grant_queue.
+		# Saída de gate de dinheiro: `gateway_ready`, `f2p_friendly` e
+		# `webhook_verified` saíram desta payload em 2026-09-24. Eram três `true`
+		# literais que este processo não pode atestar — ele não expõe endpoint de
+		# webhook, não valida assinatura nenhuma e não conhece a configuração do
+		# gateway. Quem valida é o companion (`companion/server.py`: HMAC do
+		# provedor + re-fetch autoritativo na API, fail-closed, cobertura em
+		# `companion/test_security.py`), e publicar a afirmação como fato bastou
+		# para cinco documentos a citarem como evidência de "economia pronta"
+		# (AUDITORIA_INDEPENDENTE_2026-09-24.md §24). Sobrou o que este servidor
+		# garante e a suíte mede: `grant_queue` é idempotente pela chave, então a
+		# reentrega do webhook não credita duas vezes.
 		"grant_queue_idempotent": true}
+	# K1: `checkout_intent` = a pessoa viu o preço e abriu o checkout. Sem este
+	# evento só existe o lado da entrega, e a razão entre os dois é o que diz se o
+	# preço/offer está errado — antes da compra, essa diferença é invisível.
+	if Launcher.Telemetry != null:
+		Launcher.Telemetry.RecordMoney("checkout_intent", accountID, 0, JSON.stringify({
+			"sku" = sku, "price" = float(entry.get("price", 0.0)), "currency" = "BRL"}))
+	return intent
 
 # ------------------------------------------------------------------ C1: companion grants (grant queue)
 
@@ -112,17 +132,56 @@ func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey :
 func ProcessPendingGrants(limit : int = 50) -> Dictionary:
 	var done : Dictionary = {"processed" = 0, "failed" = 0}
 	_eco.settleMutex.lock()
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id, idempotency_key, account_id, kind, amount, payload FROM grant_queue WHERE status = 'pending' ORDER BY id LIMIT ?;", [limit])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id, idempotency_key, account_id, kind, amount, payload, price_paid, currency FROM grant_queue WHERE status = 'pending' ORDER BY id LIMIT ?;", [limit])
 	for row in rows:
 		var grantID : int = int(row["id"])
-		if Launcher.SQL.Transaction(func() -> bool: return _ApplyGrantRaw(row)):
-			Launcher.SQL.ExecuteBindings("UPDATE grant_queue SET status = 'processed', processed_at = ? WHERE id = ? AND status = 'pending';", [SQLCommons.Timestamp(), grantID])
+		if Launcher.SQL.Transaction(_GrantApplyAndMark.bind(row, grantID)):
 			done["processed"] = int(done["processed"]) + 1
+			_RecordPurchase(row)
 		else:
 			Launcher.SQL.ExecuteBindings("UPDATE grant_queue SET status = 'failed', error = 'apply_failed', processed_at = ? WHERE id = ? AND status = 'pending';", [SQLCommons.Timestamp(), grantID])
 			done["failed"] = int(done["failed"]) + 1
 	_eco.settleMutex.unlock()
 	return done
+
+# SOM-IDLE E3: o crédito e a marcação da fila são o MESMO commit. Marcar
+# 'processed' depois do Transaction() fechar deixava uma janela: derrubar o
+# processo entre o COMMIT do saldo e o UPDATE mantinha a linha 'pending' e o
+# próximo tick creditava de novo — ledger_transaction não tem UNIQUE em reason,
+# então nada barrava o segundo lançamento (dinheiro falso).
+#
+# Dentro do commit: (1) reivindicar a linha, (2) creditar, (3) fechar. Qualquer
+# passo que falhe faz ROLLBACK dos três. ExecuteBindings devolve true também
+# quando o UPDATE não altera linha nenhuma, por isso a releitura — sem ela uma
+# linha já consumida seria creditada de novo.
+func _GrantApplyAndMark(grant : Dictionary, grantID : int) -> bool:
+	var sql : SQLService = Launcher.SQL
+	var now : int = SQLCommons.Timestamp()
+	if not sql.ExecuteBindings("UPDATE grant_queue SET status = 'processing', processed_at = ? WHERE id = ? AND status = 'pending';", [now, grantID]):
+		return false
+	var claimed : Array = sql.QueryBindings("SELECT status FROM grant_queue WHERE id = ?;", [grantID])
+	if claimed.is_empty() or str((claimed[0] as Dictionary).get("status", "")) != "processing":
+		return false
+	if not _ApplyGrantRaw(grant):
+		return false
+	return sql.ExecuteBindings("UPDATE grant_queue SET status = 'processed', processed_at = ? WHERE id = ?;", [now, grantID])
+
+# K1: `purchase` = dinheiro ENTREGUE (não "autorizado"). Emitido depois do COMMIT
+# do grant e nunca dentro dele: o flush da telemetria abre a própria transação e
+# `SQLService.Transaction` pega o queryMutex — chamar de dentro de um lambda seria
+# lock recursivo numa Mutex não-recursiva. `price_paid` é o que o provedor cobrou
+# (migration 044; bundle só paga na primeira perna), então somar a coluna separa
+# receita de grant de sandbox/GM, que chega com 0.
+func _RecordPurchase(grant : Dictionary) -> void:
+	if Launcher.Telemetry == null:
+		return
+	var sku : String = "?"
+	var parsed : Variant = JSON.parse_string(str(grant.get("payload", "")))
+	if parsed is Dictionary:
+		sku = str((parsed as Dictionary).get("sku", "?"))
+	Launcher.Telemetry.RecordMoney("purchase", int(grant["account_id"]), 0, JSON.stringify({
+		"sku" = sku, "kind" = str(grant["kind"]), "amount" = int(grant["amount"]),
+		"price_paid" = int(grant.get("price_paid", 0)), "currency" = str(grant.get("currency", ""))}))
 
 # Aplica um grant DENTRO de Transaction() — só ops raw (db direto, sem mutex).
 func _ApplyGrantRaw(grant : Dictionary) -> bool:

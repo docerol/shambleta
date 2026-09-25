@@ -14,7 +14,9 @@ const CheckoutDialog = preload("res://sources/gui/Checkout.gd")
 # external_reference → POST companion /checkout/simulate (allow_dev) →
 # grant entra na fila e credita no próximo poll (~30s). Produção troca o
 # simulate pelo checkout MP (mesma external_reference, handoff §2).
-const COMPANION_URL_DEFAULT : String = "http://127.0.0.1:8901"
+# A base do companion não mora mais aqui: `NetworkCommons.CompanionURL` é a única
+# resolução (env > conf > origem da página no web), porque browser não tem variável
+# de ambiente e o default de desenvolvimento é o loopback da própria máquina.
 @onready var gemsLabel : Label	= $Layout/Gems
 @onready var vipLabel : Label	= $Layout/VIP
 @onready var buyChest1 : Button	= $Layout/BuyChest1
@@ -51,11 +53,6 @@ func RefreshState():
 	ShowDailyShop(NetClient.LastDailyShop)
 	Network.GetEconomyState()
 	Network.GetDailyShop()
-
-func _companion_url() -> String:
-	if OS.has_environment("SHAMBLETA_COMPANION_URL"):
-		return OS.get_environment("SHAMBLETA_COMPANION_URL")
-	return COMPANION_URL_DEFAULT
 
 # Redesenho a partir do estado consolidado (preços vivem no servidor).
 func ShowState(state : Dictionary):
@@ -188,7 +185,7 @@ func _on_pay_sandbox_pressed():
 	intentLabel.text = "Simulating sandbox payment %s…" % extRef
 	# allow_dev exige o segredo compartilhado; em sandbox local o padrão é
 	# vazio — o companion rejeita sem SHAMBLETA_WEBHOOK_SECRET (fail-closed).
-	_http.request(_companion_url() + "/checkout/simulate",
+	_http.request(NetworkCommons.CompanionURL + "/checkout/simulate",
 		["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
 
 # Fase B (loja diária): ofertas do dia + reroll pago + one-time (boss/finale).
@@ -250,7 +247,7 @@ func _on_reroll_daily_ad_pressed():
 
 func _on_simulate_done(result : int, _code : int, _headers : PackedStringArray, body : PackedByteArray):
 	if result != HTTPRequest.RESULT_SUCCESS:
-		intentLabel.text = "Sandbox: companion unreachable (%s). Is it running?" % _companion_url()
+		intentLabel.text = "Sandbox: companion unreachable (%s). Is it running?" % NetworkCommons.CompanionURL
 		paySandboxButton.disabled = false
 		return
 	var parsed : Variant = JSON.parse_string(body.get_string_from_utf8())

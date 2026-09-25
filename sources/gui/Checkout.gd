@@ -8,8 +8,9 @@ extends WindowPanel
 # Sandbox dev: POST /checkout/simulate atrás de SHAMBLETA_ALLOW_DEV_CHECKOUT.
 #
 # This window is created programmatically (no .tscn edit required).
-
-const COMPANION_URL_DEFAULT : String = "http://127.0.0.1:8901"
+# A base do companion vem de `NetworkCommons.CompanionURL` (env > conf > origem da
+# página no web) — não de uma constante daqui: em browser não existe variável de
+# ambiente, e 127.0.0.1 é a máquina do jogador, não o servidor.
 
 var _http : HTTPRequest				= null
 var _pendingIntent : Dictionary		= {}
@@ -20,6 +21,9 @@ var _detailLabel : Label			= null
 var _priceLabel : Label				= null
 var _payButton : Button				= null
 var _statusLabel : Label			= null
+# Segunda porta do dinheiro: abre a página de pagamento de novo, a pedido.
+var _openPaymentButton : Button		= null
+var _openPaymentURL : String		= ""
 
 func _ready():
 	_http = HTTPRequest.new()
@@ -56,7 +60,7 @@ func _BuildUI():
 	_statusLabel = Label.new()
 	_statusLabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_statusLabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_statusLabel.autowrap = true
+	_statusLabel.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(_statusLabel)
 
 	_payButton = Button.new()
@@ -64,13 +68,33 @@ func _BuildUI():
 	_payButton.pressed.connect(_on_pay_pressed)
 	root.add_child(_payButton)
 
+	# A segunda porta. `_open_payment_url` chega por dois caminhos, e eles não são
+	# iguais para o browser: o clique em "Pagar agora" com a URL já na intent acontece
+	# dentro da user activation, mas a URL que volta do `POST /checkout/preference`
+	# chega de um round trip — e um `window.open` disparado fora da activation é o que
+	# o bloqueador de popup come. Sem remédio visível o jogador fica olhando "awaiting
+	# confirmation" de uma página que nunca abriu, e o grant do webhook não tem o que
+	# confirmar. Botão comum e não `LinkButton`: quem abre a aba tem que ser um clique
+	# do jogador, que é exatamente o que reabre a janela de activation.
+	_openPaymentButton = Button.new()
+	_openPaymentButton.text = tr("Open payment page")
+	_openPaymentButton.visible = false
+	_openPaymentButton.pressed.connect(_on_open_payment_pressed)
+	root.add_child(_openPaymentButton)
+
 func StartCheckout(sku : String, label : String, price : float, currency : String = "BRL"):
 	_pendingSKU = sku
 	_pendingIntent = {}
+	_openPaymentURL = ""
+	_openPaymentButton.visible = false
 	_titleLabel.text = label
 	_priceLabel.text = "%.2f %s" % [price, currency]
 	_detailLabel.text = "SKU: %s" % sku
 	_statusLabel.text = tr("Requesting payment...")
+	# O texto volta junto do resto do estado: `_open_payment_url` e o aceite do sandbox
+	# deixam o botão como "Close", e reabrir a janela para outro SKU sem resetar deixava
+	# um botão rotulado "Fechar" que, apertado, iniciava uma cobrança.
+	_payButton.text = tr("Pay now")
 	_payButton.disabled = true
 	# SOM-IDLE parser: WindowPanel não tem popup_centered() (era erro de parse
 	# no Godot estrito) — ToggleControl() é o padrão das outras janelas.
@@ -108,7 +132,7 @@ func _on_pay_pressed():
 	_request_preference()
 
 func _pay_sandbox():
-	var companionURL : String = _companion_url()
+	var companionURL : String = NetworkCommons.CompanionURL
 	_statusLabel.text = tr("Processing sandbox payment...")
 	_payButton.disabled = true
 	var body : Dictionary = {
@@ -120,7 +144,7 @@ func _pay_sandbox():
 		["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(body))
 
 func _request_preference():
-	var companionURL : String = _companion_url()
+	var companionURL : String = NetworkCommons.CompanionURL
 	var sku : String = str(_pendingIntent.get("sku", _pendingSKU))
 	if sku.is_empty():
 		_statusLabel.text = tr("Payment URL not available")
@@ -149,16 +173,33 @@ func _open_payment_url(paymentURL : String):
 		_statusLabel.text = tr("Payment URL not available")
 		_payButton.disabled = false
 		return
-	# Web: nova aba (não perde o estado do jogo). Desktop: navegador do sistema.
+	_show_payment_url(paymentURL)
+	_launch_payment_url(paymentURL)
+	_poll_pending_grants()
+
+# Metade visual: é o que a janela mostra quando existe uma página de pagamento
+# esperando o jogador. Deliberadamente não toca o navegador — assim ela abre e é
+# verificável headless, e o único caminho para fora da tela é `_launch_payment_url`.
+func _show_payment_url(paymentURL : String):
+	_statusLabel.text = tr("Awaiting payment confirmation — items credit automatically when approved.")
+	_payButton.text = tr("Close")
+	_payButton.disabled = false
+	_openPaymentURL = paymentURL
+	_pendingIntent["payment_url"] = paymentURL
+	_openPaymentButton.visible = true
+
+# Metade que navega. Chamada uma vez pelo clique direto (dentro da user activation) e
+# de novo pelo botão acima, que é clique do jogador e portanto activation fresca —
+# é o que sobra quando o browser come o popup do caminho assíncrono.
+func _launch_payment_url(paymentURL : String):
 	if LauncherCommons.isWeb:
 		JavaScriptBridge.eval("window.open(%s, '_blank');" % JSON.stringify(paymentURL))
 	else:
 		OS.shell_open(paymentURL)
-	_statusLabel.text = tr("Awaiting payment confirmation — items credit automatically when approved.")
-	_payButton.text = tr("Close")
-	_payButton.disabled = false
-	_pendingIntent["payment_url"] = paymentURL
-	_poll_pending_grants()
+
+func _on_open_payment_pressed():
+	if not _openPaymentURL.is_empty():
+		_launch_payment_url(_openPaymentURL)
 
 func _poll_pending_grants():
 	# O grant chega pelo webhook independente do retorno; o poll de
@@ -193,16 +234,19 @@ func _on_preference_done(result : int, body : PackedByteArray):
 		_payButton.disabled = false
 		return
 	var parsed : Variant = JSON.parse_string(body.get_string_from_utf8())
+	if parsed is Dictionary and str(parsed.get("error", "")) == "consent_required":
+		# O aceite gravado na conta não é a versão vigente (bump de ToS/
+		# privacidade/idade, ou conta anterior à migration 046, que lê ''). O jogo
+		# já barrou o login e o companion barra o checkout: a ação é re-aceitar os
+		# textos, não insistir — por isso isto não cai no "try again later".
+		_statusLabel.text = tr("Payment blocked: log in again to accept the current agreements.")
+		_payButton.disabled = false
+		return
 	if not (parsed is Dictionary) or str(parsed.get("payment_url", "")).is_empty():
 		_statusLabel.text = tr("Checkout unavailable — try again later (%s)") % body.get_string_from_utf8().left(120)
 		_payButton.disabled = false
 		return
 	_open_payment_url(str(parsed.get("payment_url", "")))
-
-func _companion_url() -> String:
-	if OS.has_environment("SHAMBLETA_COMPANION_URL"):
-		return OS.get_environment("SHAMBLETA_COMPANION_URL")
-	return COMPANION_URL_DEFAULT
 
 func _get_username() -> String:
 	if Launcher.nPanel:
@@ -210,7 +254,18 @@ func _get_username() -> String:
 	return ""
 
 func _get_auth_token() -> String:
-	if Launcher.nPanel and "savedToken" in Launcher.nPanel:
-		return str(Launcher.nPanel.savedToken)
-	return ""
+	# O token da sessão mora em conf, não no painel: `SaveToken` grava em
+	# `Conf.Type.AUTH_TOKEN` e `Connect()` zera `savedToken` logo depois de usá-lo no
+	# auto-login (sources/gui/Login.gd:311). Ler só o var devolvia "" em qualquer
+	# sessão — no login por senha porque o var nunca chega a ser atribuído, no por
+	# token porque ele é aparado — e o companion respondia 401 `missing_token` na
+	# frente do pagamento, com a janela aconselhando "lembrar" justamente a quem já
+	# marcou. A porta de remember-me continua intacta: o server emite token só com
+	# rememberMe (sources/network/server/Peers.gd:286), então sem ele o conf está
+	# vazio e o aviso acionável lá em cima é o caminho certo.
+	var panelToken : String = str(Launcher.nPanel.savedToken) if Launcher.nPanel \
+		and "savedToken" in Launcher.nPanel else ""
+	if not panelToken.is_empty():
+		return panelToken
+	return str(Conf.GetString("auth", "token", Conf.Type.AUTH_TOKEN))
 

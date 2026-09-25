@@ -44,8 +44,11 @@ class Peer:
 		if data and data.accountID != NetworkCommons.PeerUnknownID:
 			var lastPeerID = Peers.accounts.get(data.accountID, NetworkCommons.PeerUnknownID)
 			if lastPeerID != NetworkCommons.PeerUnknownID and Peers.GetAccount(lastPeerID) != NetworkCommons.PeerUnknownID:
-				Network.DisconnectAccount(lastPeerID)
-				if data.accountID == lastPeerID:
+				# S1: dispatch interno — o alvo é o peer ANTIGO, e não pode passar pelo
+				# wrapper Network.DisconnectAccount(), cujo AuthPeerID() reescreveria o
+				# destino para o sender do RPC de login que estamos processando.
+				Network.CallServer(&"DisconnectAccount", [], lastPeerID)
+				if peerID == lastPeerID:
 					Network.AuthError(NetworkCommons.AuthError.ERR_DUPLICATE_CONNECTION, lastPeerID)
 			Peers.accounts[data.accountID] = NetworkCommons.PeerUnknownID
 		if data:
@@ -230,13 +233,20 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		return NetworkCommons.AuthError.ERR_BANNED
 
 	peer.SetAccount(accountData)
-	# SOM-IDLE S5: multi-account heuristic (best-effort, never fails login).
-	# Checks for duplicate fingerprint hashes across accounts in telemetry.
+	# SOM-IDLE S5 (2026-09-24): a heurística multi-conta que morava aqui coletava a
+	# impressão digital DENTRO do processo do servidor — `DeviceFingerprint.Collect()`
+	# tinha um único chamador no repositório, e era esta função, que só roda em
+	# `Server.gd`. Toda conta registrava portanto o hash do hardware do SERVIDOR: o
+	# `fingerprint LIKE '%"hash":"…"%'` de 7 dias casava com todas as outras contas e
+	# abria `fraud_flag multi_account` para o logado mais até dez outras a cada login
+	# (fila de revisão 100 % falsa, um LIKE sem índice no caminho crítico do login, e
+	# o painel "multi-conta" do `/metrics` reduzido a um balde gigante). Detectar
+	# multi-conta de verdade exige entropia por instalação coletada no cliente, mais
+	# base legal para levar esses campos — é feature, não ajuste de fiação
+	# (AUDITORIA_INDEPENDENTE item (s)). `SuiteFraud` amarra que a coleta do
+	# servidor não volta.
 	if Launcher.Telemetry:
-		var fp : Dictionary = DeviceFingerprint.Collect()
-		var fp_hash : String = str(fp.get("hash", ""))
-		if not fp_hash.is_empty():
-			Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}", fp)
+		Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}")
 		# ROADMAP_COMERCIAL S2: funil d1_return — 2º dia distinto com login.
 		if Launcher.Telemetry.has_method("RecordFunnel") and Launcher.SQL != null:
 			var dayRows : Array = Launcher.SQL.QueryBindings(
@@ -244,30 +254,20 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 				[accountData.accountID])
 			if not dayRows.is_empty() and int(dayRows[0].get("d", 0)) == 1:
 				Launcher.Telemetry.RecordFunnel("d1_return", accountData.accountID)
-		# S5: heurística multi-account (fail-safe: nunca falha o login; abre flag
-		# na fila de revisão manual via EconomyService.FlagMultiAccount — o mesmo
-		# fraud_flag das outras heurísticas, sem ban automático por design).
-		# Sem try/except (GDScript não tem exceções): guards explícitos; a
-		# heurística é best-effort e nunca bloqueia o login.
-		var fp_for_heuristic : String = fp_hash if not fp_hash.is_empty() else str(fp.get("hash", ""))
-		if not fp_for_heuristic.is_empty() and Launcher.SQL != null:
-			var duplicate_rows : Array = Launcher.SQL.QueryBindings(
-				"SELECT DISTINCT account_id FROM telemetry_event WHERE fingerprint LIKE ? AND account_id != ? AND created_at > ?;",
-				["%\"hash\":\"" + fp_for_heuristic + "%", accountData.accountID, int(Time.get_unix_time_from_system()) - 86400 * 7])
-			if duplicate_rows.size() > 1:
-				push_warning("[S5 MultiAccount] Fingerprint hash=%s encontrado com %d outras contas (últimos 7d)" % [fp_for_heuristic, duplicate_rows.size()])
-				if Launcher.Economy != null and Launcher.Economy.has_method("FlagMultiAccount"):
-					var detail : String = "shared_fp:%s" % fp_for_heuristic
-					Launcher.Economy.FlagMultiAccount(accountData.accountID, detail)
-					var flagged : int = 0
-					for dup in duplicate_rows:
-						if flagged >= 10:
-							break
-						if dup is Dictionary and Launcher.Economy.FlagMultiAccount(int((dup as Dictionary).get("account_id", 0)), detail):
-							flagged += 1
 	if platform < 0 or platform >= NetworkCommons.Platform.COUNT:
 		platform = NetworkCommons.Platform.UNKNOWN
 	Launcher.SQL.UpdateAccount(peer.accountID, platform)
+
+	# #28 (AUDITORIA item 7 / G3): a copa semanal só nascia dentro do job diário, e
+	# esse job roda na thread de backup — que `SQL._post_launch` só cria
+	# `if not Launcher.Debug and not LauncherCommons.isWeb`. Numa build de debug o
+	# servidor sobe sem thread nenhuma e o meta game não roda nunca: o primeiro
+	# login garante a copa independentemente disso. Com o catch-up do boot
+	# (SQLBackups), no servidor de produção este caminho é um SELECT —
+	# EnsureWeeklyTournament é idempotente (lê a ativa, pega o settleMutex e re-lê
+	# dentro da transação) e a thread já roda no boot.
+	if Launcher.Economy != null and Launcher.Economy.has_method("EnsureWeeklyTournament"):
+		Launcher.Economy.EnsureWeeklyTournament()
 
 	if rememberMe:
 		IssueAuthToken(peer, accountName)

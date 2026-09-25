@@ -37,6 +37,12 @@ func RegisterCommands():
 	CommandManager.Register("ban", CommandBan, ActorCommons.Permission.GM, "ban <player_name> <time> <reason>" )
 	CommandManager.Register("unban", CommandUnban, ActorCommons.Permission.GM, "unban <player_name>" )
 	CommandManager.Register("banlist", CommandBanList, ActorCommons.Permission.MODERATOR, "banlist <filter>" )
+	# SOM-IDLE C1c: canal de denúncia do jogador e sanção que não é ban.
+	CommandManager.Register("report", CommandReport, ActorCommons.Permission.NONE, "report <player> <reason>" )
+	CommandManager.Register("mute", CommandMute, ActorCommons.Permission.MODERATOR, "mute <player> <time> <reason>" )
+	CommandManager.Register("unmute", CommandUnmute, ActorCommons.Permission.MODERATOR, "unmute <player>" )
+	CommandManager.Register("reports", CommandReports, ActorCommons.Permission.MODERATOR, "reports [limit]" )
+	CommandManager.Register("resolve", CommandResolveReport, ActorCommons.Permission.MODERATOR, "resolve <report_id>" )
 	CommandManager.Register("ipban", CommandIpBan, ActorCommons.Permission.ADMIN, "ipban <ip> <reason>, use * as an octet wildcard (e.g. 192.168.*.*), never expires, remove it with ipunban" )
 	CommandManager.Register("ipunban", CommandIpUnban, ActorCommons.Permission.ADMIN, "ipunban <ip>" )
 	CommandManager.Register("ipbanlist", CommandIpBanList, ActorCommons.Permission.MODERATOR, "ipbanlist <filter>" )
@@ -113,6 +119,12 @@ static func UnregisterCommands():
 	CommandManager.Unregister("ban")
 	CommandManager.Unregister("unban")
 	CommandManager.Unregister("banlist")
+	# SOM-IDLE C1c
+	CommandManager.Unregister("report")
+	CommandManager.Unregister("mute")
+	CommandManager.Unregister("unmute")
+	CommandManager.Unregister("reports")
+	CommandManager.Unregister("resolve")
 	CommandManager.Unregister("ipban")
 	CommandManager.Unregister("ipunban")
 	CommandManager.Unregister("ipbanlist")
@@ -1261,6 +1273,131 @@ func CommandBanList(caller : PlayerAgent, filter : String = "") -> bool:
 			Network.CommandFeedback("%s: %s remaining (%s)" % [username, Util.FormatDuration(remaining), banReason], caller.peerID)
 	return true
 
+# SOM-IDLE C1c (AUDITORIA §16 SOCIAL): denúncia e mute de chat. A única resposta a assédio
+# no canal era /ban da CONTA inteira — não havia para onde denunciar, e não havia
+# como calar alguém sem tirar o jogo. /report é Permission.NONE porque é o caminho
+# legal para o moderador existir; o texto do denunciante é só um apontador, a prova
+# é o trecho que o SERVIDOR viu aquele account falar (ChatModeration.Report).
+func CommandReport(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false, 1)
+	if parts.size() < 2:
+		Network.CommandFeedback("Usage: /report <player> <motivo>", caller.peerID)
+		return false
+
+	var targetID : int = GetAccountID(parts[0])
+	if targetID <= 0:
+		Network.CommandFeedback("Player '%s' not found" % parts[0], caller.peerID)
+		return false
+
+	var result : Dictionary = ChatModeration.Report(Peers.GetAccount(caller.peerID), targetID, "", parts[1])
+	match str(result.get("reason", "")):
+		"not_logged_in":
+			Network.CommandFeedback("Not logged in", caller.peerID)
+			return false
+		"self_report":
+			Network.CommandFeedback("You cannot report yourself", caller.peerID)
+			return false
+		"empty_reason":
+			Network.CommandFeedback("Usage: /report <player> <motivo>", caller.peerID)
+			return false
+		"already_reported":
+			Network.CommandFeedback("You already have an open report against '%s'" % parts[0], caller.peerID)
+			return false
+	if not bool(result.get("ok", false)):
+		Network.CommandFeedback("Report could not be filed", caller.peerID)
+		return false
+
+	var verified : bool = bool(result.get("verified", false))
+	Network.CommandFeedback("Report #%d filed against '%s'%s" % [int(result.get("report_id", 0)), parts[0], "" if verified else " (no recent line from them in the log — the moderator will hear only your side)"], caller.peerID)
+	return true
+
+func CommandMute(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+
+	var parts : PackedStringArray = arg.strip_edges().split(" ", false, 2)
+	if parts.size() < 2:
+		Network.CommandFeedback("Usage: /mute <player> <time> [reason]", caller.peerID)
+		return false
+
+	var targetID : int = GetAccountID(parts[0])
+	if targetID <= 0:
+		Network.CommandFeedback("Player '%s' not found" % parts[0], caller.peerID)
+		return false
+
+	var duration : int = Util.ParseDuration(parts[1])
+	if duration <= 0:
+		Network.CommandFeedback("Couldn't parse the duration", caller.peerID)
+		return false
+
+	var reason : String = ChatModeration.ClipReason(parts[2]) if parts.size() > 2 else ""
+	if not ChatModeration.Mute(targetID, SQLCommons.Timestamp() + duration, reason, Peers.GetAccount(caller.peerID)):
+		Network.CommandFeedback("Mute registration failed", caller.peerID)
+		return false
+
+	Network.CommandFeedback("'%s' muted for %s" % [parts[0], parts[1]], caller.peerID)
+	return true
+
+func CommandUnmute(caller : PlayerAgent, nickname : String) -> bool:
+	if not caller:
+		return false
+
+	var targetID : int = GetAccountID(nickname)
+	if targetID <= 0:
+		Network.CommandFeedback("Player '%s' not found" % nickname, caller.peerID)
+		return false
+
+	if not ChatModeration.IsMuted(targetID):
+		Network.CommandFeedback("Player '%s' is not muted" % nickname, caller.peerID)
+		return false
+
+	if not ChatModeration.Unmute(targetID):
+		Network.CommandFeedback("Unmute failed", caller.peerID)
+		return false
+
+	Network.CommandFeedback("'%s' unmuted" % nickname, caller.peerID)
+	return true
+
+func CommandReports(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+
+	var requested : int = arg.strip_edges().to_int()
+	var limit : int = clampi(requested, 1, 100) if requested > 0 else 20
+	var rows : Array[Dictionary] = Launcher.SQL.GetChatReports("open", limit)
+	if rows.is_empty():
+		Network.CommandFeedback("No open chat reports", caller.peerID)
+		return true
+
+	var lines : PackedStringArray = PackedStringArray()
+	lines.append("%d open chat report(s):" % Launcher.SQL.CountChatReports("open"))
+	for row in rows:
+		var excerpt : String = str(row.get("excerpt", ""))
+		lines.append("#%d %s -> %s: %s%s" % [int(row.get("report_id", 0)), Launcher.SQL.GetAccountName(int(row.get("reporter_account", 0))), Launcher.SQL.GetAccountName(int(row.get("reported_account", 0))), str(row.get("reason", "")), (" | \"" + excerpt + "\"") if not excerpt.is_empty() else " | (no logged line)"])
+	Network.CommandFeedback("\n".join(lines), caller.peerID)
+	return true
+
+# Sem /resolve a fila não fecha: o guard anti-metralhadora (uma open por par)
+# viraria punição permanente para quem denuncia mais de uma vez a mesma pessoa.
+func CommandResolveReport(caller : PlayerAgent, reportIDStr : String) -> bool:
+	if not caller:
+		return false
+
+	var reportID : int = reportIDStr.to_int()
+	if reportID <= 0:
+		Network.CommandFeedback("Usage: /resolve <report_id>", caller.peerID)
+		return false
+
+	if not Launcher.SQL.ResolveChatReport(reportID, Peers.GetAccount(caller.peerID)):
+		Network.CommandFeedback("Report #%d not found or already resolved" % reportID, caller.peerID)
+		return false
+
+	Network.CommandFeedback("Report #%d resolved" % reportID, caller.peerID)
+	return true
+
 func CommandIpBan(caller : PlayerAgent, ipRange : String, reason : String = "") -> bool:
 	if not caller:
 		return false
@@ -1326,6 +1463,17 @@ func CommandWhisper(caller : PlayerAgent, channelName : String, text : String) -
 	if not caller or channelName.is_empty() or text.is_empty():
 		return false
 
+	# SOM-IDLE C1/C1c: este caminho entrega direto no alvo, sem passar por
+	# Server.TriggerChat. Sem o teto e sem o mute aqui, "/w" era o portão de trás
+	# do canal — o mute só valeria para quem não sabe que ele existe.
+	var message : String = NetworkCommons.ClipChat(text)
+	if message.is_empty():
+		return false
+	var silenced : String = ChatModeration.CanSpeak(Peers.GetAccount(caller.peerID))
+	if not silenced.is_empty():
+		Network.ChatSystem(channelName, silenced, caller.peerID)
+		return true
+
 	var target : PlayerAgent = Launcher.World.GetGlobalPlayer(channelName)
 	if not target:
 		Network.ChatSystem(channelName, "Player '%s' is no longer online" % channelName, caller.peerID)
@@ -1335,8 +1483,9 @@ func CommandWhisper(caller : PlayerAgent, channelName : String, text : String) -
 		Network.ChatSystem(channelName, "You cannot whisper to yourself", caller.peerID)
 		return true
 
-	Network.ChatPlayer(caller.nick, caller.nick, text, caller.get_rid().get_id(), target.peerID)
-	Network.ChatPlayer(target.nick, caller.nick, text, caller.get_rid().get_id(), caller.peerID)
+	Network.ChatPlayer(caller.nick, caller.nick, message, caller.get_rid().get_id(), target.peerID)
+	Network.ChatPlayer(target.nick, caller.nick, message, caller.get_rid().get_id(), caller.peerID)
+	ChatModeration.Note(Peers.GetAccount(caller.peerID), caller.nick, channelName, message)
 	return true
 
 func CommandQuery(caller : PlayerAgent, targetName : String) -> bool:

@@ -16,7 +16,7 @@ const AdProvider = preload("res://sources/ads/AdProvider.gd")
 func _ready():
 	if Network and Network.has_method("GetAFKReport"):
 		if NetClient.LastAFKReport.is_empty():
-			hoursLabel.text = tr("Carregando...")
+			hoursLabel.text = tr("Loading...")
 			goldLabel.text = "—"
 			xpLabel.text = "—"
 			effLabel.text = "—"

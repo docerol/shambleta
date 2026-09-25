@@ -11,7 +11,13 @@ const BufferCap : int = 500
 
 # ROADMAP_COMERCIAL S1: funil de receita — kinds reservados, nunca renomear
 # (dashboard e queries históricas dependem destes nomes).
-const FUNNEL_KINDS : Array[String] = ["onboarding_done", "first_boss", "first_chest", "d1_return"]
+# K1 (AUDITORIA_INDEPENDENTE §23 Bloco 1 item 9): os eventos de dinheiro entram
+# aqui. Antes só existia a ponta de progressão, então "cobrou e não entregou" não
+# tinha como ser visto — o `purchase` é emitido na entrega do grant (o momento em
+# que o produto cumpre), `checkout_intent` na intenção, e os dois carregam
+# price_paid/currency no meta para o dashboard separar dinheiro de sandbox.
+const FUNNEL_KINDS : Array[String] = ["onboarding_done", "first_boss", "first_chest", "d1_return",
+	"checkout_intent", "purchase", "ah_list", "ah_buy", "ah_cancel", "trade", "rebirth", "pass_claim"]
 
 var _buffer : Array[Dictionary] = []
 var _accum : float = 0.0
@@ -55,6 +61,17 @@ func RecordFunnel(kind : String, accountID : int = 0, charID : int = 0, meta : S
 	Record(kind, accountID, charID, 1, meta)
 	return true
 
+# K1: evento de DINHEIRO — grava e dá flush imediato. O buffer de 60 s serve ao
+# tráfego de progressão (login/settle/levelup), onde perder um evento no crash é
+# irrelevante; perder um `purchase` é perder exatamente o número que existe para
+# responder "cobramos e não entregamos?". Flush só faz transação se o buffer tem
+# algo, então o custo é uma escrita por compra.
+func RecordMoney(kind : String, accountID : int, charID : int = 0, meta : String = "{}") -> bool:
+	if not RecordFunnel(kind, accountID, charID, meta):
+		return false
+	Flush()
+	return true
+
 # Esvazia o buffer em 1 transação. Retorna eventos persistidos.
 func Flush() -> int:
 	if _buffer.is_empty():
@@ -82,9 +99,28 @@ func Count(kind : String, sinceSec : int = 0) -> int:
 # Conta contas distintas (não eventos) desde sinceSec. Leitura pura, sem escrita.
 func FunnelSummary(sinceSec : int = 0) -> Dictionary:
 	var out : Dictionary = {}
-	var kinds : Array[String] = ["login", "onboarding_done", "first_boss", "first_chest", "d1_return"]
+	var kinds : Array[String] = ["login", "onboarding_done", "first_boss", "first_chest", "d1_return",
+		"checkout_intent", "purchase"]
 	for kind in kinds:
 		var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
 			"SELECT COUNT(DISTINCT account_id) AS n FROM telemetry_event WHERE kind = ? AND created_at >= ?;", [kind, sinceSec])
 		out[kind] = int(rows[0]["n"]) if not rows.is_empty() else 0
 	return out
+
+# K1: coorte D1/D7/D30 lida da view `cohort_retention` (migration 045), que é a
+# régua reescrita de ROADMAP_COMERCIAL §Semana 2. A definição está no SQL e não
+# mudou aqui: login no dia calendário UTC exato +1/+7/+30 a partir do dia-zero da
+# conta. Contas sem login ficam fora do numerador E do denominador — somar "quem
+# nunca abriu o jogo" embaixo de uma meta de retenção é como o healthcheck
+# fictício nasceu.
+# Retorna {"accounts", "d1", "d7", "d30"} em contas; percentual é conta do leitor
+# (o dashboard corta por período, e aqui não há período a cortar).
+func CohortSummary() -> Dictionary:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
+		"SELECT COUNT(*) AS n, COALESCE(SUM(d1), 0) AS d1, COALESCE(SUM(d7), 0) AS d7, "
+		+ "COALESCE(SUM(d30), 0) AS d30 FROM cohort_retention;", [])
+	if rows.is_empty():
+		return {"accounts" = 0, "d1" = 0, "d7" = 0, "d30" = 0}
+	var row : Dictionary = rows[0]
+	return {"accounts" = int(row.get("n", 0)), "d1" = int(row.get("d1", 0)),
+		"d7" = int(row.get("d7", 0)), "d30" = int(row.get("d30", 0))}

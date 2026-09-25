@@ -106,8 +106,14 @@ func Rebirth(charID : int, player) -> Dictionary:
 	var info : Dictionary = Launcher.SQL.GetRebirthInfo(charID)
 	var rebirths : int = int(info.get("rebirths", 0))
 	# Fase D: vitrine do renascimento — 1º ciclo concede o básico grátis.
+	var accountID : int = Launcher.SQL.GetAccountIDForCharacter(charID)
 	if rebirths > 0:
-		_eco._RebirthVitrine(Launcher.SQL.GetAccountIDForCharacter(charID), rebirths)
+		_eco._RebirthVitrine(accountID, rebirths)
+	# K1: renascimento é a prova de que o loop de prestígio é usado — a curva foi
+	# desenhada para acelerar, e sem evento não há como saber se está. Depois do
+	# unlock e fora da transação, como o resto da telemetria.
+	if Launcher.Telemetry != null:
+		Launcher.Telemetry.RecordFunnel("rebirth", accountID, charID, JSON.stringify({"rebirths" = rebirths}))
 	return {"ok" = true, "rebirths" = rebirths}
 
 func GetRebirthState(charID : int) -> Dictionary:

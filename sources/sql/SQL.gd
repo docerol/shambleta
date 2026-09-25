@@ -21,13 +21,43 @@ func GetVersion() -> int:
 func SetVersion(version : int):
 	Query("UPDATE migration SET version = %d;" % version)
 
+# O que o boot faz com o diretório de patches que ele enxerga. Puro de propósito:
+# `patchCount` e `currentVersion` são as duas entradas e a decisão é verificável
+# sem esconder arquivo de ninguém. Os dois estados de reclamação não são dano de
+# schema — medido em 2026-09-24, `SetVersion` regrava o número que leu, então a
+# versão da base nunca desce por esse caminho — e sim os dois casos em que o boot
+# não aplica nada e diz nada:
+#  - `empty`: sem `res://data/conf/migrations` dentro do `.pck`, `0 == 0` devolvia
+#    antes de qualquer coisa e o servidor subia com a base sem schema, saudável no
+#    healthcheck (que não olha schema) e morta no primeiro login. A vinda do
+#    diretório no pacote depende do `include_filter` do preset de servidor, que não
+#    é medível sem templates de export nesta máquina — o que dá para medir é se ele
+#    chegou.
+#  - `stale`: binário mais velho que o schema (rollback de deploy, que é rotina).
+#    Antes era um no-op silencioso: ninguém descobria que o processo rodando é de
+#    antes do schema que ele mesmo consulta.
+static func MigrationPlan(patchCount : int, currentVersion : int) -> String:
+	if patchCount == 0:
+		return "empty"
+	if patchCount < currentVersion:
+		return "stale"
+	if patchCount == currentVersion:
+		return "uptodate"
+	return "apply"
+
 func ApplyMigrations():
 	var currentVersion : int = GetVersion()
 	var patches : PackedStringArray = FileSystem.ParseSQL(Path.MigrationRsc)
 	var patchCount : int = patches.size()
-	if patchCount == currentVersion:
+	var plan : String = MigrationPlan(patchCount, currentVersion)
+	if plan == "uptodate":
 		return
-
+	if plan == "empty":
+		push_error("SQL: nenhum patch visível em %s — o pacote não traz as migrations. Nada aplicado." % Path.MigrationRsc)
+		return
+	if plan == "stale":
+		push_error("SQL: %d patches visíveis contra a base na versão %d — binário mais velho que o schema. Nada aplicado." % [patchCount, currentVersion])
+		return
 	while patchCount > currentVersion:
 		ApplyMigration(patches[currentVersion])
 		currentVersion += 1
@@ -56,8 +86,11 @@ func AddAccount(username : String, password : String, email : String, tosVersion
 		"locked_until" : 0,
 		"created_timestamp" : SQLCommons.Timestamp(),
 		# SOM-IDLE LGPD: aceite afirmativo dos textos (versão + quando + de onde).
+		# A declaração de idade viaja junto porque é a terceira cláusula do MESMO
+		# checkbox (migration 046): sem aceite não há aceitação de maioridade.
 		"consent_tos_version" : tosVersion,
 		"consent_privacy_version" : privacyVersion,
+		"consent_age_version" : NetworkCommons.AgreementAgeVersion if not tosVersion.is_empty() else "",
 		"consent_timestamp" : SQLCommons.Timestamp() if not tosVersion.is_empty() else 0,
 		"consent_ip" : consentIp,
 		"status" : NetworkCommons.AccountStatus.ACTIVE,
@@ -71,26 +104,33 @@ func IsConsentAccepted(accountID : int, tosVersion : String, privacyVersion : St
 	# AgreementPrivacyVersion forces every existing account to re-accept at
 	# login. Legacy rows with NULL columns must read as no-consent (str(null)
 	# yields "<null>", which is NOT empty) — hence the explicit null guards.
-	var rows : Array[Dictionary] = QueryBindings("SELECT consent_tos_version, consent_privacy_version FROM account WHERE account_id = ?;", [accountID])
+	var rows : Array[Dictionary] = QueryBindings("SELECT consent_tos_version, consent_privacy_version, consent_age_version FROM account WHERE account_id = ?;", [accountID])
 	if rows.is_empty():
 		return false
 	var storedTos : Variant = rows[0].get("consent_tos_version")
 	var storedPrivacy : Variant = rows[0].get("consent_privacy_version")
-	if storedTos == null or storedPrivacy == null:
+	var storedAge : Variant = rows[0].get("consent_age_version")
+	if storedTos == null or storedPrivacy == null or storedAge == null:
 		return false
 	# a consent record must always carry a real version — empty strings on
 	# either side (erased rows, misconfigured constants) never match
-	if tosVersion.is_empty() or privacyVersion.is_empty():
+	if tosVersion.is_empty() or privacyVersion.is_empty() or NetworkCommons.AgreementAgeVersion.is_empty():
 		return false
-	return String(storedTos) == tosVersion and String(storedPrivacy) == privacyVersion
+	# Idade: a cláusula maior de idade não é parâmetro porque só existe uma
+	# vigente (`AgreementAgeVersion`), e é ela que o checkout cobra. Conta criada
+	# antes da migration 046 tem '' aqui e para de contar até re-afirmar.
+	return String(storedTos) == tosVersion and String(storedPrivacy) == privacyVersion \
+		and String(storedAge) == NetworkCommons.AgreementAgeVersion
 
 func SetConsentAccepted(accountID : int, tosVersion : String, privacyVersion : String, ip : String) -> bool:
 	# SOM-IDLE LGPD: records a (re-)acceptance of the given agreement versions
 	# with timestamp + IP audit trail (single-row house update, like
-	# UpdatePowerScore — no transaction wrapper needed).
+	# UpdatePowerScore — no transaction wrapper needed). A cláusula de idade é a
+	# terceira do mesmo aceite e é re-estampada junto (migration 046).
 	var ok : bool = db.update_rows("account", "account_id = %d" % accountID, {
 		"consent_tos_version" : tosVersion,
 		"consent_privacy_version" : privacyVersion,
+		"consent_age_version" : NetworkCommons.AgreementAgeVersion,
 		"consent_timestamp" : SQLCommons.Timestamp(),
 		"consent_ip" : ip,
 	})
@@ -165,7 +205,7 @@ func EraseAccount(accountID : int) -> bool:
 
 		# 4) anonimiza a conta (mantém account_id p/ integridade do ledger)
 		db.query_with_bindings(
-			"UPDATE account SET username = ?, email = '', password = ?, password_salt = '', permission = ?, status = ?, purged_at = ?, consent_ip = '', consent_tos_version = '', consent_privacy_version = '' WHERE account_id = ?;",
+			"UPDATE account SET username = ?, email = '', password = ?, password_salt = '', permission = ?, status = ?, purged_at = ?, consent_ip = '', consent_tos_version = '', consent_privacy_version = '', consent_age_version = '' WHERE account_id = ?;",
 			[anonUser, anonPass, ActorCommons.Permission.NONE, NetworkCommons.AccountStatus.DELETED, now, accountID])
 		return true)
 
@@ -1116,6 +1156,53 @@ func GetIPBanList(filter : String = "") -> Array[Dictionary]:
 		return Query("SELECT ip_range, banned_timestamp, reason FROM ip_ban;")
 	return QueryBindings("SELECT ip_range, banned_timestamp, reason FROM ip_ban WHERE ip_range LIKE ?;", ["%" + filter + "%"])
 
+# Chat moderation (SOM-IDLE C1c): espelho do ban — a linha é durável, a decisão
+# de "ainda vale?" é do momento da leitura (purge on query), nunca de um timer.
+func MuteAccount(accountID : int, untilTimestamp : int, reason : String = "", mutedBy : int = 0) -> bool:
+	if accountID <= 0 or untilTimestamp <= 0:
+		return false
+	return ExecuteBindings("INSERT OR REPLACE INTO chat_mute(account_id, muted_by, reason, until_ts, created_ts) VALUES (?, ?, ?, ?, ?);", [accountID, mutedBy, reason, untilTimestamp, SQLCommons.Timestamp()])
+
+func UnmuteAccount(accountID : int) -> bool:
+	return ExecuteBindings("DELETE FROM chat_mute WHERE account_id = ?;", [accountID])
+
+func LoadMutes() -> Dictionary[int, int]:
+	var mutes : Dictionary[int, int] = {}
+	var results : Array[Dictionary] = QueryBindings("SELECT account_id, until_ts FROM chat_mute WHERE until_ts > ?;", [SQLCommons.Timestamp()])
+	for row in results:
+		mutes[int(row["account_id"])] = int(row["until_ts"])
+	return mutes
+
+func AddChatReport(reporterAccount : int, reportedAccount : int, channel : String, reason : String, excerpt : String, verified : bool) -> int:
+	if reporterAccount <= 0 or reportedAccount <= 0:
+		return 0
+	if not ExecuteBindings("INSERT INTO chat_report(reporter_account, reported_account, channel, reason, excerpt, verified, status, created_ts) VALUES (?, ?, ?, ?, ?, ?, 'open', ?);", [reporterAccount, reportedAccount, channel, reason, excerpt, int(verified), SQLCommons.Timestamp()]):
+		return 0
+	var rows : Array[Dictionary] = Query("SELECT last_insert_rowid() AS rid;")
+	return int(rows[0].get("rid", 0)) if not rows.is_empty() else 0
+
+func CountOpenReports(reporterAccount : int, reportedAccount : int) -> int:
+	var rows : Array[Dictionary] = QueryBindings("SELECT COUNT(*) AS n FROM chat_report WHERE reporter_account = ? AND reported_account = ? AND status = 'open';", [reporterAccount, reportedAccount])
+	return int(rows[0].get("n", 0)) if not rows.is_empty() else 0
+
+func GetChatReports(status : String = "open", limit : int = 20) -> Array[Dictionary]:
+	var cap : int = clampi(limit, 1, 100)
+	return QueryBindings("SELECT report_id, reporter_account, reported_account, channel, reason, excerpt, verified, status, created_ts FROM chat_report WHERE status = ? ORDER BY created_ts DESC LIMIT ?;", [status, cap])
+
+func CountChatReports(status : String = "open") -> int:
+	var rows : Array[Dictionary] = QueryBindings("SELECT COUNT(*) AS n FROM chat_report WHERE status = ?;", [status])
+	return int(rows[0].get("n", 0)) if not rows.is_empty() else 0
+
+func ResolveChatReport(reportID : int, resolvedBy : int) -> bool:
+	if reportID <= 0:
+		return false
+	# Um UPDATE que não casa linha nenhuma é sucesso de query — sem changes() o
+	# /resolve de um id inexistente diria "resolved" e a fila não fecharia.
+	if not ExecuteBindings("UPDATE chat_report SET status = 'resolved', resolved_ts = ?, resolved_by = ? WHERE report_id = ? AND status = 'open';", [SQLCommons.Timestamp(), resolvedBy, reportID]):
+		return false
+	var rows : Array[Dictionary] = QueryBindings("SELECT changes() AS c;", [])
+	return not rows.is_empty() and int(rows[0].get("c", 0)) > 0
+
 func GetAccountID(username : String) -> int:
 	var results : Array[Dictionary] = QueryBindings("SELECT account_id FROM account WHERE username = ?;", [username])
 	if not results.is_empty():
@@ -1185,6 +1272,7 @@ func _post_launch():
 	CleanExpiredTwoFactorTokens()
 	Peers.bannedAccounts = LoadBans()
 	Peers.bannedIPRanges = LoadIPBans()
+	ChatModeration.Reset(LoadMutes())
 	CleanExpiredTokens()
 
 	isInitialized = true
@@ -1206,6 +1294,8 @@ func Wipe():
 	db.delete_rows("ban", "")
 	db.delete_rows("bestiary", "")
 	db.delete_rows("character", "")
+	db.delete_rows("chat_mute", "")
+	db.delete_rows("chat_report", "")
 	db.delete_rows("equipment", "")
 	db.delete_rows("ip_ban", "")
 	db.delete_rows("item", "")

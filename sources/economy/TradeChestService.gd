@@ -94,6 +94,13 @@ func ExecuteTrade(charIDFrom : int, charIDTo : int, itemsFrom : Array, itemsTo :
 	_eco.settleMutex.unlock()
 	if traded:
 		Util.PrintLog("Economy", "Trade %d -> %d executed (%d/%d stacks, fee %d gems)" % [charIDFrom, charIDTo, itemsFrom.size(), itemsTo.size(), EconomyCatalog.TradeFeeGems])
+		# K1: um evento por lado. A troca é o comportamento que o fraud-scan olha
+		# (flip, burst), e sem contar por conta não dá para saber se o mercado está
+		# sendo usado por duas pessoas ou por uma com alt contas.
+		if Launcher.Telemetry != null:
+			var stacks : int = itemsFrom.size() + itemsTo.size()
+			Launcher.Telemetry.RecordFunnel("trade", _eco._AccountIDForCharacterRaw(charIDFrom), charIDFrom, JSON.stringify({"with" = charIDTo, "stacks" = stacks}))
+			Launcher.Telemetry.RecordFunnel("trade", _eco._AccountIDForCharacterRaw(charIDTo), charIDTo, JSON.stringify({"with" = charIDFrom, "stacks" = stacks}))
 	return traded
 
 # Opens a settle-granted chest with an odds snapshot + provably-fair seeds

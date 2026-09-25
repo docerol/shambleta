@@ -24,6 +24,8 @@ enum RecoveryState { NONE, REQUEST_EMAIL, ENTER_CODE }
 
 # SOM-IDLE LGPD: aceite afirmativo (scroll do termo não é consentimento — exige
 # checkbox). Criado em runtime p/ não editar o .tscn; visível só no cadastro.
+# O mesmo checkbox carrega a declaração maior de idade (§24-11, Lei 15.211/2025):
+# são três cláusulas num aceite só, gravadas por versão em `account.consent_*`.
 var consentCheckBox : CheckBox				= null
 # SOM-IDLE LGPD: re-consent dialog state — the credentials of the last login
 # attempt, replayed to AcceptConsent (server re-verifies before recording).
@@ -102,10 +104,10 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 			RequestFocus(emailTextControl)
 		NetworkCommons.AuthError.ERR_CONSENT_REQUIRED:
 			if isAccountCreatorEnabled:
-				warn = tr("You must read and accept the Terms of Use and Privacy Policy to register.")
+				warn = tr("You must read and accept the Terms of Use and Privacy Policy and declare you are 18 or older to register.")
 				RequestFocus(consentCheckBox)
 			else:
-				warn = tr("The Terms of Use and Privacy Policy were updated. Accept to continue.")
+				warn = tr("The Terms of Use, Privacy Policy or age declaration were updated. Accept to continue.")
 				if not lastAuthAccount.is_empty():
 					OpenReconsentDialog.call_deferred()
 		NetworkCommons.AuthError.ERR_RESET_UNAVAILABLE:
@@ -327,7 +329,7 @@ func OpenReconsentDialog():
 		reconsentDialog.ok_button_text = tr("Accept")
 		reconsentDialog.confirmed.connect(OnReconsentAccepted)
 		add_child(reconsentDialog)
-	reconsentDialog.dialog_text = tr("A new version of the Terms of Use and the Privacy Policy is in effect. Please review them on the game website and accept to enter.")
+	reconsentDialog.dialog_text = tr("A new version of the Terms of Use, the Privacy Policy or the age declaration is in effect. Please review them on the game website and accept to enter.")
 	if not reconsentDialog.visible:
 		reconsentDialog.popup_centered()
 
@@ -461,7 +463,7 @@ func _on_remember_me_toggled(toggled_on : bool):
 func _ready():
 	# SOM-IDLE LGPD: checkbox de aceite (scroll do termo não é consentimento).
 	consentCheckBox = CheckBox.new()
-	consentCheckBox.text = tr("I have read and accept the Terms of Use and Privacy Policy")
+	consentCheckBox.text = tr("I have read and accept the Terms of Use and Privacy Policy, and I am 18 years old or older")
 	consentCheckBox.visible = false
 	loginContainer.add_child(consentCheckBox)
 	# logo abaixo do campo de e-mail, acima da linha de "Remember me"

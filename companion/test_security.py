@@ -21,6 +21,17 @@ Parte B — checkout com binding de sessão (6 casos):
   4. SKU válido → preço exclusivamente do catálogo/server;
   5. preço enviado pelo cliente é ignorado (não altera a preferência);
   6. external_reference permanece vinculado à conta dona do token.
+
+Parte C — gate de idade/LGPD (Lei 15.211/2025) na porta do dinheiro (6 checagens):
+  aceite desatualizado recusa preferência e intent sem chegar ao gateway; conta
+  vigente continua comprando; catálogo sem a declaração fecha a porta; e o
+  webhook continua creditando (dinheiro já tomado não se descarta).
+
+Parte D — chave de comentário do catálogo não é SKU (15 checagens): `_agreements`
+  e `_note` vivem no mesmo dict que as portas consultam; nenhuma das três que
+  TOMAM dinheiro (intent, preferência, sandbox) aceita uma delas, a que CRÉDITA
+  responde 400 em vez de levantar KeyError no handler, `/catalog` não publica
+  nenhuma e o arquivo canônico mantém os 10 SKUs cobráveis.
 """
 import hashlib
 import hmac
@@ -42,6 +53,7 @@ CHECKS = 0
 MP_SECRET = "mp-webhook-secret"
 MP_TOKEN = "MP-ACCESS-TOKEN"
 NOW = int(time.time())
+AGR = server.DEFAULT_CATALOG["_agreements"]
 
 
 def ok(cond, label):
@@ -63,16 +75,32 @@ def make_db():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     con = sqlite3.connect(path)
+    # As três colunas de aceite são as reais (migrations 020 + 046): a porta do
+    # dinheiro compara igualdade com o bloco `_agreements` do catálogo, então o
+    # fixture declara as versões vindas de lá — copiar literal aqui deixaria o
+    # teste passando depois de um bump.
     con.execute("CREATE TABLE account (account_id INTEGER PRIMARY KEY, "
-                "username TEXT, created_timestamp INTEGER);")
-    con.execute("INSERT INTO account VALUES (1, 'Alice', ?);", (NOW,))
-    con.execute("INSERT INTO account VALUES (2, 'Bob', ?);", (NOW,))
+                "username TEXT, created_timestamp INTEGER, "
+                "consent_tos_version TEXT NOT NULL DEFAULT '', "
+                "consent_privacy_version TEXT NOT NULL DEFAULT '', "
+                "consent_age_version TEXT NOT NULL DEFAULT '');")
+    con.execute("INSERT INTO account VALUES (1, 'Alice', ?, ?, ?, ?);",
+                (NOW, AGR["tos"], AGR["privacy"], AGR["age"]))
+    con.execute("INSERT INTO account VALUES (2, 'Bob', ?, ?, ?, ?);",
+                (NOW, AGR["tos"], AGR["privacy"], AGR["age"]))
+    # Carol é a conta do cenário real: token de sessão ainda válido, aceite na
+    # versão anterior ao bump — o jogo já a barra no login, a porta do dinheiro
+    # não pode deixar passar.
+    con.execute("INSERT INTO account VALUES (3, 'Carol', ?, ?, ?, ?);",
+                (NOW, AGR["tos"], AGR["privacy"], "2026-01-a"))
     con.execute("CREATE TABLE grant_queue (id INTEGER PRIMARY KEY "
                 "AUTOINCREMENT, idempotency_key TEXT NOT NULL UNIQUE, "
                 "account_id INTEGER NOT NULL, kind TEXT NOT NULL, "
                 "amount INTEGER NOT NULL, payload TEXT, "
                 "status TEXT NOT NULL DEFAULT 'pending', "
-                "created_at INTEGER NOT NULL);")
+                "created_at INTEGER NOT NULL, "
+                "price_paid INTEGER NOT NULL DEFAULT 0, "
+                "currency TEXT NOT NULL DEFAULT '');")
     con.execute("CREATE TABLE auth_token (account_id INTEGER NOT NULL, "
                 "token_hash TEXT NOT NULL, ip_address TEXT NOT NULL DEFAULT '',"
                 " expires_timestamp INTEGER NOT NULL DEFAULT 0);")
@@ -82,6 +110,8 @@ def make_db():
                 (tok_a, NOW + 30 * 86400))
     con.execute("INSERT INTO auth_token VALUES (2, ?, '127.0.0.1', ?);",
                 (tok_b, NOW + 30 * 86400))
+    con.execute("INSERT INTO auth_token VALUES (3, ?, '127.0.0.1', ?);",
+                (hashlib.sha256(b"tok-Carol").hexdigest(), NOW + 30 * 86400))
     con.execute("INSERT INTO auth_token VALUES (1, ?, '127.0.0.1', ?);",
                 (hashlib.sha256(b"tok-expired").hexdigest(), NOW - 10))
     con.commit()
@@ -170,7 +200,8 @@ def webhook_headers(data_id, request_id="req-1", bad_sig=False):
 
 def approved_payment(pid, ref, amount):
     return {"id": pid, "status": "approved",
-            "external_reference": ref, "transaction_amount": amount}
+            "external_reference": ref, "transaction_amount": amount,
+            "currency_id": "BRL"}
 
 
 try:
@@ -184,6 +215,14 @@ try:
     rows = grants("pay-ok")
     ok(len(rows) == 1 and rows[0][1] == 1 and rows[0][2] == "gems"
        and rows[0][3] == 550, "A1 grant gems.550 p/ conta 1 enfileirado")
+    # K1: amount é o que o JOGO concede; price_paid é o que o provedor COBROU.
+    # Sem a segunda coluna nenhuma métrica de receita existe (ARPU/ARPPU/LTV).
+    con = sqlite3.connect(DB_PATH)
+    paid = con.execute("SELECT price_paid, currency FROM grant_queue "
+                       "WHERE idempotency_key = 'pay-ok';").fetchone()
+    con.close()
+    ok(paid[0] == 1990 and paid[1] == "BRL",
+       "A1 o valor pago (centavos + moeda) é registrado junto do grant")
 
     # A2: provider real sem token → 503, nada concede
     HTTPD.mp_access_token = ""
@@ -297,6 +336,105 @@ try:
                      {"auth_token": "tok-expired", "account_id": 1,
                       "sku": "gems.550"})
     ok(code == 401, "token expirado → 401")
+
+    # ===== Parte C — gate de idade/LGPD (Lei 15.211/2025) na porta do dinheiro =====
+    # Carol tem token de sessão válido e aceite de antes do bump: o game server a
+    # barra no login, então a outra porta não pode abrir checkout para ela.
+    n_pref = len(PREF_CALLS)
+    code, res = post("/checkout/preference",
+                     {"auth_token": "tok-Carol", "account_id": 3,
+                      "sku": "gems.550"})
+    ok(code == 403 and res.get("error") == "consent_required",
+       "C1 aceite desatualizado → 403 consent_required")
+    ok(len(PREF_CALLS) == n_pref,
+       "C1 recusa acontece antes de abrir preferência no gateway")
+    code, res = post("/checkout/intents",
+                     {"auth_token": "tok-Carol", "sku": "gems.550"})
+    ok(code == 403 and res.get("error") == "consent_required",
+       "C2 intent também recusa sem aceite vigente")
+    code, res = post("/checkout/preference",
+                     {"auth_token": "tok-Alice", "account_id": 1,
+                      "sku": "gems.550"})
+    ok(code == 200, "C3 conta com o aceite vigente continua comprando")
+
+    # Fail-closed dos dois lados do contrato: catálogo sem a declaração não é
+    # "nenhuma cobrança" — é porta fechada até alguém declarar a versão vigente.
+    saved_catalog = HTTPD.catalog
+    try:
+        HTTPD.catalog = {k: v for k, v in saved_catalog.items()
+                         if k != "_agreements"}
+        code, res = post("/checkout/preference",
+                         {"auth_token": "tok-Alice", "account_id": 1,
+                          "sku": "gems.550"})
+        ok(code == 403, "C4 catálogo sem _agreements fecha a porta (fail-closed)")
+    finally:
+        HTTPD.catalog = saved_catalog
+
+    # Assimétrico de propósito: o webhook NÃO é gated. Lá o dinheiro já foi
+    # tomado, e recusar seria descartar a entrega de quem pagou.
+    PAYMENTS["pay-carol"] = approved_payment("pay-carol", "3:gems.550", 19.90)
+    n_before = len(grants())
+    code, res = post("/webhooks/payments?data.id=pay-carol", {},
+                     webhook_headers("pay-carol"))
+    ok(code == 200 and len(grants()) > n_before,
+       "C5 webhook de conta sem aceite vigente ainda credita (pago não se descarta)")
+
+    # ===== Parte D — chave de comentário do catálogo não é SKU cobrável =====
+    # O `_agreements` que o gate de aceite passou a ler vive no MESMO dict que as
+    # três portas consultavam por membership (`sku not in catalog`). Medido antes
+    # da correção: `build_preference_payload(cat, "_agreements")` devolvia payload
+    # com `unit_price` 0.0 — cobrar zero é entregar de graça, e sem `kind`/
+    # `amount` não há o que conceder — e `_note` derrubava o handler com
+    # AttributeError antes de qualquer resposta. Hoje a porta exige forma de
+    # produto, com a mesma predicate que `load_catalog` usa no arquivo.
+    for ghost in ("_agreements", "_note"):
+        n_pref = len(PREF_CALLS)
+        n_grants = len(grants())
+        code, res = post("/checkout/preference",
+                         {"auth_token": "tok-Alice", "account_id": 1,
+                          "sku": ghost})
+        ok(code == 400 and res.get("error") == "unknown_sku",
+           "D1 %s não abre preferência no gateway" % ghost)
+        ok(len(PREF_CALLS) == n_pref and len(grants()) == n_grants,
+           "D1 %s não cria preferência nem enfileira grant" % ghost)
+        code, res = post("/checkout/intents",
+                         {"auth_token": "tok-Alice", "sku": ghost})
+        ok(code == 400 and res.get("error") == "unknown_sku",
+           "D2 intent recusa %s" % ghost)
+
+    saved_dev, saved_secret = HTTPD.allow_dev_checkout, HTTPD.secret
+    try:
+        HTTPD.allow_dev_checkout = True
+        HTTPD.secret = "dev-shared"
+        body = {"sku": "_agreements", "account_id": 1,
+                "idempotency_key": "ghost-1"}
+        raw = json.dumps(body).encode()
+        code, res = post("/checkout/simulate", body, {"X-Signature": hmac.new(
+            b"dev-shared", raw, hashlib.sha256).hexdigest()})
+        ok(code == 400 and res.get("error") == "unknown_sku",
+           "D3 sandbox também não aceita chave de comentário")
+        ok(not grants("ghost-1"), "D3 nenhuma grant row nascida do SKU fantasma")
+    finally:
+        HTTPD.allow_dev_checkout, HTTPD.secret = saved_dev, saved_secret
+
+    # A porta que CRÉDITA vale igual: um evento cujo `external_reference` apontasse
+    # para a declaração levantava KeyError dentro do handler — o provedor reenvia
+    # para sempre um evento que nunca vai passar — em vez de um 400 limpo.
+    PAYMENTS["pay-ghost"] = approved_payment("pay-ghost", "1:_agreements", 19.90)
+    n_before = len(grants())
+    code, res = post("/webhooks/payments?data.id=pay-ghost", {},
+                     webhook_headers("pay-ghost"))
+    ok(code == 400 and res.get("error") == "unknown_sku",
+       "D4 webhook com SKU de comentário responde 400 limpo (não KeyError)")
+    ok(len(grants()) == n_before, "D4 nada concedido pelo SKU fantasma")
+
+    with urllib.request.urlopen(BASE + "/catalog", timeout=10) as resp:
+        pub = json.loads(resp.read().decode())["catalog"]
+    ok(not [k for k in pub if k.startswith("_")],
+       "D5 /catalog não publica declaração de comentários como item de loja")
+    ok(len(pub) == len([k for k in HTTPD.catalog
+                        if not k.startswith("_")]),
+       "D5 /catalog continua publicando todos os SKUs cobráveis")
 finally:
     server.mp_fetch_payment = _real_fetch
     server.mp_create_preference = _real_pref
@@ -305,6 +443,23 @@ finally:
         os.unlink(DB_PATH)
     except OSError:
         pass
+
+# O arquivo canônico é a fonte das duas coisas: o `_agreements` que o gate lê e
+# os SKUs que a loja pode cobrar. Um guard que confunda as duas tranca a loja —
+# medido aqui, no caminho de leitura real (`load_catalog`), não no dict embutido.
+_file_cat = server.load_catalog(os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "conf", "paid_catalog.json"))
+_real_skus = [k for k in _file_cat if not k.startswith("_")]
+ok(_real_skus and all(server.is_sellable_sku(_file_cat, k) for k in _real_skus),
+   "D6 todo SKU do arquivo canônico continua cobrável (guard não fecha a loja)")
+ok(not any(server.is_sellable_sku(_file_cat, k)
+           for k in _file_cat if k.startswith("_")),
+   "D6 nenhuma chave de comentário do arquivo é cobrável")
+ok(isinstance(_file_cat.get("_agreements"), dict)
+   and all(_file_cat["_agreements"].get(v)
+           for v in ("tos", "privacy", "age")),
+   "D6 o arquivo canônico declara as três versões vigentes")
 
 if FAILS:
     print("== SECURITY: %d failures ==" % len(FAILS))

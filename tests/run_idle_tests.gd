@@ -41,8 +41,14 @@ func _run_tests():
 	print("== boot wait done (waited %d ms) ==" % waited)
 
 	# SOM-IDLE beta fechado (T5): Seasons travadas por padrão; os testes
-	# habilitam explicitamente aqui (o beta real nunca seta esta env).
+	# habilitam explicitamente aqui. G1 ligou a mesma env no deploy do beta
+	# (`deploy/docker-compose.yml`) — o par ligado/desligado é provado em
+	# `SuiteSeasonLock` e a ativação em si, em `SuiteSeasonBootstrap`.
 	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "1")
+	# SOM-IDLE M2: o stub de rewarded ad é fechado por default no servidor; a suíte
+	# de ads roda o caminho do beta (que liga a env no compose). O par
+	# ligado/desligado é provado dentro do próprio SuiteAds.
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	var sql : Node = launcher.SQL
 	var economy : Node = launcher.Economy
 
@@ -137,6 +143,10 @@ func _run_tests():
 			suites.SuiteWipeB3(sql)
 			suites.SuiteGrantQueue(sql)
 			suites.SuiteTelemetry(sql)
+			# K1: o funil de dinheiro e a coorte de retenção. Prova que cada evento
+			# sai do caminho real (intenção → entrega → mercado → troca) e que a view
+			# da migration 045 marca D1/D7/D30 em dia calendário, não em janela móvel.
+			suites.SuiteMoneyFunnel(sql)
 			suites.SuiteFraud(sql)
 			# SOM-IDLE: E guilds + AH/seasons
 			suites.SuiteGuilds(sql)
@@ -156,6 +166,10 @@ func _run_tests():
 			suites.SuiteSeasonRaces(sql)
 			suites.SuiteTournamentDonation(sql)
 			suites.SuiteSeasonLock(sql)
+			# G1: ativação da espinha sazonal (deploy + relógio + ciclo com
+			# congelamento do placar). Depois de SuiteSeasonLock porque ela é a
+			# única que fala do ciclo completo habilitado e limpa a tabela season.
+			suites.SuiteSeasonBootstrap(sql)
 			suites.SuiteReferral(sql)
 			suites.SuiteVendor(sql)
 			suites.SuiteLiveEvents(sql)
@@ -183,14 +197,54 @@ func _run_tests():
 		# SOM-IDLE: A1 auth hardening + A2 ops hardening
 		suites.SuiteAuthHardening(sql)
 		suites.SuiteTwoFactor(sql)
+		# SOM-IDLE M1: handlers de setup do 2FA no NetServer (o facade existia sem
+		# implementação — o painel de conta nunca respondeu).
+		suites.SuiteTwoFactorSetup(sql)
+		# SOM-IDLE V2: TOTP contra os vetores do RFC 6238 e contra o raio real da
+		# janela de tolerância (puro, sem DB).
+		suites.SuiteTwoFactorVectors()
+		# SOM-IDLE C1/C1b: chat e balão de fala — markup de terceiros inerte no
+		# sink, teto de tamanho no servidor, nick validado no servidor.
+		suites.SuiteChatHardening()
+		# SOM-IDLE C1c: denúncia e mute no envio — os dois portais de saída cobram a
+		# sanção, a prova da denúncia é o trecho que o servidor viu, e a fila fecha.
+		suites.SuiteChatModeration(sql)
 		suites.SuiteLGPD(sql)
 		suites.SuiteRefund(sql)
 		suites.SuiteConcurrency(sql)
 		suites.SuiteOpsA2(sql)
 
+		# SOM-IDLE D1: modo de lançamento (live.db/porta/feature tag) amarrado
+		# aos arquivos do deploy — só lê res://, então roda fora do bloco do DB.
+		suites.SuiteDeployMode()
+
+		# SOM-IDLE L1: /healthz e /metrics ao vivo (HTTP na loopback) + o probe do
+		# compose amarrado à porta que o servidor binda. Awaited: conversa de verdade
+		# com o _process do serviço entre frames.
+		await suites.SuiteMetrics()
+
+		# SOM-IDLE M3: as três listas de preço (anúncio do servidor, catálogo do gateway
+		# e fallback do companion) têm que bater SKU a SKU e centavo a centavo — pass.s1
+		# estava cobrável e não anunciado, e o botão do passe virava unknown_sku.
+		suites.SuiteCatalogConsistency(sql)
+
+		# S1: identidade do chamador vem do transporte. Varre o facade por source
+		# guard — não precisa de DB, então fica junto do SuiteDeployMode.
+		suites.SuiteRpcIdentity(_getAutoload("Network"))
+
 		# §7.4 deterministic live farm sim (zone 1) — after the DB suites so the
 		# fixture character is already leveled by the settle
 		await suites.SuiteIdlePolicySim(suites.lastCharID)
+		# Agent lifecycle: the instance list is the authority, not the tree, and an
+		# empty instance closes by identity. Both regressions are use-after-free in
+		# teardown, so they run right after the sim that exercises the same path.
+		await suites.SuiteAgentLifecycle(sql)
+		# R1: chamada de autoload apontando para função que não existe só explode em
+		# runtime no client — o runner é server-only, então a varredura é o exame.
+		suites.SuiteAutoloadSurface()
+		# SOM-IDLE beta: mesma varredura para os campos de serviço do Launcher
+		# (tipados na base — nada no compilador checa `Launcher.SQL.<método>`).
+		suites.SuiteServiceSurface()
 		# SOM-IDLE: D1 pacing (harness fast; real-time probe ~5min, binding gate)
 		suites.SuiteFaucetHarness(sql)
 		await suites.SuiteOnboarding(sql)
@@ -198,6 +252,20 @@ func _run_tests():
 		# SOM-IDLE: arena do interrupt AO VIVO (drena o _consumeBossInterrupt real
 		# contra um mob da instância; mesmo harness de agente do ladder)
 		await suites.SuiteBossInterruptLive(sql, economy)
+		# SOM-IDLE beta: jornada de painéis. Por último — EnsureCharacterHub
+		# absorve status/skills/progresso/formação no TabContainer do hub e
+		# reorganiza o GUI ao vivo; nada depois dela depende dos painéis originais.
+		suites.SuiteGuiPanels()
+		# Hotkeys depois do hub: F2/F4/F5 agora apontam para o TabContainer que
+		# SuiteGuiPanels montou, e a suíte aperta as teclas de verdade no `_input`
+		# do serviço — nada nesta casa provava que um atalho anunciado abria algo.
+		suites.SuiteInputHotkeys()
+		# Ponteiros de evidência por último: não toca estado nenhum, só relê a
+		# documentação do beta contra a árvore atual.
+		suites.SuiteEvidencePointers()
+		# Depois da régua de ponteiros, no mesmo espírito: leitura da árvore, nenhum
+		# estado tocado. Varre `sources/` procurando navegação externa sem o ramo Web.
+		suites.SuiteExternalLinksWebBranch()
 	else:
 		print("FATAL: DB not initialized — DB-backed suites skipped")
 

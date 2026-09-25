@@ -104,6 +104,15 @@ func _post_launch():
 	if kernel == null:
 		kernel = EconomyKernel.new()
 		kernel._eco = self
+	# §10 (Bloco 1): o catálogo pago é validado no boot do servidor. A CI amarra as
+	# três pontas (anúncio / JSON / fallback do companion); isto pega o JSON editado
+	# na máquina do operator — um `kind` novo ou preço trocado de um lado só é
+	# dinheiro aceito e mercadoria nunca entregue dias depois, com a fila de grant
+	# parada em `pending`. Não derruba o server de propósito: o erro é do catálogo,
+	# o resto do jogo continua e a divergência fica no log com o SKU.
+	if "--server" in OS.get_cmdline_args():
+		for drift : String in EconomyCatalog.ValidatePaidCatalogFile():
+			push_error("catálogo pago divergente: %s" % drift)
 	isInitialized = true
 
 func Destroy():
@@ -122,11 +131,11 @@ func LedgerAppend(charID : int, accountID : int, kind : String, amount : int, ba
 func GrantItem(accountID : int, itemHash : int, count : int, reason : String = "") -> bool:
 	return kernel.GrantItem(accountID, itemHash, count, reason)
 
-func RemoveItem(uid : int) -> bool:
-	return kernel.RemoveItem(uid)
-
-func SettleTransaction(charID : int, report : Dictionary) -> bool:
-	return kernel.SettleTransaction(charID, report)
+# Não há RemoveItem aqui de propósito: tirar item do inventário é
+# Inventory.RemoveItem → SQL.RemoveItem, e os movimentos econômicos de item
+# (listar no leilão, grant de compra, fee) entram assinados em ledger pelos
+# domínios. O stub `RemoveItem(uid) -> false` que existia aqui não tinha
+# chamador nenhum e devolver false para uma remoção seria um sumiço silencioso.
 
 func GetGems(accountID : int) -> int:
 	return kernel.GetGems(accountID)
@@ -236,7 +245,8 @@ func PurchaseVIP(accountID : int, tier : int) -> bool:
 	return checkoutService.PurchaseVIP(accountID, tier)
 
 # ------------------------------------------------------------------ C1: companion grants (Fatia 2 → CheckoutService.gd)
-# Fila idempotente pós-webhook (WebhookValidator) — kinds, tier por SKU e
+# Fila idempotente pós-webhook (a assinatura é validada no companion,
+# `companion/server.py`) — kinds, tier por SKU e
 # apply raw vivem no serviço; wrappers no fim do arquivo.
 
 # ------------------------------------------------------------------ beta GUI: shop (Fatia 5 → ShopService.gd)
@@ -250,13 +260,15 @@ func BuyChests(accountID : int, charID : int, count : int) -> Dictionary:
 # fechados, odds públicas (texto pré-formatado, compliance loot box) e preços.
 # Uma RPC única — as janelas pedem ao abrir e as ações devolvem o estado novo.
 #
-# Fase A (checkout sandbox): inclui `catalog` (espelho DISPLAY-ONLY do
-# companion/catalog.json — o grant autoritativo vive no companion; preço aqui
-# nunca vira crédito), `starter_offer` (elegibilidade one-time D0–D3, sem
+# Fase A (checkout sandbox): inclui `catalog` (espelho DISPLAY-ONLY do catálogo
+# pago — `EconomyCatalog.SHOP_CATALOG`, amarrado a data/conf/paid_catalog.json por
+# `ValidatePaidCatalog`; o grant autoritativo vive no companion; preço aqui nunca
+# vira crédito), `starter_offer` (elegibilidade one-time D0–D3, sem
 # migração: idade via account.created_timestamp + compra prévia via
 # grant_queue payload) e `pending_grants` (fila do companion p/ esta conta).
 #
-# Espelho do catálogo (manter sincronizado com companion/catalog.json).
+# Espelho do catálogo: validado contra data/conf/paid_catalog.json no boot do
+# servidor e em SuiteCatalogConsistency — não é mais "manter sincronizado à mão".
 
 # Fatia 2 → CheckoutService.gd (wrappers de delegação; locking no serviço).
 
@@ -328,6 +340,9 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	return shopService.BuyVendorOffer(accountID, charID, offerID)
 
 # ------------------------------------------------------------------ R3: live events (Fatia 10 -> CommunityService.gd)
+func EnsureCalendarLiveEvents() -> int:
+	return communityService.EnsureCalendarLiveEvents()
+
 func TickLiveEvents() -> Dictionary:
 	return communityService.TickLiveEvents()
 
@@ -398,7 +413,7 @@ func _NamedSeasonBoard(seasonID : int, kind : String, limit : int) -> Array:
 
 
 # ------------------------------------------------------------------ C1/CDC: grants + refund (Fatia 2 → CheckoutService.gd)
-# Wrappers de delegação: callers (Server.gd, WebhookValidator, testes) não
+# Wrappers de delegação: callers (Server.gd, testes) não
 # mudam. O serviço usa o MESMO settleMutex + helpers raw daqui (composição com
 # back-reference), então a semântica de locking é idêntica à pré-fatiamento.
 

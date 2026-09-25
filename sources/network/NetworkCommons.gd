@@ -13,6 +13,27 @@ static var WebSocketPort : int			= 6108
 static var ENetPort : int				= 6109
 static var ServerAddress : String		= "som.manasource.org"
 
+# SOM-IDLE beta (fronteira do dinheiro): base HTTP do companion, o serviço que
+# recebe webhook de pagamento e cria a preferência de checkout. Browser não tem
+# variável de ambiente, e o default histórico (loopback) só faz sentido em
+# desktop/dev — no export web ele apontava para a máquina do jogador, então
+# nenhum POST de checkout chegava ao companion. Quem resolve é `Launcher._ready`
+# (uma vez, junto com Server-Address) escrevendo em `CompanionURL`; o client lê.
+const CompanionPort : int				= 8901
+const CompanionLocalDev : String	= "http://127.0.0.1:%d" % CompanionPort
+static var CompanionURL : String	= CompanionLocalDev
+
+# Pura de propósito (mesmo formato de LauncherCommons.ResolveIsTesting): as três
+# fontes entram por parâmetro, então o harness cobre o ramo web sem browser.
+# Ordem: env (desktop/dev) > conf [Network] Companion-Base (baked no build) >
+# origem da página (web; é o proxy same-origin do nginx) > loopback de dev.
+static func ResolveCompanionURL(envValue : String, confValue : String, pageOrigin : String) -> String:
+	for candidate : String in [envValue, confValue, pageOrigin]:
+		var url : String = candidate.strip_edges().trim_suffix("/")
+		if not url.is_empty():
+			return url
+	return CompanionLocalDev
+
 # SOM-IDLE beta deploy: TLS terminado no proxy reverso (Coolify/Traefik). O
 # server binda ws:// plain porque o proxy expõe wss:// ao cliente — nunca
 # ativar em binds públicos diretos. Lido de SHAMBLETA_PROXY_TLS=1.
@@ -144,11 +165,48 @@ const MaxLoginAttempts : int			= 5
 const BaseLockoutSec : int				= 300
 const MaxLockoutSec : int				= 7200
 
+# SOM-IDLE C1: cota de tamanho do chat. Vale onde nenhum cliente manda — o
+# NotifyGlobal/NotifyNeighbours repete cada linha para a sala inteira, então um
+# texto de megabytes de um peer vira banda e layout quebrado para todos.
+const ChatMaxSize : int					= 240
+
 # SOM-IDLE A2: produção pública exige TLS (WSS/DTLS). Dev/test/offline/local
 # estão isentos (loopback ou sem rede). WebRTC não passa por aqui e já é
 # sempre cifrado pelo próprio protocolo (DTLS-SRTP mandatório).
 static func RequiresTLS(isTesting : bool, isOffline : bool, isLocal : bool) -> bool:
 	return not isTesting and not isOffline and not isLocal
+
+# SOM-IDLE beta (V7): as opções TLS do CLIENTE, com a verificação de certificado
+# LIGADA. `TLSOptions.client_unsafe()` desliga cadeia e hostname no canal por onde
+# viajam senha, token de "lembrar" e o código 2FA dos RPCs de auth — um MITM na rota
+# respondia com qualquer certificado e colhia credencial antes de repassar o tráfego
+# ao servidor real. O hostname conferido não é argumento daqui: o transporte o deriva
+# do URL (`create_client` em wss://host) ou do endereço do `dtls_client_setup`.
+#
+# A âncora é a store de CA do sistema entregue explicitamente, e isso não é preciosismo:
+# medido com este engine (Godot 4.7.2, Linux/mbedtls, WebSocket em loopback contra
+# certificado autoassinado), `TLSOptions.client()` sem argumento morre na inicialização
+# do contexto — "SSL module failed to initialize!" (-0x6C00) — e o handshake nem
+# acontece, ou seja, derrubaria o login do desktop. O mesmo PEM lido do sistema e
+# passado como CA funciona: recusa cadeia não confiável (-0x2700 / -0x7180) e aceita
+# quando a âncora bate. Sem store legível o fallback é o caminho interno do engine
+# (verificado também); `client_unsafe` não é fallback de nada.
+static func ClientTLSOptions() -> TLSOptions:
+	# Web: não há store de âncoras para o wasm consultar, e a tentativa de ler uma
+	# despejava um `ERROR: Error parsing X509 certificates: -8576` (INVALID_FORMAT) no
+	# console de cada jogador — medido no navegador em 2026-09-25, com o mesmo engine
+	# respondendo OK para um PEM de 185.307 chars no desktop (`OS` base devolve string
+	# vazia na plataforma, sem nenhuma implementação de certificado no glue web).
+	# Não é regressão da verificação acima: no browser quem faz o handshake do `wss://`
+	# é o próprio navegador (a tentativa de conexão cai na camada de rede dele, com
+	# erro `net::`), então o Godot não termina TLS aqui e estas opções são inertes. O
+	# caminho que verifica certificado vale onde o engine termina o TLS — desktop.
+	if LauncherCommons.isWeb:
+		return TLSOptions.client()
+	var systemAnchors : X509Certificate = X509Certificate.new()
+	if systemAnchors.load_from_string(OS.get_system_ca_certificates()) == OK:
+		return TLSOptions.client(systemAnchors)
+	return TLSOptions.client()
 
 # Tools
 const OnlineListPath : String			= ""
@@ -223,6 +281,11 @@ enum AccountStatus {
 # conteúdo de data/db/agreement.json e a política de privacidade publicada).
 const AgreementTosVersion : String = "2026-09-b"		# bumped: AFK-farm rule + BR jurisdiction (agreement.json)
 const AgreementPrivacyVersion : String = "2026-09-b"
+# Gate de idade (§21/§24-11): terceira cláusula do mesmo aceite afirmativo — o
+# jogador declara ter 18+. Bump aqui força re-afirmação dos ativos, como os dois
+# acima. A fonte do texto é `data/db/agreement.json`
+# ("Age and Paid Randomized Content"); o predicate é version-aware em SQL.
+const AgreementAgeVersion : String = "2026-09-a"
 
 static func CheckSize(entry : String, minSize : int, maxSize : int) -> bool:
 	var currentSize : int = entry.length()
@@ -253,6 +316,12 @@ static func CheckEmailInformation(emailText : String) -> AuthError:
 
 static func CheckResetCode(code : String) -> bool:
 	return code.length() == ResetCodeSize and code.is_valid_int()
+
+# SOM-IDLE C1: normaliza a linha de chat no servidor — corta no teto e remove a
+# sobra de espaço/quebra de linha, de modo que texto só-espaço vazio "" e o
+# chamador descarte. Sempre devolve no máximo ChatMaxSize caracteres.
+static func ClipChat(text : String) -> String:
+	return text.substr(0, ChatMaxSize).strip_edges()
 
 # IP ranges with wildcards support
 static func IsValidIPRange(ipRange : String) -> bool:

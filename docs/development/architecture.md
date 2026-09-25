@@ -31,21 +31,33 @@
 
 `Launcher.gd` gerencia lifecycle dos serviços. `FSM.gd` implementa máquina de estados do launcher (LOGIN_SCREEN → IN_GAME).
 
-### Network (Fragmentado — P4 / 2026-09)
+### Autoloads (o que realmente existe em `project.godot`)
 
-`Network.gd` agora atua como **facade pura** (177 linhas, 0 `@rpc`): dispatcher (`CallServer`/`CallClient`/`Bulk`/`Notify*`), transporte (`ENet`, `WebSocket`, `WebRTC`) e sinais. Todos os RPCs foram fragmentados em módulos autocontidos (registrados como `autoload` em `project.godot`):
+Cinco, e só estes: `Launcher`, `Network`, `FSM`, `Monitoring`, `WebPush`. Todo o
+restante é classe global por `class_name` (`Util`, `NetworkCommons`, `OnlineList`,
+`SQLCommons`, `EconomyCatalog`, …) ou serviço composto dentro do `Launcher`
+(`Launcher.SQL`, `Launcher.Economy`, `Launcher.World`). Registrar um `RefCounted`
+como autoload não funciona no Godot 4 — foi exatamente isso que derrubou a
+tentativa de fragmentação do `Network` (ver abaixo).
 
-| Módulo | RPCs principais | Linhas |
+### Network
+
+| Arquivo | Papel | Linhas |
 |---|---|---|
-| `Network.gd` (facade) | `CallServer`, `CallClient`, `Bulk`, `Notify*`, `Mode` | 177 |
-| `NetworkAuth.gd` | Auth (`CreateAccount`, `LoginWithPassword`, `2FA`, `Refund`) | 44 |
-| `NetworkSocial.gd` | Guild / Social (`GuildState`, `GuildFeedback`) | 22 |
-| `NetworkCharacter.gd` | Personagem (`CreateCharacter`, `CharacterInfo`, `ConnectCharacter`) | 33 |
-| `NetworkCombat.gd` | Combate / Chat / Contexto (`TriggerSkill`, `TriggerChat`, `Express`) | 36 |
-| `NetworkEconomy.gd` | Economia (`OpenChest`, `BuyPass`, `PurchaseVIP`, `GetAchievements`) | 48 |
-| `NetworkGuild.gd` | Guild / Torneios (`LevelUpGuildFast`, `EnterTournament`) | 22 |
+| `sources/network/Network.gd` | Nó autoload: dispatcher (`CallServer`/`CallClient`/`Bulk`/`Notify*`), transporte (`ENet`, `WebSocket`, `WebRTC`), sinais **e os 201 `@rpc`** | 1062 |
+| `sources/network/server/Server.gd` | Autoridade: sessão, mundo, economia, chat, guild, torneios | 1468 |
+| `sources/network/client/Client.gd` | Lado do cliente | 876 |
+| `sources/network/NetworkCommons.gd` | Constantes de protocolo + `ComputeProtocolVersion(network)` — hash dos `@rpc` do nó, usado no handshake | — |
+| `sources/network/server/` | `Peers.gd`, `OnlineList.gd`, `ChatModeration.gd` (mute/denúncia), `EmailService.gd` | — |
+| `sources/network/Interface.gd` | `class_name NetInterface` | — |
 
-**Protocolo (`ComputeProtocolVersion`)**: atualizado em `NetworkCommons.gd` (§ Passo 2) para agregar `@rpc` de todos os módulos, não apenas da facade. Isso garante que o handshake (`Server.gd:1355` / `Client.gd:793`) valide corretamente clientes com a versão dos módulos.
+**Não existe** `NetworkAuth.gd`/`NetworkSocial.gd`/`NetworkCharacter.gd`/
+`NetworkCombat.gd`/`NetworkEconomy.gd`/`NetworkGuild.gd`. O P4 (2026-09) fragmentou
+`Network.gd` nesses seis módulos registrados como autoload; a tentativa foi
+revertida: `RefCounted` não vira autoload no Godot 4 e os `class_name` colidiam com
+os nomes globais, travando a compilação de tudo que tocava rede. As docs antigas
+descreviam a fragmentação como concluída — ver `ROADMAP_COMERCIAL.md` §S3 e
+`AUDITORIA_INDEPENDENTE_2026-09-24.md` §20.
 
 **Transportes**: `ENet` (UDP), `WebSocket`, `WebRTC` (web). Canais: `CONNECT`, `ACTION`, `MAP`, `MAP_UNRELIABLE`, `NAVIGATION`, `NAVIGATION_UNRELIABLE`, `ENTITY`, `ENTITY_UNRELIABLE`, `BULK`.
 
@@ -55,17 +67,51 @@
 - `ZonePolicy` — batching O(1) por zona
 - `OfflineSettle` — idempotente via `last_settled_at`
 
-### SQL (Fragmentado — P4)
+### SQL
 
-`SQL.gd` atua como facade; módulos por domínio (`SQLMigration`, `SQLAccount`, `SQLCharacter`, `SQLStats`, `SQLInventory`, `SQLEquipment`, `SQLProgress`, `SQLEconomy`, `SQLBan`, `SQLUtils`).
+`SQL.gd` (1267 linhas) é o serviço de dados e está na allowlist do gate
+anti-god-node como legado consciente, junto com `Server.gd`, `Client.gd`,
+`Network.gd`, `WorldCommands.gd` e `companion/server.py`. Ao lado dele só
+`SQLCommons.gd` (constantes/caminho de DB) e `SQLBackups.gd` (worker de backup +
+rotação do meta game). Os dez módulos de domínio que esta página listava
+(`SQLMigration`, `SQLAccount`, `SQLCharacter`, `SQLStats`, `SQLInventory`,
+`SQLEquipment`, `SQLProgress`, `SQLEconomy`, `SQLBan`, `SQLUtils`) foram
+**removidos em 2026-09-24**: zero referências em `sources/` e `tests/`, e eram
+cópias parciais/stub do que o próprio `SQL.gd` já implementa — mexer neles não
+mudava nada e era exatamente o tipo de armadilha que uma hotfix de beta encontra.
 
 ### Economy
 
-`EconomyService` com sharding de mutex (8 shards), ledger append-only, settlement, rebirth.
+16 arquivos, ~5.7k linhas em `sources/economy/`. `EconomyService.gd` (778) é a
+fachada: dono dos mutexes (`settleMutex` global + 8 shards por
+`hash(accountID) % EconomyCatalog.SHARD_COUNT`) e dos wrappers que os callers
+(RPC do servidor, GUI, testes) sempre enxergaram. Domínios extraídos por composição
+com back-reference `_eco` — mesmo locking, mesma assinatura pública:
 
-### Monitoring
+`EconomyKernel` (carteira, ledger, ops de item) · `CheckoutService` (grant queue,
+VIP, refund) · `SeasonService` · `PassService` · `GuildService` ·
+`AuctionHouseService` · `ShopService` · `ItemForgeService` (crafting/sinks) ·
+`BossProgressionService` (rebirth/escada/tormento) · `AdsCosmeticsService` ·
+`TournamentArenaService` · `CommunityService` (live events, conquistas, referral,
+anti-fraude) · `TradeChestService` · `TelemetryService` ·
+`EconomyCatalog` (constantes/helpers puros).
 
-`Monitoring.gd` integra Sentry (opt-in). `MetricsServer` expõe `/metrics` e `/healthz` em `127.0.0.1:9400`.
+A fronteira de dinheiro não tem módulo GDScript: assinatura de webhook é validada
+no companion (`companion/server.py`, HMAC + re-fetch autoritativo, fail-closed) e o
+servidor do jogo apenas consome a `grant_queue` que esse código escreveu.
+
+Ledger append-only (trigger no banco), baús provably-fair com pity, e o catálogo
+pago canônico em `data/conf/paid_catalog.json` — a mesma fonte que o companion
+cobra e que o servidor valida no boot (`EconomyCatalog.ValidatePaidCatalogFile`).
+
+### Observabilidade
+
+`Monitoring.gd` integra Sentry (opt-in). `MetricsServer.gd` é instanciado pelo
+`Launcher` (`Launcher.Metrics`), faz bind de `127.0.0.1:9400` e responde `/healthz` e
+`/metrics` — é para essa porta que o healthcheck do Docker aponta; antes de
+existir servidor nenhum, o check era permanentemente falso. Leitura por dentro do
+container (`docker compose exec game curl localhost:9400/healthz`); não é exposta
+publicamente.
 
 ## Diagrama de Sequência — Login
 

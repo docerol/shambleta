@@ -176,19 +176,26 @@ func _input(event : InputEvent):
 		if TryJustPressed(event, "ui_close"):			Launcher.GUI.CloseWindow()
 		elif TryJustPressed(event, "ui_close", true):	Launcher.GUI.CloseCurrent()
 		elif TryJustPressed(event, "ui_menu"):			Launcher.GUI.menu._on_button_pressed()
-		elif FSM.IsGameState():
-			if TryJustPressed(event, "ui_inventory"):		Launcher.GUI.ToggleControl(Launcher.GUI.inventoryWindow)
-			elif TryJustPressed(event, "ui_minimap"):		Launcher.GUI.ToggleControl(Launcher.GUI.minimapWindow)
-			elif TryJustPressed(event, "ui_chat"):			Launcher.GUI.ToggleControl(Launcher.GUI.chatWindow)
-			elif TryJustPressed(event, "ui_emote"):			Launcher.GUI.ToggleControl(Launcher.GUI.emoteWindow)
+		# As teclas presas ao estado de jogo vêm condicionadas na própria linha. Com
+		# o guard num `elif FSM.IsGameState():` aninhado, a cadeia parava nele assim
+		# que o jogador entrava no jogo e nada depois do ramo era avaliado — F2/F4/F5
+		# (hub de personagem), F9 (social), P e F11 só funcionavam no menu, exatamente
+		# o contrário do que a tela de bindings anuncia.
+		elif FSM.IsGameState() and TryJustPressed(event, "ui_inventory"):	Launcher.GUI.ToggleControl(Launcher.GUI.inventoryWindow)
+		elif FSM.IsGameState() and TryJustPressed(event, "ui_minimap"):		Launcher.GUI.ToggleControl(Launcher.GUI.minimapWindow)
+		elif FSM.IsGameState() and TryJustPressed(event, "ui_chat"):			Launcher.GUI.ToggleControl(Launcher.GUI.chatWindow)
+		elif FSM.IsGameState() and TryJustPressed(event, "ui_emote"):			Launcher.GUI.ToggleControl(Launcher.GUI.emoteWindow)
+		# Enter é do LineEdit do chat enquanto se joga; fora do jogo ele não disputa
+		# nada, então `ui_validate` continua restrito aos estados de menu.
+		elif not FSM.IsGameState() and TryJustPressed(event, "ui_validate"):	Launcher.GUI.ToggleChatNewLine()
 		elif TryJustPressed(event, "ui_skill"):
 			Launcher.GUI.OpenCharacterHub(1)
 		elif TryJustPressed(event, "ui_progress"):
 			Launcher.GUI.OpenCharacterHub(2)
 		elif TryJustPressed(event, "ui_stat"):
 			Launcher.GUI.OpenCharacterHub(0)
+		elif TryJustPressed(event, "ui_settings"):		Launcher.GUI.ToggleControl(Launcher.GUI.settingsWindow)
 		elif TryJustPressed(event, "ui_social"):		Launcher.GUI.ToggleControl(Launcher.GUI.socialWindow)
-		elif TryJustPressed(event, "ui_validate"):		Launcher.GUI.ToggleChatNewLine()
 		elif TryJustPressed(event, "ui_screenshot"):	FileSystem.SaveScreenshot()
 		elif TryJustPressed(event, "ui_fullscreen"):	Launcher.GUI.ToggleFullscreen()
 	consumed.clear()

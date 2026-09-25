@@ -270,6 +270,10 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 
 	var rarity : String = EconomyCatalog.CraftRarityForUsage(float(budgetUsed) / float(budgetCap) * 100.0)
 	var fee : int = EconomyCatalog.CraftSubmitFee(tier)
+	# #27: `smith_week` existia como kind com `fee_mod` no parâmetro, mas nenhum
+	# caminho de código lia o valor — o evento era inerte. Esta é a taxa que ele
+	# modula. Leitura pura, antes do lock (a consulta abaixo pega o queryMutex).
+	fee = maxi(1, roundi(float(fee) * _eco.GetLiveEventCraftingFeeMod()))
 	var now : int = SQLCommons.Timestamp()
 
 	_eco.settleMutex.lock()

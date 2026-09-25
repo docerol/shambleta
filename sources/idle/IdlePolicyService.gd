@@ -156,7 +156,12 @@ static func _Attach(player : PlayerAgent, map : WorldMap, instID : int, zoneID :
 	# the farm instance (the currentInst check skips their warp) and never hit
 	# it — which is why 561 headless checks stayed green while the GUI farmed
 	# nothing.
-	var currentInst : Node = player.get_parent()
+	# A lista da instância é a autoridade sobre "onde o char está", não a árvore:
+	# um agente recém-spawnado já está listado na zona de destino enquanto o
+	# add_child ainda está adiado. Medir por get_parent() warpeava para a mesma
+	# instância — o pop esvaziava a lista e o fechamento adiado derrubava a
+	# zona com o dono dela dentro.
+	var currentInst : Node = player.listedIn
 	if currentInst == null or not (currentInst is WorldInstance) or (currentInst as WorldInstance).id != instID:
 		Launcher.World.Warp(player, map, pos, ActorCommons.Direction.UNKNOWN, instID)
 
@@ -184,8 +189,11 @@ static func StopIdleSession(player : PlayerAgent):
 		if policy:
 			policy.Halt()
 			player.idlePolicy = null
-			var inst : WorldInstance = WorldAgent.GetInstanceFromAgent(player)
-			if inst and inst is WorldInstance:
+			# A policy é anexada à instância que lista o char (ver _Attach), então é
+			# nela que tem que ser desanexada — get_parent() é null no meio do warp
+			# e deixava policy morta na lista da instância antiga.
+			var inst : WorldInstance = player.listedIn as WorldInstance
+			if inst:
 				inst.DetachIdlePolicy(policy)
 
 # ------------------------------------------------------------------ auto-idle (inatividade)

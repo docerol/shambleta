@@ -81,6 +81,14 @@ static func AddThousandsSeparators(integerPart : String) -> String:
 		charCounter -= 3
 	return integerPart
 
+# SOM-IDLE C1: texto de terceiros (chat de outro jogador, nick) nunca pode
+# virar markup — RichTextLabel do chat é bbcode_enabled e um "[b]" já quebrava
+# o layout de quem recebia. Godot 4 não tem escape por colchete ("[[b]]"
+# renderiza "[]") nem push_string(); ZWSP depois do "[" desarma o parser e tem
+# advance 0 na theme do projeto, ou seja, visualmente idêntico ao original.
+static func EscapeBBCode(text : String) -> String:
+	return text.replace("[", "[\u200B")
+
 # SOM-IDLE: F2 idle spike — compact number formatting (TECH_SPEC_CORE §6)
 # Below 100k: pt-BR thousands separators ("123.456"); above: K/M/B/T/Qa/Qi
 # with 3 significant digits ("1.23M", "12.3M", "123M").

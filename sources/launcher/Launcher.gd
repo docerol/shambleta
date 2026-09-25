@@ -20,9 +20,23 @@ var Email : EmailService			= null
 # SOM-IDLE: F2 — economy/settle service (settle-path ledger writes)
 var Economy : EconomyService		= null
 var Telemetry : TelemetryService	= null
+# SOM-IDLE L1: /healthz + /metrics do server (loopback 9400). O healthcheck do
+# compose e o `depends_on: service_healthy` do `web` dependem deste processo
+# escutar — sem ele a stack do beta nunca fica healthy.
+var Metrics : MetricsServer			= null
 
 # Accessors
 var Player : Entity					= null
+
+# O modo como o processo nasceu, registrado em `_ready`. É o estado para o qual se
+# volta quando a conexão com o servidor remoto cai: hardcodar `Mode(true, true)` no
+# teardown do cliente ligava um servidor que o boot nunca ligou — no browser isso
+# tentava bind TCP em 127.0.0.1:9400 (`ERR_CANT_CREATE`, medido 2026-09-25) e
+# re-entrava `DB.Init`; num desktop de release criava World/SQL/Discord/Email/
+# Economy/Telemetry que ninguém pediu. Em dev o boot já é client+server, então o
+# comportamento medido até aqui não muda.
+var BootClient : bool				= false
+var BootServer : bool				= false
 
 # Signals
 signal launchModeUpdated
@@ -65,6 +79,10 @@ func Server():
 	# SOM-IDLE: F2 — economy service lives with the other server services
 	Economy			= EconomyService.new()
 	Telemetry		= TelemetryService.new()
+	# SOM-IDLE L1: bind imediato, antes das migrations. É isso que permite ao
+	# healthcheck distinguir "booting" (503) de "processo morto" (conexão
+	# recusada); IsServing() é avaliado por requisição, não por aqui.
+	Metrics			= MetricsServer.new()
 
 	add_child.call_deferred(World)
 	add_child.call_deferred(SQL)
@@ -72,6 +90,8 @@ func Server():
 	add_child.call_deferred(Email)
 	add_child.call_deferred(Economy)
 	add_child.call_deferred(Telemetry)
+	add_child.call_deferred(Metrics)
+	Metrics.Launch()
 
 func Reset(clientStarted : bool, serverStarted : bool):
 	if not clientStarted:
@@ -138,6 +158,13 @@ func Reset(clientStarted : bool, serverStarted : bool):
 			Telemetry.Destroy()
 			Telemetry.queue_free()
 			Telemetry = null
+		# SOM-IDLE L1: Destroy() faz listener.stop() na hora, então um Mode() que
+		# recria o server re-binda a 9400 sem esperar o free adiado.
+		if Metrics:
+			Metrics.set_name("MetricsDestroyed")
+			Metrics.Destroy()
+			Metrics.queue_free()
+			Metrics = null
 
 func Quit():
 	Reset(false, false)
@@ -164,8 +191,16 @@ func _ready():
 	var confPort : int = Conf.GetInt("Network", "Server-Port", Conf.Type.SETTINGS)
 	if confPort > 0:
 		NetworkCommons.WebSocketPort = confPort
-	if confPort > 0:
-		NetworkCommons.WebSocketPort = confPort
+	# Base do companion (webhook/checkout). No web a resposta é a origem da própria
+	# página: o nginx do serviço `web` faz proxy de /checkout/ e /webhooks/ para o
+	# companion na rede interna, então o client nunca precisa conhecer outro
+	# hostname (e não há CORS nem mixed content no caminho do dinheiro).
+	var pageOrigin : String = ""
+	if LauncherCommons.isWeb:
+		pageOrigin = str(JavaScriptBridge.eval("window.location.origin", true))
+	NetworkCommons.CompanionURL = NetworkCommons.ResolveCompanionURL(
+		OS.get_environment("SHAMBLETA_COMPANION_URL"),
+		Conf.GetString("Network", "Companion-Base", Conf.Type.SETTINGS), pageOrigin)
 
 	if "--server" in OS.get_cmdline_args():
 		Scene = FileSystem.LoadResource(Path.Pst + "Server" + Path.SceneExt)
@@ -185,6 +220,8 @@ func _ready():
 		printerr("Could not initialize source's base services")
 		Quit()
 
+	BootClient = startClient
+	BootServer = startServer
 	Mode(startClient, startServer)
 	await Scene.ready
 

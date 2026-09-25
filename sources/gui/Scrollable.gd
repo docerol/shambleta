@@ -49,7 +49,13 @@ static func AddContent(container : VBoxContainer, entry : Dictionary):
 		container.add_child.call_deferred(label)
 
 static func _richtextlabel_on_meta_clicked(meta):
-	OS.shell_open(str(meta))
+	# Mesmo ramo da porta do dinheiro (`Checkout.gd:_launch_payment_url`): no export
+	# Web `OS.shell_open` não abre aba nenhuma, e aqui é justamente o link do
+	# próprio aceite — o jogador clicando dentro do texto que está aceitando.
+	if LauncherCommons.isWeb:
+		JavaScriptBridge.eval("window.open(%s, '_blank');" % JSON.stringify(str(meta)))
+	else:
+		OS.shell_open(str(meta))
 
 static func AddContacts(container : VBoxContainer, entry : Dictionary):
 	if "contacts" in entry:

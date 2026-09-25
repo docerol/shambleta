@@ -33,6 +33,14 @@
 			]
 		},
 		{
+			"category": "Age and Paid Randomized Content",
+			"entries": [
+				{
+					"content": "- [b]Adults only[/b]: Shambleta is offered to players aged 18 or older. Accepting these Terms and the Privacy Policy includes declaring that you are 18 or older.\n- [b]Age gate[/b]: The declaration is recorded with the version, timestamp and IP of your acceptance. An account without a current declaration cannot enter the game, and the server refuses every paid checkout for it — no charge is taken without it.\n- [b]Self-declaration[/b]: we do not verify identity documents, so a truthful declaration is a condition of use. Accounts found to be held by a minor are suspended, and purchases made by them are refunded on request.\n- [b]Randomized content[/b]: chest odds are published in the client before you buy and the pity counter is deterministic. Chests themselves come from play (settlement, bosses); money buys keys, rerolls and VIP.\n- [b]No cash-out[/b]: in-game items have no sale path back to money. Player-to-player trade and the auction house move in-game currency only.\n"
+				}
+			]
+		},
+		{
 			"category": "Enforcement and Disclaimers",
 			"entries": [
 				{

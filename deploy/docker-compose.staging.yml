@@ -1,14 +1,46 @@
 # Shambleta — Staging override (Coolify environment: staging)
-# Usa o mesmo Dockerfile da produção, mas com variáveis de ambiente diferentes.
+# Aplicado POR CIMA do deploy/docker-compose.yml (`-f docker-compose.yml -f
+# docker-compose.staging.yml`). Mesma imagem, mesmo Dockerfile da produção.
+#
+# Não existe "modo staging" no código: `LauncherCommons.IsTesting` só conhece
+# production vs testing. O que torna esta pilha staging é o volume próprio e o
+# webhook sandbox. Um `SHAMBLETA_ENV=staging` aqui seria um knob que ninguém lê —
+# ele já existiu neste arquivo e era exatamente isso.
 services:
   web:
-    environment:
-      - SHAMBLETA_SERVER_ADDRESS=staging.seudominio.com
-      - SHAMBLETA_SERVER_PORT=0
+    # O endereço do game server NÃO é lido em runtime por este serviço: o container
+    # `web` é nginx puro (deploy/web/Dockerfile não tem entrypoint que leia env) e o
+    # client lê `Server-Address` do settings.cfg **gravado dentro do pck pelo build**
+    # (ARG + `sed`). Por isso a correção mora em `build.args`, e não em
+    # `environment:` — que era onde estas duas linhas estavam: inertes, elas faziam
+    # o endereço de staging depender do valor que o operator tivesse no `.env` do
+    # projeto (é dele que o `${...}` do compose base interpolate). Reaproveitar o env
+    # da produção deixaria o client de staging apontando para o game server da
+    # produção. AQUI o valor é literal de propósito: o override é a fonte do endereço
+    # de staging, e um `${VAR:-}` vazio produziria `Server-Address=""`, que
+    # `Launcher._ready` ignora e deixa o default compilado.
+    build:
+      args:
+        # É o endereço do GAME SERVER visto pelo client web, não o do site: no
+        # browser o client monta `wss://<Server-Address>` **sem porta**
+        # (`sources/network/client/Client.gd`), e o nginx do serviço `web` não
+        # faz upgrade de WebSocket — apontar para o domínio do próprio web
+        # devolve o `index.html` (try_files) no lugar do handshake. staging usa
+        # o mesmo par de domínios da produção (deploy/COOLIFY.md §3): o web em
+        # `staging.seudominio.com`, o WS proxy (Coolify/Traefik) em
+        # `ws.staging.seudominio.com` → game:6108.
+        SHAMBLETA_SERVER_ADDRESS: ws.staging.seudominio.com
+        SHAMBLETA_SERVER_PORT: "0"
   game:
-    environment:
-      - SHAMBLETA_ENV=staging
+    volumes:
+      # Os dois serviços trocam de volume JUNTO: o grant_queue do companion é
+      # consumido do MESMO SQLite (WAL) que o servidor abre. Redirecionar só um
+      # deles deixa o companion escrevendo grants num banco que o jogo nunca
+      # abre — receita perdida em silêncio, o defeito que D1 corrigiu na produção.
+      - game-data-staging:/data
   companion:
+    volumes:
+      - game-data-staging:/data
     environment:
       - SHAMBLETA_WEBHOOK_PROVIDER=shared
       - SHAMBLETA_ALLOW_DEV_WEBHOOK=1

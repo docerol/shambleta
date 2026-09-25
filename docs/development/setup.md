@@ -61,21 +61,32 @@ O banco de dados (`live.db`) fica em `game-data:/data`.
 ## Rodar testes
 
 ```bash
-./scripts/test.sh all          # todos os testes
+./scripts/test.sh all          # todos os testes (5 harnesses Godot + 3 suítes do companion)
 ./scripts/test.sh quick        # sem sims real-time
 ./scripts/test.sh idle         # idle tests
 ./scripts/test.sh backup       # backup restore probe
 ./scripts/test.sh benchmarks   # performance benchmarks
+./scripts/test.sh companion    # fronteira do dinheiro (webhook/segurança/reembolso)
 ./scripts/test.sh diag         # pacing diagnosis
 ./scripts/test.sh clean        # limpa testing.db
 ```
 
 ## Convenções
 
-- **GDScript**: static typing, snake_case, 4 espaços
+- **GDScript**: static typing, snake_case, **tab** para indentar (292 dos 301
+  arquivos; `treat_warnings_as_errors=true`, então um warning no `.gd` quebra o
+  build tanto quanto um erro)
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`)
 - **Branches**: `main` (produção), `develop` (staging), `feature/*`
 
-## Notas de Arquitetura (P4 — Fragmentação Network)
+## Arquitetura de rede
 
-`Network.gd` foi fragmentado em módulos (`NetworkAuth`, `NetworkSocial`, `NetworkCharacter`, `NetworkCombat`, `NetworkEconomy`, `NetworkGuild`). A facade (`Network.gd`, 177 linhas) mantém apenas dispatcher, transporte e `Notify*`. Os módulos são registrados como `autoload` no `project.godot`. Veja `docs/development/architecture.md` para detalhes.
+`Network.gd` é um nó autoload único (1062 linhas, 201 `@rpc`) com dispatcher,
+transporte e RPCs; do lado do servidor o domínio fica em
+`sources/network/server/` (`Server.gd`, `Peers.gd`, `ChatModeration.gd`,
+`OnlineList.gd`, `EmailService.gd`) e no cliente em `sources/network/client/Client.gd`.
+A versão do protocolo é derivada dos `@rpc` por `NetworkCommons.ComputeProtocolVersion`.
+Os autoloads registrados são cinco: `Launcher`, `Network`, `FSM`, `Monitoring`,
+`WebPush` — o resto é `class_name` global ou serviço composto no `Launcher`.
+Detalhes (e o motivo da fragmentação do P4 ter sido revertida) em
+`docs/development/architecture.md`.

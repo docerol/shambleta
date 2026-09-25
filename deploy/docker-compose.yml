@@ -4,8 +4,9 @@
 # serviço):
 #   web       → https://seudominio.com        (client web; proxy injeta TLS)
 #   game      → https://ws.seudominio.com    (WebSocket; TLS do proxy)
-#   companion → SEM domínio público (rede interna; webhooks entram pelo proxy
-#               privado do Coolify ou via túnel — ver COOLIFY.md).
+#   companion → SEM domínio próprio. O tráfego dele entra pelo domínio do `web`:
+#               /checkout/ e /webhooks/payments são proxied para companion:8901
+#               (deploy/web/nginx.conf). Ver COOLIFY.md §2/§4.
 #
 # Depois do primeiro deploy sete os Build Args do serviço web:
 #   SHAMBLETA_SERVER_ADDRESS = ws.seudominio.com
@@ -13,6 +14,12 @@
 #
 # Nada aqui deve ser exposto fora do proxy: game (6108) e companion (8901)
 # ficam na rede interna do Coolify, acessíveis só pelos domínios acima.
+# O companion não tem porta publicada nem domínio próprio — e ainda assim é a
+# única porta de entrada do dinheiro: o nginx do serviço `web` faz proxy de
+# /checkout/ (o client do browser) e /webhooks/payments (o provedor de
+# pagamento) para companion:8901 na rede interna. É por isso que a URL que se
+# registra no painel do Mercado Pago é https://seudominio.com/webhooks/payments
+# — mesma origem do jogo, sem CORS e sem segundo certificado.
 services:
   web:
     build:
@@ -25,6 +32,12 @@ services:
     depends_on:
       game:
         condition: service_healthy
+      # O nginx deste serviço é o único caminho de entrada do companion (checkout
+      # do browser + webhook do provedor). service_started basta: o nginx resolve
+      # o upstream por resolver/variável a cada request, então um companion ainda
+      # esquentando responde 502 em vez de derrubar o `web` no boot.
+      companion:
+        condition: service_started
 
   game:
     build:
@@ -33,14 +46,40 @@ services:
     restart: unless-stopped
     healthcheck:
       # P1 Deploy / Performance: healthcheck de produção confirma estabilidade da sessão.
-      test: ["CMD", "curl", "-f", "http://localhost:9400/healthz", "||", "exit", "1"]
+      # SOM-IDLE L1: forma CMD (lista) não interpreta "||" nem "exit" — isso era
+      # passado como argumento ao curl. Agora é um GET real no /healthz do
+      # MetricsServer (127.0.0.1:9400, servido pelo próprio processo do game).
+      # start_period cobre o boot (migrations + mundo), que é quando o probe
+      # deliberadamente responde 503.
+      test: ["CMD", "curl", "-fsS", "http://localhost:9400/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 40s
     environment:
       # TLS termina no proxy do Coolify — server binda ws:// plain na 6108.
       SHAMBLETA_PROXY_TLS: "1"
+      # Modo produção: live.db + porta 6108 (o default sem isto é testing.db +
+      # 6118, e o companion escreve grants no live.db — receita perdida).
+      # Literal de propósito: não deve poder ser desligado por env ausente.
+      SHAMBLETA_PRODUCTION: "1"
+      # SOM-IDLE M2: rewarded ads do beta rodam no token stub ("stub:<place>:<dia>"),
+      # que é mintável pelo client por construção. O servidor nasce FECHADO para
+      # isso (EconomyCatalog.AdStubEnabled() exige a env) — esta linha é o beta
+      # assumindo o abuso em troca de não ter conta no portal (caps 6/dia, 1 baú,
+      # 2 chaves limitam o estrago; nenhum dinheiro envolvido). Quando o SSV real
+      # do portal entrar, apague a linha: sem ela nenhum token stub credita.
+      SHAMBLETA_AD_STUB: "1"
+      # G1 (auditoria 2026-09-24, Bloco 1 #7): o beta LIGA o espinho sazonal.
+      # Sem esta env, `SeasonsEnabled()` é false e criação/fechamento/liquidação
+      # viram no-op — o shell entregaria Season Pass e placar de temporada sobre
+      # uma temporada que nunca existe. Com ela, o relógio de temporada
+      # (`SQLCommons.SeasonClockIntervalSec`, 5 min, disparando também no boot, em
+      # `SQLBackups`) abre os 30 dias com as regras congeladas de
+      # `SeasonS1Rules()`, fecha a vencida congelando o placar no `ends_at` e
+      # liquida os prêmios em gems (não-casháveis) com prova de idempotência no
+      # ledger. Sem a env, o relógio continua rodando e não faz nada.
+      SHAMBLETA_ENABLE_SEASONS: "1"
       # Diretório offsite de backups (best-effort, verificado com restore probe).
       # Aponte para uma montagem persistente separada (ex.: volume offsite).
       SHAMBLETA_OFFSITE_BACKUPS: ${SHAMBLETA_OFFSITE_BACKUPS:-}
@@ -55,12 +94,26 @@ services:
       context: .
       dockerfile: deploy/companion/Dockerfile
     restart: unless-stopped
+    depends_on:
+      # O companion abre o SQLite do game no boot e sai com exit 2 se o arquivo
+      # não existe. Num volume novo isso aconteceria antes do game criar live.db
+      # — crash-loop exatamente na fronteira do dinheiro. service_healthy garante
+      # que o banco já está de pé (e na porta do healthcheck real) antes de escutar
+      # webhook.
+      game:
+        condition: service_healthy
     environment:
       # (1c) produção valida assinatura do provedor (Mercado Pago); só troque
       # p/ "shared" + allow-dev num sandbox local — nunca junto de dinheiro real.
       SHAMBLETA_WEBHOOK_PROVIDER: ${SHAMBLETA_WEBHOOK_PROVIDER:-mercadopago}
       SHAMBLETA_MP_WEBHOOK_SECRET: ${SHAMBLETA_MP_WEBHOOK_SECRET:-}
       SHAMBLETA_MP_ACCESS_TOKEN: ${SHAMBLETA_MP_ACCESS_TOKEN:-}
+      # Origem pública do jogo, usada nos back_urls da preferência (a volta do
+      # checkout MP para <base>/checkout_return.html, página que o serviço `web`
+      # serve na raiz). Vazio = preferência sem back_urls: o jogador fica na página
+      # do provedor e o grant continua chegando pelo webhook — funciona, mas é UX
+      # pior. Preencha com https://seudominio.com no beta.
+      SHAMBLETA_MP_BACK_URLS_BASE: ${SHAMBLETA_MP_BACK_URLS_BASE:-}
       SHAMBLETA_STRIPE_WEBHOOK_SECRET: ${SHAMBLETA_STRIPE_WEBHOOK_SECRET:-}
       SHAMBLETA_WEBHOOK_SECRET: ${SHAMBLETA_WEBHOOK_SECRET:-}
       SHAMBLETA_ALLOW_DEV_WEBHOOK: ${SHAMBLETA_ALLOW_DEV_WEBHOOK:-}

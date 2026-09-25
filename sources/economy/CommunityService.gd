@@ -14,12 +14,49 @@ var _eco : EconomyService = null
 # Eventos temporários rotativos: framework ativado por timestamp no job diário.
 # 2 kinds iniciais: "weekend_drops" (multiplicador no settle/sim) e "smith_week"
 # (taxa de crafting -50%). O modificador soma no mesmo eixo dos bônus VIP/ads.
+#
+# #27: `live_event_tick` é o diário de ativação — uma linha por janela ativada
+# (o `NOT IN` abaixo é por evento, sem predicado de tempo: re-tickar a mesma
+# janela todo dia só inchava a tabela e fazia o log do job reportar "activated"
+# para um evento que já estava ativo). As três leituras perguntam "esta janela já
+# foi ativada?", e por isso o predicado é `ticked_at <= now`. Estava `>= now`, que
+# só é verdadeiro DENTRO do mesmo segundo do tick: em produção o modificador nunca
+# chegava ao settle (OfflineSettle.gd:188) e o SuiteLiveEvents só passava porque
+# tick e leitura caíam no mesmo segundo do relógio.
+#
+# As leituras de modificador usam EXISTS, não JOIN com a tabela de tick: JOIN
+# emitiria uma linha por tick e `GetLiveEventMods` multiplicaria `drops_mod` por
+# ela (2x → 4x → 8x). Uma janela vale um modificador, quantos ticks ela tiver.
+
+# Calendário derivado do relógio UTC (#27): semear a janela desta semana e as
+# LIVE_EVENT_SEED_WEEKS - 1 seguintes, idempotente por (kind, starts_at). Sem
+# isto o mecanismo roda sobre tabela vazia e nenhum jogador vê evento nenhum.
+func EnsureCalendarLiveEvents() -> int:
+	var sql : SQLService = Launcher.SQL
+	var now : int = SQLCommons.Timestamp()
+	var dayStart : int = now - (now % 86400)
+	var weekday : int = (dayStart / 86400 + 4) % 7		# 0 = domingo (1970-01-01 foi quinta)
+	var seeded : int = 0
+	for week : int in EconomyCatalog.LIVE_EVENT_SEED_WEEKS:
+		var sat : int = dayStart + ((6 - weekday + 7) % 7) * 86400 + week * 7 * 86400
+		if _SeedLiveEvent(sql, "weekend_drops", sat, sat + 2 * 86400, '{"drops_mod": %s}' % str(EconomyCatalog.LIVE_EVENT_WEEKEND_MOD)):
+			seeded += 1
+		var mon : int = dayStart + ((1 - weekday + 7) % 7) * 86400 + week * 7 * 86400
+		if int(mon / 86400 / 7) % 2 == 0:
+			if _SeedLiveEvent(sql, "smith_week", mon, mon + 5 * 86400, '{"fee_mod": %s}' % str(EconomyCatalog.LIVE_EVENT_SMITH_FEE_MOD)):
+				seeded += 1
+	return seeded
+
+func _SeedLiveEvent(sql : SQLService, kind : String, startsAt : int, endsAt : int, params : String) -> bool:
+	if not sql.QueryBindings("SELECT id FROM live_event WHERE kind = ? AND starts_at = ?;", [kind, startsAt]).is_empty():
+		return false
+	return sql.ExecuteBindings("INSERT INTO live_event (kind, starts_at, ends_at, params_json, created_at) VALUES (?, ?, ?, ?, ?);", [kind, startsAt, endsAt, params, SQLCommons.Timestamp()])
 
 func TickLiveEvents() -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
 	var activated : int = 0
 	var closed : int = 0
-	for row in Launcher.SQL.QueryBindings("SELECT id, kind, starts_at, ends_at, params_json FROM live_event WHERE starts_at <= ? AND ends_at > ? AND id NOT IN (SELECT event_id FROM live_event_tick WHERE ticked_at >= ?);", [now, now, now]):
+	for row in Launcher.SQL.QueryBindings("SELECT id, kind, starts_at, ends_at, params_json FROM live_event WHERE starts_at <= ? AND ends_at > ? AND id NOT IN (SELECT event_id FROM live_event_tick);", [now, now]):
 		var eventID : int = int(row["id"])
 		var kind : String = str(row["kind"])
 		var raw : String = str(row["params_json"])
@@ -50,7 +87,7 @@ func _ApplyLiveEventMods(kind : String, params : Dictionary, active : bool) -> v
 func GetActiveEventsState(accountID : int) -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
 	var active : Array = []
-	for row in Launcher.SQL.QueryBindings("SELECT id, kind, starts_at, ends_at, params_json FROM live_event WHERE starts_at <= ? AND ends_at > ? AND id IN (SELECT event_id FROM live_event_tick WHERE ticked_at >= ?);", [now, now, now]):
+	for row in Launcher.SQL.QueryBindings("SELECT id, kind, starts_at, ends_at, params_json FROM live_event WHERE starts_at <= ? AND ends_at > ? AND id IN (SELECT event_id FROM live_event_tick WHERE ticked_at <= ?);", [now, now, now]):
 		var raw : String = str(row["params_json"])
 		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
 		if not (params is Dictionary):
@@ -66,7 +103,7 @@ func GetActiveEventsState(accountID : int) -> Dictionary:
 func GetLiveEventMods(accountID : int) -> float:
 	var now : int = SQLCommons.Timestamp()
 	var mods : float = EconomyCatalog.LIVE_EVENT_DEFAULT_MOD
-	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l INNER JOIN live_event_tick t ON t.event_id = l.id WHERE l.starts_at <= ? AND l.ends_at > ? AND t.ticked_at >= ?;", [now, now, now]):
+	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l WHERE l.starts_at <= ? AND l.ends_at > ? AND EXISTS (SELECT 1 FROM live_event_tick t WHERE t.event_id = l.id AND t.ticked_at <= ?);", [now, now, now]):
 		var raw : String = str(row["params_json"])
 		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
 		if not (params is Dictionary):
@@ -78,7 +115,7 @@ func GetLiveEventMods(accountID : int) -> float:
 
 func GetLiveEventCraftingFeeMod() -> float:
 	var now : int = SQLCommons.Timestamp()
-	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l INNER JOIN live_event_tick t ON t.event_id = l.id WHERE l.kind = 'smith_week' AND l.starts_at <= ? AND l.ends_at > ? AND t.ticked_at >= ?;", [now, now, now]):
+	for row in Launcher.SQL.QueryBindings("SELECT l.params_json FROM live_event l WHERE l.kind = 'smith_week' AND l.starts_at <= ? AND l.ends_at > ? AND EXISTS (SELECT 1 FROM live_event_tick t WHERE t.event_id = l.id AND t.ticked_at <= ?);", [now, now, now]):
 		var raw : String = str(row["params_json"])
 		var params : Dictionary = JSON.parse_string(raw) if raw.length() > 0 else {}
 		if not (params is Dictionary):
@@ -329,9 +366,12 @@ func _FlagOpen(accountID : int, charID : int, kind : String, detail : String) ->
 		return false
 	return Launcher.SQL.ExecuteBindings("INSERT INTO fraud_flag (created_at, account_id, char_id, kind, detail, status) VALUES (?, ?, ?, ?, ?, 'open');", [SQLCommons.Timestamp(), accountID, charID, kind, detail])
 
-# SOM-IDLE S5: a heurística de multi-conta (Peers.FinalizeLogin, não-bloqueante)
-# abre flag na MESMA fila de revisão manual das outras heurísticas — antes só
-# logava um alerta separado. Sem ban automático por design: punição é manual.
+# SOM-IDLE S5: abre flag na MESMA fila de revisão manual das outras heurísticas
+# (`/cs_flags`), sem ban automático por design — punição é decisão humana. Não há
+# produtor automático hoje: a única chamada vivia em `Peers.FinalizeLogin` e
+# coletava o hash do hardware do SERVIDOR, o que sinalizava todas as contas
+# (removida em 2026-09-24; ver AUDITORIA_INDEPENDENTE item (s)). O que falta é um
+# detector com entropia por instalação coletada no cliente, não a fila.
 func FlagMultiAccount(accountID : int, detail : String) -> bool:
 	if accountID <= 0 or detail.is_empty():
 		return false

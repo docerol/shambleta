@@ -297,10 +297,10 @@ func RunReconcileJob() -> int:
 	var flagged : int = _eco.RunFraudScan()
 	if flagged > 0:
 		Util.PrintLog("Economy", "Fraud scan opened %d flags" % flagged)
-	# SOM-IDLE (3b): ciclo de vida de temporada (fecha vencidas + liquida prêmios).
-	var seasons : Dictionary = _eco.TickSeasonLifecycle()
-	if int(seasons.get("settled", 0)) > 0 or int(seasons.get("closed", 0)) > 0:
-		Util.PrintLog("Economy", "Season lifecycle: closed %d, settled %d" % [int(seasons.get("closed", 0)), int(seasons.get("settled", 0))])
+	# O ciclo de temporada saiu deste job: quem o roda é o relógio de temporada
+	# (`SQLBackups`, a cada `SQLCommons.SeasonClockIntervalSec`, também no boot).
+	# Fechar uma temporada vencida até 24 h depois contaminava a apuração com o
+	# jogo que aconteceu depois de `ends_at`. Ver `SeasonService.TickSeasonLifecycle`.
 	# Fase F: copas semanais (liquida vencidas + garante a ativa).
 	var tours : Dictionary = TickTournaments()
 	if int(tours.get("settled", 0)) > 0 or int(tours.get("created", 0)) > 0:
@@ -309,10 +309,13 @@ func RunReconcileJob() -> int:
 	var ref : int = _eco.GrantReferralBonuses()
 	if ref > 0:
 		Util.PrintLog("Economy", "Referral bonuses paid: %d" % ref)
-	# R3: ativa/desativa eventos temporários por timestamp.
+	# R3: ativa/desativa eventos temporários por timestamp. #27: sem semeadura o
+	# tick girava sobre tabela vazia — o calendário é derivado do relógio UTC e é
+	# idempotente, então roda antes do tick na mesma passada.
+	var seeded : int = _eco.EnsureCalendarLiveEvents()
 	var events : Dictionary = _eco.TickLiveEvents()
-	if int(events.get("activated", 0)) > 0 or int(events.get("closed", 0)) > 0:
-		Util.PrintLog("Economy", "Live events: activated %d, closed %d" % [int(events.get("activated", 0)), int(events.get("closed", 0))])
+	if seeded > 0 or int(events.get("activated", 0)) > 0 or int(events.get("closed", 0)) > 0:
+		Util.PrintLog("Economy", "Live events: seeded %d, activated %d, closed %d" % [seeded, int(events.get("activated", 0)), int(events.get("closed", 0))])
 	# R4: refila tickets da arena assíncrona.
 	var arena : Dictionary = TickArenaTickets()
 	if int(arena.get("refilled", 0)) > 0:

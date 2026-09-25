@@ -2,7 +2,7 @@
 
 **Objetivo (confirmado pelo usuário):** Polimento (não redesign total) — HUD idle aprimorado, onboarding refinado, simplificação mobile/touch, layout responsivo, settings simplificadas. **Sem tocar core loop, monetização (bloqueado pelo dono) ou rede de features já implementadas.**
 
-**Base:** `FEATURE_MATRIX.md` §7 (UI/UX), `sources/gui/Gui.gd`, `Onboarding.gd`, `Localizer.gd`, `WebPush.gd`, `Settings.gd`, `Monitoring.gd` (P4 — spans). `README.md` confirma design idle-first.
+**Base:** `FEATURE_MATRIX.md` §7 (UI/UX), `sources/gui/Gui.gd`, `Onboarding.gd`, `Localizer.gd`, `WebPush.gd`, `Settings.gd`. `README.md` confirma design idle-first.
 
 ---
 
@@ -88,12 +88,12 @@ Todas as tarefas abaixo são **puro código/design de interface** — nenhuma ex
 
 ## 6. Relação com gaps corrigidos (P4 / S5)
 
-- **P4 (profiling)** — spans no `Monitoring.gd` permitem medir duração de ações de UI (settle, zone load, guild level) — útil para validar se polimento melhorou performance percebida.
+- **P4 (profiling)** — nunca realizado: `Monitoring.gd` não tem spans (`StartSpan`/`FinishSpan`/`ActiveSpans` só existiram no texto do `FEATURE_MATRIX.md` arquivado). Medir performance percebida de UI é trabalho a fazer com o profiler embutido do Godot e com `tests/benchmarks.gd`, não com o que está no repositório hoje.
 - **S5 (multi-account)** — heurística no `Peers.gd` protege contra abuso; não afeta UI diretamente, mas garante que testes de polimento (múltiplas sessões) não sejam comprometidos por duplicatas.
 
 ---
 
 **Status recomendado para `FEATURE_MATRIX.md`:**
 - UI/UX: `HUD MMO` → Implementado (polido — essencial, ≤8 janelas); `Onboarding` → Implementado (polido — pulse + border); `Touch` → Parcial (polido — responsivo); `Settings` → Implementado (polido — simplificado para mobile/web).
-- Economia/Monetização: `Checkout` → Implementado (P1 — gateway_ready flag + F2P-friendly); `VIP` → Implementado (sandbox); `Season Pass` → Implementado.
+- Economia/Monetização: `Checkout` → Implementado (~~P1 — gateway_ready flag + F2P-friendly~~; **retificado 2026-09-24**: a flag era um `"true"` literal na intent, sem consumidor, e saiu — o gateway real é o `companion/server.py`, fail-closed sem `SHAMBLETA_MP_ACCESS_TOKEN`); `VIP` → Implementado (sandbox); `Season Pass` → Implementado.
 - Social: `Guild` → Implementado (`Social.gd` + botão HUD); `AuctionHouse` → Implementado (`AuctionHouseWindow.gd` — UI gráfica estilo Grand Exchange, busca/filtros/histórico).

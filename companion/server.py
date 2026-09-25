@@ -11,7 +11,7 @@ Uso:
     SHAMBLETA_WEBHOOK_PROVIDER=mercadopago \
     SHAMBLETA_MP_WEBHOOK_SECRET=<credencial do endpoint> \
     SHAMBLETA_MP_ACCESS_TOKEN=<access_token> \
-    python3 companion/server.py --db /data/live.db --port 8901
+    python3 companion/server.py --db /data/.local/share/Shambleta/live.db --port 8901
       # MP manda x-signature: ts=...,v1=... (HMAC sobre o manifest
       # id:<data.id>;request-id:<x-request-id>;ts:<ts>;). O companion valida a
       # assinatura e RE-BUSCA o pagamento na API MP (autoritativo): status
@@ -20,14 +20,14 @@ Uso:
 
     # alternativa Stripe (assinatura Stripe-Signature + catálogo autoritativo):
     SHAMBLETA_WEBHOOK_PROVIDER=stripe SHAMBLETA_STRIPE_WEBHOOK_SECRET=whsec_xxx \
-    python3 companion/server.py --db /data/live.db
+    python3 companion/server.py --db /data/.local/share/Shambleta/live.db
       # Stripe manda Stripe-Signature: t=...,v1=... ; o checkout define
       # metadata.shambleta_sku + client_reference_id=<account_id>.
 
     # sandbox/dev (assinatura por segredo compartilhado, payload plano) — só
     # com opt-in explícito:
     SHAMBLETA_WEBHOOK_PROVIDER=shared SHAMBLETA_WEBHOOK_SECRET=xxx \
-    SHAMBLETA_ALLOW_DEV_WEBHOOK=1 python3 companion/server.py --db /data/live.db
+    SHAMBLETA_ALLOW_DEV_WEBHOOK=1 python3 companion/server.py --db /data/.local/share/Shambleta/live.db
       curl -X POST localhost:8901/webhooks/payments \
         -H 'X-Signature: <hmac-sha256-hex do body>' \
         -d '{"idempotency_key":"tx1","username":"Hero","sku":"gems.550"}'
@@ -74,12 +74,25 @@ DAY = 86400
 #      o corpo só pode REFERENCIAR um SKU, nunca ditar o montante.
 # --------------------------------------------------------------------------
 
-# Catálogo canônico (SKU -> o que comprar). Sobrescreva com um JSON via
-# SHAMBLETA_CATALOG_FILE / --catalog quando o checkout real existir. O preço
-# (`price`) fica aqui só p/ auditoria/cross-check; o que vira grant é kind+amount.
+# Catálogo canônico (SKU -> o que comprar) é data/conf/paid_catalog.json — a
+# mesma fonte que o jogo valida no boot (`EconomyCatalog.ValidatePaidCatalog`) e
+# na suíte (`SuiteCatalogConsistency`), exportada nos presets porque mora em
+# data/conf/. Aponte outro JSON com SHAMBLETA_CATALOG_FILE / --catalog. Este
+# dicionário é o FALLBACK de desenvolvimento: se ele divergir do arquivo, a
+# suíte falha (o preço que vira grant é o do catálogo carregado, nunca o do corpo
+# do webhook). O preço (`price`) fica aqui só p/ auditoria/cross-check; o que
+# vira grant é kind+amount.
 # Bundles (starter/founder) decompõem em N grants atômicos com chaves derivadas
 # "{key}:{i}:{kind}" — o game server processa linha a linha, sem código novo.
+#
+# `_agreements` não é SKU (todo `_` é comentário aqui): é a declaração das
+# versões vigentes de ToS/privacidade/idade que a FRONTIERA DO DINHEIRO cobra.
+# Mora no catálogo porque é exatamente o mesmo contrato de "uma fonte, dois
+# leitores" do preço: o jogo valida o bloco contra os consts de `NetworkCommons`
+# no boot (`EconomyCatalog.ValidatePaidCatalog`) e na suíte, então bumpar
+# `AgreementTosVersion` sem bumpar o arquivo é erro de boot, não porta aberta.
 DEFAULT_CATALOG = {
+    "_agreements": {"tos": "2026-09-b", "privacy": "2026-09-b", "age": "2026-09-a"},
     "gems.550":   {"kind": "gems",     "amount": 550,   "currency": "BRL", "price": 19.90},
     "gems.1200":  {"kind": "gems",     "amount": 1200,  "currency": "BRL", "price": 39.90},
     "gems.3000":  {"kind": "gems",     "amount": 3000,  "currency": "BRL", "price": 79.90},
@@ -111,6 +124,21 @@ DEFAULT_CATALOG = {
                      "one_time": True,
                      "title": "Fundador (pending entitlements)"},
 }
+
+
+def default_catalog_path():
+    """Catálogo canônico do repositório: data/conf/paid_catalog.json — a MESMA
+    fonte que o jogo valida no boot do servidor (EconomyCatalog.ValidatePaidCatalog)
+    e na suíte. No container do companion o Dockerfile copia o arquivo para /app,
+    ao lado deste server.py; na árvore de source ele está em data/conf/. Sem
+    nenhum dos dois, o embutido DEFAULT_CATALOG ainda serve (dev), e a suíte
+    amarra as três cópias."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (os.path.join(here, "paid_catalog.json"),
+                      os.path.normpath(os.path.join(here, os.pardir, "data", "conf", "paid_catalog.json"))):
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
 
 
 def _valid_item(e):
@@ -146,6 +174,29 @@ class CatalogError(Exception):
     pass
 
 
+def is_sellable_sku(catalog, sku):
+    """SKU cobrável: existe no catálogo E tem forma de produto.
+
+    As três portas de dinheiro comparavam o `sku` do request por *membership* no
+    dict (`sku not in self.server.catalog`). O mesmo JSON que declara os preços
+    declara comentários — `_note`, e agora `_agreements`, que é um **objeto**: por
+    membership ele passava, `build_preference_payload` lia `entry.get("price", 0.0)`
+    e montava uma preferência de `unit_price` 0.0 para o provedor (cobrar zero é
+    entregar de graça), enquanto `_note` derrubava o handler com AttributeError
+    antes de qualquer resposta. A forma é a MESMA predicate que `load_catalog` usa
+    para validar o arquivo, então não existe segunda regra a divergir."""
+    if not sku or not isinstance(sku, str) or sku.startswith("_"):
+        return False
+    entry = catalog.get(sku) if isinstance(catalog, dict) else None
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("kind") == "bundle":
+        contents = entry.get("contents")
+        return bool(isinstance(contents, list) and contents
+                    and all(_valid_item(c) for c in contents))
+    return _valid_item(entry)
+
+
 # (3c) hook de alerta/uptime opt-in: se SHAMBLETA_ALERT_WEBHOOK estiver setado
 # (ex.: healthchecks.io/Discord), melhor-esforço um POST JSON. Nunca bloqueia o
 # request (thread própria + timeout curto) nem levanta — alertas são side-channel.
@@ -175,8 +226,13 @@ def alert(message, level="warn"):
 
 def resolve_grant(catalog, sku, claimed_amount=None):
     """Devolve (kind, authoritative_amount). Nunca usa claimed_amount como fonte
-    de verdade — só como cross-check (CDC: preço anunciado = preço cobrado)."""
-    if not sku or sku not in catalog:
+    de verdade — só como cross-check (CDC: preço anunciado = preço cobrado).
+
+    A checagem é de FORMA, não de membership: o catálogo também carrega as
+    declarações do arquivo (`_note`, `_agreements`), e chamar `resolve_grant` com
+    uma delas levantava KeyError no meio do handler (KeyError 'amount' /
+    AttributeError num str) em vez de um `unknown_sku` limpo."""
+    if not is_sellable_sku(catalog, sku):
         raise CatalogError("unknown_sku")
     entry = catalog[sku]
     if entry.get("kind") == "bundle":
@@ -191,7 +247,7 @@ def resolve_grant_items(catalog, sku, claimed_amount=None):
     """Devolve [(kind, amount), ...] — 1 item p/ SKU simples, N p/ bundle.
     Chaves derivadas ficam com o chamador: '{key}' p/ item único,
     '{key}:{i}:{kind}' p/ bundles (redelivery gera as mesmas chaves)."""
-    if not sku or sku not in catalog:
+    if not is_sellable_sku(catalog, sku):
         raise CatalogError("unknown_sku")
     entry = catalog[sku]
     if entry.get("kind") == "bundle":
@@ -226,6 +282,35 @@ def starter_offer_status(con, catalog, account_id, sku="starter.pack", now=None)
     if max_age and now > expires_at:
         return {"eligible": False, "reason": "expired", "expires_at": expires_at}
     return {"eligible": True, "reason": "ok", "expires_at": expires_at}
+
+
+def season_offer_status(con, catalog, sku, now=None):
+    """Elegibilidade dos SKUs presos à temporada (kind pass_premium).
+
+    O passe NÃO EXISTE sem temporada ativa: no jogo o grant de `pass_premium`
+    falha fechado quando `ActiveSeason()` está vazio (CheckoutService devolve
+    false e a linha vira status='failed'). Sem este gate, o companion cobra
+    R$ 24,90/44,90 e o jogo registra um grant que não entrega — é o defeito
+    "cobra e não entrega" na face mais cara dele. A checagem é no mesmo SQLite
+    do servidor de jogo (o companion já lê `account`/`grant_queue` aqui), e o
+    `ends_at > agora` é o que impede vender um passe de temporada vencida nos
+    minutos antes do relógio de temporada fechá-la. Tabela ausente (banco sem a
+    migração de temporada) conta como indisponível: se não há tabela, não há
+    temporada."""
+    if now is None:
+        now = int(time.time())
+    entry = catalog.get(sku) or {}
+    if entry.get("kind") != "pass_premium":
+        return {"eligible": True, "reason": "not_season_bound", "season_id": 0}
+    try:
+        row = con.execute(
+            "SELECT season_id FROM season WHERE status = 'active' AND ends_at > ? "
+            "ORDER BY season_id DESC LIMIT 1;", (now,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is None:
+        return {"eligible": False, "reason": "no_active_season", "season_id": 0}
+    return {"eligible": True, "reason": "ok", "season_id": row[0]}
 
 
 def _const_time(a, b):
@@ -372,8 +457,10 @@ def build_preference_payload(catalog, sku, external_reference, back_urls_base=""
 
     O valor vem do CATÁLOGO (nunca do cliente). Retorna (payload, error):
     payload é o dict p/ POST /checkout/preferences; error é None em sucesso
-    ou 'unknown_sku' quando o SKU não existe no catálogo."""
-    if not sku or sku not in catalog:
+    ou 'unknown_sku' quando o SKU não existe no catálogo. Cobrável aqui tem a
+    MESMA definição das rotas: uma chave de comentário do arquivo não tem preço,
+    e `entry.get("price", 0.0)` sobre ela montava uma preferência de R$ 0,00."""
+    if not is_sellable_sku(catalog, sku):
         return None, "unknown_sku"
     entry = catalog[sku]
     title = str(entry.get("title") or entry.get("label") or sku)
@@ -389,6 +476,45 @@ def build_preference_payload(catalog, sku, external_reference, back_urls_base=""
                                 "failure": ret}
         payload["auto_return"] = "approved"
     return payload, None
+
+
+def _paid_money(source):
+    """(centavos, moeda) do que o provedor COBROU — K1: grant_queue.amount é
+    unidade de JOGO (gems concedidas), então sem este par não existia nenhum
+    número de receita no sistema e ARPU/ARPPU/LTV eram incomputáveis.
+
+    O float só é tocado aqui, na borda do provedor: MP devolve transaction_amount
+    em unidade maior (19.90), Stripe devolve amount_total JÁ em centavos
+    (inteiro). Daqui pra dentro é sempre inteiro menor — SQLite não tem ponto
+    fixo e float em caminho de dinheiro é como se perde dinheiro. Sem dado
+    (sandbox explícito) → (0, ''), que não é dinheiro inventado."""
+    if not source:
+        return 0, ""
+    currency = str(source.get("currency_id") or source.get("currency") or "").upper()
+    minor = source.get("amount_total")
+    if minor is not None:
+        try:
+            return int(minor), currency
+        except (TypeError, ValueError):
+            return 0, ""
+    major = source.get("transaction_amount")
+    if major is None:
+        return 0, ""
+    try:
+        return int(round(float(major) * 100)), currency
+    except (TypeError, ValueError):
+        return 0, ""
+
+
+def catalog_price_minor(catalog, sku):
+    """(centavos, moeda) do PREÇO DE CATÁLOGO — o mesmo número que
+    build_preference_payload manda cobrar no provedor. Usado pelo sandbox de
+    checkout, que simula o pagamento aprovado sem passar pelo provedor: registrar
+    0 ali deixaria a métrica de receita cega justamente no ambiente onde ela é
+    exercitada."""
+    entry = catalog.get(sku) or {}
+    return _paid_money({"transaction_amount": entry.get("price"),
+                        "currency_id": entry.get("currency")})
 
 
 def check_payment_amount(catalog, sku, payment):
@@ -440,6 +566,46 @@ def verify_session_token(con, account_id, auth_token, now=None):
         if claimed != owner:
             return None
     return owner
+
+
+def required_agreements(catalog):
+    """Versões vigentes declaradas no catálogo, ou None se o catálogo não
+    declarar (schema de arquivo antigo). Não é parâmetro de request: quem
+    apresenta o `sku` não pode escolher qual consentimento ele já tem."""
+    block = catalog.get("_agreements") if isinstance(catalog, dict) else None
+    if not isinstance(block, dict):
+        return None
+    return (str(block.get("tos") or ""), str(block.get("privacy") or ""),
+            str(block.get("age") or ""))
+
+
+def consent_currently_accepted(con, account_id, catalog):
+    """Gate de idade/LGPD (Lei 15.211/2025, migration 046) na segunda porta do
+    dinheiro. Espelho de `SQL.IsConsentAccepted`: só conta cujo aceite gravado
+    é IGUAL às três versões vigentes.
+
+    O game server já recusa login e `GetCheckoutIntent` sem aceite, mas o
+    companion é uma porta própria e alcançável direto (o nginx do serviço `web`
+    proxya `/checkout/` para ele): um `auth_token` emitido antes do bump continua
+    válido aqui depois de o jogo barrar o jogador — a pessoa não consegue jogar e
+    ainda assim consegue pagar. Conta pré-046 lê `consent_age_version = ''` e cai
+    na mesma recusa. Fail-closed nos três sentidos: catálogo sem o bloco,
+    tabela/coluna ausente (schema antigo) ou linha sem aceite = sem checkout. O
+    `/webhooks/payments` NÃO passa por aqui de propósito: lá o dinheiro já foi
+    tomado, e recusar seria descartar uma entrega paga."""
+    need = required_agreements(catalog)
+    if need is None or not all(need):
+        return False
+    try:
+        row = con.execute(
+            "SELECT consent_tos_version, consent_privacy_version, "
+            "consent_age_version FROM account WHERE account_id = ?;",
+            (account_id,)).fetchone()
+    except Exception:
+        return False
+    if row is None:
+        return False
+    return str(row[0]) == need[0] and str(row[1]) == need[1] and str(row[2]) == need[2]
 
 
 def mp_create_preference(payload, access_token):
@@ -505,7 +671,8 @@ def refund_sweep(db_path, access_token, dry_run=False):
 
 def normalize_event(provider, data):
     """Reduz o corpo (formato do provedor OU flat sandbox) a um grant canônico:
-    {idempotency_key, account_id, username, sku}. Retorna None se não aplicável."""
+    {idempotency_key, account_id, username, sku, price_paid, currency}.
+    price_paid está em CENTAVOS (ver _paid_money). Retorna None se não aplicável."""
     if provider == "stripe":
         # checkout.session.completed → entrega o SKU + a conta no metadata.
         obj = (data.get("data") or {}).get("object") or {}
@@ -518,15 +685,19 @@ def normalize_event(provider, data):
             acct = int(acct)
         else:
             acct = None
+        paid, currency = _paid_money(obj)
         return {"idempotency_key": key, "account_id": acct,
-                "username": user, "sku": sku}
+                "username": user, "sku": sku,
+                "price_paid": paid, "currency": currency}
     if provider == "mercadopago":
         # sandbox/teste: corpo plano já traz os campos.
         if data.get("account_id") is not None or data.get("sku") is not None:
             acct = data.get("account_id")
+            paid, currency = _paid_money(data)
             return {"idempotency_key": data.get("idempotency_key") or data.get("id"),
                     "account_id": int(acct) if acct is not None else None,
-                    "username": data.get("username"), "sku": data.get("sku")}
+                    "username": data.get("username"), "sku": data.get("sku"),
+                    "price_paid": paid, "currency": currency}
         # produção: `data` é o PAYMENT re-buscado na API MP (autoritativo).
         status = str(data.get("status", ""))
         if status and status not in ("approved", "authorized_payment"):
@@ -538,16 +709,18 @@ def normalize_event(provider, data):
         if acct is None and meta.get("shambleta_account_id") is not None:
             acct = int(meta.get("shambleta_account_id"))
         key = data.get("id")  # payment id = chave idempotente
+        paid, currency = _paid_money(data)
         return {"idempotency_key": str(key) if key is not None else "",
                 "account_id": acct, "username": meta.get("shambleta_username"),
-                "sku": sku}
+                "sku": sku, "price_paid": paid, "currency": currency}
     # sandbox / dev / pix-notify simples: payload plano
     acct = data.get("account_id")
     if acct is not None:
         acct = int(acct)
+    paid, currency = _paid_money(data)
     return {"idempotency_key": data.get("idempotency_key", ""),
             "account_id": acct, "username": data.get("username"),
-            "sku": data.get("sku")}
+            "sku": data.get("sku"), "price_paid": paid, "currency": currency}
 
 
 class Store:
@@ -571,12 +744,17 @@ class Store:
             return row[0] if row else None
         return None
 
-    def enqueue(self, con, key, account_id, kind, amount, payload):
+    def enqueue(self, con, key, account_id, kind, amount, payload,
+                price_paid=0, currency=""):
+        # amount = unidade de jogo concedida; price_paid = centavos cobrados
+        # (K1 — os dois são coisas diferentes e as duas precisam aparecer).
         cur = con.execute(
             "INSERT OR IGNORE INTO grant_queue "
-            "(idempotency_key, account_id, kind, amount, payload, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', strftime('%s','now'))",
-            (key, account_id, kind, amount, json.dumps(payload)))
+            "(idempotency_key, account_id, kind, amount, payload, status, created_at, "
+            "price_paid, currency) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', strftime('%s','now'), ?, ?)",
+            (key, account_id, kind, amount, json.dumps(payload),
+             int(price_paid), currency))
         con.commit()
         return "queued" if cur.rowcount == 1 else "duplicate"
 
@@ -585,24 +763,17 @@ class Store:
             "SELECT COUNT(*) FROM grant_queue WHERE status = 'pending';").fetchone()[0]
 
     def multi_account_suspicions(self, con):
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS device_fingerprint (
-                fp TEXT PRIMARY KEY,
-                account_id INTEGER NOT NULL,
-                last_seen INTEGER NOT NULL
-            );
-        """)
-        con.execute("""
-            CREATE INDEX IF NOT EXISTS idx_device_fp
-            ON device_fingerprint(fp, last_seen);
-        """)
-        con.commit()
+        # A impressão digital é COLUNA de telemetry_event (migration 030), não uma
+        # tabela: a consulta selecionava 'fp' — que só existia na tabela
+        # device_fingerprint criada aqui e nunca populada por ninguém — e
+        # estourava "no such column: fp", derrubando o /metrics inteiro (500) em
+        # qualquer banco migrado. Alias explícito + nada de DDL morto.
         now = int(time.time())
         rows = con.execute("""
-            SELECT fp, COUNT(DISTINCT account_id) as acct_count
+            SELECT fingerprint AS fp, COUNT(DISTINCT account_id) as acct_count
             FROM telemetry_event
             WHERE kind = 'login' AND created_at > ? AND fingerprint != ''
-            GROUP BY fp HAVING acct_count >= 3;
+            GROUP BY fingerprint HAVING acct_count >= 3;
         """, (now - 7 * DAY,)).fetchall()
         suspicious = []
         for fp, acct_count in rows:
@@ -657,11 +828,32 @@ class Store:
             "ORDER BY season_id DESC LIMIT 1;").fetchone()
         sales = {}
         try:
-            for sku_row, n, tot in con.execute(
+            for sku_row, n, tot, gross, cur in con.execute(
                     "SELECT json_extract(payload, '$.sku'), COUNT(*), "
-                    "COALESCE(SUM(amount), 0) FROM grant_queue "
+                    "COALESCE(SUM(amount), 0), COALESCE(SUM(price_paid), 0), "
+                    "COALESCE(MAX(currency), '') FROM grant_queue "
                     "WHERE status = 'processed' GROUP BY 1;").fetchall():
-                sales[sku_row or "unknown"] = {"grants": n, "units": tot}
+                # units = gem/itens concedidos; gross_minor = dinheiro de verdade
+                # (centavos, K1). As duas coisas não são intercambiáveis.
+                sales[sku_row or "unknown"] = {"grants": n, "units": tot,
+                                               "gross_minor": gross,
+                                               "currency": cur}
+        except sqlite3.Error:
+            pass
+        # Receita por moeda (nunca somada entre moedas — BRL e USD não são o
+        # mesmo número). arppu = bruto / pagantes únicos; arpu é esta divideda
+        # por accounts.active_24h/total, que já estão nesta resposta.
+        money = {}
+        try:
+            for cur, gross, buys, payers in con.execute(
+                    "SELECT currency, COALESCE(SUM(price_paid), 0), COUNT(*), "
+                    "COUNT(DISTINCT account_id) FROM grant_queue "
+                    "WHERE status = 'processed' AND price_paid > 0 "
+                    "GROUP BY currency;").fetchall():
+                money[cur or "unknown"] = {
+                    "gross_minor": gross, "purchases": buys, "payers": payers,
+                    "arppu_minor": int(round(gross / float(payers))) if payers else 0,
+                }
         except sqlite3.Error:
             pass
         funnel = {}
@@ -677,6 +869,19 @@ class Store:
             }
         except sqlite3.Error:
             pass
+        # K1: coorte D1/D7/D30 lida da view `cohort_retention` (migration 045) — é
+        # a régua reescrita de ROADMAP_COMERCIAL §Semana 2 medida em contas. Não é
+        # o `retention_d1` ali embaixo, que compara janelas móveis de 24 h e
+        # responde outra pergunta. View ausente (DB pré-045) = bloco vazio:
+        # indisponível não é zero.
+        cohort = {}
+        try:
+            c_n, c_d1, c_d7, c_d30 = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(d1), 0), COALESCE(SUM(d7), 0), "
+                "COALESCE(SUM(d30), 0) FROM cohort_retention;").fetchone()
+            cohort = {"accounts": c_n, "d1": c_d1, "d7": c_d7, "d30": c_d30}
+        except sqlite3.Error:
+            pass
         return {
             "gems": {"mint": gems[0], "burn": gems[1], "stock": stock[0]},
             "gold_7d": {"faucet": gold7[0]},
@@ -684,6 +889,7 @@ class Store:
             "vip_active": vip[0],
             "accounts": {"total": accts[0], "active_24h": accts[1]},
             "retention_d1": {"cohort": d1[0], "retained": d1[1]},
+            "retention_cohort": cohort,
             "settles_24h": {"count": settles[0], "avg_eff": round(settles[1], 3)},
             "logins_24h": logins[0],
             "reconcile": {"divergences": recon[0], "at": recon[1]} if recon else None,
@@ -692,6 +898,7 @@ class Store:
             "ah_open": ah[0],
             "season_active": season[0] if season else None,
             "sales_by_sku": sales,
+            "revenue_by_currency": money,
             "starter_funnel": funnel,
             "multi_account_suspicions": self.multi_account_suspicions(con),
         }
@@ -723,6 +930,8 @@ class Handler(BaseHTTPRequestHandler):
             # server-authoritative no webhook; preço aqui é display).
             pub = {}
             for sku, e in self.server.catalog.items():
+                if sku.startswith("_"):
+                    continue  # declaração/comentário do arquivo, não item de loja
                 pub[sku] = {k: e[k] for k in
                             ("kind", "contents", "currency", "price",
                              "one_time", "max_account_age", "title",
@@ -843,7 +1052,8 @@ class Handler(BaseHTTPRequestHandler):
                 if account_id is None:
                     return self._send(404, {"error": "unknown_account"})
                 statuses = self._enqueue_items(
-                    con, account_id, norm["sku"], items, key, provider)
+                    con, account_id, norm["sku"], items, key, provider,
+                    norm.get("price_paid", 0), norm.get("currency", ""))
         except sqlite3.Error as e:
             alert("webhook DB error: %s" % e, "error")
             return self._send(500, {"error": "db_error", "detail": str(e)})
@@ -852,10 +1062,16 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(200, {"status": "ok", "items": statuses})
 
-    def _enqueue_items(self, con, account_id, sku, items, key, provider):
+    def _enqueue_items(self, con, account_id, sku, items, key, provider,
+                       price_paid=0, currency=""):
         """Enfileira 1 grant por item (bundle = N linhas). Item único mantém a
         chave original (ledger `grant:<key>` estável); bundle usa chaves
-        derivadas determinísticas (redelivery = duplicate, sem crédito duplo)."""
+        derivadas determinísticas (redelivery = duplicate, sem crédito duplo).
+
+        O dinheiro de UMA compra vai inteiro na primeira linha: as N linhas do
+        bundle são a mesma transação, e preço por linha faria SUM(price_paid)
+        contar a venda N vezes. Todas compartilham o mesmo sku no payload, então
+        a receita por SKU continua saindo certa do GROUP BY."""
         entry = self.server.catalog.get(sku) or {}
         statuses = []
         for i, (kind, amount) in enumerate(items):
@@ -868,7 +1084,8 @@ class Handler(BaseHTTPRequestHandler):
             if entry.get("tier"):
                 payload["tier"] = entry["tier"]
             statuses.append(self.server.store.enqueue(
-                con, k, account_id, kind, amount, payload))
+                con, k, account_id, kind, amount, payload,
+                price_paid if i == 0 else 0, currency if i == 0 else ""))
         return statuses
 
     def _read_json(self):
@@ -911,7 +1128,7 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             return self._send(400, {"error": "bad_json"})
         sku = data.get("sku")
-        if not sku or sku not in self.server.catalog:
+        if not is_sellable_sku(self.server.catalog, sku):
             return self._send(400, {"error": "unknown_sku"})
         try:
             items = resolve_grant_items(self.server.catalog, sku)
@@ -923,11 +1140,21 @@ class Handler(BaseHTTPRequestHandler):
                 if account_id is None:
                     code = 403 if auth_err == "mismatch" else 401
                     return self._send(code, {"error": auth_err})
+                if not consent_currently_accepted(con, account_id,
+                                                  self.server.catalog):
+                    return self._send(403, {"error": "consent_required"})
                 offer = starter_offer_status(con, self.server.catalog,
                                              account_id, sku)
                 if not offer["eligible"] and (self.server.catalog[sku].get("one_time")):
                     return self._send(409, {"error": offer["reason"],
                                             "starter_offer": offer})
+                # G1: passe sem temporada ativa não é vendável — o grant falha
+                # fechado dentro do jogo, então a recusa tem que acontecer antes
+                # de o Mercado Pago cobrar, não depois.
+                season = season_offer_status(con, self.server.catalog, sku)
+                if not season["eligible"]:
+                    return self._send(409, {"error": season["reason"],
+                                            "season_offer": season})
         except sqlite3.Error as e:
             return self._send(500, {"error": "db_error", "detail": str(e)})
         entry = self.server.catalog[sku]
@@ -938,6 +1165,7 @@ class Handler(BaseHTTPRequestHandler):
             "items": [{"kind": k, "amount": a} for k, a in items],
             "price": entry.get("price"), "currency": entry.get("currency", "BRL"),
             "starter_offer": offer,
+            "season_offer": season,
             "sandbox": "pague via POST /checkout/simulate (allow_dev) com "
                        "idempotency_key=<external_reference>:<payment_id>",
         })
@@ -955,7 +1183,7 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             return self._send(400, {"error": "bad_json"})
         sku = data.get("sku")
-        if not sku or sku not in self.server.catalog:
+        if not is_sellable_sku(self.server.catalog, sku):
             return self._send(400, {"error": "unknown_sku"})
         try:
             with self.server.store.connect() as con:
@@ -963,11 +1191,24 @@ class Handler(BaseHTTPRequestHandler):
                 if account_id is None:
                     code = 403 if auth_err == "mismatch" else 401
                     return self._send(code, {"error": auth_err})
+                # A preferência é o ponto onde o cartão/Pix é aberto: o mesmo
+                # gate da intent vale aqui, porque esta rota é alcançável sem
+                # passar pelo game server (mesma origem, sem sessão de jogo).
+                if not consent_currently_accepted(con, account_id,
+                                                  self.server.catalog):
+                    return self._send(403, {"error": "consent_required"})
                 offer = starter_offer_status(con, self.server.catalog,
                                              account_id, sku)
                 if not offer["eligible"] and (self.server.catalog[sku].get("one_time")):
                     return self._send(409, {"error": offer["reason"],
                                             "starter_offer": offer})
+                # G1: passe sem temporada ativa não é vendável — o grant falha
+                # fechado dentro do jogo, então a recusa tem que acontecer antes
+                # de o Mercado Pago cobrar, não depois.
+                season = season_offer_status(con, self.server.catalog, sku)
+                if not season["eligible"]:
+                    return self._send(409, {"error": season["reason"],
+                                            "season_offer": season})
         except sqlite3.Error as e:
             return self._send(500, {"error": "db_error", "detail": str(e)})
         external_reference = "%d:%s" % (account_id, sku)
@@ -1018,6 +1259,8 @@ class Handler(BaseHTTPRequestHandler):
         key = data.get("idempotency_key") or ""
         if not sku or not key:
             return self._send(400, {"error": "bad_grant"})
+        if not is_sellable_sku(self.server.catalog, sku):
+            return self._send(400, {"error": "unknown_sku"})
         try:
             items = resolve_grant_items(self.server.catalog, sku)
         except CatalogError as e:
@@ -1037,13 +1280,28 @@ class Handler(BaseHTTPRequestHandler):
                 if prior:
                     return self._send(200, {"status": "ok", "replay": True,
                                             "items": [r[0] for r in prior]})
+                # Compra nova (não replay): o sandbox cria um grant com
+                # `price_paid` do mesmo jeito que o webhook criaria, então vale o
+                # mesmo gate das outras duas portas — inclusive em staging, onde
+                # `allow_dev_checkout` deixa resolver conta por username.
+                if not consent_currently_accepted(con, account_id,
+                                                  self.server.catalog):
+                    return self._send(403, {"error": "consent_required"})
                 offer = starter_offer_status(con, self.server.catalog,
                                              account_id, sku)
                 if not offer["eligible"] and (self.server.catalog[sku].get("one_time")):
                     return self._send(409, {"error": offer["reason"],
                                             "starter_offer": offer})
+                # G1: passe sem temporada ativa não é vendável — o grant falha
+                # fechado dentro do jogo, então a recusa tem que acontecer antes
+                # de o Mercado Pago cobrar, não depois.
+                season = season_offer_status(con, self.server.catalog, sku)
+                if not season["eligible"]:
+                    return self._send(409, {"error": season["reason"],
+                                            "season_offer": season})
+                paid, currency = catalog_price_minor(self.server.catalog, sku)
                 statuses = self._enqueue_items(
-                    con, account_id, sku, items, key, "sandbox")
+                    con, account_id, sku, items, key, "sandbox", paid, currency)
         except sqlite3.Error as e:
             return self._send(500, {"error": "db_error", "detail": str(e)})
         self._send(200, {"status": "ok", "items": statuses})
@@ -1072,8 +1330,9 @@ def main():
                     help="access_token MP p/ re-fetch autoritativo do pagamento "
                          "(provider=mercadopago; sem ele usa o corpo plano p/ sandbox)")
     ap.add_argument("--catalog",
-                    default=os.environ.get("SHAMBLETA_CATALOG_FILE", ""),
-                    help="JSON de catálogo SKU->grant; default: embutido")
+                    default=os.environ.get("SHAMBLETA_CATALOG_FILE", "") or default_catalog_path(),
+                    help="JSON de catálogo SKU->grant; default: data/conf/paid_catalog.json "
+                         "(/app/paid_catalog.json no container); sem o arquivo, o embutido")
     ap.add_argument("--tolerance", type=int,
                     default=int(os.environ.get("SHAMBLETA_WEBHOOK_TOLERANCE", "300")),
                     help="janela anti-replay (s)")

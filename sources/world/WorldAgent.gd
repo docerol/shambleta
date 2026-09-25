@@ -63,7 +63,11 @@ static func PopAgent(agent : BaseAgent):
 		push_error("Agent is null, can't pop it")
 		return
 	if agent:
-		var inst : WorldInstance = GetInstanceFromAgent(agent)
+		# A lista é a autoridade, não a árvore: entre PushAgent e o add_child adiado
+		# o agente está listado sem ter pai — derivar a instância de get_parent()
+		# apagava de lugar nenhum e deixava objeto liberado pendurado na lista.
+		var inst : WorldInstance = agent.listedIn as WorldInstance
+		agent.listedIn = null
 		if inst:
 			agent.set_physics_process(false)
 			if agent is PlayerAgent:
@@ -75,7 +79,7 @@ static func PopAgent(agent : BaseAgent):
 				inst.npcs.erase(agent)
 			if inst.players.is_empty():
 				if inst.id != 0 and inst.map:
-					inst.map.DestroyInstance.call_deferred(inst.id)
+					inst.map.DestroyEmptyInstanceIfUnchanged.call_deferred(inst.id, inst)
 				else:
 					inst.QueryProcessMode()
 			else:
@@ -86,7 +90,11 @@ static func PopAgent(agent : BaseAgent):
 						if agent.position.distance_squared_to(neighbour.position) < WorldAgent.VISIBLE_RADIUS_SQUARED:
 							Network.Bulk("RemoveEntity", [agentRID], neighbour.peerID)
 						neighbour.visibleAgents.erase(agentRID)
-			inst.remove_child(agent)
+			# Desanexa de onde o agente ESTÁ, que no meio de um warp é a instância
+			# antiga (a lista já aponta a nova, o add_child ainda não rodou).
+			var parent : Node = agent.get_parent()
+			if parent:
+				parent.remove_child(agent)
 
 static func PushAgent(agent : BaseAgent, inst : WorldInstance):
 	if agent == null:
@@ -97,6 +105,7 @@ static func PushAgent(agent : BaseAgent, inst : WorldInstance):
 		return
 	if agent and inst:
 		agent.set_physics_process(true)
+		agent.listedIn = inst
 		if agent is PlayerAgent:
 			inst.players.push_back(agent)
 			inst.RefreshProcessMode()

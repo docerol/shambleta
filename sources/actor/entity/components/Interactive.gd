@@ -200,14 +200,19 @@ func DisplaySpeech(speech : String):
 	if speechContainer == null:
 		push_error("No speech container found, could not display speech bubble")
 		return null
-		var speechLabel : RichTextLabel = ActorCommons.SpeechLabel.instantiate()
-		speechLabel.set_text("[center]%s[/center]" % [speech])
-		speechLabel.set_visible_ratio(0)
-		speechContainer.add_child(speechLabel)
-		if not self in Entities.speechEntities:
-			Entities.speechEntities.append(self)
-			set_process(true)
-		Callback.SelfDestructTimer(speechLabel, ActorCommons.speechDelay, OnSpeechLabelRemoved, [speechLabel])
+
+	# SOM-IDLE C1b: o corpo inteiro estava indentado dentro do ramo de erro
+	# (0c5cb56 trocou o assert antigo por um guard negativo sem desindentar),
+	# então o balão nunca aparecia. SpeechBubble.tscn é bbcode_enabled e o texto
+	# vem de outro jogador → escapa antes de montar o [center].
+	var speechLabel : RichTextLabel = ActorCommons.SpeechLabel.instantiate()
+	speechLabel.set_text("[center]%s[/center]" % [Util.EscapeBBCode(speech)])
+	speechLabel.set_visible_ratio(0)
+	speechContainer.add_child(speechLabel)
+	if not self in Entities.speechEntities:
+		Entities.speechEntities.append(self)
+		set_process(true)
+	Callback.SelfDestructTimer(speechLabel, ActorCommons.speechDelay, OnSpeechLabelRemoved, [speechLabel])
 
 func OnSpeechLabelRemoved(speechLabel : RichTextLabel):
 	Util.RemoveNode(speechLabel, speechContainer)

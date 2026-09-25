@@ -71,6 +71,11 @@ const SHOP_CATALOG : Array = [
 	{"sku": "starter.pack", "label": "Starter: VIP 7d + 220 gems (D0–D3, one-time)", "price": 9.90},
 	{"sku": "founder.pack", "label": "Founder: 1200 gems + VIP 30d + title", "price": 39.90},
 	{"sku": "donate.support", "label": "Support: Apoiador title", "price": 4.90},
+	# SOM-IDLE M3: faltava este — o botão do passe (Server.gd, tier "standard")
+	# pede a intent com "pass.s1", que é cobrável no companion, e recebia
+	# unknown_sku. O deluxe estava listado e o padrão (R$ 24,90, o SKU principal
+	# da temporada) não. SuiteCatalogConsistency amarra as duas listas.
+	{"sku": "pass.s1", "label": "Pass S1 Premium: trilha premium da temporada", "price": 24.90},
 	{"sku": "pass.s1.deluxe", "label": "Pass S1 Deluxe: premium + 10 levels + gems", "price": 44.90},
 ]
 
@@ -131,6 +136,17 @@ const VENDOR_CATALOG : Array = [
 
 # (de EconomyService.gd:1131)
 const LIVE_EVENT_DEFAULT_MOD : float = 1.0
+
+# #27 (AUDITORIA item 7 / G2): o mecanismo de live events existia, o catálogo de
+# datas não — sem linha em `live_event` nenhum evento dispara nunca, e o motor
+# ficava ligado sobre vazio. Estes são os dois únicos kinds que o código honra
+# (`drops_mod` em OfflineSettle, `fee_mod` na taxa de crafting). Números da
+# proposta R3 que já estava documentada: fim de semana ×2 drop, semana do ferreiro
+# −50% na taxa de submissão. Calendário é derivado do relógio UTC, nunca datas
+# fixas, então a rotação não precisa de operador.
+const LIVE_EVENT_WEEKEND_MOD : float = 2.0
+const LIVE_EVENT_SMITH_FEE_MOD : float = 0.5
+const LIVE_EVENT_SEED_WEEKS : int = 2
 
 # ROADMAP_COMERCIAL S2: seed de bots na AH no lançamento (a AH nasce morta sem
 # oferta; OSRS/Albion seedam o GE via NPCs). Vende consumíveis do vendor com
@@ -258,11 +274,18 @@ const AD_PLACEMENTS : Array[String] = ["afk2x", "chest", "reroll", "bosskey"]
 # (de EconomyService.gd:2436)
 const AD_PLACEMENT_CAPS : Dictionary = {"chest": 1, "bosskey": 2}
 
-# (de EconomyService.gd:2441)
-const AdStubEnabled : bool = true
-
 # (de EconomyService.gd:2442)
 const AD_DAILY_CAP : int = 6
+
+# SOM-IDLE M2: o token stub ("stub:<placement>:<dia>") é mintável por qualquer
+# cliente — quem o aceita decide se anúncio forjado credita. Antes era
+# `const AdStubEnabled = true`, i.e. compilar era a única forma de fechar e o
+# default de todo deploy era o caminho aberto. Agora o default é fechado: só
+# SHAMBLETA_AD_STUB=1 liga, e quem liga é o deploy do beta
+# (deploy/docker-compose.yml), não o binário. Sem SDK real/SSV no servidor,
+# produção não seta a env e todo token stub volta bad_token.
+static func AdStubEnabled() -> bool:
+	return OS.get_environment("SHAMBLETA_AD_STUB").strip_edges() == "1"
 
 # (de EconomyService.gd:2539)
 const COSMETIC_CATALOG : Dictionary = {
@@ -618,3 +641,108 @@ static func AchievementByID(achievementID : String) -> Dictionary:
 			return entry
 	return {}
 
+# ------------------------------------------------------------------ catálogo pago (fonte única)
+#
+# ROADMAP Bloco 1 item 10: `data/conf/paid_catalog.json` é o catálogo cobrável e
+# está nos dois lados da fronteira — o companion cobra dele, o jogo anuncia o
+# `SHOP_CATALOG` abaixo e aplica o grant por `kind`. Três cópias sem validação
+# cruzada é o bug: um `kind` que `_GrantApplyAndMark` não conhece derruba o grant
+# para `false`, a linha fica `pending` na fila e o jogador pagou sem receber — a
+# mesma classe do D1, só que pela borda do catálogo. `data/conf/*` é exportado
+# pelos presets (Windows/Android/Linux/macOS), então o servidor em produção
+# também enxerga o arquivo; `companion/` não é.
+const PaidCatalogPath : String			= "res://data/conf/paid_catalog.json"
+
+const GRANT_KINDS : Array = ["gems", "gold", "vip_days", "pass_premium", "cosmetic", "item"]
+
+# Divergências entre catálogo cobrável, anúncio e aplicador (vazio = batendo).
+# Puro — recebe o texto, não toca disco, banco nem rede — para servir ao boot do
+# servidor e à suíte com o mesmo código.
+static func ValidatePaidCatalog(raw : String) -> PackedStringArray:
+	var errors : PackedStringArray = PackedStringArray()
+	var parsed : Variant = JSON.parse_string(raw)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		errors.append("catálogo pago ausente ou não é um objeto JSON")
+		return errors
+	var paid : Dictionary = parsed
+	# §24-11 (Lei 15.211/2025): `_agreements` é a declaração do aceite que a OUTRA
+	# porta do dinheiro cobra — o companion recusa intent/preferência/sandbox
+	# quando o aceite gravado na conta não bate com ela. Validar contra os consts
+	# aqui fecha o ciclo "uma fonte, dois leitores" no mesmo regime do preço:
+	# bumpar `NetworkCommons.Agreement*` sem bumpar o arquivo (ou vice-versa) vira
+	# erro de boot, e não duas portas doendo com versões diferentes do contrato.
+	var agreements : Variant = paid.get("_agreements")
+	if typeof(agreements) != TYPE_DICTIONARY:
+		errors.append("_agreements: ausente ou não é um objeto — o companion fica sem versão vigente para cobrar e recusa todo checkout")
+	else:
+		var declared : Dictionary = agreements
+		_ValidateAgreementClause(declared, "tos", NetworkCommons.AgreementTosVersion, errors)
+		_ValidateAgreementClause(declared, "privacy", NetworkCommons.AgreementPrivacyVersion, errors)
+		_ValidateAgreementClause(declared, "age", NetworkCommons.AgreementAgeVersion, errors)
+	var advertised : Dictionary = {}
+	for entry in SHOP_CATALOG:
+		advertised[str(entry.get("sku", ""))] = float(entry.get("price", 0.0))
+	for key in paid.keys():
+		var sku : String = String(key)
+		# Chaves de comentário (`_note`) não são SKU.
+		if sku.begins_with("_"):
+			continue
+		var item : Variant = paid[key]
+		if typeof(item) != TYPE_DICTIONARY:
+			errors.append("%s: linha do catálogo não é um objeto" % sku)
+			continue
+		_ValidateSkuLine(sku, item, errors, true)
+		if not advertised.has(sku):
+			errors.append("%s: cobrável no gateway e não anunciado no SHOP_CATALOG" % sku)
+		elif absf(float((item as Dictionary).get("price", -1.0)) - float(advertised[sku])) > 0.005:
+			errors.append("%s: preço cobrado != preço anunciado" % sku)
+	for missing in advertised.keys():
+		if not paid.has(String(missing)):
+			errors.append("%s: anunciado e o gateway não cobra (intent vira unknown_sku)" % String(missing))
+	return errors
+
+# Uma cláusula do aceite (tos/privacy/idade). O comparison é de igualdade e não
+# de ordem: o predicate do jogo (`SQL.IsConsentAccepted`) também é, então
+# "2027" no arquivo não "autoriza" nada — só faz as duas portas discordarem.
+static func _ValidateAgreementClause(declared : Dictionary, clause : String, current : String, errors : PackedStringArray) -> void:
+	var value : String = str(declared.get(clause, ""))
+	if value != current:
+		errors.append("_agreements.%s: catálogo declara \"%s\", o jogo cobra \"%s\"" % [clause, value, current])
+
+static func ValidatePaidCatalogFile() -> PackedStringArray:
+	if not FileAccess.file_exists(PaidCatalogPath):
+		return PackedStringArray(["%s não existe — o servidor não tem como validar o catálogo pago" % PaidCatalogPath])
+	return ValidatePaidCatalog(FileAccess.get_file_as_string(PaidCatalogPath))
+
+# Uma linha de catálogo, ou uma perna de bundle. O bundle não chega ao jogo (o
+# companion decompõe em N grants atômicos), mas cada perna tem que ser
+# aplicável: senão a compra entrega metade.
+static func _ValidateSkuLine(sku : String, line : Dictionary, errors : PackedStringArray, topLevel : bool, legIndex : int = 0) -> void:
+	# Uma perna de bundle precisa se distinguir da linha-mãe na mensagem: o
+	# operador lê o log do boot e tem de saber qual perna não entrega.
+	var label : String = sku if topLevel else "%s perna %d" % [sku, legIndex]
+	var kind : String = str(line.get("kind", ""))
+	if kind == "bundle":
+		if not topLevel:
+			errors.append("%s: bundle dentro de bundle" % label)
+			return
+		var contents : Variant = line.get("contents", null)
+		if typeof(contents) != TYPE_ARRAY or (contents as Array).is_empty():
+			errors.append("%s: bundle sem contents" % sku)
+			return
+		var legN : int = 0
+		for leg in (contents as Array):
+			legN += 1
+			if typeof(leg) != TYPE_DICTIONARY:
+				errors.append("%s: perna %d de bundle não é um objeto" % [sku, legN])
+				continue
+			_ValidateSkuLine(sku, leg, errors, false, legN)
+		return
+	if not GRANT_KINDS.has(kind):
+		errors.append("%s: kind \"%s\" não é aplicável por _GrantApplyAndMark" % [label, kind])
+		return
+	var amount : Variant = line.get("amount", 0)
+	if not (amount is int or amount is float) or int(amount) <= 0:
+		errors.append("%s: amount ausente ou não-positivo" % label)
+	if kind == "cosmetic" and not COSMETIC_CATALOG.has(str(line.get("cosmetic_id", ""))):
+		errors.append("%s: cosmetic_id fora do COSMETIC_CATALOG" % label)

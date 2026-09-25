@@ -58,7 +58,12 @@ static func GetTOTPCounter(timestamp: int = -1) -> int:
 	return timestamp / TOTP_STEP_SECONDS
 
 static func GenerateTOTP(secret: String, timestamp: int = -1) -> String:
-	var counter: int = GetTOTPCounter(timestamp)
+	return GenerateTOTPForCounter(secret, GetTOTPCounter(timestamp))
+
+# HMAC-SHA1 sobre o contador de 8 bytes big-endian + truncação dinâmica (RFC 6238
+# / 4226). Separado do GenerateTOTP porque a verificação itera em CONTADORES;
+# passar timestamp por GenerateTOTP escalonaria duas vezes.
+static func GenerateTOTPForCounter(secret: String, counter: int) -> String:
 	var key: PackedByteArray = Base32Decode(secret)
 	if key.is_empty():
 		return ""
@@ -101,13 +106,14 @@ static func VerifyTOTP(secret: String, token: String, timestamp: int = -1) -> bo
 	if token.length() != TOTP_DIGITS or not token.is_valid_int():
 		return false
 	var baseCounter: int = GetTOTPCounter(timestamp)
-	var matchMask: int = 0
+	var matched: bool = false
+	# Janela ±1 CONTADOR (30s de tolerância para relógio do telefone). O drift
+	# nunca é multiplicado por TOTP_STEP_SECONDS duas vezes: fazer isso abria
+	# ±15min de codes válidos e recusava o código da janela vizinha.
 	for drift in range(-TOTP_DRIFT_WINDOWS, TOTP_DRIFT_WINDOWS + 1):
-		var candidateCounter: int = baseCounter + drift * TOTP_STEP_SECONDS
-		var candidate: String = GenerateTOTP(secret, candidateCounter * TOTP_STEP_SECONDS)
-		if _constant_time_equals(candidate, token):
-			matchMask = matchMask | (1 << (drift + TOTP_DRIFT_WINDOWS))
-	return matchMask != 0
+		if _constant_time_equals(GenerateTOTPForCounter(secret, baseCounter + drift), token):
+			matched = true
+	return matched
 
 static func GetQRCodeURL(secret: String, accountName: String, issuer: String = "Shambleta") -> String:
 	var encodedAccount: String = "%s:%s" % [issuer, accountName]

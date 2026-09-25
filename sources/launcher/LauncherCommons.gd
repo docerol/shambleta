@@ -20,7 +20,16 @@ const MapPoolMaxSize : int				= 10
 const ServerMaxFPS : int				= 30
 
 # Common accessors
-static var IsTesting : bool				= not OS.has_feature("production")
+# Modo de lançamento. TESTING é o default (editor, debug, testes, QA).
+# PRODUÇÃO só quando o build declara explicitamente: feature tag "production"
+# no preset de export (Web e Headless Server) e/ou SHAMBLETA_PRODUCTION=1 no
+# ambiente. Isso decide DB (live.db vs testing.db), porta de bind e endpoint do
+# client — ver SQLCommons.GetDBPath e NetworkCommons. A env só LIGA produção;
+# nunca desliga (esquecer a tag cai no modo seguro, não no perigoso).
+static func ResolveIsTesting(hasProductionFeature : bool, productionEnv : String) -> bool:
+	return not (hasProductionFeature or productionEnv.strip_edges() == "1")
+
+static var IsTesting : bool				= ResolveIsTesting(OS.has_feature("production"), OS.get_environment("SHAMBLETA_PRODUCTION"))
 static var isMobile : bool				= OS.has_feature("android") or OS.has_feature("ios") or Util.IsMobile()
 static var isWeb : bool					= OS.has_feature("web")
 

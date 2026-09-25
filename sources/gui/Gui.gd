@@ -264,7 +264,13 @@ func IsDialogueContextOpened() -> bool:
 	return dialogueContainer.is_visible()
 
 func OpenDiscord():
-	OS.shell_open(LauncherCommons.SocialLink)
+	# Terceiro site de navegação externa, mesmo ramo dos outros dois (`Checkout.gd`
+	# e `Scrollable.gd`): sem o `isWeb` o botão simplesmente não abre nada no export
+	# Web, que é onde o beta roda.
+	if LauncherCommons.isWeb:
+		JavaScriptBridge.eval("window.open(%s, '_blank');" % JSON.stringify(LauncherCommons.SocialLink))
+	else:
+		OS.shell_open(LauncherCommons.SocialLink)
 
 func DisplayFirstLogin():
 	if LauncherCommons.isWeb:
@@ -463,6 +469,14 @@ func ToggleIdleMode():
 				win.set_visible(true)
 		fullModeWindows.clear()
 		idleModeWindows.clear()
+	# O botão do HUD é `toggle_mode`, então o estado visual precisa ser atualizado
+	# por quem muda o modo — não por quem clica nele. Sem esta linha, F12 vira o HUD
+	# e o botão continua marcando o modo anterior: o jogador toca no "OFF" e não
+	# acontece nada, que é exatamente a classe de defeito do achado (j).
+	# `set_pressed_no_signal` porque `button_pressed = x` emitiria `toggled` no meio
+	# do próprio toggle.
+	if idleHudButton and is_instance_valid(idleHudButton):
+		idleHudButton.set_pressed_no_signal(idleMode)
 
 func IsIdleMode() -> bool:
 	return idleMode
@@ -524,11 +538,18 @@ func _notification(notif):
 		NOTIFICATION_APPLICATION_PIP_MODE_EXITED:
 			ExitPip()
 
-# SOM-IDLE P2: F10 toggles minimal idle HUD (hide non-essential windows).
+# SOM-IDLE P2: F12 toggles minimal idle HUD (hide non-essential windows).
 func _input(event : InputEvent):
 	if not FSM.IsGameState():
 		return
-	if event.is_action_pressed("ui_f10", false, true):
+	# A ação "ui_f10" nunca existiu: `project.godot` declara os `ui_*`/`gp_*` do
+	# projeto e os nativos do motor, e nada em `sources/` chama `InputMap.add_action`.
+	# `is_action_pressed` de ação inexistente devolve false para sempre, então este
+	# atalho — o ÚNICO chamador de ToggleIdleMode — nunca disparou em nenhuma build.
+	# Vira tecla crua (o painel de bindings lista categorias próprias, não
+	# `InputMap.get_actions()`, como `InputBindings.gd:133` já faz com ESC) e sai do
+	# F10: essa tecla já é o `ui_settings`, que o painel anuncia como "Settings".
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F12:
 		ToggleIdleMode()
 		get_viewport().set_input_as_handled()
 
@@ -594,78 +615,34 @@ func CheckNetworkStability():
 
 var manualSkillButtons : Array[Button] = []
 var manualSkillBar : HBoxContainer = null
+# Porta de mouse/touch do HUD idle (achado (j): até aqui o único caminho era a tecla
+# F12 crua em `_input`, inexistente em navegador sem teclado e em celular).
+var idleHudButton : Button = null
+
+# Construção da barra fatiada para `ManualHudBar.gd` (o `Gui` estourou o teto de
+# 800 linhas do gate anti-god-node). O estado fica aqui de propósito: `_input`,
+# `ToggleIdleMode`, a suíte de idle e o harness e2e leem a barra daqui, e quem
+# decide o que cada botão faz continua sendo método deste arquivo.
+const ManualHudBar = preload("res://sources/gui/ManualHudBar.gd")
 
 func AddManualSkillButtons():
-	# Barra própria (HBox auto-layout) sob a ButtonBar: buttonBoxes é a barra
-	# de diálogo (oculta in-game) e ActionBoxes é cena instanciada de slots.
 	if manualSkillBar and is_instance_valid(manualSkillBar):
 		manualSkillBar.set_visible(true)
 		return
-	if actionBoxes == null:
+	var built : Dictionary = ManualHudBar.Build(self)
+	manualSkillBar = built["bar"] as HBoxContainer
+	if manualSkillBar == null:
 		return
-	manualSkillButtons.clear()
-	manualSkillBar = HBoxContainer.new()
-	manualSkillBar.name = "ManualSkills"
-	manualSkillBar.alignment = BoxContainer.ALIGNMENT_CENTER
-	manualSkillBar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	manualSkillBar.offset_bottom = 36.0
-	manualSkillBar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	actionBoxes.get_parent().add_child(manualSkillBar)
-	actionBoxes.get_parent().move_child(manualSkillBar, 0)
-
-	# Main skills (Melee + Run): quick-cast sem ocupar os 10 slots + nomes reais.
-	var skills : Array = [
-		["Melee", DB.GetCellHash("Melee")],
-		["Run", DB.GetCellHash("Run")],
-	]
-	var touchSize : Vector2 = Vector2(48, 48) if (LauncherCommons.isMobile or LauncherCommons.isWeb) else Vector2(60, 30)
-
-	for entry in skills:
-		var btn : Button = Button.new()
-		btn.name = "ManualSkill_" + str(entry[1])
-		btn.text = str(entry[0])
-		btn.custom_minimum_size = touchSize
-		btn.mouse_filter = Control.MOUSE_FILTER_STOP
-		btn.add_theme_color_override("font_color", Color(1, 1, 0, 1))
-		btn.pressed.connect(_on_manual_skill_pressed.bind(int(entry[1])))
-		manualSkillBar.add_child(btn)
-		manualSkillButtons.append(btn)
-	# Hub Atividades (entra sem fricção; mesmos backends dos comandos).
-	var eventsBtn : Button = Button.new()
-	eventsBtn.name = "ActivitiesButton"
-	eventsBtn.text = "Eventos"
-	eventsBtn.custom_minimum_size = touchSize
-	eventsBtn.mouse_filter = Control.MOUSE_FILTER_STOP
-	eventsBtn.pressed.connect(_on_activities_pressed)
-	manualSkillBar.add_child(eventsBtn)
-	# Botão Guilda — acesso rápido ao painel Social.gd (guildList, membros, vault, ações líder).
-	var guildBtn : Button = Button.new()
-	guildBtn.name = "GuildButton"
-	guildBtn.text = "Guilda"
-	guildBtn.custom_minimum_size = touchSize
-	guildBtn.mouse_filter = Control.MOUSE_FILTER_STOP
-	guildBtn.pressed.connect(_on_guild_pressed)
-	manualSkillBar.add_child(guildBtn)
-	# Botão AH — acesso à Auction House (UI gráfica P1 em desenvolvimento; comandos /ah funcionam via EconomyService).
-	var ahBtn : Button = Button.new()
-	ahBtn.name = "AHButton"
-	ahBtn.text = "AH"
-	ahBtn.custom_minimum_size = touchSize
-	ahBtn.mouse_filter = Control.MOUSE_FILTER_STOP
-	ahBtn.pressed.connect(_on_ah_pressed)
-	manualSkillBar.add_child(ahBtn)
-	# Botão de acesso rápido à Auction House Window (P1 Social — UI gráfica de leilão).
-	if not manualSkillBar.has_node("AuctionHouseAccess"):
-		var ahAccessBtn : Button = Button.new()
-		ahAccessBtn.name = "AuctionHouseAccess"
-		ahAccessBtn.text = "Leilão"
-		ahAccessBtn.custom_minimum_size = touchSize
-		ahAccessBtn.mouse_filter = Control.MOUSE_FILTER_STOP
-		ahAccessBtn.pressed.connect(_on_ah_pressed)
-		manualSkillBar.add_child(ahAccessBtn)
+	manualSkillButtons = built["skillButtons"]
+	idleHudButton = built["idleButton"] as Button
 
 func _on_activities_pressed() -> void:
 	OpenActivities(0)
+
+# Mouse/touch no `IdleHudButton`. Só chama o toggle: quem devolve o estado visual do
+# botão é o próprio `ToggleIdleMode`, para que tecla e botão terminem no mesmo lugar.
+func _on_idle_hud_pressed() -> void:
+	ToggleIdleMode()
 
 # P1 Social: acesso rápido à guilda via HUD (Social.gd já existe com guildList, membros, vault, level-up).
 func _on_guild_pressed() -> void:

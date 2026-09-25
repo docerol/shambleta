@@ -33,6 +33,7 @@ Network="*res://sources/network/Network.gd"
 FSM="*res://sources/launcher/FSM.gd"
 Monitoring="*res://sources/system/Monitoring.gd"
 WebPush="*res://sources/web/WebPush.gd"
+PwaUpdate="*res://sources/web/PwaUpdate.gd"
 
 [debug]
 

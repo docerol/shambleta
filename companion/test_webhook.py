@@ -3,6 +3,7 @@
 companion/test_webhook.py. Sai !=0 se falhar."""
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 import sys
@@ -146,7 +147,8 @@ con.execute(
     "CREATE TABLE grant_queue (id INTEGER PRIMARY KEY AUTOINCREMENT,"
     " idempotency_key TEXT NOT NULL UNIQUE, account_id INTEGER NOT NULL,"
     " kind TEXT NOT NULL, amount INTEGER NOT NULL, payload TEXT,"
-    " status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL);")
+    " status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL,"
+    " price_paid INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '');")
 st = server.Store(tmp.name)
 ok(st.account_id(con, username="Hero") == 1, "store resolves account by username")
 ok(st.account_id(con, username="Ghost") is None, "store rejects unknown account")
@@ -168,12 +170,14 @@ raises(server.CatalogError,
        lambda: server.resolve_grant_items(cat, "starter.pack", 999),
        "bundle claimed_amount rejected")
 
-filecat = server.load_catalog(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                           "catalog.json"))
+filecat = server.load_catalog(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                            "data", "conf", "paid_catalog.json"))
 ok("starter.pack" in filecat and "founder.pack" in filecat,
-   "catalog.json loads with starter/founder")
+   "paid_catalog.json loads with starter/founder")
 ok(server.resolve_grant_items(filecat, "founder.pack")
-   == [("gems", 1200), ("vip_days", 30)], "catalog.json founder bundle")
+   == [("gems", 1200), ("vip_days", 30)], "paid_catalog.json founder bundle")
+ok(server.default_catalog_path().replace("\\", "/").endswith("data/conf/paid_catalog.json"),
+   "default --catalog resolves to the canonical source file")
 fd, badpath = tempfile.mkstemp(suffix=".json")
 os.write(fd, b'{"x": {"kind": "bundle", "contents": []}}')
 os.close(fd)
@@ -194,7 +198,8 @@ con.execute(
     "CREATE TABLE grant_queue (id INTEGER PRIMARY KEY AUTOINCREMENT,"
     " idempotency_key TEXT NOT NULL UNIQUE, account_id INTEGER NOT NULL,"
     " kind TEXT NOT NULL, amount INTEGER NOT NULL, payload TEXT,"
-    " status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL);")
+    " status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL,"
+    " price_paid INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '');")
 st = server.Store(tmp2.name)
 offer = server.starter_offer_status(con, cat, 1)
 ok(offer["eligible"] and offer["reason"] == "ok", "fresh account starter eligible")
@@ -225,6 +230,40 @@ ok(server.resolve_grant(cat, "pass.s1") == ("pass_premium", 1),
    "pass.s1 resolves to pass_premium")
 ok(server.resolve_grant_items(cat, "pass.s1") == [("pass_premium", 1)],
    "pass.s1 items single")
+
+# --- G1: gate de temporada no checkout ---
+# O grant de pass_premium falha fechado no jogo sem temporada ativa; a recusa
+# tem que acontecer ANTES de o Mercado Pago cobrar.
+SEASON_DDL = ("CREATE TABLE season (season_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+              " starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL,"
+              " rules_frozen TEXT NOT NULL DEFAULT '{}',"
+              " status TEXT NOT NULL DEFAULT 'active');")
+nowS = int(time.time())
+bare = sqlite3.connect(":memory:")
+ok(server.season_offer_status(bare, cat, "vip.1mo")["eligible"],
+   "gate não toca sku não sazonal")
+bare.execute(SEASON_DDL)
+gate = server.season_offer_status(bare, cat, "pass.s1")
+ok(not gate["eligible"] and gate["reason"] == "no_active_season",
+   "passe indisponível sem temporada")
+missing = sqlite3.connect(":memory:")
+ok(not server.season_offer_status(missing, cat, "pass.s1.deluxe")["eligible"],
+   "banco sem a tabela season também recusa (fail-closed)")
+bare.execute("INSERT INTO season (starts_at, ends_at, status) VALUES (?, ?, 'active');",
+             (nowS - 3600, nowS + 30 * 86400))
+live = server.season_offer_status(bare, cat, "pass.s1")
+ok(live["eligible"] and live["season_id"] > 0, "passe vendável com temporada ativa")
+bare.execute("UPDATE season SET status = 'settled';")
+ok(not server.season_offer_status(bare, cat, "pass.s1")["eligible"],
+   "temporada liquidada não vende passe")
+bare.execute("UPDATE season SET status = 'active', ends_at = ?;", (nowS - 10,))
+ok(not server.season_offer_status(bare, cat, "pass.s1")["eligible"],
+   "temporada vencida não vende passe no intervalo até o fechamento")
+bare.execute("UPDATE season SET status = 'active', ends_at = ?;", (nowS + 3600,))
+ok(server.season_offer_status(bare, cat, "pass.s1")["eligible"],
+   "volta a vender quando há temporada dentro do prazo")
+bare.close()
+missing.close()
 
 # --- Fase F: doação vira cosmético ---
 ok(server.resolve_grant(cat, "donate.support") == ("cosmetic", 1),
@@ -389,6 +428,135 @@ ok(server.mp_create_preference(payload, "TOKEN123") is None,
 _urlreq2.urlopen = _real2
 ok(server.mp_create_preference(payload, "") is None,
    "preference without token refused (fail-closed)")
+
+# --- K1: preço pago na fila (receita em dinheiro, não unidade de jogo) ---
+stripe_paid = {"id": "evt_9", "data": {"object": {
+    "id": "cs_9", "client_reference_id": "42",
+    "metadata": {"shambleta_sku": "gems.550"},
+    "amount_total": 1990, "currency": "brl"}}}
+nsp = server.normalize_event("stripe", stripe_paid)
+ok(nsp["price_paid"] == 1990 and nsp["currency"] == "BRL",
+   "stripe: amount_total (já em centavos) vira price_paid")
+mp_paid = {"id": "9002", "status": "approved", "external_reference": "1:gems.550",
+           "transaction_amount": 19.9, "currency_id": "BRL"}
+npm = server.normalize_event("mercadopago", mp_paid)
+ok(npm["price_paid"] == 1990,
+   "mp: transaction_amount float da borda vira inteiro em centavos")
+ok(server.normalize_event("mercadopago", {"id": "9003", "status": "approved",
+   "external_reference": "1:gems.550"})["price_paid"] == 0,
+   "payment sem valor não inventa receita")
+ok(server.normalize_event("shared", {"idempotency_key": "t",
+   "sku": "gems.550"})["currency"] == "",
+   "sandbox sem moeda não chuta uma moeda")
+ok(server.catalog_price_minor(cat, "gems.550") == (1990, "BRL"),
+   "preço de catálogo sai na mesma unidade menor da fila")
+ok(server.catalog_price_minor(cat, "nao.existe") == (0, ""),
+   "sku inexistente não tem preço")
+
+# O writer: bundle = N linhas de grant, UMA linha de dinheiro (senão
+# SUM(price_paid) contaria a mesma compra N vezes).
+tmp4 = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+tmp4.close()
+con4 = sqlite3.connect(tmp4.name)
+con4.execute(
+    "CREATE TABLE grant_queue (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " idempotency_key TEXT NOT NULL UNIQUE, account_id INTEGER NOT NULL,"
+    " kind TEXT NOT NULL, amount INTEGER NOT NULL, payload TEXT,"
+    " status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL,"
+    " price_paid INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '');")
+st4 = server.Store(tmp4.name)
+handler = server.Handler.__new__(server.Handler)  # sem request real: só o writer
+handler.server = type("S", (), {"catalog": cat, "store": st4})()
+bundle = server.resolve_grant_items(cat, "starter.pack")
+statuses = handler._enqueue_items(con4, 1, "starter.pack", bundle, "pay7",
+                                  "mercadopago", 1990, "BRL")
+ok(statuses == ["queued"] * len(bundle), "bundle: um grant por item")
+ok(con4.execute("SELECT COALESCE(SUM(price_paid), 0) FROM grant_queue;").fetchone()[0]
+   == 1990, "bundle: o preço entra uma única vez na soma")
+ok(con4.execute("SELECT COUNT(*) FROM grant_queue WHERE price_paid > 0;").fetchone()[0]
+   == 1, "bundle: uma compra é uma linha com dinheiro")
+ok(con4.execute("SELECT amount FROM grant_queue ORDER BY id;").fetchall()
+   == [(7,), (220,)], "bundle: as unidades de jogo continuam por item")
+# redelivery do mesmo payment: idempotente por chave derivada, sem preço extra
+again = handler._enqueue_items(con4, 1, "starter.pack", bundle, "pay7",
+                               "mercadopago", 1990, "BRL")
+ok(again == ["duplicate"] * len(bundle) and con4.execute(
+    "SELECT COALESCE(SUM(price_paid), 0) FROM grant_queue;").fetchone()[0] == 1990,
+   "redelivery não duplica o dinheiro")
+con4.close()
+os.unlink(tmp4.name)
+
+# /metrics: a resposta tem de dizer quanto entrou, em qual moeda, e por pagante.
+tmp5 = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+tmp5.close()
+con5 = sqlite3.connect(tmp5.name)
+for ddl in (
+        "CREATE TABLE grant_queue (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " idempotency_key TEXT UNIQUE, account_id INTEGER, kind TEXT, amount INTEGER,"
+        " payload TEXT, status TEXT DEFAULT 'pending', created_at INTEGER,"
+        " price_paid INTEGER DEFAULT 0, currency TEXT DEFAULT '')",
+        "CREATE TABLE ledger_transaction (kind TEXT, amount INTEGER, reason TEXT,"
+        " created_at INTEGER)",
+        "CREATE TABLE wallet (gems INTEGER)",
+        "CREATE TABLE account (account_id INTEGER PRIMARY KEY, username TEXT,"
+        " created_timestamp INTEGER, last_timestamp INTEGER, vip_until INTEGER)",
+        "CREATE TABLE telemetry_event (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " created_at INTEGER, account_id INTEGER, char_id INTEGER, kind TEXT,"
+        " value INTEGER, meta TEXT DEFAULT '{}', fingerprint TEXT DEFAULT '')",
+        "CREATE TABLE reconcile_run (id INTEGER PRIMARY KEY, divergences INTEGER,"
+        " created_at INTEGER)",
+        "CREATE TABLE guild (guild_id INTEGER)",
+        "CREATE TABLE auction_listing (status TEXT)",
+        "CREATE TABLE season (season_id INTEGER, status TEXT)"):
+    con5.execute(ddl)
+nowts = int(time.time())
+con5.execute("INSERT INTO account VALUES (1, 'Hero', ?, ?, 0);", (nowts, nowts))
+con5.execute("INSERT INTO account VALUES (2, 'Payer', ?, ?, 0);", (nowts, nowts))
+con5.execute("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount,"
+             " payload, status, created_at, price_paid, currency)"
+             " VALUES ('p1:0:vip_days', 2, 'vip_days', 7, ?,"
+             " 'processed', ?, 1990, 'BRL');",
+             (json.dumps({"sku": "vip.1mo"}), nowts))
+con5.execute("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount,"
+             " payload, status, created_at, price_paid, currency)"
+             " VALUES ('p1:1:gems', 2, 'gems', 220, ?, 'processed', ?, 0, '');",
+             (json.dumps({"sku": "vip.1mo"}), nowts))
+con5.execute("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount,"
+             " payload, status, created_at, price_paid, currency)"
+             " VALUES ('p2', 1, 'gems', 550, ?, 'processed', ?, 2500, 'USD');",
+             (json.dumps({"sku": "gems.550"}), nowts))
+con5.execute("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount,"
+             " payload, status, created_at, price_paid, currency)"
+             " VALUES ('p3', 1, 'gems', 550, ?, 'pending', ?, 9999, 'BRL');",
+             (json.dumps({"sku": "gems.550"}), nowts))
+st5 = server.Store(tmp5.name)
+# Multi-account: a digital é COLUNA de telemetry_event (migration 030). A
+# consulta selecionava 'fp' — coluna que só existia numa tabela que este próprio
+# código criava e ninguém populava — e o OperationalError derrubava o /metrics
+# inteiro (500) em qualquer banco migrado. Este bloco é o guarda-chuva disso.
+for acct, fp in ((1, "maquina-compartilhada"), (2, "maquina-compartilhada"),
+                 (3, "maquina-compartilhada"), (4, "casa-do-joao")):
+    con5.execute("INSERT INTO telemetry_event (created_at, account_id, char_id,"
+                 " kind, value, meta, fingerprint) VALUES (?, ?, 0, 'login', 0,"
+                 " '{}', ?);", (nowts, acct, fp))
+m = st5.metrics(con5)
+rev = m["revenue_by_currency"]
+ok(rev["BRL"]["gross_minor"] == 1990 and rev["USD"]["gross_minor"] == 2500,
+   "metrics: receita por moeda, sem somar moedas diferentes")
+ok(rev["BRL"]["payers"] == 1 and rev["BRL"]["arppu_minor"] == 1990,
+   "metrics: ARPPU sai da fila (1 pagante = bruto)")
+ok(rev["BRL"]["purchases"] == 1,
+   "metrics: grant pendurado no mesmo payment não vira duas compras")
+ok("9999" not in json.dumps(rev),
+   "metrics: grant ainda não processado não conta como receita")
+ok(m["sales_by_sku"]["vip.1mo"]["gross_minor"] == 1990
+   and m["sales_by_sku"]["vip.1mo"]["units"] == 227,
+   "metrics: por SKU o dinheiro e a unidade de jogo aparecem separados")
+ok(m["multi_account_suspicions"] == [{"fingerprint": "maquina-compartilhada",
+                                      "account_count": 3}],
+   "metrics: a suspeita de multi-conta roda na coluna real (não derruba /metrics)")
+con5.close()
+os.unlink(tmp5.name)
 
 # resumo
 if FAILS:

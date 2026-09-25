@@ -46,6 +46,19 @@ func DestroyInstance(instanceID : int):
 		inst.Destroy()
 		instances.erase(instanceID)
 
+# PopAgent adia o fechamento da instância vazia para o fim do frame, e na mesma
+# chamada precisa conferir duas coisas. Identidade: outro pedido pode ter assumido
+# o id (reconexão, retomada de sessão idle) — matar por id destrói a instância
+# nova. Vazio: o pop que enfileirou isto pode ser um warp para a PRÓPRIA
+# instância (a lista esvazia no pop e o PushAgent do mesmo frame enche de novo),
+# e Destroy() faz RemoveAgent em quem está dentro — ou seja, mataria o jogador.
+func DestroyEmptyInstanceIfUnchanged(instanceID : int, expected : WorldInstance) -> bool:
+	var inst : WorldInstance = instances.get(instanceID, null)
+	if inst != expected or not inst.players.is_empty():
+		return false
+	DestroyInstance(instanceID)
+	return true
+
 func Destroy():
 	for instanceID in instances.keys():
 		DestroyInstance(instanceID)

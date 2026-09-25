@@ -9,6 +9,10 @@ insert_final_newline = true
 trim_trailing_whitespace = true
 
 [*.gd]
+# O GDScript do projeto é todo em tab (292 dos 301 arquivos; os 4 restantes são
+# `Audio.gd` e três probes de teste que herdam o estilo antigo). `indent_size`
+# aqui é só a largura de exibição do tab — o editor NÃO deve converter.
+indent_style = tab
 indent_size = 4
 
 [*.py]

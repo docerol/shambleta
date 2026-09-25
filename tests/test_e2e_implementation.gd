@@ -52,6 +52,13 @@ func _initialize():
 		["res://sources/gui/Activities.gd", "ShowAchievements", "Hub — ShowAchievements"],
 		["res://sources/network/Network.gd", "GetAchievements", "Hub RPC — GetAchievements"],
 		["res://sources/network/server/Server.gd", "ClaimAchievement", "Hub RPC — ClaimAchievement handler"],
+		# Duas linhas que nasceram de runtime error real no log, não de palpite:
+		# Gui.DisplayFirstLogin chamava settingsWindow.get_sessionfirstlogin(),
+		# método que nunca existiu em nenhuma revisão — a chamada abortava o
+		# primeiro login e o tour de onboarding não abria para ninguém.
+		["res://sources/gui/Settings.gd", "get_sessionfirstlogin", "Primeiro login — getter que Gui.gd:286 chama"],
+		# E a linha de web push em Settings só existe se o gate responder.
+		["res://sources/web/WebPush.gd", "CanDeliver", "Web push — gate que Settings.gd consulta para montar a linha"],
 	]
 	for c in checks:
 		if _has_fn(c[0], c[1]):

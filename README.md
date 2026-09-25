@@ -66,19 +66,22 @@ The server starts automatically in debug builds. Use `F1`–`F12` for UI shortcu
 - **Network:** ENet, WebSocket, and WebRTC transports with a unified RPC layer.
 - **Idle engine:** `IdlePolicy` ticks at physics FPS; offline settle is idempotent via `last_settled_at`.
 
-See [som-idle-docs/](som-idle-docs/) for detailed architecture, economy study, and roadmap.
+Current docs live in [`docs/`](docs/) (`development/architecture.md`, `setup.md`,
+`testing.md`, `debugging.md`, plus the `adding-a-*.md` recipes), the commercial plan in
+[`ROADMAP_COMERCIAL.md`](ROADMAP_COMERCIAL.md), and the historical design record —
+architecture, economy study, monetization, battle pass, season activation notes — in
+[`archive/`](archive/).
 
 ## Tests
 
 ```bash
-# Idle test suite (XP curve, settle, ledger, guild, seasons, rebirth)
-godot --headless --path . -s tests/run_idle_tests.gd
-
-# Backup restore probe
-godot --headless --path . -s tests/test_backup_restore.gd
+./scripts/test.sh all     # os cinco harnesses headless, cada um pelo gate da CI
+./scripts/test.sh idle    # suíte idle (XP curve, settle, ledger, guild, seasons, rebirth)
 ```
 
-CI runs both on every push.
+CI roda os cinco em todo push (`idle-tests`, `backup-restore`, `benchmarks` e os
+jobs de `companion/`), sempre através de `scripts/ci_gate_log.sh` — exit code sozinho
+não aprova nada. Ver [docs/development/testing.md](docs/development/testing.md).
 
 ## Contributing
 

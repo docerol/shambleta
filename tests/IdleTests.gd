@@ -62,7 +62,10 @@ func CreateFixture(sql : SQLService, accountName : String, nickname : String, gp
 	sql.db.delete_rows("character", "nickname = '%s';" % nickname)
 	sql.db.delete_rows("account", "username = '%s';" % accountName)
 
-	if not sql.AddAccount(accountName, "testpass", accountName + "@test.local"):
+	# Fixture = conta como o produto cria: aceite afirmativo vigente gravado (Termos +
+	# Privacidade + declaração de idade, §24-11). Sem isto todo fixture é "conta sem
+	# declaração" e o gate de checkout derruba as suítes de economia inteiras.
+	if not sql.AddAccount(accountName, "testpass", accountName + "@test.local", NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, "203.0.113.1"):
 		return 0
 	var accountID : int = sql.GetAccountID(accountName)
 	if accountID == NetworkCommons.PeerUnknownID:
@@ -250,10 +253,18 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 
 func SuiteSettleIdempotency(sql : SQLService, charID : int, expectedLedgerRows : int) -> void:
 	print("[suite] settle idempotency")
-	# Second call on the same anchor: zero delta, no new rows
+	# Segunda chamada com o MESMO anchor. O relógio precisa ser pinado: o guard de
+	# idempotência é `now <= last_settled_at` e o settle do golden acima já andou
+	# com o anchor para o `now` dele — se um segundo inteiro passasse entre as duas
+	# chamadas, o re-settle pagaria esse segundo (ganho legítimo, anchor anda) e a
+	# suíte ficava vermelha por sorteio de timing, não por bug. Padrão de
+	# OfflineSettle.nowOverride já usado na suíte de anúncios (Fase E).
+	var pinned : int = int(sql.GetCharacter(charID)["last_settled_at"])
+	OfflineSettle.nowOverride = pinned
 	var statBefore : Dictionary = sql.GetStat(charID)
 	var report : Dictionary = OfflineSettle.SettlePending(charID)
 	var statAfter : Dictionary = sql.GetStat(charID)
+	OfflineSettle.nowOverride = 0
 
 	Check(report.is_empty(), "re-settle on same anchor is a no-op")
 	CheckEq(int(statAfter["level"]), int(statBefore["level"]), "level unchanged on re-settle")
@@ -551,6 +562,831 @@ func _SpawnSimAgent(charID : int, runIdx : int, zoneID : int) -> PlayerAgent:
 	agent.SetCharacterInfo(charInfo, charID)
 	return agent
 
+# SOM-IDLE: ciclo de vida do agente na lista da instância. PushAgent registra na
+# lista no mesmo frame em que ADIA o add_child; PopAgent, que derivava a instância
+# de get_parent(), apagava de lugar nenhum e deixava objeto liberado pendurado em
+# players. WorldInstance.Destroy() então abortava no primeiro RemoveAgent e a
+# instância ficava na árvore e em map.instances, com os mobs dentro, para sempre.
+func SuiteAgentLifecycle(sql : SQLService) -> void:
+	print("[suite] ciclo de vida do agente na instância")
+	var charID : int = CreateFixture(sql, "lifecycle_acct", "LifecycleAgent")
+	if not Check(charID != 0, "lifecycle: fixture criada"):
+		return
+	var agent : PlayerAgent = await _SpawnSimAgent(charID, 970, 1)
+	if not Check(agent != null, "lifecycle: agente spawnado na instância da zona"):
+		return
+	var inst : WorldInstance = IdlePolicyService.GetFarmInstance(1)
+	if not Check(inst != null, "lifecycle: a instância da zona resolve"):
+		return
+	var instanceID : int = inst.id
+	var map : WorldMap = inst.map
+
+	Check(agent.get_parent() == null, "lifecycle: o add_child ainda está adiado (a janela que quebrava)")
+	CheckEq(inst.players.size(), 1, "lifecycle: o agente está na lista da instância")
+
+	var rid : int = agent.get_rid().get_id()
+	WorldAgent.RemoveAgent(agent)
+	CheckEq(inst.players.size(), 0, "lifecycle: remover no mesmo frame esvazia a lista")
+	Check(not inst.players.has(agent), "lifecycle: nada fica pendurado na lista")
+	Check(not WorldAgent.agents.has(rid), "lifecycle: o registro global também saiu")
+
+	# Recriar o mesmo id no mesmo frame é o que um segundo jogador da mesma zona
+	# faz enquanto a saída do primeiro ainda está adiada pelo call_deferred.
+	map.instances.erase(instanceID)
+	map.CreateInstance(instanceID)
+	var fresh : WorldInstance = map.instances.get(instanceID, null)
+	if not Check(fresh != null and fresh != inst, "lifecycle: instância nova assumiu o mesmo id"):
+		return
+	for i in 6:
+		await Launcher.get_tree().process_frame
+	Check(is_instance_valid(fresh) and map.instances.get(instanceID, null) == fresh,
+		"lifecycle: o deferred não matou a instância nova (fecha por identidade, não por id)")
+
+	# O outro lado do fechamento adiado: pop e push na MESMA instância dentro do
+	# mesmo frame (warp de retomada de zona — a lista esvazia no pop e enche de
+	# novo no push). Fechar por snapshot do pop destruía a zona com o dono dentro,
+	# e Destroy() faz RemoveAgent em quem está na lista: jogador liberado no meio
+	# da própria sessão. Confere vazio de novo na hora de fechar.
+	var back : PlayerAgent = await _SpawnSimAgent(charID, 971, 1)
+	if Check(back != null, "lifecycle: agente para o ciclo mesma-instância"):
+		var same : WorldInstance = IdlePolicyService.GetFarmInstance(1)
+		WorldAgent.PopAgent(back)
+		WorldAgent.PushAgent(back, same)
+		CheckEq(same.players.size(), 1, "lifecycle: re-empurrou para a mesma instância")
+		await Launcher.get_tree().process_frame
+		Check(is_instance_valid(back), "lifecycle: o pop+push na mesma instância não matou o agente")
+		Check(is_instance_valid(same) and same.players.has(back), "lifecycle: a instância ocupada continua de pé")
+		WorldAgent.RemoveAgent(back)
+		for i in 3:
+			await Launcher.get_tree().process_frame
+		Check(not is_instance_valid(back), "lifecycle: remover de verdade libera")
+
+	# Os dois caminhos do fechamento explícito precisam de instância VIVA: `fresh`
+	# já era, porque ela É a instância da zona 1 e o bloco acima a derrubou quando
+	# ficou vazia de verdade. Passar um objeto liberado num parâmetro tipado é erro
+	# de script, não caso de teste.
+	map.instances.erase(instanceID)
+	var closable : WorldInstance = map.CreateInstance(instanceID)
+	if Check(closable != null, "lifecycle: instância para o fechamento explícito"):
+		Check(map.DestroyEmptyInstanceIfUnchanged(instanceID, closable), "lifecycle: fecha a instância certa")
+		Check(not map.DestroyEmptyInstanceIfUnchanged(instanceID, closable), "lifecycle: id vazio não fecha duas vezes")
+		# O id foi reassumido: fechar pelo snapshot velho destruiria a instância nova.
+		var takeover : WorldInstance = map.CreateInstance(instanceID)
+		Check(not map.DestroyEmptyInstanceIfUnchanged(instanceID, closable), "lifecycle: identidade trocada não fecha")
+		Check(is_instance_valid(takeover) and map.instances.get(instanceID, null) == takeover,
+			"lifecycle: quem assumiu o id sobrevive ao snapshot velho")
+		map.DestroyInstance(instanceID)
+
+	# --- guardas de fonte --------------------------------------------------
+	var wa : String = _RepoFile("res://sources/world/WorldAgent.gd")
+	var popStart : int = wa.find("static func PopAgent")
+	if Check(popStart != -1, "PopAgent existe"):
+		var popBody : String = wa.substr(popStart, wa.find("static func PushAgent", popStart) - popStart)
+		Check(popBody.contains("agent.listedIn"), "PopAgent resolve a instância pela lista")
+		Check(not popBody.contains("GetInstanceFromAgent"), "PopAgent não deriva a instância da árvore")
+		Check(popBody.contains("inst.map.DestroyEmptyInstanceIfUnchanged.call_deferred"), "PopAgent fecha por identidade")
+	Check(wa.contains("agent.listedIn = inst"), "PushAgent marca a instância que lista o agente")
+	Check(not wa.contains("inst.map.DestroyInstance.call_deferred"), "nada fecha instância por id cego")
+	var wm : String = _JoinLines(_RawFuncBody(_RepoFile("res://sources/world/WorldMap.gd"), "DestroyEmptyInstanceIfUnchanged"))
+	Check(wm.contains("inst.players.is_empty()"), "o fechamento adiado confere vazio na hora de fechar")
+	Check(_RepoFile("res://sources/actor/agent/BaseAgent.gd").contains("var listedIn"), "BaseAgent carrega a referência da lista")
+	var ips : String = _RepoFile("res://sources/idle/IdlePolicyService.gd")
+	Check(ips.contains("var currentInst : Node = player.listedIn"), "_Attach mede a instância atual pela lista")
+	Check(not ips.contains("var currentInst : Node = player.get_parent()"), "_Attach não confunde add_child adiado com char fora da zona")
+	Check(ips.contains("var inst : WorldInstance = player.listedIn as WorldInstance"), "StopIdleSession desanexa da instância que lista o char")
+	var destroy : String = _JoinLines(_RawFuncBody(_RepoFile("res://sources/world/WorldInstance.gd"), "Destroy"))
+	CheckEq(destroy.count("is_instance_valid"), 3, "Destroy ignora entrada morta nas três listas")
+	Check(destroy.contains("is_inside_tree()"), "Destroy só tira da árvore quem está na árvore (o add_child do Create é adiado)")
+
+# SOM-IDLE R1: superfície pública dos autoloads. Perder uma função de autoload não
+# quebra o parse de quem chama — quebra em runtime, no caminho de um jogador. Foi
+# exatamente assim que Monitoring perdeu SetPlayer: f781f71 esvaziou o arquivo por
+# causa de um erro de indentação e Map.gd:125 continuou chamando na chegada do
+# jogador local ao mapa. O runner headless é server-only e nunca passa por ali,
+# então esta varredura é a única prova que existe sem client real aberto.
+func SuiteAutoloadSurface() -> void:
+	print("[suite] superfície dos autoloads (R1)")
+	var names : Array[String] = []
+	for prop in ProjectSettings.get_property_list():
+		var pname : String = String(prop["name"])
+		if pname.begins_with("autoload/"):
+			names.append(pname.trim_prefix("autoload/"))
+	if not Check(not names.is_empty(), "autoloads enumerados do project.godot"):
+		return
+	var sceneRoot : Node = (Engine.get_main_loop() as SceneTree).root
+	var patterns : Array[RegEx] = []
+	var live : Array[Node] = []
+	var probed : Array[String] = []
+	for autoloadName in names:
+		var node : Node = sceneRoot.get_node_or_null(NodePath(autoloadName))
+		if not Check(node != null, "autoload %s vive em /root" % autoloadName):
+			continue
+		var pattern : RegEx = RegEx.new()
+		if Check(pattern.compile("\\b%s\\.([A-Za-z_]\\w*)\\s*\\(" % autoloadName) == OK, "regex de chamada %s compila" % autoloadName):
+			patterns.append(pattern)
+			live.append(node)
+			probed.append(autoloadName)
+	# Um arquivo lido uma vez, todos os autoloads conferidos nele.
+	var checked : int = 0
+	var broken : int = 0
+	for filePath in _GdFilesUnder("res://sources"):
+		var body : String = _RepoFile(String(filePath))
+		for i in patterns.size():
+			for matchResult in patterns[i].search_all(body):
+				var method : String = matchResult.get_string(1)
+				checked += 1
+				if not live[i].has_method(method):
+					broken += 1
+					Check(false, "%s.%s é chamado em %s e não existe no autoload" % [probed[i], method, String(filePath)])
+	Check(checked >= 40, "a varredura realmente olhou chamadas de autoload (%d)" % checked)
+	CheckEq(broken, 0, "nenhuma chamada de autoload aponta para função inexistente")
+
+# SOM-IDLE beta: superfície dos SERVIÇOS do Launcher. Mesma técnica do
+# SuiteAutoloadSurface — exame no objeto vivo, não no fonte — aplicada aos campos
+# de serviço. O compilador não checa nada disso: `var SQL : ServiceBase` e o
+# método está em SQLService, `var settingsWindow : WindowPanel` e o método está
+# em Settings. Foi exatamente assim que `get_sessionfirstlogin` derrubou o
+# primeiro login (e `Monitoring.SetPlayer` a chegada do jogador local).
+func SuiteServiceSurface() -> void:
+	print("[suite] superfície dos serviços do Launcher")
+	var probed : Array[String] = []
+	var patterns : Array[RegEx] = []
+	var live : Array[Node] = []
+	for prop in Launcher.get_script().get_script_property_list():
+		var fieldName : String = String(prop["name"])
+		# Launcher.get() devolve Variant: BootClient/BootServer são bool de
+		# script e uma tipagem Object aqui derruba a atribuição antes da
+		# guarda `is Node` abaixo (SCRIPT ERROR medido em final21).
+		var value : Variant = Launcher.get(fieldName)
+		if value == null or not (value is Node):
+			continue
+		var pattern : RegEx = RegEx.new()
+		if pattern.compile("\\bLauncher\\." + fieldName + "\\.([A-Za-z_]\\w*)\\s*\\(") != OK:
+			continue
+		probed.append(fieldName)
+		patterns.append(pattern)
+		live.append(value as Node)
+	if not Check(probed.size() >= 8, "serviços vivos bastam para o exame (%d)" % probed.size()):
+		return
+	var scanned : int = 0
+	var broken : int = 0
+	for filePath in _GdFilesUnder("res://sources"):
+		var body : String = _RepoFile(String(filePath))
+		for i in patterns.size():
+			for matchResult in patterns[i].search_all(body):
+				var member : String = matchResult.get_string(1)
+				scanned += 1
+				if not live[i].has_method(member):
+					broken += 1
+					Check(false, "Launcher.%s.%s é chamado em %s e não existe no serviço vivo" % [probed[i], member, String(filePath)])
+	Check(scanned >= 40, "a varredura olhou chamadas de serviço de verdade (%d)" % scanned)
+	CheckEq(broken, 0, "nenhuma chamada de serviço aponta para função inexistente")
+
+# SOM-IDLE beta: jornada de painéis. O runner headless boota o client
+# (Launcher._ready → Client.tscn, sem `--server`), então Launcher.GUI É a cena do
+# beta e cada `@onready … = $Windows/…` dela já foi resolvido — nada além desta
+# suíte exercita o painel. Duas falhas confirmadas desta passada moravam aqui:
+# chamada de método que só existe na subclasse compilando limpa porque o campo é
+# tipado na base (`settingsWindow : WindowPanel` → get_sessionfirstlogin, e
+# `Monitoring.SetPlayer`). O exame do encadeamento é a própria chamada: um método
+# que falte escreve SCRIPT ERROR no log e o gate quadruplo reprova a rodada.
+func SuiteGuiPanels() -> void:
+	print("[suite] jornada de painéis GUI (beta)")
+	var guiNode : Node = Launcher.GUI
+	if not Check(guiNode != null, "GUI vive no client headless"):
+		return
+	# Cada alvo de highlight/open é um painel que o jogador pode clicar.
+	var targetHits : int = 0
+	for targetIdx in range(int(UICommons.UITarget.MENUINDICATOR), int(UICommons.UITarget.ACTION_BAR) + 1):
+		var resolved : Control = guiNode.GetUITarget(targetIdx as UICommons.UITarget)
+		if Check(resolved != null, "GetUITarget(%d) resolve painel vivo" % targetIdx):
+			targetHits += 1
+	CheckEq(targetHits, int(UICommons.UITarget.ACTION_BAR) - int(UICommons.UITarget.MENUINDICATOR) + 1, "todo UITarget de painel aponta um controle vivo")
+	Check(guiNode.GetUITarget(UICommons.UITarget.NONE) == null, "NONE aponta para nenhum painel")
+	# Primeiro login: o caminho inteiro, caixa de boas-vindas + tour, encadeados
+	# por apply_sessionfirstlogin(true) → GUI.DisplayFirstLogin() → tour.
+	var settingsWin : WindowPanel = guiNode.settingsWindow
+	if not Check(settingsWin != null, "janela de settings existe no scene"):
+		return
+	Check(settingsWin.has_method("get_sessionfirstlogin"), "settings expõe o getter que Gui.DisplayFirstLogin lê")
+	Check(settingsWin.has_method("set_sessionfirstlogin"), "settings expõe o setter que o botão OK usa")
+	var flagWas : bool = settingsWin.get_sessionfirstlogin()
+	settingsWin.set_sessionfirstlogin(true)
+	Check(bool(guiNode.messageBox.is_visible()), "primeiro login abre a caixa de boas-vindas")
+	var tourNode : Node = guiNode.get_node_or_null("Onboarding")
+	if Check(tourNode != null, "primeiro login monta o tour no GUI"):
+		Check(bool(tourNode.get("_isActive")), "tour abre ativo")
+		Check(bool(tourNode.get("_label").visible), "tour mostra o primeiro passo")
+		tourNode.Stop()
+		guiNode.remove_child(tourNode)
+		tourNode.free()
+	settingsWin.set_sessionfirstlogin(false)
+	Check(guiNode.get_node_or_null("Onboarding") == null, "flag desligado não monta o tour")
+	guiNode.messageBox.Clear()
+	settingsWin.set_sessionfirstlogin(flagWas)
+	# Hub de atividades (copa, diária, ranking, ofertas) — montado em runtime.
+	var actWin : ActivitiesWindow = guiNode.EnsureActivities()
+	if Check(actWin != null and is_instance_valid(actWin), "hub de atividades nasce sob demanda"):
+		CheckEq(actWin.tabs.get_tab_count(), 4, "hub tem as 4 abas do plano")
+		var openedTabs : int = 0
+		for tabIdx in range(0, 4):
+			guiNode.OpenActivities(tabIdx)
+			if Check(bool(actWin.is_visible()) and actWin.tabs.current_tab == tabIdx, "aba %d abre e vem para frente" % tabIdx):
+				openedTabs += 1
+		CheckEq(openedTabs, 4, "as 4 abas de atividade abrem")
+		guiNode.ToggleControl(actWin)
+		Check(not bool(actWin.is_visible()), "hub de atividades fecha de novo")
+	# Placar da temporada no Leaderboard: é a superfície que G1 liga, e nada além
+	# desta suíte chega a chamar `ShowSeason` — as duas corridas de baixo já foram
+	# impressas em duplicado aqui e continuariam impressas se ninguém olhasse.
+	var lbWin : WindowPanel = guiNode.leaderboardWindow
+	if Check(lbWin != null and lbWin.has_method("ShowSeason"), "leaderboard expõe ShowSeason"):
+		var seasonData : Dictionary = {
+			"season_id" = 1, "ends_at" = Time.get_unix_time_from_system() + 86400,
+			"power" = [{"name" = "A", "value" = 10}],
+			"spend" = [{"name" = "A", "value" = 5}],
+			"boss_kills" = [{"name" = "A", "value" = 2}],
+			"guild_points" = [{"name" = "G", "value" = 7}]}
+		lbWin.ShowSeason(seasonData)
+		var headers : Dictionary = {}
+		for child in (lbWin.get_node("Layout/SeasonScroll/SeasonList") as VBoxContainer).get_children():
+			var lbl : Label = child as Label
+			if lbl == null or child.is_queued_for_deletion() or not str(lbl.text).begins_with("Season "):
+				continue
+			headers[str(lbl.text)] = int(headers.get(str(lbl.text), 0)) + 1
+		CheckEq(headers.size(), 4, "placar da temporada mostra as 4 corridas")
+		var dupes : int = 0
+		for header : String in headers:
+			if int(headers[header]) > 1:
+				dupes += 1
+		CheckEq(dupes, 0, "nenhuma corrida do placar aparece duas vezes")
+	# Checkout: a segunda porta do dinheiro. A janela não está no scene — o Shop a cria
+	# em runtime (`Shop.gd:265`: `new()` + `add_child` no GUI), então o exame faz o mesmo
+	# e por isso é obrigado a chamar `_show_payment_url` em vez de `_open_payment_url`:
+	# atravessar o `_launch_payment_url` num harness chama `OS.shell_open` de verdade e
+	# abre um navegador na máquina de quem roda a suíte. Que a metade visual não navega é
+	# exatamente o que os guards de corpo no fim do bloco amarram.
+	var checkoutScript : GDScript = load("res://sources/gui/Checkout.gd") as GDScript
+	if Check(checkoutScript != null, "checkout: a janela do companion carrega"):
+		var payWin : WindowPanel = checkoutScript.new() as WindowPanel
+		Launcher.GUI.add_child(payWin)
+		var doorBtn : Button = payWin.get("_openPaymentButton") as Button
+		var payBtn : Button = payWin.get("_payButton") as Button
+		var statusLbl : Label = payWin.get("_statusLabel") as Label
+		if Check(doorBtn != null and payBtn != null and statusLbl != null, "checkout: a janela se monta no add_child (UI em runtime)"):
+			var doorURL : String = "https://pagamento.example/abc123"
+			payWin.StartCheckout("gems.550", "550 gemas", 9.90)
+			Check(not doorBtn.visible, "checkout: sem página aberta a segunda porta fica fechada")
+			payWin.call("_show_payment_url", doorURL)
+			Check(doorBtn.visible, "checkout: com a URL na mesa a segunda porta abre sozinha")
+			Check(str(payWin.get("_openPaymentURL")) == doorURL, "checkout: a segunda porta leva à MESMA página do pagamento")
+			Check(statusLbl.text == tr("Awaiting payment confirmation — items credit automatically when approved."), "checkout: o texto continua o de aguardando confirmação")
+			CheckEq(doorBtn.pressed.get_connections().size(), 1, "checkout: o botão de reabrir está ligado em um handler")
+			# Reabrir a janela para outro SKU não pode herdar a página anterior, nem o
+			# rótulo que a primeira corrida deixa: botão escrito "Fechar" que, apertado,
+			# cobra é a pior mensagem possível numa tela de dinheiro.
+			payWin.StartCheckout("starter.pack", "Pacote inicial", 4.90)
+			Check(not doorBtn.visible and str(payWin.get("_openPaymentURL")).is_empty(), "checkout: outro SKU fecha a segunda porta e larga a URL")
+			Check(payBtn.text != tr("Close"), "checkout: o botão principal volta a pagar em vez de fechar")
+		Launcher.GUI.remove_child(payWin)
+		payWin.free()
+		# O corpo das quatro funções é o ponto do guard, não o texto corrido: se o ato de
+		# navegar voltar para a metade visual, o bloco de cima continua verde justamente
+		# porque não chama `_open_payment_url`. Só a proibição no corpo percebe.
+		var checkoutUI : String = _RepoFile("res://sources/gui/Checkout.gd")
+		var showBody : String = _FnBody(checkoutUI, "func _show_payment_url(")
+		var launchBody : String = _FnBody(checkoutUI, "func _launch_payment_url(")
+		var openBody : String = _FnBody(checkoutUI, "func _open_payment_url(")
+		var retryBody : String = _FnBody(checkoutUI, "func _on_open_payment_pressed(")
+		if Check(not showBody.is_empty() and not launchBody.is_empty() and not openBody.is_empty() and not retryBody.is_empty(), "checkout: as quatro metades da porta existem"):
+			Check(not showBody.contains("JavaScriptBridge") and not showBody.contains("shell_open"), "checkout: a metade visual não navega (por isso é testável headless)")
+			Check(launchBody.contains("JavaScriptBridge") and launchBody.contains("shell_open"), "checkout: navegar mora num lugar só, web e desktop")
+			Check(openBody.contains("_show_payment_url(") and openBody.contains("_launch_payment_url("), "checkout: abrir a página faz as duas metades (nada órfão na divisão)")
+			Check(retryBody.contains("_launch_payment_url(") and retryBody.contains("_openPaymentURL"), "checkout: reabrir navega com a URL da própria janela (não é botão enfeite)")
+		# A string tem que existir em pt_BR: o botão é a única saída de quem teve o popup
+		# bloqueado no caminho assíncrono, e legenda em inglês numa tela de dinheiro
+		# brasileira é meia porta também.
+		var trDoor : Translation = load("res://data/i18n/ui.pt_BR.translation")
+		Check(trDoor != null, "checkout: pt_BR compilado carrega")
+		if trDoor != null:
+			var doorMsg : String = trDoor.get_message("Open payment page")
+			Check(not doorMsg.is_empty() and doorMsg != "Open payment page", "checkout: a segunda porta tem legenda em pt_BR (%s)" % doorMsg)
+	# Overlay do duelo de boss: o boot já o constrói (`Gui._ready`: `new()` + `add_child`
+	# + `Setup`), então o que nunca tinha sido exercitado eram as três delegações que o
+	# client chama no meio de um duelo — `SetWindowVisible`, `ShowFeedback`, `Flash`. Um
+	# erro ali não derruba o boot, derruba a única janela em que se interrompe um boss, e
+	# aparece na tela de quem estava jogando. A instância é própria porque `Flash` e o
+	# ping de abertura criam filhos no nó (contar filhos só fecha num nó limpo) e porque
+	# o banner do HUD é compartilhado com outras suítes.
+	var bossOv : BossInterruptOverlay = BossInterruptOverlay.new()
+	Launcher.GUI.add_child(bossOv)
+	var spy : FeedbackSpy = FeedbackSpy.new()
+	bossOv.Setup(spy)
+	var intBtn : Button = bossOv.get("_button") as Button
+	if Check(intBtn != null, "boss overlay: Setup monta o botão de interrupt"):
+		Check(not intBtn.visible, "boss overlay: sem duelo aberto não há botão na tela")
+		bossOv.SetWindowVisible(true)
+		Check(intBtn.visible, "boss overlay: a janela do duelo mostra o botão")
+		bossOv.SetWindowVisible(false)
+		Check(not intBtn.visible, "boss overlay: fechada a janela, o botão sai")
+		CheckEq(intBtn.pressed.get_connections().size(), 1, "boss overlay: o botão está ligado no interrupt")
+		Check(bossOv.get_node_or_null("RewardFlash") == null, "boss overlay: nada pulsa até sair um veredito")
+		bossOv.ShowFeedback("good", 1.5)
+		CheckEq(spy.calls.size(), 1, "boss overlay: o veredito chega ao banner")
+		Check(not str(spy.calls[0]).contains("PERFEITO"), "boss overlay: 'good' não anuncia o veredito perfeito")
+		Check(bossOv.get_node_or_null("RewardFlash") == null, "boss overlay: só o veredito perfeito pulsa a tela")
+		bossOv.ShowFeedback("perfect", 2.0)
+		if CheckEq(spy.calls.size(), 2, "boss overlay: o veredito perfeito também chega ao banner"):
+			Check(str(spy.calls[1]).contains("PERFEITO") and str(spy.calls[1]).contains("2.00"), "boss overlay: 'perfect' mostra o multiplicador (%s)" % str(spy.calls[1]))
+		Check(bossOv.get_node_or_null("RewardFlash") != null, "boss overlay: 'perfect' pulsa a tela")
+		# O pulso reaproveita o retângulo. Sem o guard do `_flashRect`, cada interrupt
+		# perfeito deixaria mais um ColorRect cheio de tela no HUD. Conto ColorRects
+		# filhos e não o nome: medir por "RewardFlash" é CEGO a esta falha — o segundo
+		# retângulo entra renomeado por colisão de irmão (`@ColorRect@3`, probe medido
+		# nesta passada), então a busca por nome devolve 1 tanto no reuso quanto no
+		# empilhamento. E olho o delta entre dois `Flash` seguidos, não o total, porque
+		# o total depende do pulso do veredito existir (a Overlay também ganha botão e
+		# AudioStreamPlayer como filhos).
+		var rectCount : Callable = func() -> int:
+			var n : int = 0
+			for kid in bossOv.get_children():
+				if kid is ColorRect:
+					n += 1
+			return n
+		bossOv.Flash(Color(1.0, 1.0, 1.0, 0.4))
+		var rectsAfterFirst : int = rectCount.call()
+		Check(rectsAfterFirst >= 1, "boss overlay: Flash deixa um retângulo de pulso na tela")
+		bossOv.Flash(Color(1.0, 1.0, 1.0, 0.4))
+		CheckEq(rectCount.call(), rectsAfterFirst, "boss overlay: o pulso reaproveita o retângulo (não empilha ColorRect)")
+		# Highlight do tour, no alvo que é meu: `Show` guarda o `modulate` original e
+		# `Clear` devolve — errar o devolve deixa o painel tingido para o resto da sessão.
+		var hl : UIHighlight = guiNode.get("highlight") as UIHighlight
+		if Check(hl != null, "highlight: o objeto do GUI existe desde o boot"):
+			var victim : Control = bossOv
+			victim.modulate = Color(0.25, 0.5, 0.75, 1.0)
+			hl.Show(victim)
+			Check(hl.get("_target") == victim, "highlight: Show adota o alvo pedido")
+			# A mordaça que faz este check ser um check: em headless nenhum frame roda,
+			# o `Tween` de `Show` não avança e o `modulate` fica onde estava — apagar a
+			# devolução em `Clear` não mudava nada e a suíte passava igual. Escrevo o
+			# valor do primeiro step do tween para `Clear` ter o que desfazer, e aí a
+			# ordem de `Show` (capturar ANTES de animar) também entra na régua.
+			victim.modulate = Color(2.0, 1.5, 1.5, 0.2)
+			hl.Clear()
+			Check(hl.get("_target") == null, "highlight: Clear larga o alvo")
+			Check(victim.modulate == Color(0.25, 0.5, 0.75, 1.0), "highlight: Clear devolve o modulate original (%s)" % str(victim.modulate))
+			# A porta pública, estática: sem isto o `Show`/`Clear` de cima poderiam ser
+			# chamados por ninguém e o tour continuar sem destacar nada.
+			var hlBody : String = _FnBody(_RepoFile("res://sources/gui/Gui.gd"), "func HighlightUI(")
+			Check(hlBody.contains("highlight.Show(") and hlBody.contains("highlight.Clear("), "highlight: HighlightUI liga os dois lados (alvo presente e ausente)")
+	spy.free()
+	Launcher.GUI.remove_child(bossOv)
+	bossOv.free()
+
+	# Inventário medido, não lembrado: todo painel de `sources/gui/` que nasce de `.new()`
+	# em `sources/`, e não do scene. O scene entrega o `_ready` de graça no boot; um `.new()`
+	# atrasado não entrega nada a ninguém — foi assim que `Checkout.gd` viveu com `_BuildUI`
+	# abortando antes de criar o botão de pagar. A lista mexe quando alguém nasce um painel
+	# novo em runtime, e a resposta certa quando ela mexe é montar o painel numa suíte, não
+	# emendá-la.
+	var builtPanels : Dictionary = _RuntimeBuiltGuiPanels()
+	var measuredPanels : Array[String] = []
+	var measuredText : String = ""
+	for builtKey in builtPanels:
+		measuredPanels.append(String(builtKey))
+		measuredText += String(builtKey) + " "
+	measuredPanels.sort()
+	Check(measuredPanels == runtimeBuiltGuiPanels, "painéis de runtime: o inventário é exatamente o registrado (%s)" % measuredText)
+	# Nenhuma string de interface em inglês na tela de um jogador BR. A varredura é
+	# medida, não lembrada: todo `tr("literal")` de todo `.gd` de `sources/` (só código;
+	# comentário não é chamada) tem que resolver para mensagem não vazia no `pt_BR`
+	# COMPILADO. `tr()` de chave ausente devolve a própria chave, então o vazamento é
+	# silencioso — foi assim que dezenove strings viveram em inglês, treze delas o fluxo
+	# inteiro de 2FA (`Settings.gd`: QR, código de 6 dígitos, "salvei o código", a
+	# confirmação de desativar) e uma a mensagem do 403 `consent_required` na porta do
+	# dinheiro, que é o meio visível do gate de idade. Lê-se o `.translation` e não o
+	# `.csv` de propósito: o que o cliente consulta é o compilado, e um `.csv` editado
+	# sem o passo de import da CI é exatamente o buraco em que esta passada caiu (a
+	# legenda nova do checkout falhou no primeiro round). Chave montada por variável ou
+	# concatenação escapa a qualquer varredura de texto — a régua é literal. E eco
+	# (`pt_BR == chave`) não é falha aqui: o csv tem linhas idênticas por design
+	# ("+%s XP", "Arena", "Tickets: %d"); o eco das strings de consentimento é cobrado
+	# uma a uma no bloco LGPD.
+	var trPt : Translation = load("res://data/i18n/ui.pt_BR.translation")
+	if Check(trPt != null, "i18n: o pt_BR compilado carrega"):
+		var trRx : RegEx = RegEx.new()
+		trRx.compile("tr\\(\"((?:[^\"\\\\]|\\\\.)*)\"\\)")
+		var semTraducao : Array[String] = []
+		var chavesTr : int = 0
+		for trFile in _GdFilesUnder("res://sources"):
+			var trSrc : String = _StripCommentLines(_RepoFile(String(trFile)))
+			for trM in trRx.search_all(trSrc):
+				chavesTr += 1
+				var trKey : String = trM.get_string(1)
+				if trPt.get_message(trKey) == "":
+					semTraducao.append(String(trFile) + " :: " + trKey)
+		CheckEq(semTraducao.size(), 0, "i18n: %d chaves tr() literais varridas, nenhuma sem linha em pt_BR (%s)" % [chavesTr, " | ".join(semTraducao)])
+	# Chave repetida na primeira coluna não é cosmético: o importador de CSV sobrescreve a
+	# anterior pela mesma chave, então uma das duas traduções morre no catálogo compilado e o
+	# sweep de cima continua verde (a chave sobrevive, só não se sabe com qual texto). Medido
+	# em 2026-09-25: `"Attack"` tinha "Ataque" e "Atacar" no csv e o `.translation` resolvia
+	# "Atacar" para os dois únicos call sites da string, que são rótulo de estatística
+	# (`sources/actor/ActorCommons.gd:171`, `sources/cell/CellCommons.gd:95`).
+	var csvKeys : Dictionary = {}
+	var csvDups : String = ""
+	var csvLines : PackedStringArray = _RepoFile("res://data/i18n/ui.csv").split("\n")
+	for csvIdx in range(1, csvLines.size()):
+		var csvLine : String = String(csvLines[csvIdx])
+		var csvEnd : int = csvLine.find("\",\"")
+		if csvEnd < 0:
+			continue
+		var csvKey : String = csvLine.substr(0, csvEnd)
+		if csvKeys.has(csvKey):
+			csvDups += csvKey + " "
+		csvKeys[csvKey] = true
+	# O tamanho ancorado é a regra da casa: sem ele, um `_RepoFile` que devolve "" passaria
+	# a varredura inteira por cima de um csv que não foi lido.
+	Check(csvKeys.size() >= 900, "i18n: o censo do ui.csv olhou um catálogo inteiro (%d chaves)" % csvKeys.size())
+	Check(csvDups.is_empty(), "i18n: nenhuma chave repetida no ui.csv (%s)" % csvDups)
+	# Hub de personagem: absorve status/skills/progresso/formação num TabContainer
+	# e é para onde os botões do menu apontam depois. Reorganiza o GUI ao vivo,
+	# então roda por último — nada depois dela depende dos painéis originais.
+	var hubWin : WindowPanel = guiNode.EnsureCharacterHub()
+	if Check(hubWin != null, "hub de personagem nasce sob demanda"):
+		var hubTabs : TabContainer = hubWin.get_node_or_null("CharacterTabs") as TabContainer
+		Check(hubTabs != null and hubTabs.get_tab_count() >= 1, "hub agrega as abas de personagem")
+		Check(guiNode.characterHub == hubWin, "EnsureCharacterHub é idempotente (mesmo nó)")
+		guiNode.OpenCharacterHub(0)
+		Check(bool(hubWin.is_visible()), "hub de personagem abre")
+
+# ------------------------------------------- painéis nascidos de `.new()`
+
+# Espia o collaborador duck-typed do overlay: `Setup(notification)` guarda um Control e
+# `ShowFeedback` chama `AddNotification` nele. O rótulo do veredito é o produto do ramo
+# (é o que o jogador lê no meio do duelo), e é a única forma de conferir isso sem tocar
+# no banner compartilhado do HUD, que outras suítes também escrevem.
+class FeedbackSpy extends Control:
+	var calls : Array[String] = []
+	var flashes : int = 0
+	func AddNotification(notif : String, _delay : float = 5.0) -> void:
+		calls.append(notif)
+
+# Painéis de `sources/gui/` que nascem de `.new()` dentro de `sources/`, e não do scene.
+# O scene entrega o `_ready` de tudo quanto é painel de graça quando o GUI abre; um
+# `.new()` atrasado só constrói quando o jogador clica, e é aí que um `_ready` que aborta
+# se esconde — `Checkout.gd` viveu exatamente isso (`_statusLabel.autowrap`, nome de
+# Godot 3, derrubando `_BuildUI` antes de criar o botão de pagar). A lista é o inventário
+# medido por `_RuntimeBuiltGuiPanels()`, não uma lembrança: ela mexe quando alguém nasce
+# um painel novo em runtime, e o que se faz quando ela mexe é montar o painel numa suíte.
+# `WindowPanel` fica fora de propósito: é a base de quase todo o HUD.
+const runtimeBuiltGuiPanels : Array[String] = [
+	"res://sources/gui/Activities.gd",
+	"res://sources/gui/BossInterruptOverlay.gd",
+	"res://sources/gui/Checkout.gd",
+	"res://sources/gui/Localizer.gd",
+	"res://sources/gui/Onboarding.gd",
+	"res://sources/gui/UIHighlight.gd",
+]
+
+# caminho do painel -> quem o constrói. Duas passadas de texto sobre `sources/`:
+# `class_name` (identificador global) e `const X = preload(...)` (identificador local),
+# resolvidos contra os chamadores de `X.new()`.
+func _RuntimeBuiltGuiPanels() -> Dictionary:
+	var classRx : RegEx = RegEx.new()
+	# `(?m)` porque o PCRE de Godot não trata `^` como início de linha por padrão — sem
+	# isso só um `class_name` na primeira linha do arquivo seria resolvido, e a varredura
+	# devolveria apenas os painéis alcançados por `const … = preload(…)`.
+	classRx.compile("(?m)^[ \\t]*class_name[ \\t]+(\\w+)")
+	var constRx : RegEx = RegEx.new()
+	constRx.compile("const[ \\t]+(\\w+)[ \\t]*=[ \\t]*preload\\(\"([^\"]+)\"\\)")
+	var newRx : RegEx = RegEx.new()
+	# O `[^.\\w]` antes é o que separa `BossInterruptOverlay.new()` de um
+	# `launcher.BossInterruptOverlay.new()` qualquer (que não constrói nada).
+	newRx.compile("(?:^|[^.\\w])(\\w+)\\.new\\(\\)")
+	var byClass : Dictionary = {}
+	var texts : Dictionary = {}
+	for filePath in _GdFilesUnder("res://sources"):
+		var text : String = _RepoFile(filePath)
+		texts[filePath] = text
+		var cls : RegExMatch = classRx.search(text)
+		if cls != null:
+			byClass[String(cls.get_string(1))] = filePath
+	var built : Dictionary = {}
+	for filePath in texts:
+		var text : String = texts[filePath]
+		var consts : Dictionary = {}
+		for c : RegExMatch in constRx.search_all(text):
+			consts[String(c.get_string(1))] = String(c.get_string(2))
+		for n : RegExMatch in newRx.search_all(text):
+			var ident : String = String(n.get_string(1))
+			var target : String = String(consts.get(ident, byClass.get(ident, "")))
+			if not target.begins_with("res://sources/gui/") or target.ends_with("WindowPanel.gd"):
+				continue
+			if not built.has(target):
+				built[target] = []
+			(built[target] as Array).append(filePath)
+	return built
+
+# ------------------------------------------------------------- hotkeys de input
+
+# Linhas que pedem um nome de ação a alguém. O exame abaixo é textual porque é a
+# única forma de varrer a árvore inteira sem ligar cada sistema; o que ele decide
+# (a ação existe?) é respondido pelo InputMap real do processo, não por uma cópia
+# do `project.godot` — os `ui_*` do motor não estão no arquivo nenhum.
+const actionConsumerTokens : Array[String] = [
+	"is_action_pressed(", "is_action_just_pressed(", "is_action_released(",
+	"is_action_just_released(", "get_action_strength(", "action_press(",
+	"action_release(", "is_action(", "IsUsable(",
+	"IsActionPressed(", "IsActionJustPressed(", "IsActionOnlyPressed(",
+	"IsActionJustReleased(", "TryConsume(", "TryJustPressed(", "TryPressed(",
+	"TryOnlyPressed(", "TryJustReleased(", "ConsumeAction(",
+]
+
+# Nome de ação neste projeto é sempre minúsculo, com `_`, e um dos três prefixos
+# declarados em `project.godot`: `ui_*` de interface, `gp_*` de gameplay,
+# `smile_*` de emote. É o que separa `"ui_f10"` — o defeito que esta suíte nasceu
+# de pegar — de um literal de prosa que apareça na mesma linha por acaso.
+func _LooksLikeActionName(literal : String) -> bool:
+	if not (literal.begins_with("ui_") or literal.begins_with("gp_") or literal.begins_with("smile_")):
+		return false
+	for i : int in range(literal.length()):
+		var cp : int = literal.unicode_at(i)
+		if not ((cp >= 97 and cp <= 122) or (cp >= 48 and cp <= 57) or cp == 95):
+			return false
+	return true
+
+func _IsActionConsumerLine(text : String) -> bool:
+	for token in actionConsumerTokens:
+		if text.contains(String(token)):
+			return true
+	return false
+
+# Aperto de tecla de verdade no estado do motor: `Input.action_press` é o que
+# `Input.is_action_just_pressed` consulta (o serviço confere os dois — o evento e o
+# estado global), e o `InputEventAction` é o objeto que `_input` recebe. Juntos
+# reproduzem um aperto sem depender de DisplayServer, que não existe em headless.
+func _PressAction(action : String) -> void:
+	Input.action_press(action)
+	var event : InputEventAction = InputEventAction.new()
+	event.action = StringName(action)
+	event.pressed = true
+	event.strength = 1.0
+	Launcher.Action._input(event)
+	Input.action_release(action)
+
+# `WindowPanel.EnableControl` desliga o serviço de input quando a janela que abre é
+# `blockActions` — é por isso que o jogador fecha a janela antes do próximo atalho.
+# O teste simula o fechamento religando o serviço a cada aperto.
+func _ReenableInputService() -> void:
+	var guard : int = 0
+	while not Launcher.Action.IsEnabled() and guard < 16:
+		Launcher.Action.Enable(true)
+		guard += 1
+
+# Três classes de defeito que nada nesta casa cobria, todas de "tecla anunciada e
+# morta" — o jogador vê o atalho na tela de bindings e ele não faz nada:
+# 1) literal de ação que não existe no InputMap. O `ui_f10` do `ToggleIdleMode`
+#    viveu assim desde que foi escrito: `is_action_pressed` de ação inexistente
+#    devolve false para sempre, sem erro, sem log.
+# 2) linha da tela de bindings que nenhum código consome. `ui_settings` (F10) é
+#    declarada no `project.godot`, rotulada no `DeviceManager` e listada no painel
+#    sem ter um único leitor — o atalho rebinda nada.
+# 3) tecla engolida pela cadeia `if/elif`: `Action.gd` tinha um
+#    `elif FSM.IsGameState():` aninhado, e a cadeia para no primeiro ramo
+#    verdadeiro. Entrando no jogo, nada depois dele era avaliado — F2/F4/F5 (hub de
+#    personagem), F9 (social), P e F11 funcionavam só no menu, o contrário do que a
+#    tela de bindings promete. (F10 não está nessa lista: ela era morta nos dois
+#    estados, pela classe 2, e não por este guard.)
+func SuiteInputHotkeys() -> void:
+	print("[suite] hotkeys de input (beta)")
+	# --- 1) nenhum consumidor pede ação inexistente ------------------------------
+	var consumed : Dictionary = {}
+	var unknown : int = 0
+	var consumerLines : int = 0
+	for filePath in _GdFilesUnder("res://sources"):
+		var path : String = String(filePath)
+		var code : String = _StripCommentLines(_RepoFile(path))
+		for rawLine in code.split("\n"):
+			var line : String = String(rawLine)
+			if not _IsActionConsumerLine(line):
+				continue
+			consumerLines += 1
+			var pos : int = 0
+			while true:
+				var open : int = line.find("\"", pos)
+				if open < 0:
+					break
+				var close : int = line.find("\"", open + 1)
+				if close < 0:
+					break
+				var literal : String = line.substr(open + 1, close - open - 1)
+				pos = close + 1
+				if not _LooksLikeActionName(literal):
+					continue
+				consumed[literal] = true
+				if not InputMap.has_action(literal):
+					unknown += 1
+					Check(false, "atalho morto: %s pede a ação \"%s\", que não está no InputMap" % [path, literal])
+	CheckEq(unknown, 0, "toda ação pedida por um consumidor em sources/ existe no InputMap")
+	Check(consumerLines >= 60, "a varredura de input olhou %d linhas de consumidor" % consumerLines)
+	Check(consumed.size() >= 60, "a varredura coletou %d ações consumidas" % consumed.size())
+
+	# --- 2) cada linha da tela de bindings rebinda algo que existe ---------------
+	var panelSrc : String = _RepoFile("res://sources/gui/settings/InputBindings.gd")
+	var blockAt : int = panelSrc.find("const actionCategories")
+	var blockEnd : int = panelSrc.find("\n}", blockAt)
+	Check(blockAt >= 0 and blockEnd > blockAt, "a tela de bindings declara actionCategories")
+	var advertised : int = 0
+	var advertisedMissing : int = 0
+	var advertisedDead : int = 0
+	if blockAt >= 0 and blockEnd > blockAt:
+		var scan : int = blockAt
+		while scan < blockEnd:
+			var open : int = panelSrc.find("\"", scan)
+			if open < 0 or open >= blockEnd:
+				break
+			var close : int = panelSrc.find("\"", open + 1)
+			if close < 0 or close > blockEnd:
+				break
+			var literal : String = panelSrc.substr(open + 1, close - open - 1)
+			scan = close + 1
+			if not _LooksLikeActionName(literal):
+				continue
+			advertised += 1
+			if not InputMap.has_action(literal):
+				advertisedMissing += 1
+			elif not consumed.has(literal):
+				advertisedDead += 1
+			Check(InputMap.has_action(literal), "o painel anuncia \"%s\", que existe no InputMap" % literal)
+			Check(consumed.has(literal), "o painel anuncia \"%s\" e algum código consome a ação" % literal)
+	CheckEq(advertisedMissing, 0, "nenhuma linha do painel de bindings anuncia ação inexistente")
+	CheckEq(advertisedDead, 0, "nenhuma linha do painel de bindings anuncia ação sem consumidor")
+	Check(advertised >= 50, "o painel de bindings anuncia %d ações" % advertised)
+
+	# Terceiro lugar onde a casa promete uma tecla ao jogador: a tabela de nomes
+	# amigáveis do `DeviceManager`, impressa nos balões de controle. Uma chave que
+	# não é ação nenhuma vira rótulo de tecla que não existe. Diferente do painel,
+	# aqui também moram os `ui_*` nativos do motor (foco, página, home/end) que o
+	# próprio Godot consome — por isso só a existência é cobrada, não o consumidor.
+	var deviceSrc : String = _RepoFile("res://sources/input/DeviceManager.gd")
+	var labeled : int = 0
+	var unlabeledBad : int = 0
+	var labelAt : int = 0
+	while true:
+		var keyOpen : int = deviceSrc.find("\"", labelAt)
+		if keyOpen < 0:
+			break
+		var keyClose : int = deviceSrc.find("\"", keyOpen + 1)
+		if keyClose < 0:
+			break
+		var key : String = deviceSrc.substr(keyOpen + 1, keyClose - keyOpen - 1)
+		# chave de rótulo é do forma `"acao" : "Nome"` — o `:` vem antes do segundo
+		# abre aspas, e o valor é capitalizado (por isso não passa no filtro abaixo).
+		if not _LooksLikeActionName(key):
+			labelAt = keyClose + 1
+			continue
+		var colon : int = deviceSrc.find(":", keyClose)
+		var nextOpen : int = deviceSrc.find("\"", keyClose + 1)
+		# Paridade de aspas: numa CHAVE a próxima aspa (o abre aspas do valor) vem
+		# DEPOIS do `:`; se vier antes, o literal lido é o VALOR de uma linha, e valor
+		# não é ação. Com a comparação invertida aqui a varredura contava zero linhas.
+		if colon < 0 or nextOpen < 0 or nextOpen < colon:
+			labelAt = keyClose + 1
+			continue
+		labeled += 1
+		if not InputMap.has_action(key):
+			unlabeledBad += 1
+			Check(false, "rótulo de controle: %s aponta para a ação inexistente \"%s\"" % ["DeviceManager", key])
+		labelAt = keyClose + 1
+	CheckEq(unlabeledBad, 0, "nenhum rótulo do DeviceManager nomeia ação inexistente")
+	Check(labeled >= 60, "a tabela de rótulos do DeviceManager tem %d ações" % labeled)
+
+	# --- 3) as teclas abrem as janelas DENTRO do jogo ----------------------------
+	if not Check(Launcher.GUI != null and Launcher.Action != null, "hotkeys precisam do GUI e do serviço de input vivo"):
+		return
+	# `currentState` escrito direto, sem `EnterState`: o que está em prova é o ramo da
+	# cadeia de input, não a máquina de estados — `EnterState` carregaria mundo,
+	# sinais e warp no meio de uma suíte que só olha janela. O valor volta na última
+	# linha e nada entre aqui e lá roda `_process` (o corpo é todo síncrono).
+	var wasState = FSM.currentState
+	FSM.currentState = FSM.States.IN_GAME
+	var liveKeys : int = 0
+	var toggles : Array = [
+		["ui_inventory", "inventoryWindow"], ["ui_minimap", "minimapWindow"],
+		["ui_chat", "chatWindow"], ["ui_emote", "emoteWindow"],
+		["ui_social", "socialWindow"], ["ui_settings", "settingsWindow"]]
+	for row in toggles:
+		var action : String = String(row[0])
+		var field : String = String(row[1])
+		var win : WindowPanel = Launcher.GUI.get(field) as WindowPanel
+		if not Check(win != null, "%s aponta para a janela %s" % [action, field]):
+			continue
+		_ReenableInputService()
+		var before : bool = win.is_visible()
+		_PressAction(action)
+		var after : bool = win.is_visible()
+		if not Check(after != before, "%s abre/fecha %s estando dentro do jogo" % [action, field]):
+			continue
+		liveKeys += 1
+		_ReenableInputService()
+		_PressAction(action)
+		Check(bool(win.is_visible()) == before, "%s devolve %s ao estado anterior" % [action, field])
+	# Hub de personagem: F2/F4/F5 são as teclas do hub depois que ele absorveu
+	# status/skills/progresso, e eram justamente as que o estado de jogo engolia.
+	for tabRow in [["ui_stat", 0], ["ui_skill", 1], ["ui_progress", 2]]:
+		var hubAction : String = String(tabRow[0])
+		var wantTab : int = int(tabRow[1])
+		# Aperta primeiro, lida depois: `OpenCharacterHub` garante o hub
+		# (`EnsureCharacterHub`) em runtime, então exigir o campo antes do aperto
+		# faria a suíte depender de qual outra suíte montou o quê.
+		#
+		# Estado prévio forçado: sem isto o hub podia chegar aqui ABERTO e na aba
+		# certa (a suíte de painéis monta o hub) e o check passava sem a tecla fazer
+		# nada — foi exatamente assim que `ui_stat` passou no teste de mordaça com a
+		# cadeia aninhada de volta. Fecha pelo caminho real e sai da aba alvo antes.
+		var preHub : WindowPanel = Launcher.GUI.EnsureCharacterHub()
+		if preHub.is_visible():
+			Launcher.GUI.ToggleControl(preHub)
+		var preTabs : TabContainer = preHub.get_node_or_null("CharacterTabs") as TabContainer
+		if preTabs != null and preTabs.get_tab_count() > 1:
+			preTabs.current_tab = (wantTab + 1) % preTabs.get_tab_count()
+		_ReenableInputService()
+		_PressAction(hubAction)
+		var hub : WindowPanel = Launcher.GUI.characterHub as WindowPanel
+		if not Check(hub != null, "%s encontra o hub de personagem" % hubAction):
+			continue
+		var tabs : TabContainer = hub.get_node_or_null("CharacterTabs") as TabContainer
+		if not Check(tabs != null and tabs.current_tab == wantTab and bool(hub.is_visible()),
+				"%s abre o hub na aba %d dentro do jogo" % [hubAction, wantTab]):
+			continue
+		liveKeys += 1
+	# Fecha o hub pelo caminho real: as três linhas acima o deixaram aberto, e o passo
+	# seguinte (HUD idle) é sobre janelas visíveis.
+	var tailHub : WindowPanel = Launcher.GUI.characterHub as WindowPanel
+	if tailHub != null and tailHub.is_visible():
+		Launcher.GUI.ToggleControl(tailHub)
+	# `ui_validate` (Enter) é o único atalho deliberadamente preso fora do jogo:
+	# enquanto se joga, Enter é do LineEdit do chat. Os dois checks gravam a decisão —
+	# se alguém a inverter sem perceber, a régua reclama.
+	var chatWin : WindowPanel = Launcher.GUI.chatWindow as WindowPanel
+	if chatWin != null:
+		_ReenableInputService()
+		var chatWasVisible : bool = chatWin.is_visible()
+		_PressAction("ui_validate")
+		Check(bool(chatWin.is_visible()) == chatWasVisible, "Enter não abre o chat nem troca o modo de linha dentro do jogo")
+		FSM.currentState = FSM.States.LOGIN_SCREEN
+		_ReenableInputService()
+		chatWin.set_visible(false)
+		_PressAction("ui_validate")
+		Check(bool(chatWin.is_visible()), "fora do jogo Enter ainda é o atalho que abre o chat")
+		chatWin.set_visible(false)
+		FSM.currentState = FSM.States.IN_GAME
+	# HUD idle (SOM-IDLE P2): tecla crua F12 — não `ui_f10`, que nunca existiu, e não
+	# F10, que já é o `ui_settings` anunciado no painel de bindings.
+	var key : InputEventKey = InputEventKey.new()
+	key.keycode = KEY_F12
+	key.physical_keycode = KEY_F12
+	key.pressed = true
+	var idleWas : bool = bool(Launcher.GUI.IsIdleMode())
+	Launcher.GUI._input(key)
+	Check(bool(Launcher.GUI.IsIdleMode()) != idleWas, "F12 vira o HUD idle (o atalho que nunca disparou)")
+	var echo : InputEventKey = InputEventKey.new()
+	echo.keycode = KEY_F12
+	echo.pressed = true
+	echo.echo = true
+	Launcher.GUI._input(echo)
+	Check(bool(Launcher.GUI.IsIdleMode()) != idleWas, "eco de F12 não reverte o HUD idle")
+	# Devolve: o primeiro aperto ligou, então um aperto limpo desliga de novo.
+	Launcher.GUI._input(key)
+	Check(bool(Launcher.GUI.IsIdleMode()) == idleWas, "segundo aperto devolve o HUD ao modo anterior")
+	# Porta de mouse/touch do mesmo modo. O achado (j) fechava com "teclado é a única
+	# porta do HUD idle", e em Web/celular essa porta não existe: `ToggleIdleMode` tinha
+	# um chamador só, a tecla crua. O botão é construído por `AddManualSkillButtons()` —
+	# a mesma função que o caminho de jogo real chama — e os checks abaixo provam que ele
+	# acaba no mesmo estado que a tecla, inclusive quando é a tecla que muda o modo: sem
+	# essa sincronia o jogador toca no "OFF" e nada acontece.
+	Launcher.GUI.AddManualSkillButtons()
+	var hudBar : HBoxContainer = Launcher.GUI.manualSkillBar as HBoxContainer
+	var idleBtn : Button = null
+	if hudBar != null:
+		idleBtn = hudBar.get_node_or_null("IdleHudButton") as Button
+	if Check(idleBtn != null, "a barra de HUD tem o botão do modo idle (porta de mouse/touch)"):
+		var btnWas : bool = bool(Launcher.GUI.IsIdleMode())
+		Check(idleBtn.button_pressed == btnWas, "o botão começa marcando o modo em que se está")
+		idleBtn.pressed.emit()
+		Check(bool(Launcher.GUI.IsIdleMode()) != btnWas, "tocar no botão vira o HUD idle")
+		Check(idleBtn.button_pressed == bool(Launcher.GUI.IsIdleMode()), "o toque atualiza o estado visual do botão")
+		idleBtn.pressed.emit()
+		Check(bool(Launcher.GUI.IsIdleMode()) == btnWas, "tocar de novo devolve o HUD ao modo anterior")
+		Check(idleBtn.button_pressed == btnWas, "o segundo toque devolve também o estado visual")
+		Launcher.GUI._input(key)
+		Check(bool(Launcher.GUI.IsIdleMode()) != btnWas, "F12 e botão mandam no mesmo modo")
+		Check(idleBtn.button_pressed == bool(Launcher.GUI.IsIdleMode()), "F12 também devolve o estado visual ao botão")
+		Launcher.GUI._input(key)
+	_ReenableInputService()
+	FSM.currentState = wasState
+	Check(liveKeys >= 6, "%d de %d hotkeys de painel abrem a janela estando no jogo" % [liveKeys, toggles.size()])
+
 # SOM-IDLE onboarding: fresh char auto-farms zone 1 on the login path.
 func SuiteOnboarding(sql : SQLService) -> void:
 	print("[suite] Onboarding (auto-farm)")
@@ -597,6 +1433,24 @@ func SuiteOnboarding(sql : SQLService) -> void:
 		WorldAgent.RemoveAgent(agent)
 	sql.db.delete_rows("character", "nickname = 'IdleOBTester'")
 	sql.db.delete_rows("account", "username = 'idle_ob_account'")
+	# U2: nada neste repositório construía o Onboarding. O overlay inteiro nasce em
+	# _ready(), e `_label.autowrap = true` é nome de propriedade do Godot 3 (em 4 é
+	# autowrap_mode) — _ready abortava ali e os três botões nunca eram criados, então
+	# o primeiro _show_step morria em "assignment on ... 'Nil'". Por cima disso,
+	# DisplayFirstLogin já abortava um andar antes (o get_sessionfirstlogin que não
+	# existia), ou seja: duas peças mortas uma sobre a outra e nenhuma suíte via
+	# nenhuma. Constrói o nó de verdade para as duas não voltarem.
+	var ob : Onboarding = Onboarding.new()
+	(Engine.get_main_loop() as SceneTree).root.add_child(ob)
+	if Check(ob._label != null and ob._nextButton != null and ob._backButton != null and ob._skipButton != null,
+			"onboarding: _ready constrói label e os três botões"):
+		ob.Start()
+		Check(ob._isActive and bool(ob._label.visible) and bool(ob._nextButton.visible), "onboarding: primeiro passo abre com texto e Next")
+		Check(str(ob._label.text).length() > 0, "onboarding: passo tem texto")
+		Check(not bool(ob._backButton.visible), "onboarding: Back escondido no primeiro passo")
+		ob.Stop()
+		Check(not ob._isActive and not bool(ob._label.visible), "onboarding: Stop fecha o tour")
+	ob.free()
 
 # SOM-IDLE D1: real-time diagnostic entry (zone-parametric).
 func _SimRunDiag(charID : int, zoneID : int, simSeconds : int) -> Dictionary:
@@ -631,7 +1485,7 @@ func SuiteIdlePolicyRealTime(sql : SQLService) -> void:
 	# onboarding": 0–2 kills/300s (≤24/h) é o regime doente que ele pega.
 	# Precisão de pacing pertence ao harness determinístico e à telemetria.
 	# (A anotação antiga "~160/h estável" não reproduzia nem no commit que a
-	# escreveu — 47,99/h in-situ; ver som-idle-docs/D1_GATE_REPORT.md.)
+	# escreveu — 47,99/h in-situ; ver archive/D1_GATE_REPORT.md.)
 	# Teto 200/h. Par de design da zona 1 = 150/h (meta de conteúdo, não gate).
 	Check(rate >= 30.0, "realtime: onboarding floor (%.0f/h ≥ 30/h)" % rate)
 	Check(rate <= 200.0, "realtime: sanity ceiling (%.0f/h ≤ 200/h)" % rate)
@@ -1146,13 +2000,24 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 		Check(str(subRows[0]["rarity"]).length() > 0, "rarity persisted")
 
 	# --- Daily cap: submit 3 times total (CRAFT_MAX_PER_DAY = 3) ---
+	# #27: `smith_week` era um kind com `fee_mod` no parâmetro e nenhuma leitura do
+	# valor no caminho da taxa — o evento era inerte. A janela entra já tickada 2 h
+	# no passado, que é o intervalo real entre o job diário que a ativa e a
+	# submissão de um jogador (e o que o predicado antigo do reader não tolerava).
+	# Usa a 2a submissão do cap: uma 4a quebraria o assert de daily_cap abaixo.
+	var smithStart : int = SQLCommons.Timestamp() - 3600
+	sql.ExecuteBindings("INSERT INTO live_event (kind, starts_at, ends_at, params_json, created_at) VALUES (?, ?, ?, ?, ?);", ["smith_week", smithStart, smithStart + 90000, '{"fee_mod": %s}' % str(EconomyCatalog.LIVE_EVENT_SMITH_FEE_MOD), smithStart])
+	sql.ExecuteBindings("INSERT INTO live_event_tick (event_id, ticked_at) SELECT id, ? FROM live_event WHERE kind = 'smith_week' AND starts_at = ?;", [smithStart - 3600, smithStart])
 	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeTwo", {"Attack" = 5})
 	Check(bool(result["ok"]), "second submission accepted")
+	CheckEq(int(result["fee"]), maxi(1, roundi(float(feeT1) * EconomyCatalog.LIVE_EVENT_SMITH_FEE_MOD)), "smith_week modula a taxa de submissão (#27)")
 	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeThree", {"Attack" = 5})
 	Check(bool(result["ok"]), "third submission accepted")
 	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeFour", {"Attack" = 5})
 	Check(not bool(result["ok"]), "fourth submission rejected: daily cap reached")
 	Check(str(result["reason"]) == "daily_cap_reached", "daily_cap_reached reason")
+	sql.ExecuteBindings("DELETE FROM live_event_tick WHERE event_id IN (SELECT id FROM live_event WHERE kind = 'smith_week' AND starts_at = ?);", [smithStart])
+	sql.ExecuteBindings("DELETE FROM live_event WHERE kind = 'smith_week' AND starts_at = ?;", [smithStart])
 
 # SOM-IDLE Fase H: H4 — weighted drop pool by rarity + crafted templates in pool.
 # Verifies that an approved craft template enters the zone's drop pool and that
@@ -1416,6 +2281,13 @@ func SuiteCheckout(sql : SQLService, charID : int, accountID : int) -> void:
 	Check(not bool(bad.get("ok", true)), "unknown sku intent rejected")
 	var gi : Dictionary = economy.GetCheckoutIntent(accountID, "gems.550")
 	Check(bool(gi.get("ok", false)) and str(gi.get("external_reference", "")) == "%d:gems.550" % accountID, "gems intent external_reference")
+	# O servidor do jogo não atesta o gateway: as três flags literais
+	# (`gateway_ready`, `f2p_friendly`, `webhook_verified`) saíram da payload em
+	# 2026-09-24 porque este processo não valida assinatura nenhuma nem conhece a
+	# configuração do provedor — e cinco documentos as citaram como prova de
+	# "economia pronta". Ficou o que ele garante e a suíte mede (SuiteGrantQueue).
+	Check(not gi.has("gateway_ready") and not gi.has("f2p_friendly") and not gi.has("webhook_verified"), "intent não auto-atesta gateway nem assinatura")
+	Check(bool(gi.get("grant_queue_idempotent", false)), "intent declara a idempotência que o servidor garante")
 	var si : Dictionary = economy.GetCheckoutIntent(accountID, "starter.pack")
 	Check(bool(si.get("ok", false)), "starter intent ok when eligible")
 
@@ -1547,6 +2419,7 @@ func SuiteSeasonPass(sql : SQLService) -> void:
 	sql.ExecuteBindings("UPDATE season_account_state SET pt = 3600 WHERE account_id = ? AND season_id = ?;", [accountID, seasonID])
 	CheckEq(int(economy.GetSeasonPass(accountID).get("level", 0)), 30, "3600 PT → L30")
 	var g0 : int = economy.GetGems(accountID)
+	var tPass : int = SQLCommons.Timestamp()
 	Check(bool(economy.ClaimPassReward(accountID, charID, 3, "free").get("ok", false)), "free L3 claimed")
 	CheckEq(economy.GetGems(accountID), g0 + 10, "free L3 +10 gems")
 	Check(bool(economy.ClaimPassReward(accountID, charID, 10, "free").get("ok", false)), "free L10 emote claimed")
@@ -1555,6 +2428,11 @@ func SuiteSeasonPass(sql : SQLService) -> void:
 	Check(str(economy.ClaimPassReward(accountID, charID, 3, "free").get("reason", "")) == "already_claimed", "reward double-claim rejected")
 	Check(str(economy.ClaimPassReward(accountID, charID, 31, "free").get("reason", "")) == "locked", "L31 locked at L30")
 	Check(str(economy.ClaimPassReward(accountID, charID, 5, "premium").get("reason", "")) == "not_premium", "premium locked without purchase")
+	# K1: dois resgates aceitos e três rejeitados nesta janela. O evento tem que sair
+	# só nos aceitos — contar tentativa frustrada como "passe usado" é como o
+	# healthcheck fictício nasce: um número que parece bom e não significa nada.
+	Launcher.Telemetry.Flush()
+	CheckEq(_FunnelCount(sql, "pass_claim", accountID, tPass), 2, "pass_claim emitido só nos resgates aceitos")
 
 	# Premium via grant do companion (pass.s1) + claims premium + bônus
 	Check(economy.EnqueueGrant(accountID, "pass_premium", 1, "co-pass-1", '{"sku": "pass.s1"}'), "pass grant enqueued")
@@ -1743,8 +2621,9 @@ func SuiteCosmetics(sql : SQLService) -> void:
 # no settle, VIP dobra quantidade. Stub em vez de SDK; servidor valida tudo.
 func SuiteAds(sql : SQLService) -> void:
 	print("[suite] rewarded ads (Fase E)")
-	# SOM-IDLE beta fechado (T7): stub explícito; reais fora de escopo.
-	Check(EconomyCatalog.AdStubEnabled, "ads: beta roda em stub explícito")
+	# SOM-IDLE M2: o stub é env com default FECHADO (era `const true` — compilar
+	# era a única forma de fechar). O par abaixo prova os dois lados com o MESMO
+	# token bem formado; o resto da suíte roda o caminho do beta (stub ligado).
 	var economy : EconomyService = Launcher.Economy
 	var tele : TelemetryService = Launcher.Telemetry
 	var now : int = SQLCommons.Timestamp()
@@ -1756,6 +2635,29 @@ func SuiteAds(sql : SQLService) -> void:
 	var accountID : int = sql.GetAccountIDForCharacter(charID)
 	sql.SetGems(accountID, 1000)
 	sql.SetCharacterFarmZone(charID, 1)
+
+	# Trava fechada: nada credita, nada é registrado (sem view, sem baú, sem
+	# chave, sem reroll) — e a única diferença para o bloco seguinte é a env.
+	OS.set_environment("SHAMBLETA_AD_STUB", "")
+	Check(not EconomyCatalog.AdStubEnabled(), "ads: stub fechado sem a env (default)")
+	Check(not economy._ValidAdToken(tok.call("chest"), "chest"), "ads off: token bem formado rejeitado")
+	var viewsOff : int = economy.AdViewsToday(accountID)
+	var keysOff : int = sql.GetCharacterBossKeys(charID)
+	var closedOff : int = int(sql.GetChestStats(charID)["closed"])
+	Check(str(economy.WatchAd(accountID, charID, "afk2x", tok.call("afk2x")).get("reason", "")) == "bad_token", "ads off: watch não credita")
+	Check(str(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("reason", "")) == "bad_token", "ads off: baú não credita")
+	Check(str(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("reason", "")) == "bad_token", "ads off: chave não credita")
+	Check(str(economy.RerollDailyShopAd(accountID, tok.call("reroll")).get("reason", "")) == "bad_token", "ads off: reroll não credita")
+	CheckEq(economy.AdViewsToday(accountID), viewsOff, "ads off: nenhuma view de anúncio")
+	CheckEq(sql.GetCharacterBossKeys(charID), keysOff, "ads off: nenhuma chave creditada")
+	CheckEq(int(sql.GetChestStats(charID)["closed"]), closedOff, "ads off: nenhum baú creditado")
+
+	OS.set_environment("SHAMBLETA_AD_STUB", "true")
+	Check(not EconomyCatalog.AdStubEnabled(), "ads: valor não-1 não liga o stub (sem modo acidental)")
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
+	Check(EconomyCatalog.AdStubEnabled(), "ads: beta liga o stub por env")
+	Check(economy._ValidAdToken(tok.call("chest"), "chest"), "ads on: o mesmo token passa a valer")
+	Check(not economy._ValidAdToken("stub:chest:99999", "chest"), "ads on: dia errado continua rejeitado")
 
 	# Client: provider trocável (env; default stub) + token no formato que o
 	# servidor valida (stub:<placement>:<dia>). Portal real pluga via
@@ -2076,8 +2978,11 @@ func SuiteTournamentDonation(sql : SQLService) -> void:
 	sql.db.delete_rows("account", "username = 'idle_tn_b'")
 
 # SOM-IDLE beta fechado (T5): Seasons travadas por padrão — criação e ciclo
-# de vida viram no-op sem SHAMBLETA_ENABLE_SEASONS=1 (o runner seta; o beta
-# real nunca seta). Não remove código; só impede ativação acidental.
+# de vida viram no-op sem SHAMBLETA_ENABLE_SEASONS=1 (o runner seta para
+# exercitar o espinho; o deploy do beta também seta — decisão G1, coberta por
+# SuiteSeasonBootstrap). A trava continua valendo como kill-switch de
+# emergência: tirar a env desliga o ciclo inteiro, e é isso que esta suíte
+# prova.
 func SuiteSeasonLock(sql : SQLService) -> void:
 	print("[suite] season beta lock (T5)")
 	var economy : EconomyService = Launcher.Economy
@@ -2098,6 +3003,88 @@ func SuiteSeasonLock(sql : SQLService) -> void:
 	if planted > 0:
 		sql.ExecuteBindings("DELETE FROM season_score WHERE season_id = ?;", [planted])
 		sql.ExecuteBindings("DELETE FROM season WHERE season_id = ?;", [planted])
+
+# G1 (AUDITORIA_INDEPENDENTE 2026-09-24, Bloco 1 #7): o beta LIGA a espinha
+# sazonal. Isso só é verdade se três coisas baterem, e é isso que a suíte prova:
+# (a) o artefato de deploy põe a env — a decisão está no arquivo, não na conversa;
+# (b) a produção chama o ciclo (relógio próprio em `SQLBackups`, não o job de 24 h
+# que era o defeito); (c) o ciclo abre → congela → liquida → substitui sem deixar
+# o jogo depois de `ends_at` entrar na apuração, que é exatamente o que
+# `archive/SEASON_ACTIVATION_NOTE.md` listava como pré-condição da ativação.
+func SuiteSeasonBootstrap(sql : SQLService) -> void:
+	print("[suite] bootstrap da temporada (G1)")
+	var economy : EconomyService = Launcher.Economy
+	var compose : String = _RepoFile("res://deploy/docker-compose.yml")
+	Check(compose.contains("SHAMBLETA_ENABLE_SEASONS: \"1\""), "deploy do beta liga a env de temporada")
+	var backups : String = _RepoFile("res://sources/sql/SQLBackups.gd")
+	Check(backups.contains("SeasonClockIntervalSec") and backups.contains("TickSeasonLifecycle") and backups.contains("EnsureSeasonS1"), "loop de produção tem relógio de temporada com as duas metades")
+	Check(SQLCommons.SeasonClockIntervalSec > 0 and SQLCommons.SeasonClockIntervalSec < SQLCommons.MetaJobIntervalSec, "relógio é mais curto que o job diário (%d s)" % SQLCommons.SeasonClockIntervalSec)
+	# Tábula rasa: esta suíte é a única que fala do ciclo completo, então apaga o
+	# que as anteriores deixaram (season/season_score não têm dependentes aqui).
+	sql.ExecuteBindings("DELETE FROM season_score;", [])
+	sql.ExecuteBindings("DELETE FROM season;", [])
+	# Contrato do relógio em duas metades: fechar não abre. `EnsureSeasonS1` é a
+	# metade que abre, e é ela que torna o `pass.s1` do catálogo entregável.
+	var first : Dictionary = economy.TickSeasonLifecycle()
+	CheckEq(int(first.get("closed", 0)) + int(first.get("settled", 0)), 0, "tick sem temporada vencida não fecha nem liquida")
+	Check(economy.ActiveSeason().is_empty(), "tick sozinho não abre temporada")
+	Check(economy.EnsureSeasonS1() > 0, "relógio abre a S1")
+	var active : Dictionary = economy.ActiveSeason()
+	if not Check(not active.is_empty(), "existe temporada ativa depois do relógio"):
+		return
+	var seasonID : int = int(active["season_id"])
+	CheckEq(int(active["ends_at"]) - int(active["starts_at"]), 30 * 86400, "temporada do beta dura 30 dias")
+	Check(str(active["rules_frozen"]).contains("S1"), "regras congeladas são as da S1")
+	CheckEq(economy.EnsureSeasonS1(), 0, "relógio com temporada ativa não duplica")
+	# A janela de apuração é a temporada: o que for gasto depois de `ends_at` não
+	# entra no placar congelado no fechamento. O débito fora da janela é injetado
+	# no ledger em vez de comprado — SQLite carimba `created_at` em segundos, então
+	# duas compras no mesmo segundo são indistinguíveis por um teto em `ends_at`.
+	# A linha sintética é `kind='gems'`, que `ReconcileDaily` não valida (só gold
+	# e xp), e INSERT é o único write que o ledger append-only aceita.
+	var charID : int = CreateFixture(sql, "idle_g1_account", "IdleG1Tester")
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.UpdateRowsRaw("character", "char_id = %d" % charID, {"power_score" = 40})
+	sql.SetGems(accountID, EconomyCatalog.VIP1CostGems * 4 + 100)
+	Check(economy.PurchaseVIP(accountID, 1), "compra dentro da janela")
+	sql.ExecuteBindings("INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, ?, 'gems', -1000, 0, 'g1_outside_window', ?);",
+		[accountID, charID, SQLCommons.Timestamp() + 3600])
+	var injected : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE account_id = ? AND reason = 'g1_outside_window';", [accountID])
+	Check(not injected.is_empty() and int(injected[0]["c"]) == 1, "gasto fora da janela está no ledger")
+	sql.ExecuteBindings("UPDATE season SET ends_at = ? WHERE season_id = ?;", [SQLCommons.Timestamp() + 60, seasonID])
+	Check(economy.CloseSeason(seasonID), "fechar congela o placar")
+	var spendBoard : Array = economy.GetSeasonBoard(seasonID, "spend", 10)
+	var spendRow : Array = spendBoard.filter(func(row : Dictionary) -> bool: return int(row["subject_id"]) == accountID)
+	CheckEq(spendRow.size(), 1, "comprador aparece na corrida de gasto")
+	CheckEq(int(spendRow[0]["value"]) if spendRow.size() == 1 else -1, EconomyCatalog.VIP1CostGems, "placar congela só o gasto dentro da janela")
+	# Liquidar lê o congelado: subir de poder depois do fechamento não entra.
+	var frozenPower : int = economy.GetSeasonBoard(seasonID, "power", 100).size()
+	sql.UpdateRowsRaw("character", "char_id = %d" % charID, {"power_score" = 999999})
+	var settled : Dictionary = economy.SettleSeasonPrizes(seasonID)
+	Check(bool(settled.get("ok", false)), "temporada fechada liquida")
+	var powerAfter : Array = economy.GetSeasonBoard(seasonID, "power", 100)
+	var powerRows : Array = powerAfter.filter(func(row : Dictionary) -> bool: return int(row["subject_id"]) == charID)
+	CheckEq(powerRows.size(), 1, "poder do fixture estava no placar congelado")
+	CheckEq(int(powerRows[0]["value"]) if powerRows.size() == 1 else -1, 40, "potência pós-fechamento não entra no placar")
+	CheckEq(powerAfter.size(), frozenPower, "liquidação não recompõe o placar")
+	var statusRow : Array[Dictionary] = sql.QueryBindings("SELECT status FROM season WHERE season_id = ?;", [seasonID])
+	Check(not statusRow.is_empty() and str(statusRow[0]["status"]) == "settled", "temporada liquidada fica marcada")
+	CheckEq(int(economy.SettleSeasonPrizes(seasonID).get("awarded", -1)), 0, "liquidar de novo não paga duas vezes")
+	# Ciclo contínuo: liquidada a vencedora, a mesma passada do relógio abre a
+	# sucessora — é a sequência exata do bloco em `SQLBackups`.
+	economy.TickSeasonLifecycle()
+	Check(economy.EnsureSeasonS1() > 0, "relógio depois de liquidar abre a sucessora")
+	Check(not economy.ActiveSeason().is_empty(), "o beta nunca fica sem temporada ativa")
+	# As gems de prêmio têm que continuar no ledger (append-only de propósito), mas
+	# as linhas de temporada e o fixture saem — nada depois desta suíte pode
+	# herdar uma temporada ativa que ela criou.
+	var nextActive : Dictionary = economy.ActiveSeason()
+	if not nextActive.is_empty():
+		sql.ExecuteBindings("DELETE FROM season_score WHERE season_id = ?;", [int(nextActive["season_id"])])
+	sql.ExecuteBindings("DELETE FROM season_score WHERE season_id = ?;", [seasonID])
+	sql.ExecuteBindings("DELETE FROM season;", [])
+	sql.db.delete_rows("character", "nickname = 'IdleG1Tester'")
+	sql.db.delete_rows("account", "username = 'idle_g1_account'")
 
 # R1 referral (COMMUNITY_ROADMAP): código, vínculo 72h, bônus por marco L10 +
 # e-mail, idempotência, teto semanal, anti auto-referral.
@@ -2481,7 +3468,7 @@ func SuiteGrantQueue(sql : SQLService) -> void:
 	var otherChar : int = other
 
 	# testing.db persiste entre runs — limpa chaves de execuções anteriores.
-	for key in ["k-gems-1", "k-vip-1", "k-gold-1", "k-gold-2", "k-weird-1"]:
+	for key in ["k-gems-1", "k-vip-1", "k-gold-1", "k-gold-2", "k-weird-1", "k-e3-rollback"]:
 		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
 
 	# Validation gates
@@ -2536,11 +3523,62 @@ func SuiteGrantQueue(sql : SQLService) -> void:
 	var st : Array = sql.QueryBindings("SELECT status FROM grant_queue WHERE idempotency_key = ?;", ["k-weird-1"])
 	Check(str(st[0]["status"]) == "failed", "row marked failed")
 
+	# --- E3: o crédito e a marcação da fila são o mesmo commit ------------
+	# A auditoria confirmou a janela: Transaction() fechava e o UPDATE de status
+	# corria depois, separado. Derrubar o processo no meio deixava a linha
+	# 'pending' com o saldo já creditado, e como ledger_transaction não tem
+	# UNIQUE em `reason`, o tick seguinte creditava de novo — dinheiro falso.
+	# Os checks abaixo não simulam crash: eles provam as duas invariantes que
+	# fecham a janela (reivindicação dentro do commit + rollback conjunto).
+	var checkout : CheckoutService = economy.checkoutService
+	if Check(checkout != null and checkout.has_method("_GrantApplyAndMark"), "e3: apply+mark é uma unidade só"):
+		# (1) uma linha que não está 'pending' não é creditada nem por chamada
+		# direta — é a trava que segura o segundo lançamento.
+		var gemsRow : Array = sql.QueryBindings("SELECT id, idempotency_key, account_id, kind, amount, payload FROM grant_queue WHERE idempotency_key = ?;", ["k-gems-1"])
+		CheckEq(gemsRow.size(), 1, "e3: linha do grant de gems localizada")
+		if gemsRow.size() == 1:
+			var gemsID : int = int(gemsRow[0]["id"])
+			var gemsBefore : int = sql.GetGems(accountID)
+			# Ledger é append-only e sobrevive entre runs (testing.db persiste):
+			# o que se pode afirmar é que a recusa não ACRESCENTA lançamento.
+			var ledgerBefore : int = int((sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE reason = 'grant:k-gems-1';", [])[0] as Dictionary)["n"])
+			Check(ledgerBefore >= 1, "e3: o grant de gems tem lançamento no ledger")
+			Check(not checkout._GrantApplyAndMark(gemsRow[0], gemsID), "e3: linha já processada recusa a reivindicação")
+			CheckEq(sql.GetGems(accountID), gemsBefore, "e3: recusar a reivindicação não credita nada")
+			var ledgerAfter : int = int((sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE reason = 'grant:k-gems-1';", [])[0] as Dictionary)["n"])
+			CheckEq(ledgerAfter, ledgerBefore, "e3: nenhum segundo lançamento para a mesma chave")
+
+		# (2) crédito que falha desfaz a reivindicação junto (rollback do par).
+		Check(economy.EnqueueGrant(accountID, "gold", 10, "k-e3-rollback", '{"char_id": %d}' % other), "e3: grant fadado enfileirado")
+		var badRow : Array = sql.QueryBindings("SELECT id, idempotency_key, account_id, kind, amount, payload FROM grant_queue WHERE idempotency_key = ?;", ["k-e3-rollback"])
+		CheckEq(badRow.size(), 1, "e3: linha do grant fadado localizada")
+		if badRow.size() == 1:
+			var badID : int = int(badRow[0]["id"])
+			var otherGP : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [other])
+			var otherGPBefore : int = int(otherGP[0]["gp"]) if otherGP.size() == 1 else -1
+			Check(otherGP.size() == 1, "e3: stat do personagem alheio lido")
+			Check(not sql.Transaction(checkout._GrantApplyAndMark.bind(badRow[0], badID)), "e3: caminho de produção devolve false")
+			var rolled : Array = sql.QueryBindings("SELECT status FROM grant_queue WHERE id = ?;", [badID])
+			Check(str(rolled[0]["status"]) == "pending", "e3: a reivindicação volta com o crédito (rollback) — nunca sobra 'processing'")
+			var gpBad : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [other])
+			CheckEq(int(gpBad[0]["gp"]) if gpBad.size() == 1 else -2, otherGPBefore, "e3: nada creditado no rollback")
+
+		# (3) a marcação não pode voltar para fora do Transaction() — foi
+		# exatamente assim que o bug nasceu. Guarda na fonte do chamador.
+		var markSource : String = _RepoFile("res://sources/economy/CheckoutService.gd")
+		var callerBody : Array = _RawFuncBody(markSource, "ProcessPendingGrants")
+		var callerText : String = _JoinLines(callerBody)
+		Check(callerText.contains("_GrantApplyAndMark"), "e3: ProcessPendingGrants roda apply+mark dentro do Transaction")
+		Check(not callerText.contains("status = 'processed'"), "e3: nenhuma marcação 'processed' solta depois do commit")
+		var markBody : String = _JoinLines(_RawFuncBody(markSource, "_GrantApplyAndMark"))
+		Check(markBody.contains("_ApplyGrantRaw(grant)") and markBody.contains("status = 'processed'"), "e3: crédito e marcação vivem na mesma função")
+		Check(markBody.find("status = 'processing'") < markBody.find("_ApplyGrantRaw(grant)"), "e3: reivindica antes de creditar")
+
 	sql.db.delete_rows("character", "nickname = 'IdleC1Tester'")
 	sql.db.delete_rows("character", "nickname = 'IdleC1Other'")
 	sql.db.delete_rows("account", "username = 'idle_c1_account'")
 	sql.db.delete_rows("account", "username = 'idle_c1_other'")
-	for key in ["k-gems-1", "k-vip-1", "k-gold-1", "k-gold-2", "k-weird-1"]:
+	for key in ["k-gems-1", "k-vip-1", "k-gold-1", "k-gold-2", "k-weird-1", "k-e3-rollback"]:
 		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
 
 # Telemetry (SOM-IDLE D2): record/flush, settle+levelup hooks, reconcile job.
@@ -2578,9 +3616,157 @@ func SuiteTelemetry(sql : SQLService) -> void:
 	CheckEq(economy.RunReconcileJob(), 0, "reconcile clean")
 	var hist : Array = sql.QueryBindings("SELECT divergences FROM reconcile_run ORDER BY id DESC LIMIT 1;", [])
 	Check(not hist.is_empty() and int(hist[0]["divergences"]) == 0, "reconcile history recorded")
+	# #27: o mesmo job roda o calendário de eventos. Num sábado/domingo a janela
+	# semeada já nasce aberta e o tick do job a ativa — limpa o que ele semeou para
+	# que nenhum modificador vazado altere o drop dos suites seguintes.
+	var seededByJob : int = sql.QueryBindings("SELECT id FROM live_event WHERE kind IN ('weekend_drops', 'smith_week');", []).size()
+	Check(seededByJob > 0, "reconcile semeia o calendário de eventos (#27)")
+	sql.ExecuteBindings("DELETE FROM live_event_tick WHERE event_id IN (SELECT id FROM live_event WHERE kind IN ('weekend_drops', 'smith_week'));", [])
+	sql.ExecuteBindings("DELETE FROM live_event WHERE kind IN ('weekend_drops', 'smith_week');", [])
 
 	sql.db.delete_rows("character", "nickname = 'IdleD2Tester'")
 	sql.db.delete_rows("account", "username = 'idle_d2_account'")
+
+# ------------------------------------------------------------------ K1 helpers
+# Leitura do funil por (kind, conta, janela). `since` existe porque o banco é o
+# mesmo da suíte inteira — contar sem janela achava evento de outro teste.
+func _FunnelCount(sql : SQLService, kind : String, accountID : int, since : int) -> int:
+	var rows : Array = sql.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = ? AND account_id = ? AND created_at >= ?;", [kind, accountID, since])
+	return int(rows[0]["n"]) if not rows.is_empty() else 0
+
+func _FunnelMeta(sql : SQLService, kind : String, accountID : int) -> Dictionary:
+	var rows : Array = sql.QueryBindings("SELECT meta FROM telemetry_event WHERE kind = ? AND account_id = ? ORDER BY id DESC LIMIT 1;", [kind, accountID])
+	if rows.is_empty():
+		return {}
+	var parsed : Variant = JSON.parse_string(str(rows[0]["meta"]))
+	return parsed if parsed is Dictionary else {}
+
+# K1 (AUDITORIA_INDEPENDENTE §23 Bloco 1 item 9): o funil de dinheiro e a coorte
+# de retenção. Cada assert dispara o caminho real de produto — intenção de
+# checkout, entrega de grant, mercado, troca — e lê o que ficou em
+# telemetry_event. O que tem que estar provado é que o evento sai do lugar certo,
+# não que Record() grava linha (isso a suíte D2 já cobre).
+#
+# Nada aqui chama tele.Flush(): `checkout_intent` e `purchase` têm flush próprio e
+# precisam aparecer lidos imediatamente, senão o buffer de 60 s perderia a compra
+# num crash — exatamente o número que não pode faltar.
+func SuiteMoneyFunnel(sql : SQLService) -> void:
+	print("[suite] funil de dinheiro + coorte (K1)")
+	var economy : EconomyService = Launcher.Economy
+	var tele : TelemetryService = Launcher.Telemetry
+	if not Check(tele != null and economy != null, "economy e telemetry vivos (K1)"):
+		return
+	var seller : int = CreateFixture(sql, "idle_k1_seller", "IdleK1Seller")
+	var buyer : int = CreateFixture(sql, "idle_k1_buyer", "IdleK1Buyer")
+	if not Check(seller != 0 and buyer != 0, "fixtures K1 criadas"):
+		return
+	var sellerAccount : int = sql.GetAccountIDForCharacter(seller)
+	var buyerAccount : int = sql.GetAccountIDForCharacter(buyer)
+	sql.SetGems(sellerAccount, 5000)
+	sql.SetGems(buyerAccount, 5000)
+	sql.SetEmailVerified(sellerAccount, true)
+	sql.SetEmailVerified(buyerAccount, true)
+	var apple : int = FarmZoneData.DefaultDropItemHash
+	_SetInventory(sql, seller, apple, 6)
+	var t0 : int = SQLCommons.Timestamp()
+
+	# A whitelist é o que impede typo de evento virar série nova no dashboard.
+	Check(not tele.RecordFunnel("purchase_totalmente_falso", sellerAccount), "funil rejeita kind fora da whitelist")
+
+	# (1) intenção de checkout: a pessoa viu o preço.
+	Check(bool(economy.GetCheckoutIntent(sellerAccount, "gems.550").get("ok", false)), "intent gems.550 aceita")
+	CheckEq(_FunnelCount(sql, "checkout_intent", sellerAccount, t0), 1, "checkout_intent emitido na intenção")
+	CheckEq(_FunnelCount(sql, "checkout_intent", sellerAccount, SQLCommons.Timestamp() + 10), 0, "checkout_intent não é gravado duas vezes")
+	Check(str(_FunnelMeta(sql, "checkout_intent", sellerAccount).get("sku", "")) == "gems.550", "meta do intent carrega o sku")
+	# In intent a inexistente não pode gerar evento — senão o funil conta clique em
+	# anything como abertura de checkout.
+	Check(not bool(economy.GetCheckoutIntent(sellerAccount, "sku.que.nao.existe").get("ok", false)), "sku desconhecido rejeitado")
+	CheckEq(_FunnelCount(sql, "checkout_intent", sellerAccount, t0), 1, "sku desconhecido não emite intent")
+
+	# (2) entrega: grant processado é o `purchase`. O preço volta para a linha como
+	# o companion escreve (centavos) — é a coluna da migration 044 que estava
+	# chegando em /metrics como se fosse unidade de jogo.
+	Check(economy.EnqueueGrant(sellerAccount, "gems", 550, "k-k1-money", '{"sku": "gems.550"}'), "grant de gems enfileirado")
+	Check(sql.ExecuteBindings("UPDATE grant_queue SET price_paid = 2490, currency = 'BRL' WHERE idempotency_key = 'k-k1-money';", []), "price_paid gravado na fila")
+	Check(economy.EnqueueGrant(sellerAccount, "gems", 50, "k-k1-sandbox", '{"sku": "sandbox"}'), "grant de sandbox enfileirado")
+	Check(int(economy.ProcessPendingGrants(50).get("processed", 0)) >= 2, "dois grants processados")
+	var moneyMeta : Dictionary = _FunnelMeta(sql, "purchase", sellerAccount)
+	CheckEq(_FunnelCount(sql, "purchase", sellerAccount, t0), 2, "purchase emitido por entrega")
+	CheckEq(int(moneyMeta.get("price_paid", -1)), 0, "última entrega (sandbox) tem preço 0")
+	CheckEq(int(moneyMeta.get("amount", -1)), 50, "purchase carrega a quantidade concedida")
+	CheckEq(_FunnelCount(sql, "purchase", buyerAccount, t0), 0, "purchase é da conta que pagou")
+	# Price_paid e moeda têm que sobreviver à viagem: foi exatamente neste ponto que
+	# o dashboard somou unidade de jogo e chamou de venda (AUDITORIA §"Receita em
+	# dinheiro"). 2490 centavos = o que foi gravado na fila logo acima.
+	var paid : Array = sql.QueryBindings("SELECT json_extract(meta, '$.currency') AS cur FROM telemetry_event WHERE kind = 'purchase' AND account_id = ? AND CAST(json_extract(meta, '$.price_paid') AS INTEGER) = 2490;", [sellerAccount])
+	Check(not paid.is_empty() and str(paid[0]["cur"]) == "BRL", "purchase carrega price_paid e a moeda do provedor")
+
+	# (3) mercado: anunciar, comprar, desistir. Estes três vão pelo buffer comum do
+	# telemetria (janela de 60 s), então a leitura precisa de um Flush — ao
+	# contrário do dinheiro lá em cima, que é durável na hora.
+	var listing : int = economy.ListItemForSale(seller, apple, 1, 300)
+	Check(listing > 0, "listing aberto na AH")
+	Launcher.Telemetry.Flush()
+	CheckEq(_FunnelCount(sql, "ah_list", sellerAccount, t0), 1, "ah_list emitido")
+	CheckEq(int(_FunnelMeta(sql, "ah_list", sellerAccount).get("price_gold", -1)), 300, "ah_list carrega o preço pedido")
+	Check(economy.BuyListing(buyer, listing), "compra na AH executada")
+	Launcher.Telemetry.Flush()
+	CheckEq(_FunnelCount(sql, "ah_buy", buyerAccount, t0), 1, "ah_buy emitido no comprador")
+	var listing2 : int = economy.ListItemForSale(seller, apple, 1, 400)
+	Check(economy.CancelListing(seller, listing2), "listing cancelado")
+	Launcher.Telemetry.Flush()
+	CheckEq(_FunnelCount(sql, "ah_cancel", sellerAccount, t0), 1, "ah_cancel emitido na desistência")
+	CheckEq(_FunnelCount(sql, "ah_buy", sellerAccount, t0), 0, "vendedor não conta como comprador")
+	# #26: a perna de item da compra no leilão escrevia `trade_in:` — o mesmo
+	# namespace da troca direta — e LastTradeTimestampRaw casa esse par, então
+	# comprar no AH armava o cooldown de 60 s de troca no comprador (medido na run
+	# anterior: linha 18433 do ledger, troca rejeitada no mesmo segundo). O AH tem
+	# namespace próprio agora; a troca logo abaixo só acontece por causa disso.
+	var ahInLeg : Array = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE char_id = ? AND reason LIKE 'ah_in:%';", [buyer])
+	Check(not ahInLeg.is_empty(), "AH grava a perna de item no próprio namespace (#26)")
+	CheckEq(int(sql.LastTradeTimestampRaw(buyer)), 0, "comprar no leilão não arma o cooldown de troca (#26)")
+
+	# (4) troca entre contas.
+	Check(economy.ExecuteTrade(seller, buyer, [{"item_id" = apple, "count" = 1}], []), "troca executada")
+	Launcher.Telemetry.Flush()
+	CheckEq(_FunnelCount(sql, "trade", sellerAccount, t0), 1, "trade emitido no lado A")
+	CheckEq(_FunnelCount(sql, "trade", buyerAccount, t0), 1, "trade emitido no lado B")
+
+	# (5) coorte D1/D7/D30 — a régua reescrita de ROADMAP_COMERCIAL §Semana 2.
+	# Dia-zero é a criação da conta; os logins entram deslocados de dias calendário
+	# UTC inteiros, que é o que a view conta (migration 045).
+	var day : int = 86400
+	var anchorRows : Array = sql.QueryBindings("SELECT created_timestamp AS c FROM account WHERE account_id = ?;", [sellerAccount])
+	var anchor : int = int(anchorRows[0]["c"]) if not anchorRows.is_empty() else 0
+	Check(anchor > 0, "dia-zero da conta existe")
+	for offset : int in [0, 1, 7, 30]:
+		sql.ExecuteBindings("INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value) VALUES (?, ?, ?, 'login', 1);", [anchor + offset * day, sellerAccount, seller])
+	sql.ExecuteBindings("INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value) VALUES (?, ?, ?, 'login', 1);", [anchor + 2 * day, buyerAccount, buyer])
+	# settle no dia +7 não é retenção: sem essa linha, qualquer contagem de
+	# qualquer evento viraria "o jogador voltou".
+	sql.ExecuteBindings("INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value) VALUES (?, ?, ?, 'settle', 100);", [anchor + 7 * day, buyerAccount, buyer])
+	var cohortSeller : Array = sql.QueryBindings("SELECT cohort_day, d1, d7, d30 FROM cohort_retention WHERE account_id = ?;", [sellerAccount])
+	if Check(not cohortSeller.is_empty(), "conta entra na coorte"):
+		CheckEq(int(cohortSeller[0]["d1"]), 1, "D1 marcado no dia +1")
+		CheckEq(int(cohortSeller[0]["d7"]), 1, "D7 marcado no dia +7")
+		CheckEq(int(cohortSeller[0]["d30"]), 1, "D30 marcado no dia +30")
+		CheckEq(int(cohortSeller[0]["cohort_day"]), anchor / day, "dia-zero é o dia da criação")
+	var cohortBuyer : Array = sql.QueryBindings("SELECT d1, d7 FROM cohort_retention WHERE account_id = ?;", [buyerAccount])
+	if Check(not cohortBuyer.is_empty(), "comprador entra na coorte"):
+		CheckEq(int(cohortBuyer[0]["d1"]), 0, "voltar no dia +2 não é D1")
+		CheckEq(int(cohortBuyer[0]["d7"]), 0, "settle não conta como retorno")
+	var summary : Dictionary = tele.CohortSummary()
+	Check(int(summary.get("accounts", 0)) >= 2, "resumo soma as duas contas")
+	Check(int(summary.get("d30", 0)) >= 1, "resumo soma D30")
+
+	for key : String in ["k-k1-money", "k-k1-sandbox"]:
+		sql.ExecuteBindings("DELETE FROM grant_queue WHERE idempotency_key = ?;", [key])
+	sql.ExecuteBindings("DELETE FROM telemetry_event WHERE account_id = ? OR account_id = ?;", [sellerAccount, buyerAccount])
+	sql.db.delete_rows("auction_listing", "seller_account = %d OR seller_account = %d" % [sellerAccount, buyerAccount])
+	sql.db.delete_rows("character", "nickname = 'IdleK1Seller'")
+	sql.db.delete_rows("character", "nickname = 'IdleK1Buyer'")
+	sql.db.delete_rows("account", "username = 'idle_k1_seller'")
+	sql.db.delete_rows("account", "username = 'idle_k1_buyer'")
 
 # Fraud v1 (SOM-IDLE D3): gates, velocity flags, CS reads.
 func SuiteFraud(sql : SQLService) -> void:
@@ -2647,6 +3833,24 @@ func SuiteFraud(sql : SQLService) -> void:
 	Check(not economy.FlagMultiAccount(accountA, ""), "multi_account rejects empty detail")
 	Check(sql.ReviewFraudFlag(int(multi[0]["id"]), "dismissed"), "multi_account flag dismissed")
 	Check(sql.ReviewFraudFlag(int(multi[1]["id"]), "dismissed"), "multi_account second dismissed")
+
+	# S5 (2026-09-24): o detector que alimentava esses flags coletava a impressão
+	# digital dentro do processo do SERVIDOR — uma única impressão digital para todas
+	# as contas do mundo, portanto 100 % de falsos positivos na fila acima. A fila e a
+	# API ficam (é o destino acordado do sinal, LAUNCH_HANDOFF T5); o que não pode
+	# voltar é o produtor falso. O defeito era uma chamada que *parecia* certa, então
+	# o guard é de fonte, não de comportamento: nenhum comportamento observável desta
+	# suíte distingue o coletor real do falso.
+	var peersSrc : String = _StripCommentLines(_RepoFile("res://sources/network/server/Peers.gd"))
+	if Check(not peersSrc.is_empty(), "S5: fonte de Peers.gd legível"):
+		Check(not peersSrc.contains("DeviceFingerprint"), "S5: o servidor não coleta hardware próprio como identidade do jogador")
+		Check(not peersSrc.contains("fingerprint LIKE"), "S5: nenhum LIKE de fingerprint no caminho do login")
+		Check(peersSrc.contains("Record(\"login\""), "S5: o evento de login continua registrado (funil d1_return vivo)")
+	var fpInServer : Array[String] = []
+	for filePath in _GdFilesUnder("res://sources/network/server"):
+		if _StripCommentLines(_RepoFile(filePath)).contains("DeviceFingerprint"):
+			fpInServer.append(filePath)
+	CheckEq(fpInServer.size(), 0, "S5: nenhum arquivo do servidor referencia o coletor de hardware")
 
 	# CS reads: ledger search + lot history chain
 	var ledger : Array = sql.SearchLedger(accountA, 5)
@@ -3262,10 +4466,374 @@ func SuiteTwoFactor(sql : SQLService) -> void:
 	replayPeer.pendingTwoFactorAt = now
 	CheckEq(int(Peers.ValidateTwoFactorChallenge(replayPeer, "idle_2fa_a", codeA)), int(NetworkCommons.AuthError.ERR_AUTH), "cross-peer replay → AUTH")
 	Check(replayPeer.pendingTwoFactorAccount == "idle_2fa_a", "cross-peer replay preserves active challenge")
+	# O que sobrava de MultiplayerTests.gd (arquivo apagado nesta passada: não
+	# compilava desde que as assinaturas de Network.Notify* mudaram e 4 dos 5
+	# checks dele eram `Check(true, "não crashou")`). Registro de peer é o único
+	# asserts verdadeiros daquilo, e cabem aqui.
+	var probePeer : int = 424250
+	Peers.AddPeer(probePeer, Peers.TransportType.OFFLINE)
+	var probe : Peers.Peer = Peers.GetPeer(probePeer)
+	Check(probe != null and probe.peerID == probePeer and probe.transport == Peers.TransportType.OFFLINE,
+			"peer registra com a identidade e o transporte pedidos")
+	Peers.AddPeer(probePeer, Peers.TransportType.OFFLINE)
+	Check(Peers.GetPeer(probePeer) == probe, "AddPeer em peer existente não substitui o objeto")
+	Peers.RemovePeer(probePeer)
+	Check(Peers.GetPeer(probePeer) == null, "RemovePeer desregistra")
 	Peers.RemovePeer(replayPeerID)
 	Peers.RemovePeer(peerID)
 	sql.db.delete_rows("account", "username = 'idle_2fa_a'")
 	sql.db.delete_rows("account", "username = 'idle_2fa_b'")
+
+# SOM-IDLE M1: o lado do servidor do SETUP de 2FA. O facade declarava os RPCs mas
+# NetServer não os implementava — o botão do painel chamava um método inexistente
+# e a conta ficava para sempre sem 2FA. Ciclo completo, observável no SQLite:
+# segredo pendente nunca auto-ativa, código queima na verificação, desligar
+# re-autentica pela senha e revoga as sessões salvas.
+func SuiteTwoFactorSetup(sql : SQLService) -> void:
+	print("[suite] 2FA setup no servidor (M1)")
+	var uname : String = "idle_2fa_setup"
+	sql.db.delete_rows("account", "username = '%s'" % uname)
+	if not Check(sql.AddAccount(uname, "CorrectHorse123!", "idle_2fa_setup@test.local"), "2fa m1: fixture criada"):
+		return
+	var accountID : int = sql.GetAccountID(uname)
+	if not Check(accountID != NetworkCommons.PeerUnknownID, "2fa m1: fixture resolvida"):
+		return
+	var server : NetServer = Network.ENetServer
+	if not Check(server != null and server.has_method("SetupTwoFactor") and server.has_method("VerifyTwoFactorSetup") and server.has_method("DisableTwoFactor") and server.has_method("GetTwoFactorState"), "2fa m1: os quatro handlers existem no servidor"):
+		return
+
+	var peerID : int = 424250
+	Peers.AddPeer(peerID, Peers.TransportType.OFFLINE)
+	var peer : Peers.Peer = Peers.GetPeer(peerID)
+	if not Check(peer != null, "2fa m1: peer de teste"):
+		return
+	var now : int = int(Time.get_unix_time_from_system())
+
+	# Sem sessão autenticada não se escreve segredo nenhum (anti-spam de RPC).
+	server.SetupTwoFactor(peerID)
+	Check(sql.GetTwoFactorSecret(accountID).is_empty(), "2fa m1: sem sessão não gera segredo")
+	Check(not sql.IsTwoFactorEnabled(accountID), "2fa m1: sem sessão 2FA fica off")
+
+	peer.SetAccount(Peers.AccountData.new(accountID, ActorCommons.Permission.NONE))
+	server.SetupTwoFactor(peerID)
+	var secret : String = sql.GetTwoFactorSecret(accountID)
+	Check(secret.length() == 32, "2fa m1: segredo pendente gravado (%d chars)" % secret.length())
+	Check(not sql.IsTwoFactorEnabled(accountID), "2fa m1: pendente não ativa sozinho")
+
+	# Código fora da janela não ativa.
+	var codes : Array[String] = []
+	for drift in [-1, 0, 1]:
+		codes.append(TwoFactorAuth.GenerateTOTP(secret, now + drift * TwoFactorAuth.TOTP_STEP_SECONDS))
+	var wrong : String = "000000"
+	while codes.has(wrong):
+		wrong = str((wrong.to_int() + 137) % 1000000).pad_zeros(6)
+	server.VerifyTwoFactorSetup(wrong, peerID)
+	Check(not sql.IsTwoFactorEnabled(accountID), "2fa m1: código errado não ativa")
+	server.VerifyTwoFactorSetup("12", peerID)
+	Check(not sql.IsTwoFactorEnabled(accountID), "2fa m1: código malformado rejeitado")
+
+	# Código da janela atual ativa, e fica queimado (anti-replay do login).
+	var code : String = TwoFactorAuth.GenerateTOTP(secret, now)
+	server.VerifyTwoFactorSetup(code, peerID)
+	Check(sql.IsTwoFactorEnabled(accountID), "2fa m1: código válido ativa")
+	peer.pendingTwoFactorAccount = uname
+	peer.pendingTwoFactorAt = now
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, uname, code)), int(NetworkCommons.AuthError.ERR_AUTH), "2fa m1: código da verificação não reentra")
+	var next : String = TwoFactorAuth.GenerateTOTP(secret, now + TwoFactorAuth.TOTP_STEP_SECONDS)
+	Check(next != code, "2fa m1: janela seguinte difere (harness determinístico)")
+	peer.pendingTwoFactorAccount = uname
+	peer.pendingTwoFactorAt = int(Time.get_unix_time_from_system())
+	CheckEq(int(Peers.ValidateTwoFactorChallenge(peer, uname, next)), int(NetworkCommons.AuthError.ERR_OK), "2fa m1: 2FA ativo funciona no login")
+
+	# Já ligado: re-Setup não troca o segredo em silêncio (seria bypass da verificação).
+	server.SetupTwoFactor(peerID)
+	Check(sql.GetTwoFactorSecret(accountID) == secret, "2fa m1: setup repetido preserva o segredo")
+	Check(sql.IsTwoFactorEnabled(accountID), "2fa m1: setup repetido não desliga")
+
+	# Desligar é uma redução de segurança: pede a senha e revoga sessões.
+	server.DisableTwoFactor("WrongPassword123!", peerID)
+	Check(sql.IsTwoFactorEnabled(accountID), "2fa m1: senha errada não desliga")
+	sql.ExecuteBindings("INSERT INTO auth_token (token_hash, account_id, ip_address, created_timestamp, expires_timestamp) VALUES (?,?,?,?,?);", ["m1-probe-token", accountID, "127.0.0.1", now, now + 3600])
+	var rows : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS n FROM auth_token WHERE account_id = ?;", [accountID])
+	CheckEq(int(rows[0].get("n", 0)), 1, "2fa m1: sessão salva antes do desligamento")
+	server.DisableTwoFactor("CorrectHorse123!", peerID)
+	Check(not sql.IsTwoFactorEnabled(accountID), "2fa m1: senha correta desliga")
+	Check(sql.GetTwoFactorSecret(accountID).is_empty(), "2fa m1: segredo removido ao desligar")
+	rows = sql.QueryBindings("SELECT COUNT(*) AS n FROM auth_token WHERE account_id = ?;", [accountID])
+	CheckEq(int(rows[0].get("n", 0)), 0, "2fa m1: desligar revoga os tokens de sessão")
+	server.DisableTwoFactor("CorrectHorse123!", peerID)
+	Check(not sql.IsTwoFactorEnabled(accountID), "2fa m1: desligar de novo é no-op")
+
+	peer.SetAccount(Peers.DisconnectedAccount)
+	Peers.RemovePeer(peerID)
+	sql.db.delete_rows("account", "username = '%s'" % uname)
+
+	# Fronteira M1: o client é fino. Era o painel lendo a tabela `account` do
+	# SQLite local para decidir se a própria conta tinha 2FA — num client real a
+	# tabela nem existe. Varredura permanente: GUI e NetClient não tocam o SQL.
+	var direct : Array = []
+	for filePath in _GdFilesUnder("res://sources/gui") + _GdFilesUnder("res://sources/network/client"):
+		if _RepoFile(filePath).contains("Launcher.SQL"):
+			direct.append(filePath)
+	Check(direct.is_empty(), "2fa m1: nenhum acesso do client ao SQLite (%s)" % ", ".join(PackedStringArray(direct)))
+
+# V2: TOTP contra os vetores oficiais do RFC 6238 (anexo B, HMAC-SHA1, 6 dígitos)
+# e contra a JANELA de tolerância. O bug que este suite caça é de reloginho:
+# VerifyTOTP iterava `drift * TOTP_STEP_SECONDS` e depois escalonava de novo em
+# `candidateCounter * TOTP_STEP_SECONDS`, multiplicando o drift por 30 — ou seja,
+# ±15min de códigos aceitos (anti-replay virava piada) e o código da janela
+# vizinha recusado (quem está 20s adiantado não loga). Vetor externo é o único
+# jeito de provar interoperabilidade com Google Authenticator/andOTP: um loop
+# "gera aqui, verifica aqui" passa mesmo com o algoritmo inteiro errado.
+func SuiteTwoFactorVectors() -> void:
+	print("[suite] TOTP vectors (RFC 6238)")
+	var rfcSecret := "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" # base32("12345678901234567890")
+	# Codificador primeiro: se o Base32 estiver errado, o resto é coincidência.
+	var encoded : String = TwoFactorAuth.Base32Encode("12345678901234567890".to_utf8_buffer())
+	Check(encoded == rfcSecret, "rfc: base32 do segredo do RFC (%s)" % encoded)
+	CheckEq(TwoFactorAuth.Base32Decode(rfcSecret).size(), 20, "rfc: segredo decodifica em 20 bytes")
+	Check(TwoFactorAuth.Base32Decode(rfcSecret) == TwoFactorAuth.Base32Decode(rfcSecret.to_lower()), "decode aceita base32 minúsculo")
+	Check(TwoFactorAuth.Base32Decode("0189!").is_empty(), "segredo inválido não produz chave")
+
+	# Anexo B do RFC 6238, coluna sha1 (chave ASCII "12345678901234567890"). O RFC
+	# publica OTPs de 8 dígitos; o produto usa 6 — como 10^6 divide 10^8, o code
+	# esperado é exatamente otp8 % 1.000.000, derivado aqui em vez de memorizado.
+	# O hex do contador é o do RFC e é re-conferido contra o decimal: foi um valor
+	# transcrito de memória (T=10000000000, que nem existe no anexo) que quebrou a
+	# primeira versão deste suite, não o algoritmo.
+	var vectors : Array = [
+		[59, 1, "0000000000000001", "94287082"],
+		[1111111109, 37037036, "00000000023523EC", "07081804"],
+		[1111111111, 37037037, "00000000023523ED", "14050471"],
+		[1234567890, 41152263, "000000000273EF07", "89005924"],
+		[2000000000, 66666666, "0000000003F940AA", "69279037"],
+		[20000000000, 666666666, "0000000027BC86AA", "65353130"],
+	]
+	for vec in vectors:
+		var when : int = int(vec[0])
+		var counter : int = int(vec[1])
+		var counterHex : String = String(vec[2])
+		var otp8 : String = String(vec[3])
+		var want : String = str(int(otp8) % 1000000).pad_zeros(TwoFactorAuth.TOTP_DIGITS)
+		CheckEq(int(counterHex.hex_to_int()), counter, "rfc: hex do RFC (%s) == contador %d" % [counterHex, counter])
+		CheckEq(TwoFactorAuth.GetTOTPCounter(when), counter, "rfc: escalonamento T=%d" % when)
+		# O caminho por contador é testado à parte do caminho por timestamp: os dois
+		# têm de concordar ou a verificação diverge do que o app mostra.
+		var byCounter : String = TwoFactorAuth.GenerateTOTPForCounter(rfcSecret, counter)
+		Check(byCounter == want, "rfc: code no contador %d (%s esperado %s)" % [counter, byCounter, want])
+		var byTime : String = TwoFactorAuth.GenerateTOTP(rfcSecret, when)
+		Check(byTime == want, "rfc: code em T=%d (%s esperado %s)" % [when, byTime, want])
+		Check(TwoFactorAuth.VerifyTOTP(rfcSecret, want, when), "rfc: verificação aceita T=%d" % when)
+		Check(TwoFactorAuth.VerifyTOTP(rfcSecret, want, when + TwoFactorAuth.TOTP_STEP_SECONDS), "rfc: janela aceita 1 período adiante (T=%d)" % when)
+		Check(TwoFactorAuth.VerifyTOTP(rfcSecret, want, when - TwoFactorAuth.TOTP_STEP_SECONDS), "rfc: janela aceita 1 período atrás (T=%d)" % when)
+		Check(not TwoFactorAuth.VerifyTOTP(rfcSecret, want, when + 2 * TwoFactorAuth.TOTP_STEP_SECONDS), "rfc: janela recusa 2 períodos adiante (T=%d)" % when)
+		Check(not TwoFactorAuth.VerifyTOTP(rfcSecret, want, when - 2 * TwoFactorAuth.TOTP_STEP_SECONDS), "rfc: janela recusa 2 períodos atrás (T=%d)" % when)
+		Check(not TwoFactorAuth.VerifyTOTP(rfcSecret, want, when + 30 * TwoFactorAuth.TOTP_STEP_SECONDS), "rfc: janela recusa 30 períodos (T=%d)" % when)
+
+	# A janela é contadores, não segundos: medir o raio real aceito é o que pega a
+	# regressão (o bug antigo multiplicava o drift por 30 e abria ±30 contadores).
+	var now : int = 1700000000
+	var here : String = TwoFactorAuth.GenerateTOTP(rfcSecret, now)
+	CheckEq(here.length(), TwoFactorAuth.TOTP_DIGITS, "janela: code tem 6 dígitos (pad_zeros preservado)")
+	var far : int = 0
+	for drift in range(-40, 41):
+		if TwoFactorAuth.VerifyTOTP(rfcSecret, TwoFactorAuth.GenerateTOTP(rfcSecret, now + drift * TwoFactorAuth.TOTP_STEP_SECONDS), now):
+			far = maxi(far, absi(drift))
+	CheckEq(far, TwoFactorAuth.TOTP_DRIFT_WINDOWS, "janela: raio aceito == TOTP_DRIFT_WINDOWS contadores (foi %d)" % far)
+	# Relógio do celular 20s adiantado — o caso que travava o login.
+	Check(TwoFactorAuth.VerifyTOTP(rfcSecret, TwoFactorAuth.GenerateTOTP(rfcSecret, now + 20), now), "janela: telefone 20s adiantado loga")
+	Check(TwoFactorAuth.VerifyTOTP(rfcSecret, TwoFactorAuth.GenerateTOTP(rfcSecret, now - 20), now), "janela: telefone 20s atrasado loga")
+
+	for badToken in ["", "12345", "1234567", "abcdef", "00000 "]:
+		Check(not TwoFactorAuth.VerifyTOTP(rfcSecret, String(badToken), now), "formato: rejeita \"%s\"" % badToken)
+	Check(not TwoFactorAuth.VerifyTOTP("", here, now), "formato: segredo vazio nunca verifica")
+	Check(not TwoFactorAuth.VerifyTOTP("@@@@", here, now), "formato: segredo inválido nunca verifica")
+	# Dois segredos diferentes não podem colidir na mesma janela (segredo fixo:
+	# um GenerateSecret() aleatório daria 1 em ~300k de flake no CI).
+	var other : String = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJR"
+	Check(not TwoFactorAuth.VerifyTOTP(other, here, now), "segredo errado rejeita o code da conta")
+
+	var qr : String = TwoFactorAuth.GetQRCodeURL(rfcSecret, "thiago")
+	Check(qr.begins_with("otpauth://totp/"), "qr: scheme otpauth")
+	Check(qr.contains("secret=%s" % rfcSecret), "qr: carrega o segredo")
+	Check(qr.contains("digits=%d" % TwoFactorAuth.TOTP_DIGITS), "qr: dígitos explícitos")
+	Check(qr.contains("period=%d" % TwoFactorAuth.TOTP_STEP_SECONDS), "qr: período explícito")
+	Check(qr.contains("issuer=Shambleta"), "qr: issuer presente")
+	# O label é `Issuer:conta` percent-encodado: o ':' do label não pode aparecer
+	# cru (quebraria o parse do app) nem o segredo pode ser re-escapado.
+	Check(qr.contains("Shambleta%3Athiago"), "qr: label issuer:conta escapado")
+	Check(qr.contains("thiago"), "qr: nome da conta aparece no label")
+
+	# Encoding dos 8 bytes big-endian: nenhum vetor do RFC passa de 2^32, então só
+	# uma propriedade pega a truncatura a 32 bits. Defensivo — o contador real não
+	# cruza 2^32 antes do ano ~6053 — mas truncar em silêncio trocaria o algoritmo.
+	Check(TwoFactorAuth.GenerateTOTPForCounter(rfcSecret, 1) != TwoFactorAuth.GenerateTOTPForCounter(rfcSecret, 2), "janela vizinha produz code diferente")
+	Check(TwoFactorAuth.GenerateTOTPForCounter(rfcSecret, 1) != TwoFactorAuth.GenerateTOTPForCounter(rfcSecret, 4294967297), "contador acima de 2^32 não trunca em 32 bits")
+
+# ------------------------------------------------- C1/C1b: chat como texto puro
+
+# Corpo cru (com a indentação original) de uma função de topo `func Nome(`.
+# Diferente de _FacadeFunctions, que apara as pontas: aqui a coluna importa.
+func _RawFuncBody(text : String, funcName : String) -> Array:
+	var out : Array = []
+	var header : String = "func %s(" % funcName
+	var capturing : bool = false
+	for line in text.split("\n"):
+		var raw : String = String(line)
+		if not capturing:
+			if raw.begins_with(header):
+				capturing = true
+			continue
+		if raw.begins_with("func ") or raw.begins_with("static func "):
+			break
+		out.append(raw)
+	return out
+
+func _JoinLines(lines : Array) -> String:
+	var joined : String = ""
+	for line in lines:
+		joined += String(line) + "\n"
+	return joined
+
+# SOM-IDLE C1: chat é o único texto do jogo que um jogador escreve na tela dos
+# outros. Os rótulos são bbcode_enabled e o regex de nick permite colchete, então
+# um nick "[b]admin[/b]" chegava como markup vivo no cliente de quem lia; e
+# nenhum caminho tinha teto de tamanho (NotifyGlobal repete a linha para a sala
+# toda). Amarramos as três pontas: escape no sink, corte no servidor, nick
+# validado no servidor — e o balão de fala (C1b) que estava morto atrás do
+# próprio return de guarda.
+func SuiteChatHardening() -> void:
+	print("[suite] chat: BBCode inerte + teto de tamanho + nick no servidor")
+	var zwsp : String = "\u200B"
+	var payload : String = "[b]admin[/b] [color=#00ff00]verde[/color] [url=https://exemplo]clique[/url] [font_size=99]grito[/font_size] [[fechete]]"
+
+	# --- escape: regra e custo visual -------------------------------------
+	Check(Util.EscapeBBCode("abc") == "abc", "escape: texto sem colchete passa byte por byte")
+	Check(Util.EscapeBBCode("[b]x[/b]") == "[" + zwsp + "b]x[" + zwsp + "/b]", "escape: todo abre-colchete ganha o neutralizador")
+	var payloadBrackets : int = payload.count("[")
+	CheckEq(Util.EscapeBBCode(payload).length(), payload.length() + payloadBrackets, "escape: só acrescenta, nunca come character")
+
+	# --- oracle: RichTextLabel de verdade (o parser decide, não a gente) ---
+	var host : Control = Control.new()
+	(Engine.get_main_loop() as SceneTree).root.add_child(host)
+	var probe : RichTextLabel = RichTextLabel.new()
+	probe.bbcode_enabled = true
+	host.add_child(probe)
+
+	probe.text = "[color=#ffffff]" + payload + "[/color]"
+	Check(probe.get_parsed_text() != payload, "escape: sem tratamento o rótulo CONSUME o markup do jogador (por isso o escape existe)")
+	Check(not probe.get_parsed_text().contains("[/b]"), "escape: sem tratamento o [/b] nem aparece — virou formatação")
+
+	probe.text = "[color=#ffffff]" + Util.EscapeBBCode(payload) + "[/color]"
+	Check(probe.get_parsed_text().replace(zwsp, "") == payload, "escape: texto de terceiros chega integral e literal no rótulo real")
+	CheckEq(probe.get_total_character_count(), payload.length() + payloadBrackets, "escape: nada é engolido pelo parser")
+
+	var themeFont : Font = probe.get_theme_font("normal_font")
+	if Check(themeFont != null, "medida: fonte do rótulo resolvida"):
+		CheckNear(themeFont.get_string_size("a" + zwsp + "b").x, themeFont.get_string_size("ab").x, 0.01, "escape: neutralizador não move um pixel (advance 0)")
+	probe.text = ""
+
+	# --- sink real do jogo: ChatContainer (Chat.gd) ------------------------
+	var chatScript : GDScript = load("res://sources/gui/Chat.gd")
+	var labelScene : PackedScene = load("res://presets/gui/labels/ChatLabel.tscn")
+	var chat : Control = chatScript.new()
+	var tabs : TabContainer = TabContainer.new()
+	tabs.name = "ChatTabContainer"
+	chat.add_child(tabs)
+	var edit : LineEdit = LineEdit.new()
+	edit.name = "NewText"
+	chat.add_child(edit)
+	for channelIdx in GUICommons.ChatChannel.DEFAULT_CHANNEL_COUNT:
+		var tab : RichTextLabel = labelScene.instantiate()
+		tab.name = str(channelIdx)
+		tabs.add_child(tab)
+	host.add_child(chat)	# roda _ready(): teto da caixa + aba de boas-vindas
+
+	var localTab : RichTextLabel = tabs.get_tab_control(GUICommons.ChatChannel.LOCAL)
+	if Check(localTab != null and localTab is ChatLabel, "chat: aba LOCAL real instanciada"):
+		chat.AddPlayerChat(str(GUICommons.ChatChannel.LOCAL), "gero", payload)
+		var shown : String = localTab.get_parsed_text()
+		Check(shown.replace(zwsp, "").ends_with("gero: " + payload + "\n"), "chat: linha de outro jogador é literal na aba (rótulo do jogo)")
+		chat.AddLocalFeedback("linha nossa")
+		Check(localTab.text.contains("[color=#") and localTab.text.ends_with("[/color]"), "chat: o wrapper [color] nosso continua markup")
+		Check(localTab.get_parsed_text().ends_with("linha nossa\n"), "chat: e a linha nossa sai formatada do parser, não literal")
+
+	CheckEq(edit.max_length, NetworkCommons.ChatMaxSize, "chat: caixa de digitação para no teto do servidor")
+
+	# --- teto de tamanho (comportamento) ----------------------------------
+	CheckEq(NetworkCommons.ClipChat("a".repeat(1000)).length(), NetworkCommons.ChatMaxSize, "clip: corte exato no teto")
+	CheckEq(NetworkCommons.ClipChat("   \n  ").length(), 0, "clip: só-espaço vira vazio (TriggerChat descarta)")
+	Check(NetworkCommons.ClipChat("  oi  ") == "oi", "clip: apara a sobra das pontas")
+	Check(NetworkCommons.ClipChat(payload) == payload, "clip: mensagem dentro do teto passa byte por byte")
+	Check(NetworkCommons.ClipChat("x".repeat(500) + "   ").length() <= NetworkCommons.ChatMaxSize, "clip: nunca devolve acima do teto")
+
+	# --- guardas de servidor (fonte) --------------------------------------
+	var serverText : String = _RepoFile("res://sources/network/server/Server.gd")
+	var chatBody : Array = _RawFuncBody(serverText, "TriggerChat")
+	if Check(not chatBody.is_empty(), "servidor: corpo de TriggerChat localizado"):
+		var chatBodyText : String = _JoinLines(chatBody)
+		Check(chatBodyText.contains("NetworkCommons.ClipChat(text)"), "servidor: TriggerChat corta o texto na entrada")
+		Check(chatBodyText.contains("message.is_empty()"), "servidor: linha vazia depois do corte é descartada")
+		var disseminators : int = 0
+		for line in chatBody:
+			var raw : String = String(line)
+			if raw.contains("NotifyNeighbours") or raw.contains("NotifyGlobal") or raw.contains("Network.ChatPlayer") or raw.contains("SendToDiscord"):
+				disseminators += 1
+				Check(raw.contains("message") and not raw.contains(" text,") and not raw.contains(" text]"), "servidor: propaga a versão cortada, nunca a crua (%s)" % raw.strip_edges())
+		CheckEq(disseminators, 5, "servidor: local + global + discord + 2 whispers cobertos")
+
+	var createBody : Array = _RawFuncBody(serverText, "CreateCharacter")
+	if Check(not createBody.is_empty(), "servidor: corpo de CreateCharacter localizado"):
+		var createText : String = _JoinLines(createBody)
+		Check(createText.contains("CheckCharacterInformation(charName)"), "servidor: nick validado no CreateCharacter")
+		Check(createText.find("CheckCharacterInformation(charName)") < createText.find("Launcher.SQL.HasCharacter(charName)"), "servidor: validação vem antes de encostar no SQL")
+
+	# --- o que o validador de nick realmente aceita -----------------------
+	CheckEq(NetworkCommons.CheckCharacterInformation("a".repeat(300)), NetworkCommons.CharacterError.ERR_NAME_SIZE, "nick: 300 caracteres recusados")
+	CheckEq(NetworkCommons.CheckCharacterInformation("ab"), NetworkCommons.CharacterError.ERR_NAME_SIZE, "nick: curto demais recusado")
+	CheckEq(NetworkCommons.CheckCharacterInformation("a b"), NetworkCommons.CharacterError.ERR_NAME_VALID, "nick: espaço recusado")
+	CheckEq(NetworkCommons.CheckCharacterInformation("[b]x[/b]"), NetworkCommons.CharacterError.ERR_OK, "nick: colchete é nick LEGAL — logo a defesa é o escape no sink, não o filtro")
+
+	# --- C1b: balão de fala de volta (Interactive.DisplaySpeech) ----------
+	var fake : EntityInteractive = EntityInteractive.new()
+	var bubbleBox : VBoxContainer = VBoxContainer.new()
+	host.add_child(bubbleBox)
+	fake.speechContainer = bubbleBox
+	fake.DisplaySpeech(payload)
+	CheckEq(bubbleBox.get_child_count(), 1, "balão: DisplaySpeech volta a criar o rótulo (estava morto atrás do return)")
+	var bubble : RichTextLabel = bubbleBox.get_child(0) as RichTextLabel if bubbleBox.get_child_count() > 0 else null
+	if Check(bubble != null, "balão: filho é o RichTextLabel do balão"):
+		Check(bubble.get_parsed_text().replace(zwsp, "") == payload, "balão: texto de outro jogador é literal no SpeechBubble")
+		Check(bubble.text.begins_with("[center]"), "balão: [center] nosso continua markup")
+		Check(Entities.speechEntities.has(fake), "balão: entidade entra na fila de empilhamento")
+	Entities.speechEntities.erase(fake)
+	fake.free()
+
+	var interactiveText : String = _RepoFile("res://sources/actor/entity/components/Interactive.gd")
+	var speechBody : Array = _RawFuncBody(interactiveText, "DisplaySpeech")
+	if Check(not speechBody.is_empty(), "balão: corpo de DisplaySpeech localizado"):
+		# Assinatura da regressão: o corpo inteiro ficou INDENTADO dentro do ramo
+		# de erro, abaixo do `return null`. Irmão do `if` = executado; filho =
+		# morto. Medimos a coluna, não a ordem das linhas.
+		var guardIndent : int = -1
+		var returnIndent : int = -1
+		var labelIndent : int = -1
+		for line in speechBody:
+			var raw : String = String(line)
+			var stripped : String = raw.lstrip("\t")
+			var indent : int = raw.length() - stripped.length()
+			if stripped.begins_with("if speechContainer == null:"):
+				guardIndent = indent
+			elif stripped.strip_edges() == "return null":
+				returnIndent = indent
+			elif stripped.begins_with("var speechLabel : RichTextLabel"):
+				labelIndent = indent
+		Check(guardIndent >= 0 and returnIndent > guardIndent, "balão: guarda de container ausente existe e retorna")
+		Check(labelIndent == guardIndent and labelIndent > 0, "balão: criação do rótulo é irmã do if (%d), não filha do ramo de erro (%d)" % [labelIndent, returnIndent])
+		Check(_JoinLines(speechBody).contains("Util.EscapeBBCode(speech)"), "balão: passa pelo escape antes de montar o [center]")
+
+	chat.free()
+	host.free()
 
 # Ops hardening (SOM-IDLE A2): TLS enforcement matrix + offsite round-trip.
 func SuiteOpsA2(sql : SQLService) -> void:
@@ -3274,6 +4842,39 @@ func SuiteOpsA2(sql : SQLService) -> void:
 	Check(not NetworkCommons.RequiresTLS(true, false, false), "testing exempt")
 	Check(not NetworkCommons.RequiresTLS(false, true, false), "offline exempt")
 	Check(not NetworkCommons.RequiresTLS(false, false, true), "local exempt")
+
+	# Som-idle beta (V7): o OUTRO lado do TLS. A matriz acima protege o bind do servidor;
+	# isto protege o cliente, que montava `TLSOptions.client_unsafe()` — a opção que
+	# desliga cadeia E hostname no canal por onde passam senha, token de "lembrar" e o
+	# código 2FA dos RPCs de auth. O teste é no objeto vivo (`is_unsafe_client` e a cadeia
+	# de âncoras), porque foi assim que se descobriu que `TLSOptions.client()` sem
+	# argumento não inicializa o mbedtls deste engine: a opção "certa" por documentação
+	# derrubava o login do desktop inteiro, e só o exame da opção montada mostra a
+	# diferença entre verificada, unsafe e quebrada.
+	var tlsOpts : TLSOptions = NetworkCommons.ClientTLSOptions()
+	Check(not tlsOpts.is_unsafe_client(), "cliente: as opções TLS do transporte não são as unsafe")
+	Check(not tlsOpts.is_server(), "cliente: opções de cliente, não de servidor")
+	Check(not OS.get_system_ca_certificates().is_empty(), "harness: a store de CA do sistema está legível onde a suíte roda")
+	if not OS.get_system_ca_certificates().is_empty():
+		# `get_trusted_ca_chain()` devolve o X509Certificate anexado (não um Array):
+		# é ele que distingue a opção montada com âncora explícita da opção sem
+		# argumento, que é justamente o caminho que não inicializa neste engine.
+		Check(tlsOpts.get_trusted_ca_chain() is X509Certificate, "cliente: a store do sistema chega como âncora de verificação")
+	var clientCode : String = _StripCommentLines(_RepoFile("res://sources/network/client/Client.gd"))
+	Check(clientCode.contains("NetworkCommons.ClientTLSOptions()"), "cliente: o transporte pede as opções a NetworkCommons")
+	# Opção de TLS que não é passada a nada não verifica nada — os dois transportes.
+	Check(clientCode.contains("create_client(url, tlsOptions)"), "cliente: WebSocket leva as opções TLS")
+	Check(clientCode.contains("dtls_client_setup(serverAddress, tlsOptions)"), "cliente: ENet/DTLS leva as opções TLS")
+	var unsafeUsers : int = 0
+	var sweptFiles : int = 0
+	for filePath in _GdFilesUnder("res://sources"):
+		var body : String = _StripCommentLines(_RepoFile(String(filePath)))
+		sweptFiles += 1
+		if body.contains("client_unsafe"):
+			unsafeUsers += 1
+			Check(false, "transporte inseguro: %s desliga a verificação de certificado" % String(filePath))
+	CheckEq(unsafeUsers, 0, "nenhum cliente de TLS na árvore desliga a verificação")
+	Check(sweptFiles >= 200, "a varredura de TLS olhou a árvore toda (%d arquivos)" % sweptFiles)
 
 	# Restore round-trip: snapshot the live testing DB, prove the copy opens.
 	var snapPath : String = "user://a2_restore_probe.db"
@@ -3290,6 +4891,1138 @@ func SuiteOpsA2(sql : SQLService) -> void:
 
 	DirAccess.remove_absolute(snapPath)
 	DirAccess.remove_absolute(offsite)
+
+	# Boot de base nova — o primeiro start em staging/produção. O template vem em
+	# `migration.version = 1` e o servidor aplica os patches seguintes no boot. Como
+	# `ApplyMigrations()` usa o índice do array como versão, o diretório é parte do
+	# contrato: um buraco ou uma desordem aplica menos patches do que existem (ou os
+	# aplica fora de ordem) sem que nada reclame alto — `Query()` devolve resultado,
+	# não status, e a falha ficaria só no log do addon. Medido a mão em 2026-09-24:
+	# `DirAccess` devolve os nomes ordenados e 001..046 aplicam limpo sobre o
+	# template, fechando com o mesmo schema da base de desenvolvimento.
+	var patches : PackedStringArray = FileSystem.ParseSQL(Path.MigrationRsc)
+	CheckEq(patches.size(), sql.GetVersion(), "boot: a base corrente chegou à versão do diretório de patches")
+	var patchOrder : String = ""
+	for i in range(patches.size()):
+		var stem : String = String(patches[i]).get_file().get_basename()
+		if stem.get_slice("_", 0).to_int() != i + 1:
+			patchOrder = "índice %d traz %s (esperado %03d_...)" % [i, stem, i + 1]
+			break
+	Check(patchOrder.is_empty(), "boot: os patches são 001..N contíguos e em ordem (%s)" % (patchOrder if not patchOrder.is_empty() else "ok"))
+
+	# Decisão do boot sobre o diretório de patches que ele enxerga. Os dois estados de
+	# reclamação não são dano de schema — medido aqui em 2026-09-24: `SetVersion` regrava o
+	# número que `GetVersion` leu, então desativar as guards NÃO derruba a versão da base e
+	# um check do tipo "a versão não mudou" passaria verde com o defeito de volta. O que as
+	# guards consertam é silêncio: `empty` era o boot sem schema nenhum, `stale` era o
+	# rollback de deploy rodando sem ninguém saber. Por isso o contrato é a decisão.
+	Check(SQLService.MigrationPlan(0, 0) == "empty", "boot: zero patches visíveis reclama (base sem schema não sobe muda)")
+	Check(SQLService.MigrationPlan(44, 46) == "stale", "boot: binário mais velho que o schema é reportado, não engolido")
+	Check(SQLService.MigrationPlan(46, 46) == "uptodate", "boot: diretório e base no mesmo número não aplica nada")
+	Check(SQLService.MigrationPlan(47, 46) == "apply", "boot: patch novo ainda aplica")
+	# Fiação: os quatro checks acima olham a decisão pura; sem isto, `ApplyMigrations` pode
+	# continuar decidindo sozinho no meio da função e a decisão de cima nunca é exercida.
+	var applyBody : String = _FnBody(_RepoFile("res://sources/sql/SQL.gd"), "func ApplyMigrations()")
+	Check(applyBody.contains("MigrationPlan("), "boot: ApplyMigrations consulta MigrationPlan (a guarda está ligada)")
+
+	# A outra metade do achado (k) É medível nesta máquina: templates 4.7.2.stable
+	# instalados, `scripts/export_web.sh` roda local e o pacote sai em `build/` —
+	# o servidor roda do `.pck` e a vinda de `res://data/conf/migrations` para dentro dele
+	# depende do `include_filter` do preset de servidor. O que esta suíte trava é o
+	# contrato do texto (`match`/`matchn` atravessam `/` com `*`, medido em Godot 4.7.2).
+	var presets : String = _RepoFile("res://export_presets.cfg")
+	var serverPreset : String = presets.substr(presets.find("name=\"Linux/X11 Headless Server\""))
+	var includeLine : String = ""
+	var excludeLine : String = ""
+	for line in serverPreset.split("\n"):
+		var raw : String = String(line)
+		if includeLine.is_empty() and raw.begins_with("include_filter="):
+			includeLine = raw
+		elif excludeLine.is_empty() and raw.begins_with("exclude_filter="):
+			excludeLine = raw
+	Check(includeLine.contains("data/conf"), "export: o preset do servidor traz data/conf (de onde vêm as migrations)")
+	Check(not excludeLine.contains("data/conf"), "export: nada de data/conf é cortado do pacote do servidor")
+
+	# Beta gate local e CI têm que rodar o MESMO conjunto. Achado (t) de
+	# 2026-09-25, medido: o job `code-health` da CI executa
+	# `scripts/check_god_nodes.sh` e nenhum harness do `test.sh all` executava —
+	# na mesma passada saíram oito `Gate §24-8 OK` verdes nesta máquina e uma CI
+	# vermelha no mesmo commit (`sources/gui/Gui.gd` em 815 linhas contra o teto
+	# de 800). Gate que só a CI conhece não é gate de lançamento, é surpresa de
+	# diff. A régua é medida nos dois arquivos, não lembrada: varre o yaml atrás
+	# de `scripts/*.sh`, descarta os dois que não são gate (o avaliador do
+	# quádruplo e o próprio `test.sh`, que a CI chama para o companion) e exige
+	# que o resto apareça no runner. Discrimina nos dois lados: com o gate fora
+	# do `all` ele falha hoje, e se alguém adicionar (ou tirar) um gate da CI o
+	# `CheckEq` do número de gates reclama junto.
+	var ciWorkflow : String = _RepoFile("res://.github/workflows/godot-ci.yml")
+	var runnerScript : String = _RepoFile("res://scripts/test.sh")
+	if Check(not ciWorkflow.is_empty() and not runnerScript.is_empty(), "portão: o workflow da CI e o scripts/test.sh são legíveis do harness"):
+		var notGates : Array = ["scripts/ci_gate_log.sh", "scripts/test.sh"]
+		var gateScripts : Array = []
+		for rawLine in ciWorkflow.split("\n"):
+			var line : String = String(rawLine)
+			var at : int = line.find("scripts/")
+			while at >= 0:
+				var token : String = String(String(line.substr(at)).split(" ")[0])
+				if token.ends_with(".sh") and not gateScripts.has(token):
+					gateScripts.append(token)
+				at = line.find("scripts/", at + 8)
+		var mirrored : int = 0
+		var missing : String = ""
+		for scriptPath in gateScripts:
+			if notGates.has(scriptPath):
+				continue
+			mirrored += 1
+			if not runnerScript.contains(String(scriptPath).get_file()):
+				missing += String(scriptPath) + " "
+		CheckEq(mirrored, 1, "portão: a CI roda exatamente um gate de script próprio")
+		Check(missing.is_empty(), "portão: todo gate de script da CI também roda no scripts/test.sh (%s)" % missing)
+
+	# ---------------------------------------------------- web: boot limpo no navegador
+	# Medido em 2026-09-25 com `scripts/qa_web.mjs` (boot real do export no Chromium):
+	# o console do navegador devolvia erro em três caminhos que nenhuma suíte headless
+	# enxerga — `presets/music/` fora do `.pck` (o filtro do preset Web corta a música,
+	# deploy/WEB_SLIM.md) empilhava `push_error` em todo boot; `has_method` numa ponte
+	# da JavaScriptBridge não é checagem de existência (Godot encaminha o nome para o
+	# lado JS e recebe `TypeError: obj[method] is not a function`); e o teardown do
+	# cliente ligava um servidor que o boot web nunca ligou, terminando em bind TCP
+	# recusado dentro do wasm.
+	# O guard de pasta é por predicado, não por plataforma: se um preset voltar a
+	# trazer música, a parse volta junto. O que os dois checks abaixo travam é o risco
+	# contrário — o guard silenciar a música também no desktop.
+	Check(FileSystem.DirExists(Path.MusicPst), "web: pasta de música existe no source tree (o guard do boot não desliga a música no desktop)")
+	Check(not FileSystem.DirExists("res://presets/_ausente_/"), "web: DirExists distingue pasta ausente (senão o check de cima passaria com um return true)")
+
+	# Census, não lista lembrada: varre os .gd que usam a ponte e exige que nenhum teste
+	# método nela. Discrimina nos dois sentidos — reintroduzir o padrão em qualquer
+	# arquivo da árvore falha aqui, e um usuário novo da ponte entra no census sem
+	# ninguém precisar atualizar lista.
+	var bridgeOffenders : String = ""
+	for gdPath in _GdFilesUnder("res://sources"):
+		var bridgeSrc : String = _RepoFile(gdPath)
+		if bridgeSrc.contains("get_interface") and _StripCommentLines(bridgeSrc).contains(".has_method("):
+			bridgeOffenders += String(gdPath).replace("res://", "") + " "
+	Check(bridgeOffenders.is_empty(), "web: nenhum usuário da JavaScriptBridge testa método na ponte (%s)" % bridgeOffenders)
+
+	var disconnectBody : String = _FnBody(_RepoFile("res://sources/network/client/Client.gd"), "func DisconnectServer()")
+	if Check(not disconnectBody.is_empty(), "web: corpo de Client.DisconnectServer é legível do harness"):
+		Check(not disconnectBody.contains("Mode(true, true)"), "web: teardown do cliente não hardcodes um servidor que o boot não ligou")
+		Check(disconnectBody.contains("Launcher.Boot"), "web: teardown volta para o modo com que o processo nasceu")
+
+	# PWA update (medido em 2026-09-25 no export: o worker do engine não tem
+	# skipWaiting no install — todo deploy deixa um worker pendente que só assume
+	# via postMessage("update")). A fiação é o autoload sources/web/PwaUpdate.gd:
+	# pulso só no web, porta de entrada só no login, uma notificação por sessão.
+	var pwaReady : String = _FnBody(_RepoFile("res://sources/web/PwaUpdate.gd"), "func _ready(")
+	if Check(not pwaReady.is_empty(), "pwa: corpo de PwaUpdate._ready é legível do harness"):
+		Check(pwaReady.contains("isWeb"), "pwa: o pulso só arma no web (nunca no desktop/headless)")
+	var pwaPulse : String = _FnBody(_RepoFile("res://sources/web/PwaUpdate.gd"), "func _pulse(")
+	if Check(not pwaPulse.is_empty(), "pwa: corpo de PwaUpdate._pulse é legível do harness"):
+		Check(pwaPulse.contains("IsLoginState()"), "pwa: a porta de entrada é o login (IsLoginState, nunca IN_GAME)")
+		Check(pwaPulse.contains("pwa_needs_update()"), "pwa: o pulso consulta o worker pendente no JavaScriptBridge")
+		Check(pwaPulse.contains("MessageBox("), "pwa: worker pendente vira diálogo (uma notificação por sessão)")
+	var pwaConfirm : String = _FnBody(_RepoFile("res://sources/web/PwaUpdate.gd"), "func _confirm_update(")
+	if Check(not pwaConfirm.is_empty(), "pwa: corpo de PwaUpdate._confirm_update é legível do harness"):
+		Check(pwaConfirm.contains("pwa_update()"), "pwa: confirmar aplica o update pendente no worker")
+		Check(pwaConfirm.contains("IsLoginState()"), "pwa: update do PWA só com FSM em login (nunca no meio da partida)")
+
+# ----------------------------------------------------------- modo de lançamento
+
+func _RepoFile(path : String) -> String:
+	return FileAccess.get_file_as_string(path) if FileAccess.file_exists(path) else ""
+
+# Só código, sem as linhas de comentário: os guards de fonte abaixo procuram por
+# chamadas proibidas, e uma proibição citada em comentário não é uso.
+func _StripCommentLines(text : String) -> String:
+	var kept : String = ""
+	for rawLine in text.split("\n"):
+		var line : String = String(rawLine)
+		if line.strip_edges().begins_with("#"):
+			continue
+		kept += line + "\n"
+	return kept
+
+# Corpo de uma função do topo do arquivo (da assinatura até o próximo `\nfunc `),
+# sem as linhas de comentário. Os guards de fiação abaixo procuram por chamadas
+# obrigatórias; uma proibição ou um contrato citado em comentário não é uso.
+func _FnBody(text : String, signature : String) -> String:
+	var at : int = text.find(signature)
+	if at < 0:
+		return ""
+	var end : int = text.find("\nfunc ", at)
+	var body : String = text.substr(at, end - at) if end > at else text.substr(at)
+	return _StripCommentLines(body)
+
+# Lista recursiva de .gd sob um caminho res:// (para os guards de fronteira).
+func _GdFilesUnder(dirPath : String) -> Array:
+	var found : Array = []
+	var stack : Array[String] = [dirPath]
+	while not stack.is_empty():
+		var current : String = stack.pop_back()
+		var dir := DirAccess.open(current)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var fname : String = dir.get_next()
+		while fname != "":
+			var full : String = current.path_join(fname)
+			if dir.current_is_dir():
+				stack.append(full)
+			elif fname.ends_with(".gd"):
+				found.append(full)
+			fname = dir.get_next()
+		dir.list_dir_end()
+	return found
+
+# Valor de custom_features=<...> do preset de export indicado ("" se ausente).
+func _PresetCustomFeatures(presetName : String) -> String:
+	var text : String = _RepoFile("res://export_presets.cfg")
+	var at : int = text.find("name=\"%s\"" % presetName)
+	if at < 0:
+		return ""
+	var cf : int = text.find("custom_features=", at)
+	if cf < 0:
+		return ""
+	var eol : int = text.find("\n", cf)
+	var line : String = text.substr(cf, text.length() - cf)
+	if eol > cf:
+		line = line.substr(0, eol - cf)
+	var raw : String = line.substr(line.find("=") + 1).strip_edges()
+	if raw.length() >= 2 and raw.begins_with("\"") and raw.ends_with("\""):
+		raw = raw.substr(1, raw.length() - 2)
+	return raw
+
+# Texto entre o próximo par de aspas depois de `from`.
+func _NextQuoted(text : String, from : int) -> String:
+	var open : int = text.find("\"", from)
+	var close : int = text.find("\"", open + 1)
+	if open < 0 or close <= open:
+		return ""
+	return text.substr(open + 1, close - open - 1)
+
+# Nome da seção do compose que envolve cada ocorrência de `token` ("args",
+# "environment", "" quando nenhuma chave-mãe anterior bate). O arquivo é lido como
+# texto de propósito: o que está em jogo aqui é justamente em que bloco a linha
+# mora — um parser YAML diria o valor, não o canal. Linhas de comentário são
+# ignoradas (a documentação do compose cita o nome do knob sem defini-lo).
+func _ComposeTokenSections(text : String, token : String) -> Array:
+	var found : Array = []
+	var lines : PackedStringArray = text.split("\n")
+	for i : int in range(lines.size()):
+		var line : String = lines[i]
+		if line.strip_edges().begins_with("#") or not line.contains(token):
+			continue
+		var indent : int = line.length() - line.lstrip(" ").length()
+		var section : String = ""
+		for j : int in range(i - 1, -1, -1):
+			var up : String = lines[j]
+			var stripped : String = up.strip_edges()
+			if stripped.is_empty() or stripped.begins_with("#"):
+				continue
+			if up.length() - up.lstrip(" ").length() >= indent:
+				continue
+			if stripped == "args:":
+				section = "args"
+				break
+			if stripped.begins_with("environment:"):
+				section = "environment"
+				break
+		found.append(section)
+	return found
+
+# D1: o modo de lançamento é o que costura server, client e companion. Sem o
+# build declarar produção, o server abre testing.db na 6118 enquanto o
+# companion escreve grants no live.db — o pagamento entra numa fila que ninguém
+# consome. Estes checks amarram o código aos arquivos do deploy.
+func SuiteDeployMode() -> void:
+	print("[suite] deploy mode (D1)")
+
+	# O harness nunca roda em produção (testes escreveriam no live.db).
+	Check(LauncherCommons.IsTesting, "harness roda em modo testing")
+	Check(SQLCommons.GetDBPath().ends_with(SQLCommons.DBNameTesting), "GetDBPath resolve testing.db em teste")
+	Check(SQLCommons.GetBackupPath().ends_with(SQLCommons.BackupPathTesting), "backup de teste usa diretório próprio")
+	Check(not (SQLCommons.DBName == SQLCommons.DBNameTesting), "nomes de DB de teste e produção divergem")
+
+	# A regra de resolução, isolada do OS: só declaração explitiva liga produção.
+	Check(not LauncherCommons.ResolveIsTesting(true, ""), "feature tag production => produção")
+	Check(not LauncherCommons.ResolveIsTesting(false, "1"), "SHAMBLETA_PRODUCTION=1 => produção")
+	Check(not LauncherCommons.ResolveIsTesting(false, " 1 "), "env com espaços ainda vale")
+	Check(LauncherCommons.ResolveIsTesting(false, ""), "nenhuma declaração => testing")
+	Check(LauncherCommons.ResolveIsTesting(false, "0"), "SHAMBLETA_PRODUCTION=0 não liga produção")
+	Check(LauncherCommons.ResolveIsTesting(false, "true"), "valor não-1 é ignorado (sem modo acidental)")
+
+	# O companion escreve no MESMO arquivo que o server abre em produção — e o
+	# caminho de `user://` é o que o ENGINE produz, não o que a memória lembra:
+	# project.godot liga `use_custom_user_dir`, então o layout é $HOME/.local/share/
+	# Shambleta, e NÃO o godot/app_userdata/<projeto> do Godot 3. O Dockerfile do
+	# companion apontava para o layout antigo; server.py sai com "database not
+	# found" (exit 2) e o grant de cada compra fica preso na fila. O mesmo caminho
+	# errado estava no provisionador de TLS, onde o efeito é o server recusar o
+	# bind por não achar user://server.crt. A comparação abaixo deriva do
+	# OS.get_user_data_dir() vivo, então inverter o use_custom_user_dir quebra os
+	# dois artefatos junto — em vez de o guard confirmar a crença do autor.
+	var companion : String = _RepoFile("res://deploy/companion/Dockerfile")
+	Check(not companion.is_empty(), "deploy/companion/Dockerfile legível")
+	var dbAt : int = companion.find("\"--db\"")
+	var companionDB : String = _NextQuoted(companion, dbAt + 6) if dbAt >= 0 else ""
+	Check(not companionDB.is_empty(), "companion declara --db")
+	Check(companionDB.get_file() == SQLCommons.DBName, "companion abre o arquivo de produção do server")
+	var serverDF : String = _RepoFile("res://deploy/server/Dockerfile")
+	var compose : String = _RepoFile("res://deploy/docker-compose.yml")
+
+	# HOME do container lido do próprio Dockerfile (não o valor que este guard foi
+	# escrito esperando).
+	var homeAt : int = serverDF.find("ENV HOME=")
+	var homeTail : String = serverDF.substr(homeAt + 9) if homeAt >= 0 else ""
+	var homeEol : int = homeTail.find("\n")
+	var serverHome : String = (homeTail.substr(0, homeEol) if homeEol >= 0 else homeTail).strip_edges()
+	Check(not serverHome.is_empty() and serverHome.begins_with("/"), "Dockerfile do server declara ENV HOME absoluto (%s)" % serverHome)
+
+	# XDG_DATA_HOME tem que estar AUSENTE nos artefatos de deploy: é só assim que a
+	# raiz do user:// dentro do container é $HOME/.local/share (o fallback do spec
+	# XDG). Se alguém setar a env lá, a remontagem abaixo mente e precisa ser
+	# ajustada junto.
+	Check(not serverDF.contains("XDG_DATA_HOME"), "imagem do server não seta XDG_DATA_HOME (raiz = $HOME/.local/share)")
+	Check(not compose.contains("XDG_DATA_HOME"), "compose não seta XDG_DATA_HOME em serviço algum")
+
+	# A cauda do user:// que o engine monta hoje, aparada na raiz que ele usou
+	# nesta máquina (o harness roda com XDG_DATA_HOME num diretório descartável).
+	var engineRoot : String = OS.get_environment("XDG_DATA_HOME")
+	if engineRoot.is_empty():
+		engineRoot = OS.get_environment("HOME") + "/.local/share"
+	var userTail : String = OS.get_user_data_dir().trim_prefix(engineRoot)
+	Check(not userTail.is_empty(), "cauda do user:// derivada do engine (%s)" % OS.get_user_data_dir())
+	Check(not OS.get_user_data_dir().contains("app_userdata"), "engine monta o layout próprio, não o godot/app_userdata do Godot 3")
+	var productionUserDir : String = serverHome + "/.local/share" + userTail
+	Check(companionDB.get_base_dir() == productionUserDir, \
+		"companion abre o user:// real do server no container (%s != %s)" % [companionDB.get_base_dir(), productionUserDir])
+
+	# O provisionador de TLS tem que gravar onde o server lê (ServerCertPath é
+	# `user://server.crt`, resolvido pelo mesmo layout acima).
+	var provision : String = _RepoFile("res://tools/provision_tls.sh")
+	Check(not provision.is_empty(), "tools/provision_tls.sh legível")
+	var certMarker : String = "${SHAMBLETA_USER_DATA:-"
+	var cdAt : int = provision.find(certMarker)
+	var certRest : String = provision.substr(cdAt + certMarker.length()) if cdAt >= 0 else ""
+	var certEnd : int = certRest.find("}\"\n")
+	var certDir : String = certRest.substr(0, certEnd) if certEnd >= 0 else ""
+	Check(NetworkCommons.ServerCertPath.begins_with("user://"), "ServerCertPath é lido de user:// (%s)" % NetworkCommons.ServerCertPath)
+	Check(certDir == productionUserDir, \
+		"provision_tls grava o cert no user:// do container (%s != %s)" % [certDir, productionUserDir])
+	Check(not certDir.contains("app_userdata"), "provision_tls não volta ao layout do Godot 3 (%s)" % certDir)
+
+	# Porta pública: o que o server binda == o que o deploy expõe.
+	var exposedPort : int = -1
+	var exposeAt : int = serverDF.find("EXPOSE ")
+	if exposeAt >= 0:
+		var tail : String = serverDF.substr(exposeAt + 7)
+		var eol : int = tail.find("\n")
+		exposedPort = int((tail.substr(0, eol) if eol >= 0 else tail).strip_edges())
+	CheckEq(exposedPort, NetworkCommons.WebSocketPort, "EXPOSE do server == WebSocketPort de produção")
+	Check(NetworkCommons.WebSocketPort != NetworkCommons.WebSocketPortTesting, "porta de produção não é a porta de teste")
+
+	# Produção declarada nos dois artefatos que o beta publica.
+	Check(_PresetCustomFeatures("Linux/X11 Headless Server") == "production", "preset do server exporta com a feature production")
+	Check(_PresetCustomFeatures("Web") == "production", "preset web exporta com a feature production")
+	Check(serverDF.contains("SHAMBLETA_PRODUCTION=1"), "Dockerfile do server liga produção")
+	Check(_RepoFile("res://deploy/docker-compose.yml").contains("SHAMBLETA_PRODUCTION: \"1\""), "compose liga produção")
+	# SOM-IDLE M2: o stub de anúncio é fechado no servidor por default, então o
+	# beta só tem ads porque o compose ABRE a env explicitamente. Se a linha cair,
+	# os 4 placements viram bad_token em produção — e é assim que deve ser.
+	Check(_RepoFile("res://deploy/docker-compose.yml").contains("SHAMBLETA_AD_STUB: \"1\""), "compose do beta abre o stub de anúncio")
+	Check(not serverDF.contains("SHAMBLETA_AD_STUB"), "imagem do server não liga o stub (fechado por default)")
+
+	# SOM-IDLE L1: o `web` e o `companion` sobem com `depends_on: game:
+	# condition: service_healthy`, então a stack inteira do beta está pendurada num
+	# healthcheck que antes sondava uma porta onde nada escutava (e com "||" dentro
+	# da forma lista, que o curl recebia como argumento). Estes checks amarram o
+	# probe ao listener real.
+	var hcAt : int = compose.find("healthcheck:")
+	Check(hcAt > compose.find("\n  game:"), "game declara healthcheck")
+	var testAt : int = compose.find("test:", hcAt)
+	var testEol : int = compose.find("\n", testAt)
+	var testLine : String = compose.substr(testAt, testEol - testAt) if testAt >= 0 and testEol > testAt else ""
+	Check(testLine.contains("\"CMD\""), "healthcheck usa a forma lista (CMD)")
+	Check(not testLine.contains("||") and not testLine.contains("&&"), "healthcheck sem operador de shell (CMD não passa por shell)")
+	var urlAt : int = compose.find("http://localhost:", hcAt)
+	var urlEnd : int = compose.find("\"", urlAt)
+	var probeURL : String = compose.substr(urlAt, urlEnd - urlAt) if urlAt >= 0 and urlEnd > urlAt else ""
+	Check(probeURL.ends_with("/healthz"), "probe sonda /healthz")
+	CheckEq(int(probeURL.get_slice(":", 2).get_slice("/", 0)), MetricsServer.DefaultPort, "porta sondada == porta que o servidor binda")
+	Check(serverDF.contains("curl"), "imagem do server instala curl (sem ele o healthcheck nunca passa)")
+
+	# O companion abre o live.db no boot e sai com exit 2 se o arquivo não existe.
+	# Sem esperar o game ficar healthy, num volume novo ele entra em crash-loop na
+	# fronteira do dinheiro justo enquanto a stack levanta (e webhook perdido não
+	# chega nunca se o provedor desistir de tentar de novo).
+	var compAt : int = compose.find("\n  companion:")
+	var compEnd : int = compose.find("\n  cloudflared:", compAt)
+	Check(compAt >= 0 and compEnd > compAt, "compose declara companion antes de cloudflared")
+	var depAt : int = compose.find("depends_on:", compAt) if compAt >= 0 else -1
+	var gameDepAt : int = compose.find("game:", depAt) if depAt >= 0 else -1
+	Check(depAt >= 0 and gameDepAt >= 0 and gameDepAt < compEnd, "companion declara depends_on em game")
+	var healthyAt : int = compose.find("condition: service_healthy", gameDepAt) if gameDepAt >= 0 else -1
+	Check(healthyAt >= 0 and healthyAt < compEnd, "companion espera o game healthy (não só o container subir)")
+
+	# SOM-IDLE beta (fronteira do dinheiro, 3º defeito): o POST de checkout do
+	# browser e o webhook do provedor não tinham PARA ONDE ir. Três fechamentos
+	# independentes somados: a imagem bindava em loopback dentro do próprio
+	# container, o nginx do `web` não proxiedava rota alguma, e o client resolvia a
+	# base do companion por variável de ambiente — que não existe em browser —
+	# caindo em 127.0.0.1 (a máquina do jogador). Nenhum outro artefato do repositório
+	# conserta isso: GetCheckoutIntent nunca devolve payment_url, então o POST é o
+	# caminho. Estes guards amarram as três pontas na mesma corda.
+	var compBlock : String = compose.substr(compAt, compEnd - compAt) if compAt >= 0 and compEnd > compAt else ""
+	Check(not compBlock.contains("ports:"), "companion não publica porta (entrada só pelo proxy do web)")
+	Check(compBlock.contains("SHAMBLETA_MP_BACK_URLS_BASE"), "compose declara a origem pública dos back_urls do checkout")
+	Check(companion.contains("ENV SHAMBLETA_COMPANION_HOST=0.0.0.0"), \
+		"imagem do companion binda a interface do container (loopback é inatingível de fora)")
+	var portAt : int = companion.find("\"--port\"")
+	CheckEq(int(_NextQuoted(companion, portAt + 8)) if portAt >= 0 else -1, NetworkCommons.CompanionPort, \
+		"companion escuta na porta que o proxy e o client assumem")
+
+	var nginx : String = _RepoFile("res://deploy/web/nginx.conf")
+	Check(not nginx.is_empty(), "deploy/web/nginx.conf legível")
+	Check(nginx.contains("companion:%d" % NetworkCommons.CompanionPort), "nginx faz proxy para o companion na porta do contrato")
+	Check(nginx.contains("proxy_pass"), "nginx encaminha (sem isto /checkout e /webhooks são 404 do shell estático)")
+	Check(nginx.contains("resolver "), "nginx resolve o upstream a cada request (boot do web não morre sem companion)")
+	# O padrão é LIDO DO ARQUIVO e executado aqui: testar a regex real é o que pega
+	# o erro de digitação que deixaria a página estática de retorno presa atrás do
+	# proxy (ou o webhook caindo no try_files do shell).
+	var locAt : int = nginx.find("location ~ ")
+	var locEnd : int = nginx.find(" {", locAt) if locAt >= 0 else -1
+	var locPattern : String = nginx.substr(locAt + 11, locEnd - locAt - 11) if locAt >= 0 and locEnd > locAt else ""
+	Check(locPattern.contains("checkout") and locPattern.contains("webhooks"), "nginx: location cobre checkout e webhooks (%s)" % locPattern)
+	var routeRX : RegEx = RegEx.new()
+	CheckEq(routeRX.compile(locPattern), OK, "nginx: padrão da location compila como regex")
+	var apiPaths : Array[String] = ["/checkout/intents", "/checkout/preference", "/checkout/simulate", "/webhooks/payments"]
+	for apiPath : String in apiPaths:
+		Check(routeRX.search(apiPath) != null, "nginx: %s cai no proxy do companion" % apiPath)
+	Check(routeRX.search("/checkout_return.html") == null, "nginx: a página de retorno fica no web (não é proxied)")
+	Check(routeRX.search("/index.html") == null, "nginx: o shell do jogo não é proxied")
+
+	# A resolução é uma função só, e pura — o harness cobre o ramo web sem browser.
+	Check(NetworkCommons.ResolveCompanionURL("https://env.example", "https://conf.example", "https://page.example") \
+		== "https://env.example", "resolução: env vence (desktop/dev)")
+	Check(NetworkCommons.ResolveCompanionURL("", "https://conf.example", "https://page.example") \
+		== "https://conf.example", "resolução: conf baked vale sem env")
+	Check(NetworkCommons.ResolveCompanionURL("", "", "https://page.example") \
+		== "https://page.example", "resolução: sem env nem conf, a origem da página é a base (web)")
+	Check(NetworkCommons.ResolveCompanionURL("", "", "") == NetworkCommons.CompanionLocalDev, \
+		"resolução: sem fonte alguma resta o loopback de desenvolvimento")
+	Check(NetworkCommons.ResolveCompanionURL("", "https://example.com/", "") == "https://example.com", \
+		"resolução: barra final aparada (o POST concatena o caminho na base)")
+	Check(NetworkCommons.ResolveCompanionURL("   ", "", "") == NetworkCommons.CompanionLocalDev, \
+		"resolução: fonte em branco não conta (não existia antes desta correção)")
+	Check(NetworkCommons.CompanionURL == NetworkCommons.CompanionLocalDev, \
+		"default embarcado == resolver sem fonte (%s)" % NetworkCommons.CompanionURL)
+	var launcherSrc : String = _RepoFile("res://sources/launcher/Launcher.gd")
+	Check(launcherSrc.contains("NetworkCommons.ResolveCompanionURL("), \
+		"Launcher resolve a base do companion no boot, junto com Server-Address")
+	var settingsSrc : String = _RepoFile("res://data/conf/settings.cfg")
+	Check(settingsSrc.contains("Companion-Base="), "settings.cfg declara [Network] Companion-Base (a fonte baked existe)")
+	# As janelas não podem mais ter opinião sobre onde o companion mora: cada uma
+	# tinha a sua constante de loopback, e foi exatamente assim que o browser passou
+	# a apontar para a máquina do jogador.
+	var shopSrc : String = _RepoFile("res://sources/gui/Shop.gd")
+	var checkoutSrc : String = _RepoFile("res://sources/gui/Checkout.gd")
+	Check(shopSrc.contains("NetworkCommons.CompanionURL") and checkoutSrc.contains("NetworkCommons.CompanionURL"), \
+		"Shop e Checkout leem a base compartilhada do companion")
+	# Proibição vale sobre CÓDIGO: as duas janelas explicam em comentário qual era o
+	# default errado, e uma proibição citada em comentário não é uso (mesma regra dos
+	# guards de fronteira, via _StripCommentLines).
+	var shopCode : String = _StripCommentLines(shopSrc)
+	var checkoutCode : String = _StripCommentLines(checkoutSrc)
+	Check(not shopCode.contains("127.0.0.1") and not checkoutCode.contains("127.0.0.1"), \
+		"nenhuma das duas janelas resolve companion por conta própria")
+	Check(not shopCode.contains("SHAMBLETA_COMPANION_URL") and not checkoutCode.contains("SHAMBLETA_COMPANION_URL"), \
+		"nem uma nem outra lê env do companion (browser não tem env)")
+
+	# Quarto defeito da mesma frente, e o mais caro: a ROTA certa ainda devolve 401
+	# se a credencial não chega. `SaveToken` grava o token em conf, `Connect()` zera o
+	# var `savedToken` depois do auto-login e o login por senha nunca atribui o var —
+	# ou seja, `_get_auth_token()` lia uma fonte vazia em toda sessão e o companion
+	# (`verify_session_token`, companion/server.py) respondia `missing_token` na
+	# frente do pagamento, com a UI aconselhando "lembrar" a quem já marcou. O contrato
+	# abaixo é a chave em comum das duas pontas: renomear de qualquer lado quebra aqui.
+	var loginSrc : String = _RepoFile("res://sources/gui/Login.gd")
+	Check(loginSrc.contains("Conf.SetValue(\"auth\", \"token\", Conf.Type.AUTH_TOKEN") \
+		and checkoutSrc.contains("Conf.GetString(\"auth\", \"token\", Conf.Type.AUTH_TOKEN"), \
+		"Login grava e Checkout lê o token de sessão na MESMA chave de AUTH_TOKEN")
+	# A porta de remember-me é intencional (o server só emite token com rememberMe);
+	# afrouxar isto sem decidir seria abrir checkout anônimo.
+	Check(_RepoFile("res://sources/network/server/Peers.gd").contains("if rememberMe:"), \
+		"emissão do token de sessão continua condicionada a remember-me (gate declarado)")
+
+	# SOM-IDLE beta (deploy web, achado independente deste mesmo bloco): o client web
+	# conecta no endereço HORNEADO no pck — `deploy/web/Dockerfile` faz `sed` em
+	# settings.cfg com ARG de build e o container final é nginx puro, que não lê
+	# variável de ambiente alguma. O override de staging tinha
+	# `SHAMBLETA_SERVER_ADDRESS` em `web.environment`: sintaxe válida, dois
+	# destinatários plausíveis, efeito zero — o endereço de staging ficava nas mãos do
+	# `${...}` do compose base, interpolado do `.env` do projeto (o da produção se o
+	# operator reaproveitar o env, como "mesmo template" sugere). O guard não
+	# conhece a resposta: ele lê os dois arquivos e exige que cada ocorrência do knob
+	# caia na seção que o build consome.
+	var webDF : String = _RepoFile("res://deploy/web/Dockerfile")
+	Check(webDF.contains("ARG SHAMBLETA_SERVER_ADDRESS") and webDF.contains("Server-Address="), \
+		"o web horneia Server-Address no build (ARG + sed no settings.cfg do pck)")
+	Check(not webDF.contains("envsubst") and not webDF.contains("/docker-entrypoint.d"), \
+		"nginx do web não interpola env em runtime (prova de que environment: seria inerte)")
+	# Por que o endereço horneado no client web não pode ser o domínio do próprio site:
+	# no browser o client monta `wss://<Server-Address>` sem porta e o nginx abaixo não
+	# faz upgrade — cairia no try_files e devolveria index.html no lugar do handshake.
+	Check(not nginx.contains("Upgrade") and not nginx.contains("proxy_set_header Connection"), \
+		"nginx do web não faz upgrade de WebSocket (Server-Address web tem que ser o domínio do proxy de WS)")
+	var stagingCompose : String = _RepoFile("res://deploy/docker-compose.staging.yml")
+	Check(not stagingCompose.is_empty(), "deploy/docker-compose.staging.yml legível")
+	for knob : String in ["SHAMBLETA_SERVER_ADDRESS", "SHAMBLETA_SERVER_PORT"]:
+		var baseSections : Array = _ComposeTokenSections(compose, knob)
+		Check(not baseSections.is_empty() and baseSections.has("args") \
+			and not baseSections.has("environment"), \
+			"compose base: %s definido só em build.args (%s)" % [knob, baseSections])
+		var stagingSections : Array = _ComposeTokenSections(stagingCompose, knob)
+		Check(not stagingSections.is_empty() and stagingSections.has("args") \
+			and not stagingSections.has("environment"), \
+			"staging: %s definido só em build.args (%s)" % [knob, stagingSections])
+	# Literal, e o domínio do WS proxy: um `${VAR:-}` vazio produziria
+	# `Server-Address=""`, que Launcher._ready ignora e deixa o default compilado.
+	Check(stagingCompose.contains("SHAMBLETA_SERVER_ADDRESS: ws.staging."), \
+		"staging fixa o endereço do proxy de WS no build.args (não o domínio do próprio web)")
+
+# ------------------------------------------- L1: /healthz e /metrics ao vivo
+
+# O probe é HTTP de verdade: bytes numa socket loopback contra o listener, no mesmo
+# processo do resto do server. Rodar ao vivo no harness também prova que o _process
+# do serviço é chamado — bind sem processo vivo dá conexão que nunca é aceita.
+func SuiteMetrics() -> void:
+	print("[suite] metrics/health http (L1)")
+	var tree : SceneTree = Engine.get_main_loop() as SceneTree
+
+	# O serviço do launcher existe e escuta na porta de contrato (9400). Não se
+	# faz requisição nela: o harness e um deploy real dividem a máquina, e um
+	# scrape concorrente não pode virar flaky.
+	var live : MetricsServer = Launcher.Metrics
+	Check(live != null, "Launcher.Metrics criado pelo Server()")
+	if live != null:
+		CheckEq(live.listenPort, MetricsServer.DefaultPort, "serviço do launcher binda a porta do compose")
+		Check(live.IsServing(), "IsServing com SQL + net inicializados")
+
+	var svc : MetricsServer = MetricsServer.new()
+	tree.root.add_child(svc)
+	# Rota pura: a tabela de decisão, sem socket no meio.
+	CheckEq(int(svc._route("GET /healthz HTTP/1.1").get("status", 0)), 200, "rota: /healthz é 200")
+	CheckEq(int(svc._route("GET /nope HTTP/1.1").get("status", 0)), 404, "rota: caminho desconhecido é 404")
+	CheckEq(int(svc._route("POST /metrics HTTP/1.1").get("status", 0)), 405, "rota: POST é 405 (serviço não escreve)")
+	CheckEq(int(svc._route("garbage").get("status", 0)), 400, "rota: request line sem método+path é 400")
+	var body : String = String(svc._route("GET /metrics HTTP/1.1").get("body", ""))
+	Check(body.contains("shambleta_up 1\n"), "metrics: shambleta_up 1 com o server servindo")
+	Check(body.contains("shambleta_grant_queue_pending"), "metrics: exporta a fila de grants (dinheiro preso)")
+	Check(body.contains("shambleta_players_online"), "metrics: exporta jogadores online")
+
+	# Porta própria: bater na 9400 do launcher dividiria o listener com qualquer
+	# scrape do host e tornaria a suíte flaky.
+	var port : int = 9411
+	Check(svc.Launch(port), "bind da porta de teste")
+	var health : Array = await _ProbeHTTP(port, "GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n")
+	CheckEq(int(health[0]), 200, "wire: /healthz responde 200 para o probe real")
+	Check(str(health[1]).contains("\r\n\r\nok\n"), "wire: corpo do /healthz é 'ok'")
+	var metrics : Array = await _ProbeHTTP(port, "GET /metrics HTTP/1.0\r\n\r\n")
+	CheckEq(int(metrics[0]), 200, "wire: /metrics responde 200")
+	Check(str(metrics[1]).contains("shambleta_up 1"), "wire: /metrics serve o payload")
+	Check(str(metrics[1]).contains("Connection: close"), "wire: HTTP/1.0 fecha a conexão (curl depende disso)")
+	# 4096 é o teto de requisição: um socket que despeja bytes sem pedir nada não
+	# pode fazer o servidor acumular sem limite.
+	var flood : Array = await _ProbeHTTP(port, "GET /" + "a".repeat(6000) + " HTTP/1.0\r\n\r\n")
+	CheckEq(int(flood[0]), 431, "wire: requisição acima do teto é recusada, não acumulada")
+	svc.Destroy()
+	await tree.process_frame
+	var gone : Array = await _ProbeHTTP(port, "GET /healthz HTTP/1.0\r\n\r\n")
+	CheckEq(int(gone[0]), -1, "Destroy() libera a porta (conexão recusada)")
+	svc.queue_free()
+
+# Uma transação HTTP crua, com o _process do serviço rodando entre os polls.
+# Retorna [status, resposta inteira]; status -1 = não conectou / não respondeu.
+func _ProbeHTTP(port : int, request : String) -> Array:
+	var tree : SceneTree = Engine.get_main_loop() as SceneTree
+	var sock : StreamPeerTCP = StreamPeerTCP.new()
+	if sock.connect_to_host("127.0.0.1", port) != OK:
+		sock.disconnect_from_host()
+		return [-1, ""]
+	var deadline : float = Time.get_ticks_msec() / 1000.0 + 6.0
+	var sent : bool = false
+	var response : String = ""
+	while Time.get_ticks_msec() / 1000.0 < deadline:
+		sock.poll()
+		var status : StreamPeerTCP.Status = sock.get_status()
+		if status == StreamPeerTCP.STATUS_CONNECTED:
+			if not sent:
+				if sock.put_data(request.to_utf8_buffer()) != OK:
+					break
+				sent = true
+			var avail : int = sock.get_available_bytes()
+			if avail > 0:
+				var chunk : Variant = sock.get_data(avail)
+				if int(chunk[0]) != OK:
+					break
+				response += (chunk[1] as PackedByteArray).get_string_from_utf8()
+				if response.contains("\r\n\r\n"):
+					break
+		elif status == StreamPeerTCP.STATUS_NONE or status == StreamPeerTCP.STATUS_ERROR:
+			break
+		await tree.process_frame
+	var code : int = -1
+	if response.begins_with("HTTP/1.0 "):
+		code = int(response.get_slice(" ", 1))
+	sock.disconnect_from_host()
+	return [code, response]
+
+# ------------------------------------------- M3/§10: as três listas de preço batidas
+
+# SOM-IDLE M3: a mesma tabela de preços vive em três lugares — SHOP_CATALOG (o que
+# o servidor anuncia na loja e usa para emitir a intent), data/conf/paid_catalog.json
+# (o que o gateway cobra) e DEFAULT_CATALOG em companion/server.py (o fallback quando
+# nenhum JSON é montado). pass.s1 estava nos dois últimos e não no primeiro: o
+# botão do passe pede a intent com "pass.s1" e recebia unknown_sku, ou seja, o SKU
+# principal da temporada (R$ 24,90) não era comprável — enquanto o deluxe, listado,
+# era. A regra é do próprio catálogo ("preço anunciado = preço cobrado (CDC)"); estes
+# checks são o que a mantém valendo entre os três arquivos.
+#
+# §10 (Bloco 1): o JSON canônico mudou de lugar para dentro de data/conf/ porque os
+# presets exportam data/conf/* e NÃO exportam companion/ — só assim o servidor em
+# produção consegue validar o próprio espelho no boot (`EconomyService._post_launch`
+# chama a mesma `ValidatePaidCatalog` desta suíte). Por isso ela também exercita o
+# validador com catálogo quebrado de propósito: um validador que sempre retornasse
+# vazio passaria nos checks estruturais abaixo igualzinho.
+func SuiteCatalogConsistency(sql : SQLService) -> void:
+	print("[suite] catálogo de checkout (M3)")
+	var canonical : String = _RepoFile("res://data/conf/paid_catalog.json")
+	var parsed : Variant = JSON.parse_string(canonical)
+	if not Check(typeof(parsed) == TYPE_DICTIONARY, "data/conf/paid_catalog.json parseia"):
+		return
+	var charged : Dictionary = parsed
+	Check(EconomyCatalog.ValidatePaidCatalog(canonical).is_empty(), "validador aceita o catálogo canônico (§10)")
+
+	var advertised : Dictionary = {}
+	for entry in EconomyCatalog.SHOP_CATALOG:
+		advertised[str(entry.get("sku", ""))] = float(entry.get("price", 0.0))
+	Check(not advertised.is_empty(), "SHOP_CATALOG tem entradas")
+
+	# Mesmo conjunto, nos dois sentidos: SKU cobrável sem anúncio é compra que o
+	# jogador não vê; SKU anunciado sem cobrança é botão que vira unknown_sku.
+	var orphanCharged : String = ""
+	for key in charged.keys():
+		var chargedSku : String = String(key)
+		if chargedSku.begins_with("_"):
+			continue
+		if not advertised.has(chargedSku):
+			orphanCharged += chargedSku + " "
+	Check(orphanCharged.is_empty(), "nenhum SKU do gateway sem preço anunciado (%s)" % orphanCharged)
+	var orphanAdvertised : String = ""
+	for missing in advertised.keys():
+		if not charged.has(missing):
+			orphanAdvertised += String(missing) + " "
+	Check(orphanAdvertised.is_empty(), "nenhum SKU anunciado sem cobrança no gateway (%s)" % orphanAdvertised)
+
+	# Mesmo valor, anunciado vs cobrado.
+	for cmpSku in advertised.keys():
+		var item : Variant = charged.get(cmpSku)
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		CheckNear(float(advertised[cmpSku]), float(item.get("price", -1.0)), 0.01, "preço cobrado == anunciado: %s" % cmpSku)
+
+	# O fallback do companion não pode carregar lista própria.
+	var py : String = _RepoFile("res://companion/server.py")
+	var blockAt : int = py.find("DEFAULT_CATALOG = {")
+	var blockEnd : int = py.find("\n}", blockAt)
+	if not Check(blockAt >= 0 and blockEnd > blockAt, "DEFAULT_CATALOG localizável em companion/server.py"):
+		return
+	var block : String = py.substr(blockAt, blockEnd - blockAt)
+	var priced : int = 0
+	var at : int = block.find("\"price\"")
+	while at >= 0:
+		priced += 1
+		at = block.find("\"price\"", at + 1)
+	CheckEq(priced, advertised.size(), "fallback do companion não carrega SKU órfão do anúncio")
+	for pySku in advertised.keys():
+		var skuKey : String = String(pySku)
+		var entryAt : int = block.find("\"%s\":" % skuKey)
+		if not Check(entryAt >= 0, "fallback conhece %s" % skuKey):
+			continue
+		var colon : int = block.find(":", block.find("\"price\"", entryAt))
+		var raw : String = block.substr(colon + 1).strip_edges() if colon >= 0 else ""
+		var digits : String = ""
+		for i in raw.length():
+			var c : String = raw[i]
+			if c != "." and (c < "0" or c > "9"):
+				break
+			digits += c
+		CheckNear(float(digits), float(advertised[skuKey]), 0.01, "fallback cobra o preço anunciado: %s" % skuKey)
+
+	# §24-11: a mesma fonte que decide o preço decide qual aceite a porta do
+	# dinheiro exige. Três pontas, como o preço — consts do jogo, JSON canônico e
+	# fallback do companion — e o que pega é o cenário real: bumpar
+	# `NetworkCommons.Agreement*` sem bumpar o arquivo deixaria o companion
+	# cobrando um contrato que o jogo já não cobra (e vice-versa).
+	var agr : Variant = charged.get("_agreements")
+	if Check(typeof(agr) == TYPE_DICTIONARY, "catálogo canônico declara _agreements (§24-11)"):
+		var agrBlock : Dictionary = agr
+		Check(str(agrBlock.get("tos", "")) == NetworkCommons.AgreementTosVersion, "ToS: companion e jogo declaram a mesma versão")
+		Check(str(agrBlock.get("privacy", "")) == NetworkCommons.AgreementPrivacyVersion, "privacidade: companion e jogo declaram a mesma versão")
+		Check(str(agrBlock.get("age", "")) == NetworkCommons.AgreementAgeVersion, "idade: companion e jogo declaram a mesma versão")
+	var agrAt : int = block.find("\"_agreements\"")
+	if Check(agrAt >= 0, "fallback do companion também declara _agreements (§24-11)"):
+		var agrEnd : int = block.find("\n", agrAt)
+		var agrLine : String = block.substr(agrAt, agrEnd - agrAt) if agrEnd > agrAt else block.substr(agrAt)
+		Check(agrLine.contains(NetworkCommons.AgreementTosVersion) and agrLine.contains(NetworkCommons.AgreementPrivacyVersion) and agrLine.contains(NetworkCommons.AgreementAgeVersion), "fallback declara as três versões vigentes")
+
+	# As três portas que TOMAM dinheiro cobram o aceite; o webhook que ENTREGA não
+	# cobra. A assimetria é decisão (recusar um webhook aprovado descartaria uma
+	# compra paga), então ela precisa continuar visível quando alguém mexer aqui.
+	var gateCalls : int = 0
+	var gateAt : int = py.find("if not consent_currently_accepted(con, account_id,")
+	while gateAt >= 0:
+		gateCalls += 1
+		gateAt = py.find("if not consent_currently_accepted(con, account_id,", gateAt + 1)
+	CheckEq(gateCalls, 3, "intent, preferência e sandbox do companion cobram o aceite vigente")
+	var postAt : int = py.find("def do_POST(self):")
+	var postEnd : int = py.find("def _enqueue_items(", postAt)
+	if Check(postAt >= 0 and postEnd > postAt, "corpo do do_POST localizável em companion/server.py"):
+		Check(not py.substr(postAt, postEnd - postAt).contains("consent_currently_accepted"), "webhook continua sem gate de aceite (dinheiro já tomado)")
+
+	# As duas portas têm que ler as MESMAS colunas do aceite.
+	# `consent_currently_accepted` é espelho de `SQL.IsConsentAccepted` por
+	# construção; um dia de drift de coluna (migration renomeia, o companion não
+	# acompanha) faz o fail-closed do companion significar outra coisa — recusa em
+	# 100% das contas, que é o pior jeito de errar, porque a loja muda de muda e
+	# ninguém liga para dizer que o dinheiro parou.
+	var pyGateAt : int = py.find("def consent_currently_accepted(")
+	var pyGateEnd : int = py.find("\ndef ", pyGateAt + 1)
+	var pyGate : String = py.substr(pyGateAt, pyGateEnd - pyGateAt) if pyGateEnd > pyGateAt else ""
+	var sqlGateText : String = _RepoFile("res://sources/sql/SQL.gd")
+	var gdGateAt : int = sqlGateText.find("func IsConsentAccepted(")
+	var gdGateEnd : int = sqlGateText.find("\nfunc ", gdGateAt + 1)
+	var gdGate : String = sqlGateText.substr(gdGateAt, gdGateEnd - gdGateAt) if gdGateEnd > gdGateAt else ""
+	if Check(not pyGate.is_empty() and not gdGate.is_empty(), "predicate das duas portas localizável"):
+		for colV in ["consent_tos_version", "consent_privacy_version", "consent_age_version"]:
+			var col : String = String(colV)
+			Check(pyGate.contains(col), "companion lê %s no gate de aceite" % col)
+			Check(gdGate.contains(col), "jogo lê %s no mesmo predicate" % col)
+
+	# O `_agreements` que o gate de aceite lê é um DICT dentro do catálogo, e
+	# `sku in catalog` não distingue SKU de declaração: medido, uma preferência
+	# montada sobre "_agreements" saía com `unit_price` 0.0 (cobrar zero é
+	# entregar de graça) e `_note` derrubava o handler com AttributeError antes
+	# de qualquer resposta. As três portas comparam FORMA de produto — a mesma
+	# predicate que `load_catalog` usa ao validar o arquivo.
+	var sellableCalls : int = 0
+	var sellableAt : int = py.find("if not is_sellable_sku(self.server.catalog, sku):")
+	while sellableAt >= 0:
+		sellableCalls += 1
+		sellableAt = py.find("if not is_sellable_sku(self.server.catalog, sku):", sellableAt + 1)
+	CheckEq(sellableCalls, 3, "as três portas validam forma de SKU, não membership no dict")
+	CheckEq(py.count("if not is_sellable_sku(catalog, sku):"), 3, "as três funções puras de dinheiro (grant, grants de bundle, preferência) validam a mesma forma")
+	Check(not py.contains("if not sku or sku not in self.server.catalog:"), "nenhuma porta voltou a aceitar qualquer chave do catálogo")
+	var catRouteAt : int = py.find("if path == \"/catalog\":")
+	var catRouteEnd : int = py.find("if path == \"/metrics\":", catRouteAt)
+	if Check(catRouteAt >= 0 and catRouteEnd > catRouteAt, "rota /catalog localizável em companion/server.py"):
+		Check(py.substr(catRouteAt, catRouteEnd - catRouteAt).contains("sku.startswith(\"_\")"), "/catalog não publica declaração como item de loja")
+
+	# §10: o validador é o que roda no boot do servidor — exercitado com catálogo
+	# quebrado de propósito, cada linha mirando uma classe de divergência.
+	var driftKind : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"hype.pack\": {\"kind\": \"hype\", \"amount\": 1, \"price\": 9.90}}")
+	Check(str(driftKind).contains("não é aplicável"), "kind que o jogo não sabe aplicar é reportado (§10)")
+	var driftAmount : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"gems.550\": {\"kind\": \"gems\", \"amount\": 0, \"price\": 19.90}}")
+	Check(str(driftAmount).contains("amount"), "amount não-positivo é reportado (§10)")
+	var driftPrice : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"gems.550\": {\"kind\": \"gems\", \"amount\": 550, \"price\": 1.00}}")
+	Check(str(driftPrice).contains("anunciado"), "preço cobrado != anunciado é reportado (§10)")
+	var driftCosmetic : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"gems.550\": {\"kind\": \"cosmetic\", \"amount\": 1, \"price\": 19.90}}")
+	Check(str(driftCosmetic).contains("cosmetic_id"), "cosmético fora do catálogo é reportado (§10)")
+	var driftBundle : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"hype.pack\": {\"kind\": \"bundle\", \"contents\": [{\"kind\": \"gems\", \"amount\": 100}, {\"kind\": \"hype\", \"amount\": 1}], \"price\": 9.90}}")
+	Check(str(driftBundle).contains("perna 2"), "perna inaplicável é reportada com o índice da perna (§10)")
+	Check(str(driftBundle).contains("não é aplicável"), "perna de bundle inaplicável é reportada (§10)")
+	var bundleOKLegs : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"hype.pack\": {\"kind\": \"bundle\", \"contents\": [{\"kind\": \"gems\", \"amount\": 100}], \"price\": 9.90}}")
+	Check(not str(bundleOKLegs).contains("não é aplicável"), "bundle de pernas aplicáveis não reclama das pernas (§10)")
+	var driftEmptyBundle : PackedStringArray = EconomyCatalog.ValidatePaidCatalog("{\"hype.pack\": {\"kind\": \"bundle\", \"contents\": [], \"price\": 9.90}}")
+	Check(str(driftEmptyBundle).contains("contents"), "bundle sem pernas é reportado (§10)")
+	Check(not EconomyCatalog.ValidatePaidCatalog("[]").is_empty(), "catálogo que não é objeto é reportado (§10)")
+	Check(not EconomyCatalog.ValidatePaidCatalog("").is_empty(), "catálogo ausente é reportado (§10)")
+
+	# §24-11 no mesmo validador de boot: a declaração de aceite é checagem de
+	# igualdade, e catálogo sem declaração não é "liberado geral" — é erro.
+	var driftAge : PackedStringArray = EconomyCatalog.ValidatePaidCatalog(
+		"{\"_agreements\": {\"tos\": \"%s\", \"privacy\": \"%s\", \"age\": \"1999-01\"}}" % [NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion])
+	Check(str(driftAge).contains("_agreements.age"), "cláusula de idade divergente entre catálogo e jogo é reportada (§24-11)")
+	var driftAgrMissing : PackedStringArray = EconomyCatalog.ValidatePaidCatalog(
+		"{\"gems.550\": {\"kind\": \"gems\", \"amount\": 550, \"price\": 19.90}}")
+	Check(str(driftAgrMissing).contains("_agreements"), "catálogo sem declaração de aceite é reportado (§24-11)")
+
+	# Funcional: os dois SKUs que o Battle Pass pede saem em intent ok, e o padrão
+	# (que era o buraco) não depende do deluxe para existir.
+	var charID : int = CreateFixture(sql, "idle_catalog_account", "IdleCatalog")
+	if not Check(charID != 0, "catalog fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var std : Dictionary = Launcher.Economy.GetCheckoutIntent(accountID, "pass.s1")
+	Check(bool(std.get("ok", false)), "intent do passe padrão sai ok (Server.gd pede esta SKU)")
+	CheckNear(float(std.get("price", 0.0)), 24.90, 0.01, "intent do passe padrão cobra R$ 24,90")
+	Check(str(std.get("external_reference", "")) == "%d:pass.s1" % accountID, "referência externa é conta:sku")
+	var dlx : Dictionary = Launcher.Economy.GetCheckoutIntent(accountID, "pass.s1.deluxe")
+	Check(bool(dlx.get("ok", false)), "intent do passe deluxe sai ok")
+	Check(float(dlx.get("price", 0.0)) > float(std.get("price", 0.0)), "deluxe custa mais que o padrão")
+	Check(str(Launcher.Economy.GetCheckoutIntent(accountID, "nao.existe").get("reason", "")) == "unknown_sku", "SKU fora do catálogo não gera intent")
+
+# ------------------------------------------- C1c: denúncia e mute de chat
+
+# SOM-IDLE C1c (AUDITORIA_INDEPENDENTE §16 SOCIAL): até aqui a única resposta a assédio no
+# canal era /ban da CONTA inteira — não havia para onde denunciar e não havia como
+# calar alguém sem tirar o jogo. As duas pontas que estes checks amarram: (1) o mute
+# é cobrado no ENVIO, nos dois portais de saída que existem (o RPC de chat e o
+# /whisper, que entregava direto no alvo por fora); (2) a denúncia carrega o trecho
+# que o SERVIDOR viu aquele account falar, não o texto do denunciante — e a fila
+# fecha, senão o guard anti-metralhadora viraria castigo permanente para quem
+# denuncia. Key é account_id, nunca nick (mesma regra de C1/V1: apresentação
+# falsificável não decide segurança).
+func SuiteChatModeration(sql : SQLService) -> void:
+	print("[suite] moderação de chat (C1c)")
+	var globalChannel : String = str(GUICommons.ChatChannel.GLOBAL)
+	var localChannel : String = str(GUICommons.ChatChannel.LOCAL)
+	var now : int = SQLCommons.Timestamp()
+
+	var reporterChar : int = CreateFixture(sql, "mod_reporter", "ModReporter")
+	var offenderChar : int = CreateFixture(sql, "mod_offender", "ModOffender")
+	var quietChar : int = CreateFixture(sql, "mod_quiet", "ModQuiet")
+	if not Check(reporterChar != 0 and offenderChar != 0 and quietChar != 0, "fixtures de moderação criadas"):
+		return
+	var reporter : int = sql.GetAccountIDForCharacter(reporterChar)
+	var offender : int = sql.GetAccountIDForCharacter(offenderChar)
+	var quiet : int = sql.GetAccountIDForCharacter(quietChar)
+	if not Check(reporter > 0 and offender > 0 and quiet > 0, "as três contas existem"):
+		return
+
+	# testing.db persiste entre execuÇÕES e account_id é autoincrement — limpar só
+	# as três contas desta corrida deixava as denúncias da corrida anterior vivas, e
+	# as duas afirmações globais abaixo (fila e /reports) passavam a contar o lixo
+	# do run passado. Estas duas tabelas pertencem a esta suíte: zerar é o estado
+	# inicial, não uma concessão.
+	sql.ExecuteBindings("DELETE FROM chat_report;", [])
+	sql.ExecuteBindings("DELETE FROM chat_mute;", [])
+	ChatModeration.Reset({})
+
+	# --- mute: aplicado, consultado, persistido ----------------------------
+	Check(not ChatModeration.IsMuted(offender), "mute: cache vazio não cala ninguém")
+	Check(ChatModeration.CanSpeak(offender).is_empty(), "mute: pode falar = recusa vazia")
+	if not Check(ChatModeration.Mute(offender, now + 600, "assédio no global", reporter), "mute: aplicado"):
+		return
+	Check(ChatModeration.IsMuted(offender), "mute: vale para o account")
+	Check(not ChatModeration.IsMuted(reporter), "mute: não contamina quem aplicou")
+	Check(ChatModeration.CanSpeak(offender).contains("muted"), "mute: a recusa diz o que aconteceu")
+	var remaining : int = ChatModeration.MuteRemaining(offender)
+	Check(remaining > 500 and remaining <= 600, "mute: sobra o prazo restante (%d)" % remaining)
+
+	var muteRows : Array[Dictionary] = sql.QueryBindings("SELECT until_ts, reason, muted_by FROM chat_mute WHERE account_id = ?;", [offender])
+	if CheckEq(muteRows.size(), 1, "mute: sobrevive no banco, não só na memória"):
+		Check(str(muteRows[0].get("reason", "")) == "assédio no global", "mute: o motivo fica registrado")
+		CheckEq(int(muteRows[0].get("muted_by", 0)), reporter, "mute: quem aplicou fica registrado")
+
+	# Substituição: sanção mais longa vence sem empilhar linha (PRIMARY KEY em account_id).
+	Check(ChatModeration.Mute(offender, now + 3600, "reincidência", reporter), "mute: substituir o vigente funciona")
+	CheckEq(sql.QueryBindings("SELECT account_id FROM chat_mute WHERE account_id = ?;", [offender]).size(), 1, "mute: substituir não empilha registro")
+	Check(ChatModeration.MuteRemaining(offender) > 3500, "mute: a sanção mais longa é a que vale")
+
+	# Reinício: o cache é o estado do processo, o banco é a memória durável.
+	ChatModeration.Reset({})
+	Check(not ChatModeration.IsMuted(offender), "mute: sem leitura do banco o cache é tudo o que existe")
+	ChatModeration.Reset(sql.LoadMutes())
+	Check(ChatModeration.IsMuted(offender), "mute: reboot relê o banco e a sanção continua valendo")
+
+	# Recusas: prazo no passado e account inválido.
+	Check(not ChatModeration.Mute(offender, now - 10, "", reporter), "mute: prazo no passado recusado")
+	Check(not ChatModeration.Mute(0, now + 60, "", reporter), "mute: account 0 recusado")
+	Check(not ChatModeration.Mute(NetworkCommons.PeerUnknownID, now + 60, "", reporter), "mute: account desconhecido recusado")
+	CheckEq(sql.QueryBindings("SELECT reason FROM chat_mute WHERE account_id = ?;", [offender]).size(), 1, "mute: recusa não reescreve a sanção vigente")
+
+	# --- denúncia ---------------------------------------------------------
+	ChatModeration.log.clear()
+	ChatModeration.Note(offender, "ModOffender", globalChannel, "a linha que o servidor viu")
+	var rep : Dictionary = ChatModeration.Report(reporter, offender, globalChannel, "me assediando no global")
+	if not Check(bool(rep.get("ok", false)), "denúncia: registrada"):
+		return
+	Check(bool(rep.get("verified", false)), "denúncia: verified quando havia linha no log")
+	Check(str(rep.get("excerpt", "")) == "a linha que o servidor viu", "denúncia: a prova é o trecho do servidor, não o texto do denunciante")
+	CheckEq(sql.CountOpenReports(reporter, offender), 1, "denúncia: uma open por par")
+	Check(str(ChatModeration.Report(reporter, offender, globalChannel, "de novo").get("reason", "")) == "already_reported", "denúncia: sem metralhadora")
+	Check(str(ChatModeration.Report(0, offender, globalChannel, "x").get("reason", "")) == "not_logged_in", "denúncia: exige denunciante autenticado")
+	Check(str(ChatModeration.Report(reporter, reporter, globalChannel, "x").get("reason", "")) == "self_report", "denúncia: contra si mesmo recusada")
+	Check(str(ChatModeration.Report(reporter, quiet, globalChannel, "   ").get("reason", "")) == "empty_reason", "denúncia: sem motivo não abre")
+
+	var blind : Dictionary = ChatModeration.Report(reporter, quiet, globalChannel, "ele falou")
+	Check(bool(blind.get("ok", false)) and not bool(blind.get("verified", false)), "denúncia: sem linha no log sai verified=0 (o moderador sabe que ouve um lado só)")
+	Check(str(blind.get("excerpt", "")).is_empty(), "denúncia: verified=0 não inventa excerpt")
+	CheckEq(sql.CountChatReports("open"), 2, "denúncia: a fila conta as duas abertas")
+
+	var reportRows : Array[Dictionary] = sql.GetChatReports("open", 10)
+	CheckEq(reportRows.size(), 2, "denúncia: /reports enxerga as duas")
+	var byID : Dictionary = {}
+	for row in reportRows:
+		byID[int(row.get("report_id", 0))] = row
+	Check(str(byID.get(int(rep.get("report_id", 0)), {}).get("excerpt", "")) == "a linha que o servidor viu", "denúncia: o trecho atravessa o banco inteiro (é o que sobrevive ao restart)")
+
+	# Sem fechar a fila o guard anti-metralhadora viraria castigo permanente.
+	Check(sql.ResolveChatReport(int(blind.get("report_id", 0)), reporter), "denúncia: resolver fecha")
+	CheckEq(sql.CountOpenReports(reporter, quiet), 0, "denúncia: resolvida, o par libera de novo")
+	Check(bool(ChatModeration.Report(reporter, quiet, globalChannel, "desta vez com prova").get("ok", false)), "denúncia: o mesmo par pode denunciar de novo depois do resolve")
+	Check(not sql.ResolveChatReport(int(blind.get("report_id", 0)), reporter), "denúncia: resolver o que já está fechado diz a verdade")
+	Check(not sql.ResolveChatReport(999999, reporter), "denúncia: resolver id inexistente diz a verdade")
+
+	# --- buffer circular: a prova -----------------------------------------
+	ChatModeration.log.clear()
+	ChatModeration.Note(offender, "ModOffender", globalChannel, "linha 1")
+	ChatModeration.Note(offender, "ModOffender", localChannel, "linha 2 local")
+	ChatModeration.Note(offender, "ModOffender", globalChannel, "linha 3")
+	ChatModeration.Note(reporter, "ModReporter", globalChannel, "de outra pessoa")
+	ChatModeration.log.append({"account_id": offender, "nick": "ModOffender", "channel": globalChannel, "text": "velhíssima", "ts": now - 99999})
+	var recent : Array[Dictionary] = ChatModeration.RecentFor(offender, globalChannel, 10)
+	CheckEq(recent.size(), 2, "log: recorte por account, canal e janela")
+	if Check(not recent.is_empty(), "log: algo sobrou para o recorte"):
+		Check(str(recent[0].get("text", "")) == "linha 3", "log: mais recente primeiro")
+		Check(not str(recent[0].get("text", "")).contains("velhíssima"), "log: fora da janela de denúncia não serve de prova")
+	CheckEq(ChatModeration.RecentFor(offender, "", 10).size(), 3, "log: canal vazio = qualquer canal")
+	CheckEq(ChatModeration.RecentFor(quiet, "", 10).size(), 0, "log: account sem linha não produz prova")
+
+	ChatModeration.log.clear()
+	for i in ChatModeration.LogMax + 50:
+		ChatModeration.Note(offender, "ModOffender", globalChannel, "l%d" % i)
+	CheckEq(ChatModeration.log.size(), ChatModeration.LogMax, "log: teto do buffer circular vale (linha de chat não é arquivo morto)")
+	Check(str(ChatModeration.log[0].get("text", "")) == "l50", "log: o que cai é o mais velho")
+	ChatModeration.log.clear()
+
+	CheckEq(ChatModeration.ClipReason("a".repeat(ChatModeration.ReasonMax + 100)).length(), ChatModeration.ReasonMax, "denúncia: motivo cortado no teto")
+	Check(ChatModeration.ClipReason("  oi  ") == "oi", "denúncia: motivo aparado")
+
+	# --- unmute ------------------------------------------------------------
+	Check(ChatModeration.Unmute(offender), "mute: levantado")
+	Check(not ChatModeration.IsMuted(offender), "mute: levantar vale na hora")
+	CheckEq(sql.QueryBindings("SELECT account_id FROM chat_mute WHERE account_id = ?;", [offender]).size(), 0, "mute: a linha sai do banco junto (não é soft state)")
+
+	# --- guardas de fonte: os dois portais cobram a sanção -----------------
+	var serverText : String = _RepoFile("res://sources/network/server/Server.gd")
+	var chatBody : String = _JoinLines(_RawFuncBody(serverText, "TriggerChat"))
+	if Check(not chatBody.is_empty(), "servidor: corpo de TriggerChat localizado"):
+		Check(chatBody.contains("ChatModeration.CanSpeak("), "servidor: TriggerChat cobra o mute no envio")
+		Check(chatBody.contains("ChatModeration.Note("), "servidor: TriggerChat grava a linha que virou prova")
+
+	var wcText : String = _RepoFile("res://sources/world/WorldCommands.gd")
+	if Check(not _RawFuncBody(wcText, "CommandWhisper").is_empty(), "servidor: corpo de CommandWhisper localizado"):
+		var whisperBody : String = _JoinLines(_RawFuncBody(wcText, "CommandWhisper"))
+		Check(whisperBody.contains("ChatModeration.CanSpeak("), "servidor: /whisper não é o portão de trás do mute")
+		Check(whisperBody.contains("NetworkCommons.ClipChat(text)"), "servidor: /whisper também corta o texto (C1 vale nos dois)")
+	var registerText : String = _JoinLines(_RawFuncBody(wcText, "RegisterCommands"))
+	for cmd in ["report", "mute", "unmute", "reports", "resolve"]:
+		Check(registerText.contains("\"%s\"" % cmd), "comando /%s registrado" % cmd)
+		# UnregisterCommands é static func — _RawFuncBody só casa `func` de topo, então
+		# a procura é no arquivo: o par register/unregister é o que não pode existir torto.
+		Check(wcText.contains("CommandManager.Unregister(\"%s\")" % cmd), "comando /%s desenregistrado no teardown" % cmd)
+
+	# Varredura: qualquer função desses diretórios que retransmita o nick de um
+	# jogador por ChatPlayer tem que consultar o mute. É o que impede um terceiro
+	# portal futuro nascer sem a sanção.
+	var blocks : Array = []
+	var current : Array = []
+	for filePath in _GdFilesUnder("res://sources/network/server") + _GdFilesUnder("res://sources/world"):
+		current = []
+		for rawLine in _RepoFile(String(filePath)).split("\n"):
+			var line : String = String(rawLine)
+			if line.begins_with("func ") or line.begins_with("static func "):
+				if not current.is_empty():
+					blocks.append(current)
+				var fname : String = line.substr(line.find("func ") + 5)
+				current = [String(filePath), fname.split("(")[0], ""]
+				continue
+			if not current.is_empty():
+				current[2] = String(current[2]) + line + "\n"
+		if not current.is_empty():
+			blocks.append(current)
+	var relayers : int = 0
+	var unguarded : String = ""
+	for block in blocks:
+		var body : String = String(block[2])
+		if not body.contains("ChatPlayer") or not body.contains(".nick"):
+			continue
+		relayers += 1
+		if not body.contains("ChatModeration.CanSpeak"):
+			unguarded += "%s:%s " % [String(block[0]), String(block[1])]
+	CheckEq(relayers, 2, "servidor: os dois portais de chat conhecidos (TriggerChat, CommandWhisper)")
+	Check(unguarded.is_empty(), "servidor: todo portal de chat cobra o mute (%s)" % unguarded)
+
+	# O mute é sanção de envio: no cliente seria cosmético.
+	var clientCalls : String = ""
+	for filePath in _GdFilesUnder("res://sources/gui") + _GdFilesUnder("res://sources/network/client"):
+		if _RepoFile(String(filePath)).contains("ChatModeration"):
+			clientCalls += String(filePath) + " "
+	Check(clientCalls.is_empty(), "cliente: nada de mute no recebimento (seria cosmético) (%s)" % clientCalls)
+
+	# --- schema e wiring de boot ------------------------------------------
+	var mig : String = _RepoFile("res://data/conf/migrations/043_chat_moderation.sql")
+	if Check(not mig.is_empty(), "migração 043 existe"):
+		var muteBlock : String = _TableBlock(mig, "chat_mute")
+		var reportBlock : String = _TableBlock(mig, "chat_report")
+		Check(not muteBlock.is_empty(), "043: cria chat_mute")
+		Check(not reportBlock.is_empty(), "043: cria chat_report")
+		Check(muteBlock.contains("account_id") and not muteBlock.contains("nick"), "043: mute chaveado por conta, nunca por nick")
+		Check(reportBlock.contains("reporter_account") and not reportBlock.contains("nick"), "043: denúncia chaveada por conta, nunca por nick")
+
+	var sqlText : String = _RepoFile("res://sources/sql/SQL.gd")
+	var boot : String = _JoinLines(_RawFuncBody(sqlText, "_post_launch"))
+	Check(boot.contains("ChatModeration.Reset(LoadMutes())"), "boot: o mute é relido na inicialização")
+	Check(boot.find("ApplyMigrations()") < boot.find("ChatModeration.Reset"), "boot: relê depois das migrations (a tabela tem que existir)")
+	for fname in ["MuteAccount", "UnmuteAccount", "LoadMutes", "AddChatReport", "CountOpenReports", "CountChatReports", "GetChatReports", "ResolveChatReport"]:
+		var fnBody : String = _JoinLines(_RawFuncBody(sqlText, fname))
+		if not Check(not fnBody.is_empty(), "SQL: corpo de %s localizado" % fname):
+			continue
+		Check(not fnBody.contains("%s") and not fnBody.contains("%d"), "SQL: %s monta query só com bind" % fname)
+
+	ChatModeration.Reset(sql.LoadMutes())
+
+func _TableBlock(sqlText : String, tableName : String) -> String:
+	var header : String = "CREATE TABLE IF NOT EXISTS %s (" % tableName
+	var at : int = sqlText.find(header)
+	if at < 0:
+		return ""
+	var end : int = sqlText.find(");", at)
+	return sqlText.substr(at, end - at) if end > at else ""
+
+# ------------------------------------------- S1: identidade do chamador no RPC
+
+# Parser mínimo de sources/network/Network.gd: para cada função, o decorador @rpc
+# colado nela e o corpo. Basta porque todo wrapper do facade dispatcha em uma
+# linha. Retorna Array de [decorators: Array, header: String, body: Array].
+func _FacadeFunctions(text : String) -> Array:
+	var out : Array = []
+	var dec : Array = []
+	var cur : Array = []
+	for line in text.split("\n"):
+		var stripped : String = String(line).strip_edges()
+		if String(line).begins_with("func ") or String(line).begins_with("static func "):
+			if not cur.is_empty():
+				out.append(cur)
+			cur = [dec.duplicate(), stripped, []]
+			dec = []
+		elif stripped.begins_with("@rpc("):
+			dec = [stripped]
+		elif stripped.begins_with("#"):
+			pass
+		elif stripped == "":
+			dec = []
+		elif String(line).begins_with("\t"):
+			if not cur.is_empty():
+				cur[2].append(stripped)
+		elif not cur.is_empty():
+			out.append(cur)
+			cur = []
+			dec = []
+	if not cur.is_empty():
+		out.append(cur)
+	return out
+
+func _CountMatches(text : String, pattern : String) -> int:
+	var re : RegEx = RegEx.new()
+	if re.compile(pattern) != OK:
+		return -1
+	return re.search_all(text).size()
+
+# S1: quem fala com o servidor prova quem é pelo transporte, nunca pelo corpo do
+# pacote — escrever o peerID no payload é assinar a identidade de outra sessão.
+# Estes checks amarram o facade à regra: todo wrapper de rede declarado, toda
+# identidade autenticada, e nenhum empurrão client→client.
+func SuiteRpcIdentity(facade : Node) -> void:
+	print("[suite] identidade do chamador no RPC (S1)")
+	if not Check(facade != null and facade.has_method("AuthPeerID"), "rpc identity: facade com AuthPeerID/TransportSenderID"):
+		return
+	var text : String = _RepoFile("res://sources/network/Network.gd")
+	if not Check(not text.is_empty(), "rpc identity: Network.gd legível"):
+		return
+	var funcs : Array = _FacadeFunctions(text)
+	Check(funcs.size() > 150, "rpc identity: facade inteiro varrido (%d funções)" % funcs.size())
+
+	var undecorated : Array = []
+	var bareIdentity : Array = []
+	var pushed : Array = []
+	var misused : Array = []
+	var anyPeer : int = 0
+	for entry in funcs:
+		var dec : Array = entry[0]
+		var header : String = String(entry[1])
+		var body : String = "\n".join(PackedStringArray(entry[2]))
+		var paren : int = header.find("(")
+		var kw : int = header.find("func ")
+		var fname : String = header.substr(kw + 5, paren - kw - 5) if paren > kw + 5 else header
+		var hasRpc : bool = false
+		var isAnyPeer : bool = false
+		for d in dec:
+			hasRpc = true
+			isAnyPeer = isAnyPeer or String(d).contains("\"any_peer\"")
+		var callsServer : bool = body.contains("CallServer(")
+		var callsClient : bool = body.contains("CallClient(")
+		if (callsServer or callsClient) and not hasRpc:
+			undecorated.append(fname)
+		if isAnyPeer:
+			anyPeer += 1
+			if not callsServer:
+				pushed.append(fname)
+			elif header.contains("peerID : int") and not body.contains("AuthPeerID(peerID)"):
+				bareIdentity.append(fname)
+		elif hasRpc and body.contains("AuthPeerID"):
+			misused.append(fname)
+
+	# 1. Wrapper sem @rpc falha no client de verdade (passa no loopback offline):
+	# foi exatamente assim que vendor / live events / arena ficaram mudos.
+	for name in ["BuyVendorOffer", "GetActiveEvents", "ArenaSetDefense", "ArenaAttack", "ArenaBoard"]:
+		Check(undecorated.find(name) < 0, "rpc identity: %s declarado com @rpc" % name)
+	Check(undecorated.is_empty(), "rpc identity: nenhum wrapper de rede sem @rpc (%s)" % ", ".join(PackedStringArray(undecorated)))
+
+	# 2. any_peer = corpo controlado pelo client: a identidade tem que sair do
+	# transporte. Um só peerID cru no facade já basta para falsificar sessão.
+	Check(anyPeer > 100, "rpc identity: varredura cobriu os wrappers any_peer (%d)" % anyPeer)
+	Check(bareIdentity.is_empty(), "rpc identity: nenhum any_peer passando peerID cru (%s)" % ", ".join(PackedStringArray(bareIdentity)))
+	CheckEq(_CountMatches(text, "CallServer\\([^)]*, peerID[,)]"), 0, "rpc identity: zero CallServer com destino cru no facade")
+	Check(_CountMatches(text, "AuthPeerID\\(peerID\\)") > 100, "rpc identity: identidade autenticada em todos os sites")
+
+	# 3. any_peer que só empurra para outro client = mensagem arbitrária entre
+	# sessões com o servidor de carreto (PushNotification era esse caso).
+	Check(pushed.is_empty(), "rpc identity: nenhum any_peer client→client (%s)" % ", ".join(PackedStringArray(pushed)))
+
+	# 4. AuthPeerID em authority não tem o que autenticar e roubaria o destino.
+	Check(misused.is_empty(), "rpc identity: nenhum authority usando AuthPeerID (%s)" % ", ".join(PackedStringArray(misused)))
+
+	# 5. A origem escrita no pacote é o id do transporte do client, e a leitura no
+	# servidor cobre as três interfaces (uma reporta, as outras duas dão 0).
+	var dispatcher : String = ""
+	for entry in funcs:
+		var dHeader : String = String(entry[1])
+		if dHeader.contains("func CallServer(") or dHeader.contains("func CallClient("):
+			dispatcher += "\n".join(PackedStringArray(entry[2]))
+	Check(dispatcher.contains("args + [Client.interfaceID]"), "rpc identity: origem no wire é o interfaceID do transporte")
+	Check(dispatcher.contains("args + [WebRTCClient.interfaceID]"), "rpc identity: rota WebRTC também carrega o id do transporte")
+	Check(text.contains("get_remote_sender_id()") and not text.contains("multiplayerAPI.get_unique_id()"), "rpc identity: sender lido do transporte, não do id local")
+	Check(text.contains("WebRTCServer") and text.contains("WebSocketServer") and text.contains("ENetServer"), "rpc identity: três interfaces de servidor consultadas")
+
+	# 6. Sem borda de rede (offline / harness) não há o que falsificar: o valor
+	# informado fica — é o que mantém o singleplayer e os suites existentes.
+	CheckEq(int(facade.call("TransportSenderID")), NetworkCommons.PeerUnknownID, "rpc identity: sem transporte não há sender")
+	CheckEq(int(facade.call("AuthPeerID", 4242)), 4242, "rpc identity: sem borda de rede o declarado fica")
+	CheckEq(int(facade.call("AuthPeerID", NetworkCommons.PeerAuthorityID)), NetworkCommons.PeerAuthorityID, "rpc identity: authority preservada offline")
+
+	# 7. O único dispatch interno que mira OUTRO peer não pode herdar o sender do
+	# RPC de login: derrubar a sessão antiga é decisão do servidor.
+	var peers : String = _RepoFile("res://sources/network/server/Peers.gd")
+	if Check(not peers.is_empty(), "rpc identity: Peers.gd legível"):
+		Check(peers.contains("Network.CallServer(&\"DisconnectAccount\", [], lastPeerID)"), "rpc identity: kick do peer antigo bypassa o wrapper")
+		Check(not peers.contains("Network.DisconnectAccount(lastPeerID)"), "rpc identity: sem wrapper que reescreveria o destino")
+		Check(peers.contains("if peerID == lastPeerID:"), "rpc identity: conexão duplicada comparada por peer")
+		Check(not peers.contains("if data.accountID == lastPeerID:"), "rpc identity: accountID não comparado com peerID")
+
 
 # ------------------------------------------------------------------ LGPD
 
@@ -3408,9 +6141,15 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 	CheckEq(agent.stat.experience, 10, "remainder banked after repeat (5+1205-1200)")
 	var rebGold : int = int(sql.GetStat(charID).get("gp", 0))
 	var rebEssence : int = sql.GetCharacterEssence(charID)
+	var tReb : int = SQLCommons.Timestamp()
 	var reborn : Dictionary = economy.Rebirth(charID, agent)
 	Check(bool(reborn.get("ok", false)), "rebirth accepted for the live agent at the cap")
 	CheckEq(int(reborn.get("rebirths", -1)), 1, "cycle counter reports 1")
+	# K1: o evento do loop de prestígio. A curva foi desenhada para acelerar o
+	# segundo ciclo; sem contar renascimentos não há como saber se o reset é usado
+	# ou temido. Vai pelo buffer, daí o Flush explícito antes da leitura.
+	Launcher.Telemetry.Flush()
+	CheckEq(_FunnelCount(sql, "rebirth", sql.GetAccountIDForCharacter(charID), tReb), 1, "rebirth emitido no ciclo concluído")
 	CheckEq(agent.stat.level, 1, "live agent mirrored the reset to L1")
 	CheckEq(agent.stat.experience, 0, "XP bucket cleared")
 	var after : Dictionary = sql.GetStat(charID)
@@ -3449,6 +6188,11 @@ func SuiteLGPD(sql : SQLService):
 	var accountID : int = sql.GetAccountID(acct)
 	Check(accountID != NetworkCommons.PeerUnknownID, "lgpd: account id resolves")
 	Check(sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: consent accepted")
+	# §24-11 (Lei 15.211/2025): a declaração maior de idade é a terceira cláusula do
+	# mesmo aceite, e é ela que segura dinheiro. O aceite de cadastro já grava a
+	# versão vigente — nenhum parâmetro novo de RPC.
+	var ageRow : Array = sql.QueryBindings("SELECT consent_age_version FROM account WHERE account_id = ?;", [accountID])
+	Check(not ageRow.is_empty() and str(ageRow[0].get("consent_age_version", "")) == NetworkCommons.AgreementAgeVersion, "idade: aceite de cadastro grava a declaração vigente")
 	var crow : Array = sql.QueryBindings("SELECT consent_timestamp, consent_ip, status FROM account WHERE account_id = ?;", [accountID])
 	Check(int(crow[0].get("consent_timestamp", 0)) > 0, "lgpd: consent timestamp stored")
 	Check(str(crow[0].get("consent_ip", "")) == "203.0.113.7", "lgpd: consent ip stored")
@@ -3468,6 +6212,23 @@ func SuiteLGPD(sql : SQLService):
 	Check(sql.AddAccount(noAcct, pw, noAcct + "@test.local"), "lgpd: no-consent account row still creatable")
 	Check(not sql.IsConsentAccepted(sql.GetAccountID(noAcct), NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: no-consent NOT accepted")
 
+	# §24-11 (Lei 15.211/2025): a cláusula de idade é a que segura dinheiro. Os três
+	# estados abaixo são o contrato: sem declaração não existe intent; a declaração
+	# de quem era conta pré-046 ('' do DEFAULT) não vale; e o bump da cláusula
+	# ('2020-01' aqui, o que o const vigente fará no dia que subir) derruba quem
+	# tinha afirmado uma versão antiga. Voltar ao aceite vigente re-estampa tudo e
+	# libera o checkout.
+	var noConsentID : int = sql.GetAccountID(noAcct)
+	Check(str(Launcher.Economy.GetCheckoutIntent(noConsentID, "gems.550").get("reason", "")) == "consent_required", "idade: conta sem aceite não recebe intent de checkout")
+	Check(sql.SetConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, "203.0.113.9"), "idade: volta ao aceite vigente antes do gate")
+	Check(bool(Launcher.Economy.GetCheckoutIntent(accountID, "gems.550").get("ok", false)), "idade: declaração vigente libera o checkout")
+	sql.ExecuteBindings("UPDATE account SET consent_age_version = '' WHERE account_id = ?;", [accountID])
+	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "idade: conta pré-046 (declaração vazia) não passa no gate")
+	Check(str(Launcher.Economy.GetCheckoutIntent(accountID, "gems.550").get("reason", "")) == "consent_required", "idade: sem declaração o servidor recusa a venda")
+	sql.ExecuteBindings("UPDATE account SET consent_age_version = '2020-01' WHERE account_id = ?;", [accountID])
+	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "idade: bump da cláusula força re-afirmação")
+	Check(sql.SetConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, "203.0.113.9"), "idade: re-aceite re-estampa a declaração")
+
 	# monta personagem + wallet + ledger (financeiro deve sobreviver à deleção)
 	Check(sql.AddCharacter(accountID, nick, ActorCommons.DefaultStats, ActorCommons.DefaultTraits, ActorCommons.DefaultAttributes), "lgpd: character created")
 	var charID : int = sql.GetCharacterID(accountID, nick)
@@ -3479,11 +6240,12 @@ func SuiteLGPD(sql : SQLService):
 
 	# (b) direito ao esquecimento — anonimiza conta, apaga pessoais, preserva financeiro
 	Check(sql.EraseAccount(accountID), "lgpd: erase returns true")
-	var erow : Array = sql.QueryBindings("SELECT username, email, status, consent_ip, password_salt FROM account WHERE account_id = ?;", [accountID])
+	var erow : Array = sql.QueryBindings("SELECT username, email, status, consent_ip, consent_age_version, password_salt FROM account WHERE account_id = ?;", [accountID])
 	Check(not erow.is_empty(), "lgpd: account row KEPT (pseudonymous id for ledger)")
 	Check(str(erow[0].get("username", "")) == "deleted_%d" % accountID, "lgpd: username tombstoned")
 	Check(str(erow[0].get("email", "")) == "", "lgpd: e-mail erased")
 	Check(str(erow[0].get("consent_ip", "")) == "", "lgpd: consent ip erased")
+	Check(str(erow[0].get("consent_age_version", "")) == "", "idade: declaração apagada junto do aceite (direito ao esquecimento)")
 	CheckEq(int(erow[0].get("status", -1)), NetworkCommons.AccountStatus.DELETED, "lgpd: status DELETED")
 	Check(str(erow[0].get("password_salt", "")) == "", "lgpd: password salt wiped")
 	Check(not sql.IsConsentAccepted(accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion), "lgpd: consent blanked after erase")
@@ -3494,10 +6256,10 @@ func SuiteLGPD(sql : SQLService):
 	var trpt : Translation = load("res://data/i18n/ui.pt_BR.translation")
 	Check(trpt != null, "lgpd: pt_BR translation resource loads")
 	for k in ["Agreements Update", "Accept",
-			"A new version of the Terms of Use and the Privacy Policy is in effect. Please review them on the game website and accept to enter.",
-			"The Terms of Use and Privacy Policy were updated. Accept to continue.",
-			"I have read and accept the Terms of Use and Privacy Policy",
-			"You must read and accept the Terms of Use and Privacy Policy to register."] :
+			"A new version of the Terms of Use, the Privacy Policy or the age declaration is in effect. Please review them on the game website and accept to enter.",
+			"The Terms of Use, Privacy Policy or age declaration were updated. Accept to continue.",
+			"I have read and accept the Terms of Use and Privacy Policy, and I am 18 years old or older",
+			"You must read and accept the Terms of Use and Privacy Policy and declare you are 18 or older to register."] :
 		var msg : String = trpt.get_message(k)
 		Check(not msg.is_empty() and msg != k, "lgpd: pt_BR consent string translated: %s" % (k.left(32)))
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM character WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: characters purged")
@@ -3505,6 +6267,45 @@ func SuiteLGPD(sql : SQLService):
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE account_id = ?;", [accountID])[0]["c"]), ledgerBefore, "lgpd: LEDGER preserved (fiscal retention)")
 	Check(sql.ValidateAuthPassword(acct, pw) == null, "lgpd: old login refused after erase")
 	Check(not sql.EraseAccount(accountID), "lgpd: erase is idempotent (already deleted)")
+
+	# §24-11: o predicate acima está certo, mas quem tranca a conta é a PORTA. As três
+	# portas vivem em RPCs que precisam de um peer de rede, então o que dá para amarrar
+	# aqui é a fiação (a mesma técnica dos guards de catálogo): se alguém trocar o
+	# `IsConsentAccepted` por um `true` literal, ou passar a gravar o aceite antes de
+	# verificar a credencial, isto falha em CI em vez de falhar na cara de um jogador.
+	var srvText : String = _RepoFile("res://sources/network/server/Server.gd")
+	var loginBody : String = _FnBody(srvText, "func LoginWithPassword(")
+	var tokenBody : String = _FnBody(srvText, "func LoginWithToken(")
+	var acceptBody : String = _FnBody(srvText, "func AcceptConsent(")
+	if Check(not loginBody.is_empty() and not tokenBody.is_empty() and not acceptBody.is_empty(), "lgpd: corpos das três portas localizáveis em Server.gd"):
+		Check(loginBody.contains("IsConsentAccepted") and loginBody.contains("ERR_CONSENT_REQUIRED"), "lgpd: login por senha exige o aceite vigente")
+		Check(tokenBody.contains("IsConsentAccepted") and tokenBody.contains("ERR_CONSENT_REQUIRED"), "lgpd: login por token (lembrar) exige o aceite vigente")
+		# A porta de 2FA não repete o gate — ela é segura por ordem: `LoginWithPassword`
+		# só devolve ERR_2FA_REQUIRED para quem já passou no aceite. Inverter as duas
+		# linhas reabre uma porta sem nenhuma conferência, e nada nesta suíte perceberia.
+		var consentAt : int = loginBody.find("IsConsentAccepted")
+		var twoFactorAt : int = loginBody.find("ERR_2FA_REQUIRED")
+		Check(consentAt >= 0 and twoFactorAt > consentAt, "lgpd: o gate de aceite vem ANTES da derivação de 2FA (a porta de 2FA é segura por ordem)")
+		# O aceite só vale se quem pediu provou a credencial. Sem esta ordem bastaria o
+		# nome da conta para re-estampar as três cláusulas (e o gate de idade).
+		var credGuardAt : int = acceptBody.find("if err == NetworkCommons.AuthError.ERR_OK and accountData:")
+		var writeAt : int = acceptBody.find("SetConsentAccepted(")
+		Check(credGuardAt >= 0 and writeAt > credGuardAt, "lgpd: aceite gravado só depois da credencial validada")
+		Check(acceptBody.contains("ValidateAuthPassword") and acceptBody.contains("ValidateAuthToken"), "lgpd: re-aceite revalida senha OU token, como o login")
+		Check(acceptBody.contains("IsLockedOut"), "lgpd: re-aceite respeita o lockout da senha")
+	# Terceira porta é o cliente: sem ramo para ERR_CONSENT_REQUIRED o jogador fica com
+	# erro genérico e nenhuma forma de aceitar — bloqueio definitivo depois de um bump.
+	var loginGui : String = _RepoFile("res://sources/gui/Login.gd")
+	Check(loginGui.contains("ERR_CONSENT_REQUIRED"), "lgpd: cliente trata o código de aceite pendente")
+	Check(loginGui.contains("OpenReconsentDialog"), "lgpd: ramo do bump abre o diálogo de re-aceite")
+	Check(loginGui.contains("Network.AcceptConsent("), "lgpd: o painel de aceite chama o RPC")
+	# S1 não vale só para os RPCs antigos: um RPC novo de dinheiro/identidade tem que
+	# derivar o peer do transporte, não do argumento.
+	var netText : String = _RepoFile("res://sources/network/Network.gd")
+	var acceptCall : String = _FnBody(netText, "func AcceptConsent(")
+	var createCall : String = _FnBody(netText, "func CreateAccount(")
+	Check(acceptCall.contains("CallServer(\"AcceptConsent\"") and acceptCall.contains("AuthPeerID(peerID)"), "S1: AcceptConsent deriva a identidade do transporte")
+	Check(createCall.contains("CallServer(\"CreateAccount\"") and createCall.contains("AuthPeerID(peerID)"), "S1: CreateAccount deriva a identidade do transporte")
 
 # ------------------------------------------------------------------ CDC art.49 refund
 func SuiteRefund(sql : SQLService) -> void:
@@ -3604,8 +6405,10 @@ func SuiteConcurrency(sql : SQLService) -> void:
 	Check(not economy.SpendBossKey(charA, 1, "conc:t2"), "2nd key spend rejected")
 	CheckEq(sql.GetCharacterBossKeys(charA), 0, "keys never negative")
 	# 6. conservação em trade repetido: 2º falha no cooldown, estoque confere.
-	# Fixtures próprias: o buy do AH (passo 3) grava trade_*/ledger e armaria
-	# o cooldown deste passo (poluição entre passos, não bug do produto).
+	# Fixtures próprias: A/B saíram dos passos 1-4 com estoque, gemas e listing
+	# alterados e não estão em estado limpo. Não é cooldown — desde #26 a perna de
+	# item do buy do AH grava `ah_in:` e não interfere na troca direta (o teste
+	# disso está em SuiteMoneyFunnel).
 	var charC : int = CreateFixture(sql, "idle_conc_c", "IdleConcC")
 	var charD : int = CreateFixture(sql, "idle_conc_d", "IdleConcD")
 	if not Check(charC != 0 and charD != 0, "trade fixtures created"):
@@ -3726,6 +6529,10 @@ func SuiteLiveEvents(sql : SQLService) -> void:
 		return
 	var accountID : int = sql.GetAccountIDForCharacter(charID)
 	Check(accountID > 0, "live events account created")
+	# Este suite é dono das duas tabelas de evento: começa e termina limpo, para que
+	# as asserções de contagem e de modificador exato não dependam do que rodou antes.
+	sql.ExecuteBindings("DELETE FROM live_event_tick WHERE event_id IN (SELECT id FROM live_event WHERE kind IN ('weekend_drops', 'smith_week'));", [])
+	sql.ExecuteBindings("DELETE FROM live_event WHERE kind IN ('weekend_drops', 'smith_week');", [])
 	sql.ExecuteBindings("INSERT INTO live_event (kind, starts_at, ends_at, params_json, created_at) VALUES (?, ?, ?, ?, ?);", ["weekend_drops", SQLCommons.Timestamp() - 3600, SQLCommons.Timestamp() + 86400, '{"drops_mod": 2.0}', SQLCommons.Timestamp()])
 	sql.ExecuteBindings("INSERT INTO live_event (kind, starts_at, ends_at, params_json, created_at) VALUES (?, ?, ?, ?, ?);", ["smith_week", SQLCommons.Timestamp() - 3600, SQLCommons.Timestamp() + 86400, '{"fee_mod": 0.5}', SQLCommons.Timestamp()])
 	economy.TickLiveEvents()
@@ -3734,9 +6541,34 @@ func SuiteLiveEvents(sql : SQLService) -> void:
 	var events : Array = state.get("events", [])
 	Check(events.size() >= 2, "live events: %d active" % events.size())
 	var dropsMod : float = economy.GetLiveEventMods(accountID)
-	Check(dropsMod >= 2.0, "live events drops mod %.1f" % dropsMod)
+	Check(absf(dropsMod - 2.0) < 0.001, "live events drops mod exactly 2.0 (foi %.3f)" % dropsMod)
 	var feeMod : float = economy.GetLiveEventCraftingFeeMod()
-	Check(feeMod <= 0.5, "live events crafting fee mod %.1f" % feeMod)
+	Check(absf(feeMod - 0.5) < 0.001, "live events crafting fee mod exactly 0.5 (foi %.3f)" % feeMod)
+	# #27: o tick é o diário de ativação e a leitura é "já ativou?", não "ativou
+	# neste segundo?". Com o predicado antigo (>= now) as duas asserções acima só
+	# passavam porque tick e leitura caíam no mesmo segundo do relógio; em produção
+	# o job roda um dia antes do settle do jogador e o modificador nunca chegava.
+	# O rewind de 2 h é esse intervalo real.
+	sql.ExecuteBindings("UPDATE live_event_tick SET ticked_at = ticked_at - 7200;", [])
+	CheckEq(int(economy.GetActiveEventsState(accountID).get("events", []).size()), 2, "estado sobrevive a um tick antigo (#27)")
+	Check(absf(economy.GetLiveEventMods(accountID) - 2.0) < 0.001, "drops mod sobrevive a um tick antigo (#27)")
+	Check(absf(economy.GetLiveEventCraftingFeeMod() - 0.5) < 0.001, "fee mod sobrevive a um tick antigo (#27)")
+	# #27: uma janela vale um modificador. O writer antigo re-tickava a mesma janela
+	# a cada passada do job (a PK é (event_id, ticked_at), então só o timestamp
+	# muda); leitura com JOIN multiplicaria drops_mod por tick. O timestamp é outro
+	# que não o do rewind acima, senão a PK colide e o insert não prova nada.
+	sql.ExecuteBindings("INSERT INTO live_event_tick (event_id, ticked_at) SELECT id, ? FROM live_event WHERE kind = 'weekend_drops';", [SQLCommons.Timestamp() - 3600])
+	var ticks : Array = sql.QueryBindings("SELECT COUNT(*) AS n FROM live_event_tick WHERE event_id IN (SELECT id FROM live_event WHERE kind = 'weekend_drops');", [])
+	CheckEq(int(ticks[0]["n"]), 2, "janela com dois ticks de ativação (caminho do writer antigo)")
+	Check(absf(economy.GetLiveEventMods(accountID) - 2.0) < 0.001, "drops mod não composta por tick duplicado (#27)")
+	# #27: sem semeadura o tick girava sobre tabela vazia — nenhum jogador via evento
+	# nenhum. O calendário é derivado do relógio UTC e idempotente por (kind, starts_at).
+	var windowsBefore : int = sql.QueryBindings("SELECT id FROM live_event WHERE kind IN ('weekend_drops', 'smith_week');", []).size()
+	var seeded : int = economy.EnsureCalendarLiveEvents()
+	Check(seeded > 0, "calendário semeia janelas (%d)" % seeded)
+	var windowsAfter : int = sql.QueryBindings("SELECT id FROM live_event WHERE kind IN ('weekend_drops', 'smith_week');", []).size()
+	CheckEq(windowsAfter - windowsBefore, seeded, "cada seed é uma janela nova")
+	CheckEq(economy.EnsureCalendarLiveEvents(), 0, "semeadura é idempotente")
 	for nick in ["IdleLiveTester"]:
 		sql.db.delete_rows("character", "nickname = '%s'" % nick)
 	for uname in ["idle_live_account"]:
@@ -4113,3 +6945,201 @@ func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
 		sql.db.delete_rows("character", "nickname = '%s'" % nick)
 	for uname in ["idle_torment_account"]:
 		sql.db.delete_rows("account", "username = '%s'" % uname)
+
+# Índice de basename -> caminhos `res://` (no máximo três por nome), construído uma vez por
+# processo. Ele existe porque a documentação escreve ponteiro das duas formas: medido, dos 122
+# `arquivo:linha` do beta, 40 vêm com caminho e 82 com nome cru (`Gui.gd:681`). Sem índice a régua
+# olharia um terço da evidência que diz estar olhando.
+static var _ptrIndex : Dictionary = {}
+
+static func _PtrIndexWalk(dirPath : String) -> void:
+	var dir : DirAccess = DirAccess.open(dirPath)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var entry : String = dir.get_next()
+	while entry != "":
+		if not entry.begins_with("."):
+			if dir.current_is_dir():
+				_PtrIndexWalk(dirPath.path_join(entry))
+			else:
+				var bucket : Array = _ptrIndex.get(entry, [])
+				if bucket.size() < 3:
+					bucket.append(dirPath.path_join(entry))
+					_ptrIndex[entry] = bucket
+		entry = dir.get_next()
+	dir.list_dir_end()
+
+# Devolve "" quando o ponteiro não resolve sem ambiguidade. Ordem: caminho literal; nome que existe
+# na raiz do projeto; nome único na árvore. Nome ausente é histórico legítimo (a prosa que fala do
+# `gut_runner.gd` apagado tem que poder existir) e nome ambíguo não tem como decidir — os dois ficam
+# fora de propósito.
+static func _PtrResolve(cited : String) -> String:
+	var direct : String = "res://" + cited
+	if FileAccess.file_exists(direct):
+		return direct
+	if cited.find("/") >= 0:
+		return ""
+	if _ptrIndex.is_empty():
+		_PtrIndexWalk("res://")
+	var arr : Array = _ptrIndex.get(cited, [])
+	if arr.size() == 1:
+		return String(arr[0])
+	return ""
+
+# Ponteiros de evidência da documentação do beta. O §24, o handoff de lançamento e o roadmap citam
+# `arquivo:linha` como prova de cada item — e linha derrapa sozinha quando o código muda de
+# tamanho. Medido nesta passada: nove ponteiros do próprio documento de auditoria já apontavam para
+# outro lugar (oito com número errado, um com caminho errado — `server/Peers.gd:284`, que vive em
+# `sources/network/server/Peers.gd`), e um caía numa suíte diferente da que a prosa nomeia
+# (`IdleTests.gd:3163-3175` para checks que estão em `:3405-3410`, dentro de `SuiteChestOdds`, com
+# seis checks onde são cinco). A checagem é tripla: (1) o arquivo citado existe e a linha citada
+# cabe nele; (2) se a prosa em volta do ponteiro cita uma mensagem de check entre aspas e essa
+# mensagem existe no arquivo, ela tem que cair no intervalo citado; (3) todo `Suite*` citado na
+# documentação tem que ser `func` real. Mensagem que não existe no arquivo é prosa, não citação de
+# teste, e fica fora de propósito. Só o que está entre backticks conta na regra de linha: sem isso,
+# `127.0.0.1:8901` viraria caminho de arquivo.
+func SuiteEvidencePointers() -> void:
+	print("[suite] ponteiros de evidência")
+	var ptrRx : RegEx = RegEx.new()
+	ptrRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):(\\d+)(?:-(\\d+))?`")
+	var msgRx : RegEx = RegEx.new()
+	msgRx.compile("\"([^\"]{12,90})\"")
+	# `CheckBox.new(` não é check de teste: a âncora exige chamada `Check…(`.
+	var checkRx : RegEx = RegEx.new()
+	checkRx.compile("\\bCheck[A-Za-z]*\\(")
+	var docs : Array[String] = [
+		"res://AUDITORIA_INDEPENDENTE_2026-09-24.md",
+		"res://ROADMAP_COMERCIAL.md",
+		"res://deploy/LAUNCH_HANDOFF.md",
+	]
+	var lineCache : Dictionary = {}
+	var quebrados : Array[String] = []
+	var derrapados : Array[String] = []
+	var conferidos : int = 0
+	var comMensagem : int = 0
+	for docPath in docs:
+		var docRaw : String = _RepoFile(docPath)
+		if not Check(docRaw != "", "evidência: %s existe e lê" % docPath):
+			continue
+		var docLines : PackedStringArray = docRaw.split("\n")
+		for i in docLines.size():
+			var matches : Array[RegExMatch] = ptrRx.search_all(String(docLines[i]))
+			if matches.is_empty():
+				continue
+			var window : String = ""
+			for w in range(maxi(0, i - 1), mini(docLines.size(), i + 2)):
+				window += String(docLines[w]) + "\n"
+			for m in matches:
+				var cited : String = String(m.get_string(1))
+				var resPath : String = _PtrResolve(cited)
+				if resPath == "":
+					continue
+				if not lineCache.has(resPath):
+					lineCache[resPath] = _RepoFile(resPath).split("\n")
+				var src : PackedStringArray = lineCache[resPath]
+				var from : int = int(m.get_string(2))
+				var to : int = int(m.get_string(3))
+				if to < from:
+					to = from
+				conferidos += 1
+				if from > src.size() or to > src.size():
+					quebrados.append("%s:%d (%s tem %d linhas)" % [cited, to, resPath, src.size()])
+					continue
+				for msgMatch in msgRx.search_all(window):
+					var msg : String = String(msgMatch.get_string(1))
+					if msg.find("/") >= 0 or msg.find("res://") >= 0:
+						continue
+					# A regra só vale para citação de *mensagem de check*: em arquivo de código, o
+					# hit tem que ser uma linha de `Check…`. Sem isso a régua confunde rótulo de UI
+					# com evidência — medido ao abrir a resolução por nome, quatro falsos positivos
+					# (`"UI gráfica em desenvolvimento"` em `Gui.gd`, `"SetupTwoFactor"` em
+					# `Settings.gd`, `"18 years old or older"` em `Login.gd`) todos strings de texto,
+					# nenhum check. Em `.md` a citação é prosa sobre prosa, então vale o match solto.
+					var prosa : bool = cited.get_extension().to_lower() == "md"
+					var hit : int = 0
+					for j in src.size():
+						var srcLine : String = String(src[j])
+						if srcLine.find(msg) < 0:
+							continue
+						if not prosa and checkRx.search(srcLine) == null:
+							continue
+						hit = j + 1
+						break
+					if hit == 0:
+						continue
+					comMensagem += 1
+					if hit < from - 2 or hit > to + 2:
+						derrapados.append("%s:%d-%d cita \"%s\", que está em :%d" % [cited, from, to, msg, hit])
+	CheckEq(quebrados.size(), 0, "ponteiros: %d referências arquivo:linha conferidas, nenhuma fora do arquivo (%s)" % [conferidos, " | ".join(quebrados)])
+	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])
+	# (3) Nome de suíte. A prosa do beta afirma "coberto por `SuiteX`", e nome que não é `func`
+	# na árvore é exatamente a classe de defeito que já foi achado nesta auditoria (documentação
+	# descrevendo teste inexistente). Diferente de número de linha, nome não drifta com edição:
+	# medido, os 89 `func Suite*` do repositório vivem todos em `tests/IdleTests.gd`, e os 29
+	# nomes citados nos três docs resolvem contra eles.
+	var nameRx : RegEx = RegEx.new()
+	nameRx.compile("\\b(Suite[A-Za-z0-9_]+)\\b")
+	var defRx : RegEx = RegEx.new()
+	defRx.compile("(?m)^func (Suite[A-Za-z0-9_]+)\\(")
+	var definidas : Dictionary = {}
+	for d in defRx.search_all(_RepoFile("res://tests/IdleTests.gd")):
+		definidas[String(d.get_string(1))] = true
+	var citadas : Dictionary = {}
+	var fantasmas : Array[String] = []
+	for docPath in docs:
+		for n in nameRx.search_all(_RepoFile(docPath)):
+			var nome : String = String(n.get_string(1))
+			if citadas.has(nome):
+				continue
+			citadas[nome] = true
+			if not definidas.has(nome):
+				fantasmas.append(nome)
+	CheckEq(fantasmas.size(), 0, "ponteiros: %d nomes de suíte citados na documentação existem como func em tests/IdleTests.gd (%s)" % [citadas.size(), " | ".join(fantasmas)])
+	# Cobertura no log: "0 falhas" sozinho não diz o quanto foi olhado, que é exatamente a
+	# classe de problema que este guard veio fechar.
+	print("  [info] ponteiros: %d referências arquivo:linha, %d com mensagem de check na prosa, %d nomes de suíte" % [conferidos, comMensagem, citadas.size()])
+
+# Navegação externa no export Web. O beta roda no navegador, e no navegador
+# `OS.shell_open` não leva a URL para lugar nenhum — por isso a porta do dinheiro
+# (`Checkout.gd`, `_launch_payment_url`) faz `window.open` por `JavaScriptBridge` quando
+# `LauncherCommons.isWeb`. Os outros dois sites que navegam para fora — o clique de link
+# dentro do texto do ACEITE (`Scrollable.gd`, o painel que o gate de idade obriga o
+# jogador a ler antes de marcar a caixa de 18+) e o botão do Discord (`Gui.gd`,
+# `OpenDiscord`) — chamavam `OS.shell_open` crus. A régua é por BLOCO e varre `sources/`
+# inteira, não por arquivo: a guarda antiga lia o corpo de uma função do checkout e por
+# construção não podia ver o resto do cliente. Linha de comentário não conta como ramo —
+# senão dá para passar na régua escrevendo a palavra na prosa.
+func SuiteExternalLinksWebBranch() -> void:
+	print("[suite] navegação externa no export Web")
+	var sitios : int = 0
+	var nus : Array[String] = []
+	for found in _GdFilesUnder("res://sources"):
+		var path : String = String(found)
+		var src : PackedStringArray = _RepoFile(path).split("\n")
+		var fnNome : String = ""
+		var fnFim : int = -1
+		for i in src.size():
+			var line : String = String(src[i])
+			var trimmed : String = line.strip_edges()
+			if trimmed.begins_with("func ") or trimmed.begins_with("static func "):
+				fnNome = trimmed.substr(trimmed.find("func ") + 5).get_slice("(", 0)
+				fnFim = i
+				continue
+			if trimmed.begins_with("#") or line.find("OS.shell_open(") < 0:
+				continue
+			sitios += 1
+			var j : int = fnFim + 1
+			var bloco : String = ""
+			while j < src.size():
+				var inner : String = String(src[j])
+				var innerTrimmed : String = inner.strip_edges()
+				if not innerTrimmed.is_empty() and not inner.begins_with("\t"):
+					break
+				if not innerTrimmed.begins_with("#"):
+					bloco += inner + "\n"
+				j += 1
+			if not bloco.contains("JavaScriptBridge") or not bloco.contains("isWeb"):
+				nus.append("%s:%d em %s" % [path, i + 1, fnNome])
+	CheckEq(nus.size(), 0, "navegação externa: todo OS.shell_open de sources/ tem ramo Web com JavaScriptBridge (%d sítios; sem ramo: %s)" % [sitios, " | ".join(nus)])
+	print("  [info] navegação externa: %d sítios de OS.shell_open em sources/, todos com ramo Web" % sitios)

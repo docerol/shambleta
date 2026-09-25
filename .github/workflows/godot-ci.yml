@@ -146,14 +146,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Run webhook hardening tests
-        run: python3 companion/test_webhook.py
-
-      - name: Run security tests (checkout/session binding)
-        run: python3 companion/test_security.py
-
-      - name: Run refund CLI e2e (ROADMAP S1 dry-run gate)
-        run: python3 companion/test_refund_cli.py
+      - name: Run companion gates (webhook, security, refund CLI)
+        # Mesmo `gate_py` do test.sh local: os três arquivos passam pelo quádruplo
+        # de §24-8 (marcador de resultado presente, contagem de falhos lida do log,
+        # exit code conferido à parte). Rodar python solto aqui deixava CI e local
+        # provando coisas diferentes. Não precisa de Godot: o case `companion` só
+        # chama python3.
+        run: ./scripts/test.sh companion
 
   # SOM-IDLE: F2 idle-spike headless test suite (XP curve, zones, settle, ledger)
   # Beta fechado (2026-09-18): sem liuyuzui/godot-action-setup (setup quebrava
@@ -175,14 +174,64 @@ jobs:
           cd "$PROJECT_PATH"
           godot --headless --editor --import --quit
 
+      - name: Preflight harness parse
+        run: |
+          # Mesmo pré-checagem do scripts/test.sh all: um harness que não compila
+          # faz o `load()`/`.new()` do runner falhar, nenhuma suíte roda e o job
+          # só descobre no timeout de 1200 s. Custa ~1 s. A régua é ancorada em
+          # SCRIPT ERROR: Parse Error — o `ERROR: …tscn - Parse Error:
+          # [ext_resource]` que o modo --check-only emite é falso positivo do modo
+          # (script que referencia autoload), não do código.
+          cd "$PROJECT_PATH"
+          fail=0
+          for s in run_idle_tests IdleTests run_rpc_identity_test test_e2e_implementation test_backup_restore benchmarks; do
+            errs="$(godot --headless --path . --check-only --script "tests/$s.gd" 2>&1 | grep '^SCRIPT ERROR: Parse Error' || true)"
+            if [ -n "$errs" ]; then
+              echo "::error::tests/$s.gd não compila"
+              echo "$errs"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "Preflight parse OK: 6 harnesses, zero SCRIPT ERROR: Parse Error."
+
       - name: Run SOM-IDLE idle tests
         run: |
+          # §24-8: `set +e` porque o gate lê o log ANTES de repassar o código de
+          # saída — falhar sem explicar o motivo é como o healthcheck fictício
+          # nasceu. Exit code do godot É a contagem de checks falhos (0 = verde).
+          set +e
           cd "$PROJECT_PATH"
-          # SOM-IDLE launch gaps: a suíte tem 1015+ checks com sims reais
-          # (onboarding, boss ladder, probe realtime 300s); 300s matava o job
-          # no meio (timeout, não falha). 1200s dá margem em runners lentos.
-          timeout 1200 godot --headless --path . -s tests/run_idle_tests.gd
-          # Exit code = number of failed checks (0 = green)
+          # SOM-IDLE launch gaps: a suíte saiu de ~200 checks para mais de 2 mil, e o
+          # total desta passada é o `== RESULT:` deste mesmo log — não ponho o número
+          # aqui porque ele muda a cada commit e o comentário apodrece (estava em
+          # 2017 quando a régua medida era outra). Com sims reais (onboarding, boss
+          # ladder, probe realtime 300s), 300s matava o job no meio (timeout, não
+          # falha). 1200s dá margem em runners lentos.
+          timeout 1200 godot --headless --path . -s tests/run_idle_tests.gd > /tmp/idle-tests.log 2>&1
+          bash scripts/ci_gate_log.sh /tmp/idle-tests.log "== RESULT:" "$?"
+
+      # SOM-IDLE S1: única prova que o loopback offline não consegue dar —
+      # servidor WebSocket real + dois clients reais, forjando peerID no corpo.
+      - name: Run RPC identity transport test
+        run: |
+          set +e
+          cd "$PROJECT_PATH"
+          timeout 180 godot --headless --path . -s tests/run_rpc_identity_test.gd > /tmp/rpc-identity.log 2>&1
+          bash scripts/ci_gate_log.sh /tmp/rpc-identity.log "== RPC IDENTITY:" "$?"
+
+      # Este harness existia no repositório sem job nenhum: tabela de
+      # chamador→método entre arquivos (Gui → Settings.get_sessionfirstlogin,
+      # Settings → WebPush) que nunca rodava em lugar nenhum. É o que pega o
+      # "Nonexistent function" em runtime antes de virar SCRIPT ERROR no log do
+      # outro job — e o mesmo motivo pelo qual gut_runner.gd foi apagado: harness
+      # que não roda é garantia falsa.
+      - name: Run cross-file API verification
+        run: |
+          set +e
+          cd "$PROJECT_PATH"
+          timeout 120 godot --headless --path . -s tests/test_e2e_implementation.gd > /tmp/e2e-api.log 2>&1
+          bash scripts/ci_gate_log.sh /tmp/e2e-api.log "== RESULT:" "$?"
 
   # SOM-IDLE A2: backup restore probe — monthly gate (runs on every push for now).
   backup-restore:
@@ -201,8 +250,10 @@ jobs:
 
       - name: Run backup restore probe
         run: |
+          set +e
           cd "$PROJECT_PATH"
-          timeout 120 godot --headless --path . -s tests/test_backup_restore.gd
+          timeout 120 godot --headless --path . -s tests/test_backup_restore.gd > /tmp/backup.log 2>&1
+          bash scripts/ci_gate_log.sh /tmp/backup.log "== Backup Restore Probe:" "$?"
 
   # SOM-IDLE P2: performance benchmark gate
   benchmarks:
@@ -221,8 +272,10 @@ jobs:
 
       - name: Run performance benchmarks
         run: |
+          set +e
           cd "$PROJECT_PATH"
-          timeout 120 godot --headless --path . -s tests/benchmarks.gd
+          timeout 120 godot --headless --path . -s tests/benchmarks.gd > /tmp/bench.log 2>&1
+          bash scripts/ci_gate_log.sh /tmp/bench.log "== Benchmarks:" "$?"
 
   # SOM-IDLE beta deploy: export Web (pivô idle é web-first). O artifact é
   # servido com COOP/COEP pelo nginx do deploy/web/Dockerfile (Coolify).

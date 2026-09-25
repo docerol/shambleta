@@ -11,6 +11,12 @@ signal target_selected(target : BaseAgent)
 #
 var agent : NavigationAgent2D			= null
 
+# SOM-IDLE: a instância cuja lista (players/mobs/npcs) referencia este agente.
+# PushAgent mexe na lista no frame em que ADIA o add_child — apagar por
+# get_parent() deixava entrada pendurada, isto é, objeto liberado na lista.
+# Sem tipo: WorldInstance lista BaseAgent, tipar aqui é ciclo de resolução.
+var listedIn : Node						= null
+
 var actionTimer : Timer					= null
 var cooldownTimers : Dictionary[int, bool]	= {}
 

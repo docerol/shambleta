@@ -212,6 +212,9 @@ func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : in
 		return _eco._LedgerAppendLocked(accountID, sellerChar, EconomyCatalog.LedgerKindItem, -count, 0, "ah_list:%d:uids%s" % [itemID, _eco._UIDList(consumed)])):
 		pass
 	_eco.settleMutex.unlock()
+	if int(out["id"]) > 0:
+		_RecordAH("ah_list", sellerChar, {"listing" = int(out["id"]), "item" = itemID,
+			"count" = count, "price_gold" = priceGold})
 	return int(out["id"])
 
 func BuyListing(buyerChar : int, listingID : int) -> bool:
@@ -276,10 +279,32 @@ func BuyListing(buyerChar : int, listingID : int) -> bool:
 			return false
 		if not _eco._LedgerAppendLocked(sellerAccount, sellerChar, EconomyCatalog.LedgerKindGold, sellerNet, sellerGold + sellerNet, "ah_sell:%d" % listingID):
 			return false
-		return _eco._LedgerAppendLocked(buyerAccount, buyerChar, EconomyCatalog.LedgerKindItem, count, 0, "trade_in:%d:lot%d" % [itemID, granted])):
+		# #26: o AH tinha o próprio namespace de ledger (ah_list/ah_sell/ah_buy),
+		# mas esta perna — a única que ainda não tinha — escrevia `trade_in:`, o
+		# mesmo formato da troca direta. Consequência medida (run K1, ledger
+		# 18433): LastTradeTimestampRaw casa 'trade_out:%'/'trade_in:%', então
+		# COMPRAR NO LEILÃO armava o cooldown de 60 s de troca direta no
+		# comprador; e _FlagFlipTrades lia o mesmo par, abrindo flag de lavagem
+		# em quem vendeu um item e o recomprou no mercado (compra pública, não
+		# bilateral). O motivo do cooldown é a troca entre duas contas
+		# conhecidas; o AH já tem fricção própria (ouro + taxa + slot).
+		return _eco._LedgerAppendLocked(buyerAccount, buyerChar, EconomyCatalog.LedgerKindItem, count, 0, "ah_in:%d:lot%d" % [itemID, granted])):
 		bought = true
 	_eco.settleMutex.unlock()
+	if bought:
+		_RecordAH("ah_buy", buyerChar, {"listing" = listingID})
 	return bought
+
+# K1: AH sem evento é marketplace no escuro — quantos anunciam, quantos compram,
+# quantos desistem (e o último é o que diz se o preço está errado). É ouro/gems de
+# jogo, não dinheiro, então vai pelo funil comum (buffer de 60 s) em vez do
+# caminho de flush imediato do `purchase`. Sempre fora da transação: o flush da
+# telemetria pega o queryMutex, e chamá-lo de dentro do lambda seria lock
+# recursivo numa Mutex não-recursiva.
+func _RecordAH(kind : String, charID : int, meta : Dictionary) -> void:
+	if Launcher.Telemetry == null:
+		return
+	Launcher.Telemetry.RecordFunnel(kind, _eco._AccountIDForCharacterRaw(charID), charID, JSON.stringify(meta))
 
 func CancelListing(charID : int, listingID : int) -> bool:
 	var done : bool = false
@@ -298,4 +323,6 @@ func CancelListing(charID : int, listingID : int) -> bool:
 		return sql.UpdateRowsRaw("auction_listing", "id = %d" % listingID, {"status" = "cancelled"})):
 		done = true
 	_eco.settleMutex.unlock()
+	if done:
+		_RecordAH("ah_cancel", charID, {"listing" = listingID})
 	return done

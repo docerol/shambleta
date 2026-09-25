@@ -19,10 +19,14 @@ func ActiveSeason() -> Dictionary:
 
 # SOM-IDLE beta fechado (T5): Seasons é pós-lançamento — criação e ciclo de
 # vida ficam TRAVADOS por padrão (qualquer chamada normal, GM ou job, vira
-# no-op com aviso). Testes habilitam explicitamente via env
-# SHAMBLETA_ENABLE_SEASONS=1 (run_idle_tests.gd). Remover a trava só na
-# ativação, após a auditoria do ciclo ACTIVE→CLOSING→CLOSED→SETTLED
-# (som-idle-docs/SEASON_ACTIVATION_NOTE.md).
+# no-op com aviso). Quem habilita é o env `SHAMBLETA_ENABLE_SEASONS=1`: os
+# testes a ligam em `run_idle_tests.gd` e o deploy do beta a liga em
+# `deploy/docker-compose.yml`. O ciclo coberto por essa ativação é
+# active→closed→settled (`TickSeasonLifecycle` + `SettleSeasonPrizes`, com
+# prova de idempotência no ledger por vencedor); não existe estágio
+# "closing" no schema. Enquanto a env não estiver posta, o shell continua
+# funcionando com Season Pass/placar vazios (as suítes de lock e de
+# boards-empty cobrem exatamente isso).
 
 static func SeasonsEnabled() -> bool:
 	if not EconomyCatalog.SeasonsBetaLock:
@@ -48,13 +52,41 @@ func CreateSeason(days : int, rules : String = "{}") -> int:
 	_eco.settleMutex.unlock()
 	return int(out["id"])
 
+# G1: fechar É congelar. As quatro corridas são gravadas em `season_score` antes
+# do flip active→closed, e o flip é protegido por `status = 'active'` +
+# `changes()` — um segundo fechamento não reescreve o placar. A liquidação passou
+# a ler só esse congelamento: antes ela relia as tabelas vivas, então podia
+# correr horas depois do fim da temporada e premar quem treinou/gastou depois do
+# `ends_at` (débitos 1 e 3 de archive/SEASON_ACTIVATION_NOTE.md). O `settleMutex`
+# é o mesmo da criação, portanto não há interleaving dentro do processo.
+# O que isto NÃO resolve: `power_score`, `bosses_beaten` e `guild.points` são
+# contadores correntes sem histórico — o valor congelado é o do instante do
+# fechamento. É por isso que o relógio de temporada fecha em minutos e não em
+# horas (`SQLCommons.SeasonClockIntervalSec`): a janela restante é fração do ciclo
+# de jogo. O estágio `CLOSING` com apuração por evento (débito 4) continua
+# em aberto, e é pós-beta.
 func CloseSeason(seasonID : int) -> bool:
-	return Launcher.SQL.ExecuteBindings("UPDATE season SET status = 'closed' WHERE season_id = ? AND status = 'active';", [seasonID])
+	if Launcher.SQL.QueryBindings("SELECT season_id FROM season WHERE season_id = ? AND status = 'active';", [seasonID]).is_empty():
+		return false
+	_eco.settleMutex.lock()
+	SnapshotSeasonPower(seasonID)
+	SnapshotSeasonSpend(seasonID)
+	SnapshotSeasonBossKills(seasonID)
+	SnapshotSeasonGuildPoints(seasonID)
+	var flipped : bool = Launcher.SQL.ExecuteBindings("UPDATE season SET status = 'closed' WHERE season_id = ? AND status = 'active';", [seasonID])
+	var changed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT changes() AS c;", [])
+	_eco.settleMutex.unlock()
+	return flipped and not changed.is_empty() and int(changed[0]["c"]) > 0
 
 # ROADMAP_COMERCIAL S2: temporada S1 — regras congeladas desde o dia 1.
 # Respeita a trava do beta (T5): retorna -1 enquanto SeasonsEnabled() for false.
 # Quando habilitada, cria 30 dias com rules_frozen (4 corridas, premiação
 # não-cashable). Idempotente: se já houver temporada ativa, retorna 0.
+# Chamada de produção: o relógio de temporada em `SQLBackups`, logo depois de
+# `TickSeasonLifecycle` fechar/liquidar a vencida — por isso a rotação reusa o
+# MESMO ruleset congelado: o beta promete uma regra só, e ela não muda entre
+# períodos. `rules_frozen` é gravado como prova auditável, não como input de
+# parsing.
 func EnsureSeasonS1() -> int:
 	if not ActiveSeason().is_empty():
 		return 0
@@ -69,10 +101,13 @@ func SnapshotSeasonPower(seasonID : int, limit : int = 100) -> int:
 	return n
 
 func SnapshotSeasonSpend(seasonID : int) -> int:
-	var season : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT starts_at FROM season WHERE season_id = ?;", [seasonID])
+	var season : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT starts_at, ends_at FROM season WHERE season_id = ?;", [seasonID])
 	if season.is_empty():
 		return 0
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, SUM(-amount) AS spent FROM ledger_transaction WHERE kind = 'gems' AND amount < 0 AND created_at >= ? GROUP BY account_id;", [int(season[0]["starts_at"])])
+	# G1: a corrida é a janela da temporada, não "tudo desde o início". Sem o
+	# teto em `ends_at`, o gasto das horas entre o fim e o fechamento entrava na
+	# apuração (débito 2 de archive/SEASON_ACTIVATION_NOTE.md).
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, SUM(-amount) AS spent FROM ledger_transaction WHERE kind = 'gems' AND amount < 0 AND created_at >= ? AND created_at <= ? GROUP BY account_id;", [int(season[0]["starts_at"]), int(season[0]["ends_at"])])
 	var n : int = 0
 	for row in rows:
 		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'spend', ?, ?);", [seasonID, int(row["account_id"]), int(row["spent"])]):
@@ -105,8 +140,17 @@ func GetSeasonBoard(seasonID : int, kind : String, limit : int = 20) -> Array[Di
 # SOM-IDLE (3b): premiação AUTOMÁTICA — substitui o payout manual/GM da v0.
 # Tabela de prêmios em gems por colocação (top-N) para cada corrida (power/spend).
 
-# Rodado no job diário (e chamável a qualquer momento): fecha temporadas vencidas
-# e liquida as fechadas. Idempotente — uma temporada só paga uma vez.
+# Relógio de temporada (G1), parte 1 de 2: fecha as vencidas congelando o placar
+# e liquida as fechadas. Quem abre a temporada é `EnsureSeasonS1`, chamado logo
+# depois pelo mesmo relógio em `SQLBackups` — a separação é de propósito: fechar o
+# que venceu e abrir a sucessora são decisões diferentes, e as suítes que só
+# querem o fechamento (payout, races) não podem ganhar uma temporada ativa como
+# efeito colateral. Rodado a cada `SQLCommons.SeasonClockIntervalSec` — também no
+# boot. Idempotente: uma temporada só fecha e paga uma vez.
+# A cadência curta é parte do conserto, não otimização: `power_score`,
+# `bosses_beaten` e pontos de guild não têm histórico, então o placar congelado é
+# o do instante do fechamento e cada hora de atraso é hora de jogo pós-temporada
+# que entraria na apuração.
 func TickSeasonLifecycle() -> Dictionary:
 	if not SeasonsEnabled():
 		return {"closed" = 0, "settled" = 0, "disabled" = true}
@@ -122,10 +166,14 @@ func TickSeasonLifecycle() -> Dictionary:
 			settled += 1
 	return {"closed" = closed, "settled" = settled}
 
-# Liquida os prêmios de uma temporada fechada: congela o placar final, concede
-# gems aos top-N por corrida e marca 'settled'. Gems (não-casháveis) via AddGems
+# Liquida os prêmios de uma temporada fechada a partir do placar CONGELADO por
+# `CloseSeason` (não das tabelas vivas), concede gems aos top-N por corrida e
+# marca 'settled'. Gems (não-casháveis) via AddGems
 # com reason 'season_prize:<id>:<kind>:<subject>' — a prova no ledger garante
 # idempotência por vencedor, mesmo se uma execução anterior falhou no meio.
+# Sem snapshot aqui de propósito: se ele existisse, a liquidação de uma
+# temporada vencida dias antes recompunha o placar com o estado corrente e
+# pagaria quem subiu depois do fim.
 func SettleSeasonPrizes(seasonID : int) -> Dictionary:
 	var season : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT status FROM season WHERE season_id = ?;", [seasonID])
 	if season.is_empty():
@@ -136,10 +184,6 @@ func SettleSeasonPrizes(seasonID : int) -> Dictionary:
 	if status != "closed":
 		return {"ok" = false, "reason" = "not_closed", "awarded" = 0}
 
-	SnapshotSeasonPower(seasonID)
-	SnapshotSeasonSpend(seasonID)
-	SnapshotSeasonBossKills(seasonID)
-	SnapshotSeasonGuildPoints(seasonID)
 	var awarded : int = 0
 	for kind in ["power", "spend", "boss_kills"]:
 		var board : Array[Dictionary] = GetSeasonBoard(seasonID, kind, EconomyCatalog.SeasonPrizeGems.size())
