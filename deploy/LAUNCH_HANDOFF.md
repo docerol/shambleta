@@ -227,8 +227,10 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   Em 2026-09-25 o dono confirmou que **nenhum** dos caminhos é do projeto: os links são do
   upstream de que Shambleta fez fork, e não existe servidor Discord próprio. A função saiu
   inteira do jogo com isso — a ponte (`sources/discord/`, 2 arquivos), o addon
-  `addons/discord_gd` (33 arquivos, 224 KB, que iam dentro do pacote Web porque nenhum
-  `exclude_filter` dos presets os tirava de lá), o botão `OpenDiscord`, o endereço
+  `addons/discord_gd` (33 arquivos, 224 KB de fonte, que iam dentro do pacote Web porque nenhum
+  `exclude_filter` dos presets os tirava de lá — medido no `index.pck` exportado hoje: 38 entradas
+  `discord_gd` antes, **zero** depois do re-export, e o pacote cai de 37 542 164 para 37 457 048
+  bytes), o botão `OpenDiscord`, o endereço
   horneado em `LauncherCommons` e as duas frases de erro que o apontavam (`Login.gd`,
   `Character.gd`). O corpo do aceite parou de oferecer `discord.com/invite/UnY77dR` e o
   canal `#sourceofmana` na Libera e passou a dizer que perguntas sobre as políticas —
