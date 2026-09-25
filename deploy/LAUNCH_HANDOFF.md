@@ -329,6 +329,22 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   texturas, pack de áudio remoto) exigem QA visual.
 
 ## 5. Git + CI (T4 parcial)
+**FEITO em 2026-09-25, nesta máquina, depois da cópia de HD:** a passada inteira está
+commitada e no remoto — `6277671` ("Beta entra no índice: a passada da auditoria inteira
+num commit só"), push `da2531c..6277671` em `origin/master`, com **148 caminhos** no
+commit (98 `M`, 31 `D`, 18 `A` e 1 `R` — o rename que o git detectou sozinho foi
+`companion/catalog.json` → `data/conf/paid_catalog.json`, 54% de similaridade). A árvore
+ficou limpa e `HEAD` passou a conter as 46 migrations e cada módulo que antes só existia
+solto. Autorização do dono obtida antes de commitar e enviar, como este parágrafo exigia.
+A régua foi re-medida **antes** do commit, aqui: os nove gates com as mesmas contagens do
+parágrafo abaixo, e o pacote Web re-produzido do zero nesta máquina fechou o QA de
+navegador em `== RESULT: 10 checks, 0 failures ==` (boot do engine no Chromium,
+`crossOriginIsolated`, `SharedArrayBuffer`, canvas, manifest standalone, exatamente um
+service worker no escopo raiz, zero requisição falha, zero erro de console), com
+first-load medido em **36 MiB** gzip. O texto a seguir descreve o estado **pré-commit** e
+continua válido pelo motivo estrutural — os arquivos têm que entrar juntos — mas onde ele
+diz "nenhum arquivo da passada de beta está commitado", hoje é histórico.
+
 **Estado re-medido nesta passada (2026-09-24, 23:15 -0300 / 2026-09-25 02:15 UTC):** `HEAD` ==
 `origin/master` ==
 `da2531c` ("Conserta exports do CI", 2026-09-24 02:32 -0300) — o remoto está no mesmo
@@ -424,10 +440,16 @@ security 47/0, refund 12/0 (`/tmp/suite_beta_final28.log`). Ela vale para o comm
 nada em `sources/`, `tests/`, `companion/` ou `data/conf/` mudar depois; mudou, é `quick` +
 os três python antes de commitar.
 
-**O comando que fecha isso** (nada aqui roda sozinho: commit e push pedem autorização do dono).
+**O comando que fecha isso** — **executado em 2026-09-25 (`6277671`, push feito); preservado
+abaixo porque é o procedimento de qualquer leva futura do mesmo tipo.** Nada aqui roda
+sozinho: commit e push pedem autorização do dono.
 Um `git add -A && git commit` é o que mantém os dois conjuntos juntos, porque `-A` pega os 98
 modificados, os 32 deletados **e** os 18 soltos (o décimo nono `??`, `build/`, é saída de
-export — **não** entra: `scripts/export_web.sh` o regenera a cada rodada). A alternativa explícita, listada como foi medida
+export — **não** entra: `scripts/export_web.sh` o regenera a cada rodada; a ressalva medida
+no commit real é que `build/` colapsa num único path adicionável, `build/.gdignore`, porque
+o `.gitignore` tem `!build/.gdignore` de propósito — ele entrou, são 0 bytes e é o marcador
+que impede o import da rodada seguinte de empacotar o export anterior; nenhum byte de artefato
+entra). A alternativa explícita, listada como foi medida
 em `git status --porcelain | grep '^??'` (menos `build/`), é adicionar um por um:
 
 ```
