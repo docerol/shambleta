@@ -187,17 +187,30 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	var zone5 : FarmZoneData = FarmZoneData.GetZone(5)
 	Check(zone5 != null, "Zone 5 exists")
 
-	# Arm: farm zone 5, anchor 12h ago, efficiency 0.8
+	# Arm: farm zone 5, anchor 12h atrás, eficiência 0.8. O cap F2P é 1h desde a
+	# regra de 2026-09-25, então 12h liquidáveis têm de ser COMPRADAS: 11 views de
+	# afkhoras + 1h de base. O golden continua medindo os mesmos números de sempre
+	# (xp/ouro/tax/drops/chaves/baús) e passa a exercitar o caminho do anúncio.
+	# dayStartOverride = 1 prende a janela no anchor, não no relógio real — sem
+	# isso a suíte quebraria sozinha ao cruzar a meia-noite UTC-3 no meio do run.
 	var now : int = SQLCommons.Timestamp()
 	sql.SetCharacterFarmZone(charID, 5)
 	sql.UpdateSettleAnchor(charID, now - 12 * 3600, 0.8)
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
+	AdsCosmeticsService.dayStartOverride = 1
+	for _adView in 11:
+		if not bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS,
+			"stub:%s:%d" % [EconomyCatalog.AD_AFKHOURS, EconomyCatalog.ShopDay(now)]).get("ok", false)):
+			break
 
 	var report : Dictionary = OfflineSettle.SettlePending(charID)
+	OS.set_environment("SHAMBLETA_AD_STUB", "")
+	AdsCosmeticsService.dayStartOverride = 0
 	Check(not report.is_empty(), "Settle produced a report")
 	if report.is_empty():
 		return
 
-	var h : float = 12.0
+	var h : float = float(report["hours"])
 	var eff : float = 0.8
 	var nb : float = ExpectedNewbieMult(sql, charID)
 	var expectedXp : int = roundi(float(zone5.xpPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor * nb)
@@ -205,7 +218,7 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	var expectedTax : int = roundi(float(expectedGold) * 0.05)	# 5% — eff < 1.0
 	var expectedDrop : int = floori(float(zone5.dropRatePPM) * h * 3600.0 * eff * OfflineSettle.OfflineFactor / 1000000.0)
 
-	CheckEq(int(report["hours"] * 100.0), int(h * 100.0), "hours = 12 (capped)")
+	CheckEq(int(h * 100.0), 1200, "hours = 12 (capped)")
 	CheckEq(int(report["efficiency"] * 100.0), int(eff * 100.0), "efficiency = 0.8")
 	CheckEq(int(report["xp_earned"]), expectedXp, "xp golden")
 	CheckEq(int(report["gold_earned"]), expectedGold, "gold golden")
@@ -1565,22 +1578,33 @@ func SuiteFaucetHarness(sql : SQLService) -> void:
 	var ledger0 : int = int(sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction;", [])[0]["n"])
 	var xp4 : Dictionary = {}
 	var xp8 : Dictionary = {}
+	# O cap F2P é 1h desde a regra de 2026-09-25, então a segunda hora do par
+	# 1h/2h tem de ser COMPRADA: uma view de afkhoras por hora acima da base.
+	# As views se acumulam entre iterações (o re-anchor para trás as traz de
+	# volta), mas isso só adds folga — `min(elapsed, cap)` continua valendo 1 e 2.
+	var harnessAcct : int = sql.GetAccountIDForCharacter(charID)
+	var harnessEconomy : EconomyService = Launcher.Economy
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	for zoneID in [1, 10, 20, 30, 40]:
 		var zone : FarmZoneData = FarmZoneData.GetZone(zoneID)
 		if zone == null or zone.mapID == DB.UnknownHash:
 			continue
 		sql.SetCharacterFarmZone(charID, zoneID)
 		for eff in [0.5, 1.0]:
-			for hours in [4, 8]:
+			for hours in [1, 2]:
+				for _extraHour in hours - 1:
+					harnessEconomy.WatchAd(harnessAcct, charID, EconomyCatalog.AD_AFKHOURS,
+						"stub:%s:%d" % [EconomyCatalog.AD_AFKHOURS, EconomyCatalog.ShopDay(SQLCommons.Timestamp())])
 				sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - hours * 3600, eff)
 				var report : Dictionary = OfflineSettle.SettlePending(charID)
 				if Check(not report.is_empty(), "settle z%d %dh eff %.1f" % [zoneID, hours, eff]):
 					runs += 1
-					if hours == 4:
+					if hours == 1:
 						xp4["%d|%.1f" % [zoneID, eff]] = int(report["xp_earned"])
 					else:
 						xp8["%d|%.1f" % [zoneID, eff]] = int(report["xp_earned"])
-	# Linearity: 8h == 2x 4h and eff 1.0 == 2x eff 0.5 (±2 floor noise)
+	OS.set_environment("SHAMBLETA_AD_STUB", "")
+	# Linearity: 2h == 2x 1h and eff 1.0 == 2x eff 0.5 (±2 floor noise)
 	for key in xp4.keys():
 		Check(abs(xp8[key] - 2 * xp4[key]) <= 2, "hours linearity %s (%d vs 2x%d)" % [key, xp8[key], xp4[key]])
 	for zoneID in [1, 10, 20, 30, 40]:
@@ -2679,8 +2703,9 @@ func SuiteCosmetics(sql : SQLService) -> void:
 	sql.db.delete_rows("character", "nickname = 'IdleCosTester'")
 	sql.db.delete_rows("account", "username = 'idle_cos_account'")
 
-# Fase E (rewarded ads, MONETIZATION §2.5): tokens, caps, 4 placements, 2×/4×
-# no settle, VIP dobra quantidade. Stub em vez de SDK; servidor valida tudo.
+# Fase E (rewarded ads, MONETIZATION §2.5): tokens, caps por placement e o
+# afkhoras — anúncio COMPRA HORA de offline, não multiplicador de loot. Stub em
+# vez de SDK; servidor valida tudo.
 func SuiteAds(sql : SQLService) -> void:
 	print("[suite] rewarded ads (Fase E)")
 	# SOM-IDLE M2: o stub é env com default FECHADO (era `const true` — compilar
@@ -2706,7 +2731,7 @@ func SuiteAds(sql : SQLService) -> void:
 	var viewsOff : int = economy.AdViewsToday(accountID)
 	var keysOff : int = sql.GetCharacterBossKeys(charID)
 	var closedOff : int = int(sql.GetChestStats(charID)["closed"])
-	Check(str(economy.WatchAd(accountID, charID, "afk2x", tok.call("afk2x")).get("reason", "")) == "bad_token", "ads off: watch não credita")
+	Check(str(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, tok.call("afkhoras")).get("reason", "")) == "bad_token", "ads off: watch não credita")
 	Check(str(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("reason", "")) == "bad_token", "ads off: baú não credita")
 	Check(str(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("reason", "")) == "bad_token", "ads off: chave não credita")
 	Check(str(economy.RerollDailyShopAd(accountID, tok.call("reroll")).get("reason", "")) == "bad_token", "ads off: reroll não credita")
@@ -2730,6 +2755,7 @@ func SuiteAds(sql : SQLService) -> void:
 	Check(stubTok == tok.call("chest"), "ads: client stub token matches server day")
 
 	Check(str(economy.WatchAd(accountID, charID, "nope", tok.call("nope")).get("reason", "")) == "unknown_placement", "unknown placement rejected")
+	Check(str(economy.WatchAd(accountID, charID, "afk2x", tok.call("afk2x")).get("reason", "")) == "unknown_placement", "afk2x saiu dos placements")
 	Check(str(economy.WatchAd(accountID, charID, "chest", "bogus").get("reason", "")) == "bad_token", "bad token rejected")
 	Check(str(economy.WatchAd(accountID, charID, "chest", "stub:bosskey:%d" % day).get("reason", "")) == "bad_token", "cross-placement token rejected")
 
@@ -2758,73 +2784,80 @@ func SuiteAds(sql : SQLService) -> void:
 	Check(bool(economy.RerollDailyShop(accountID).get("ok", false)), "paid reroll 3 ok")
 	Check(str(economy.RerollDailyShop(accountID).get("reason", "")) == "reroll_cap", "shared reroll cap enforced")
 
-	# Teto global 6/dia em conta fresca (2 chaves + 1 baú + 3 rerolls)
+	# Teto global de 6 anúncios/dia SAIU (regra do dono 2026-09-25): se existe
+	# anúncio disponível ele deve ser mostrável, porque no afkhoras cada view vale
+	# 1h de farm. Os caps que continuam são por placement (baú 1, chave 2).
 	var capChar : int = CreateFixture(sql, "idle_ads_cap", "IdleAdsCap")
 	if Check(capChar != 0, "cap fixture created"):
 		var capAcct : int = sql.GetAccountIDForCharacter(capChar)
-		economy.ClaimAdBossKey(capAcct, capChar, tok.call("bosskey"))
-		economy.ClaimAdBossKey(capAcct, capChar, tok.call("bosskey"))
-		economy.ClaimAdChest(capAcct, capChar, tok.call("chest"))
-		economy.GetDailyShop(capAcct)
-		economy.RerollDailyShopAd(capAcct, tok.call("reroll"))
-		economy.RerollDailyShopAd(capAcct, tok.call("reroll"))
-		economy.RerollDailyShopAd(capAcct, tok.call("reroll"))
-		CheckEq(economy.AdViewsToday(capAcct), 6, "6 ad views counted")
-		Check(str(economy.WatchAd(capAcct, capChar, "afk2x", tok.call("afk2x")).get("reason", "")) == "ad_cap", "global 6/day enforced")
+		var accepted : int = 0
+		for i in 9:
+			if bool(economy.WatchAd(capAcct, capChar, EconomyCatalog.AD_AFKHOURS, tok.call("afkhoras")).get("ok", false)):
+				accepted += 1
+		CheckEq(accepted, 9, "9 views afkhoras aceitas na mesma conta")
+		CheckEq(economy.AdViewsToday(capAcct, EconomyCatalog.AD_AFKHOURS), 9, "as 9 views estão no banco")
+		Check(bool(economy.ClaimAdChest(capAcct, capChar, tok.call("chest")).get("ok", false)), "baú continua após 9 anúncios")
 		sql.db.delete_rows("character", "nickname = 'IdleAdsCap'")
 		sql.db.delete_rows("account", "username = 'idle_ads_cap'")
 
-	# Settle armado F2P: 2× XP/ouro/drops, baús iguais, consome no uso
-	sql.UpdateSettleAnchor(charID, now - 4 * 3600, 1.0)
+	# O prêmio do anúncio é HORA, não multiplicador: F2P líquida 1h de teto e cada
+	# view soma 1h a esse teto; `doubled` continua falso em qualquer liquidação
+	# sem o perk do tier 2.
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 4 * 3600, 1.0)
 	var base : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
-	Check(not base.is_empty() and not bool(base.get("doubled", true)), "baseline settle not doubled")
+	if Check(not base.is_empty(), "baseline settle ok"):
+		CheckNear(float(base.get("hours", 0.0)), 1.0, 0.001, "F2P líquida 1h sem anúncio")
+		Check(not bool(base.get("doubled", true)), "baseline settle not doubled")
+	for i in 3:
+		Check(bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, tok.call("afkhoras")).get("ok", false)), "afkhoras view %d" % (i + 1))
 	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 4 * 3600, 1.0)
-	Check(bool(economy.WatchAd(accountID, charID, "afk2x", tok.call("afk2x")).get("ok", false)), "afk2x armed")
-	Check(economy.IsAfkAdArmed(accountID, charID, SQLCommons.Timestamp() - 4 * 3600), "arm visible pre-settle")
-	OfflineSettle.nowOverride = SQLCommons.Timestamp()
 	var dbl : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
-	OfflineSettle.nowOverride = 0
-	if Check(not dbl.is_empty() and bool(dbl.get("doubled", false)), "armed settle doubled"):
-		CheckNear(float(dbl.get("xp_earned", 0)), float(base.get("xp_earned", 0)) * 2.0, 2.0, "F2P xp ×2")
-		CheckNear(float(dbl.get("gold_earned", 0)), float(base.get("gold_earned", 0)) * 2.0, 2.0, "F2P gold ×2")
-		CheckEq(int(dbl.get("chests", -1)), int(base.get("chests", -2)), "chests not doubled")
-	# Consumo = anchor avança além da view: nenhum settle futuro reusa o arm
-	# (em tempo real o anchor só anda p/ frente; re-ancorar p/ trás no teste
-	# re-armaria por construção — por isso o avanço é explícito aqui).
-	Check(economy.IsAfkAdArmed(accountID, charID, int(dbl.get("last_settled_at", 0))) == false, "arm consumed (anchor past view)")
+	if Check(not dbl.is_empty(), "settle com horas compradas ok"):
+		CheckNear(float(dbl.get("cap_hours", 0.0)), 4.0, 0.001, "cap = 1h base + 3h compradas")
+		CheckNear(float(dbl.get("hours", 0.0)), 4.0, 0.001, "3 anúncios pagam 4h")
+		Check(not bool(dbl.get("doubled", true)), "hora comprada não dobra o loot")
+	# Consumo = o anchor avança além da view: nenhuma hora comprada é paga duas
+	# vezes (em tempo real o anchor só anda p/ frente; re-ancorar p/ trás no teste
+	# re-compraria por construção — por isso o avanço aqui é pelo settle real).
 	OfflineSettle.nowOverride = int(dbl.get("last_settled_at", 0)) + 7200
 	var after : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
 	OfflineSettle.nowOverride = 0
-	if Check(not after.is_empty() and not bool(after.get("doubled", true)), "next settle normal (1×/liquidação)"):
+	if Check(not after.is_empty(), "next settle normal (1h de teto)"):
+		CheckNear(float(after.get("hours", 0.0)), 1.0, 0.001, "hora comprada não se reusa")
 		Check(int(after.get("xp_earned", 0)) > 0, "next settle productive")
 
-	# VIP: 4× no settle + 2 baús no placement
+	# VIP: o ×2 do loot é perk do TIER 2 e não vem de anúncio nenhum; tier 1 só
+	# compra teto maior. Baú/chave seguem dobrando a QUANTIDADE para qualquer VIP.
 	var vipChar : int = CreateFixture(sql, "idle_ads_vip", "IdleAdsVip")
 	if Check(vipChar != 0, "vip ads fixture created"):
 		var vipAcct : int = sql.GetAccountIDForCharacter(vipChar)
 		sql.SetCharacterFarmZone(vipChar, 1)
 		Check(sql.SetVIPUntil(vipAcct, now + 30 * 86400), "vip on")
-		Check(sql.SetVIPTier(vipAcct, 1), "vip tier 1")
+		Check(sql.SetVIPTier(vipAcct, 2), "vip tier 2")
 		sql.UpdateSettleAnchor(vipChar, SQLCommons.Timestamp() - 4 * 3600, 1.0)
-		var vbase : Dictionary = OfflineSettle.SettlePending(vipChar)
-		tele.Flush()
-		sql.UpdateSettleAnchor(vipChar, SQLCommons.Timestamp() - 4 * 3600, 1.0)
-		economy.WatchAd(vipAcct, vipChar, "afk2x", tok.call("afk2x"))
-		OfflineSettle.nowOverride = SQLCommons.Timestamp()
 		var vdbl : Dictionary = OfflineSettle.SettlePending(vipChar)
 		tele.Flush()
-		OfflineSettle.nowOverride = 0
-		if Check(not vdbl.is_empty() and bool(vdbl.get("doubled", false)), "vip settle doubled"):
-			CheckNear(float(vdbl.get("xp_earned", 0)), float(vbase.get("xp_earned", 0)) * 4.0, 4.0, "VIP xp ×4")
+		if Check(not vdbl.is_empty(), "tier 2 settle ok"):
+			Check(bool(vdbl.get("doubled", false)), "tier 2 dobra sem assistir nada")
+			CheckNear(float(vdbl.get("cap_hours", 0.0)), 24.0, 0.001, "tier 2 tem 24h de teto")
+			CheckNear(float(vdbl.get("hours", 0.0)), 4.0, 1.0, "tier 2 líquida as 4h do anchor")
 		var vc0 : int = int(sql.GetChestStats(vipChar)["closed"])
 		Check(bool(economy.ClaimAdChest(vipAcct, vipChar, tok.call("chest")).get("ok", false)), "vip ad chest claimed")
 		CheckEq(int(sql.GetChestStats(vipChar)["closed"]), vc0 + 2, "VIP chest doubled")
 		var vk0 : int = sql.GetCharacterBossKeys(vipChar)
 		Check(bool(economy.ClaimAdBossKey(vipAcct, vipChar, tok.call("bosskey")).get("ok", false)), "vip ad key claimed")
 		CheckEq(sql.GetCharacterBossKeys(vipChar), vk0 + 2, "VIP key doubled")
+		# Tier 1 mantém as 24h mas não herda o multiplicador.
+		Check(sql.SetVIPTier(vipAcct, 1), "vip tier 1")
+		sql.UpdateSettleAnchor(vipChar, SQLCommons.Timestamp() - 2 * 3600, 1.0)
+		var t1 : Dictionary = OfflineSettle.SettlePending(vipChar)
+		tele.Flush()
+		if Check(not t1.is_empty(), "tier 1 settle ok"):
+			Check(not bool(t1.get("doubled", true)), "tier 1 não dobra")
+			CheckNear(float(t1.get("cap_hours", 0.0)), 24.0, 0.001, "tier 1 também tem 24h")
 		sql.db.delete_rows("character", "nickname = 'IdleAdsVip'")
 		sql.db.delete_rows("account", "username = 'idle_ads_vip'")
 
@@ -3244,26 +3277,27 @@ func SuiteVendor(sql : SQLService) -> void:
 	sql.db.delete_rows("character", "nickname = 'IdleVendor'")
 	sql.db.delete_rows("account", "username = 'idle_vendor'")
 
-# Fase B: cap offline por tier (12h F2P / 24h VIP1 / 36h VIP2, expirado volta).
+# Fase B: cap offline por tier (1h F2P / 24h VIP1 / 24h VIP2, expirado volta).
 func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] VIP cap hours (Fase B)")
 	var now : int = SQLCommons.Timestamp()
 	sql.SetCharacterFarmZone(charID, 1)
 	sql.UpdateSettleAnchor(charID, now - 48 * 3600, 1.0)
 	OfflineSettle.nowOverride = now
-	CheckEq(OfflineSettle.CapHoursForAccount(0, now), 12.0, "no account → 12h")
-	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 12.0, "no VIP → 12h")
+	CheckEq(OfflineSettle.CapHoursForAccount(0, now), 1.0, "no account → 1h")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 1.0, "no VIP → 1h")
 	var r0 : OfflineSettle.SettleReport = OfflineSettle.BuildReport(charID, now)
-	CheckEq(r0.hours, 12.0, "report capped at 12h F2P")
+	CheckEq(r0.hours, 1.0, "report capped at 1h F2P")
+	CheckEq(r0.capHours, 1.0, "cap_hours F2P sem anúncio")
 	Check(sql.SetVIPUntil(accountID, now + 30 * 86400), "vip window on")
 	Check(sql.SetVIPTier(accountID, 1), "tier 1 set")
 	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 24.0, "VIP1 → 24h")
 	CheckEq(OfflineSettle.BuildReport(charID, now).hours, 24.0, "report capped at 24h VIP1")
 	Check(sql.SetVIPTier(accountID, 2), "tier 2 set")
-	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 36.0, "VIP2 → 36h")
-	CheckEq(OfflineSettle.BuildReport(charID, now).hours, 36.0, "report capped at 36h VIP2")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 24.0, "VIP2 → 24h (não mais 36h)")
+	CheckEq(OfflineSettle.BuildReport(charID, now).hours, 24.0, "report capped at 24h VIP2")
 	sql.SetVIPUntil(accountID, now - 10)
-	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 12.0, "expired → 12h")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 1.0, "expired → 1h")
 	# PurchaseVIP registra o tier (upgrade nunca rebaixa janela ativa)
 	sql.SetGems(accountID, 5000)
 	var economy : EconomyService = Launcher.Economy
@@ -6175,8 +6209,11 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 	if Check(not capped.is_empty(), "capped settle produced a report"):
 		var z1 : FarmZoneData = FarmZoneData.GetZone(1)
 		var xp : int = int(capped["xp_earned"])
-		# favor_xp = 1 comprado acima compõe o faucet offline (×1,05)
-		var expectedXp : int = roundi(float(z1.xpPerKill) * float(z1.parKillsPerHour) * 12.0 * 1.0 \
+		# favor_xp = 1 comprado acima compõe o faucet offline (×1,05). A hora é a do
+		# relatório: 12h de janela batem no cap F2P de 1h, e a window continua
+		# truncada no mesmo `h` que gerou xp/gold/chaves — re-derivar, não chumbar.
+		CheckNear(float(capped["hours"]), 1.0, 0.001, "12h de janela líquidas no cap F2P de 1h")
+		var expectedXp : int = roundi(float(z1.xpPerKill) * float(z1.parKillsPerHour) * float(capped["hours"]) * float(capped["efficiency"]) \
 			* OfflineSettle.OfflineFactor * float(capped["mods"]) * RebirthData.XpMult(1) * ExpectedNewbieMult(sql, charID))
 		CheckEq(xp, expectedXp, "offline income carries the bought favor_xp (x1.05)")
 		var gain : int = int(capped.get("essence_earned", -1))
@@ -7243,3 +7280,230 @@ func SuiteExternalLinksWebBranch() -> void:
 				nus.append("%s:%d em %s" % [path, i + 1, fnNome])
 	CheckEq(nus.size(), 0, "navegação externa: todo OS.shell_open de sources/ tem ramo Web com JavaScriptBridge (%d sítios; sem ramo: %s)" % [sitios, " | ".join(nus)])
 	print("  [info] navegação externa: %d sítios de OS.shell_open em sources/, todos com ramo Web" % sitios)
+
+# Offline comprado com anúncio (plano 2026-09-25). A regra do dono: "F2P coleta
+# 1h; cada anúncio soma +1h; o divisor de 24h reinicia; VIP faz 24h sem assistir
+# nada". Esta suíte cobre o mecanismo por trás do número — placement, horas
+# ganhas por PERSONAGEM, as duas metades da janela (divisor e coleta) e o teto de
+# baú. O C2 ligou o settle nela (CapHoursForCharacter em BuildReport e em
+# SettlePending), então os asserts de liquidação no fim são a prova de que a
+# ligou: sem eles o cap novo existiria no catálogo sem pagar hora a ninguém.
+func SuiteOfflineAdHours(sql : SQLService) -> void:
+	print("[suite] offline comprado com anúncio (C1/C2)")
+	var economy : EconomyService = Launcher.Economy
+	var tele : TelemetryService = Launcher.Telemetry
+	var now : int = SQLCommons.Timestamp()
+	var day : int = EconomyService.ShopDay(now)
+	var tok : Callable = func(p : String) -> String: return "stub:%s:%d" % [p, day]
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
+	var charA : int = CreateFixture(sql, "idle_offad_a", "IdleOffAdA")
+	var charB : int = CreateFixture(sql, "idle_offad_b", "IdleOffAdB")
+	if not Check(charA != 0 and charB != 0, "offad fixtures created"):
+		return
+	var acctA : int = sql.GetAccountIDForCharacter(charA)
+	var acctB : int = sql.GetAccountIDForCharacter(charB)
+	sql.SetCharacterFarmZone(charA, 1)
+	var old : int = now - 7200		# anchor "2h atrás", i.e. nada coletado depois das views
+
+	Check(EconomyCatalog.AD_PLACEMENTS.has(EconomyCatalog.AD_AFKHOURS), "afkhoras é placement conhecido")
+	CheckEq(int(EconomyCatalog.AD_OFFLINE_HOURS_PER_AD * 100.0), 100, "cada anúncio vale 1h")
+
+	# O placement novo não abriu porta de bypass: sem a env do beta, o token
+	# forjado continua sem valer nada.
+	OS.set_environment("SHAMBLETA_AD_STUB", "")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "bad_token", "afkhoras sem a env: bad_token")
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
+
+	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "sem view: 0h compradas")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_BOSSKEY, tok.call(EconomyCatalog.AD_BOSSKEY)).get("reason", "")) == "ok", "bosskey view registrada")
+	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "view de outro placement não compra hora")
+
+	# Linearidade: 1 view = 1h, sem teto e sem acúmulo de sobra.
+	for i in 3:
+		Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras view %d ok" % (i + 1))
+		CheckNear(economy.AfkHoursEarned(acctA, charA, old), float(i + 1), 0.01, "cap cresce 1h por view")
+
+	# Por PERSONAGEM: a mesma conta com outro personagem, ou outro personagem com
+	# a mesma conta, não herda a hora — senão 6 personagens lavariam o contador.
+	CheckNear(economy.AfkHoursEarned(acctB, charA, old), 0.0, 0.01, "conta errada: 0h")
+	CheckNear(economy.AfkHoursEarned(acctA, charB, old), 0.0, 0.01, "personagem errado: 0h")
+
+	# As duas metades do max(divisor do dia, último settle): o divisor zera a
+	# janela quando o dia vira, e o anchor consome quando se coleta.
+	AdsCosmeticsService.dayStartOverride = now + 60
+	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "virou o dia sem coletar: hora perdida")
+	AdsCosmeticsService.dayStartOverride = 0
+	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 3.0, 0.01, "janela de volta: as 3h continuam compradas")
+	CheckNear(economy.AfkHoursEarned(acctA, charA, now + 60), 0.0, 0.01, "anchor passado pela coleta: nada pendente")
+
+	# Composição do cap: comprado pela conta + assistido pelo personagem.
+	CheckNear(OfflineSettle.CapHoursForCharacter(charA, acctA, old), OfflineSettle.CapHoursForAccount(acctA) + 3.0, 0.01, "cap do personagem = comprado + 3h de anúncio")
+	Check(str(economy.WatchAd(acctB, charB, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "view do personagem B ok")
+	Check(sql.SetVIPUntil(acctB, now + 30 * 86400) and sql.SetVIPTier(acctB, 1), "vip tier 1 na conta B")
+	CheckNear(OfflineSettle.CapHoursForAccount(acctB), 24.0, 0.01, "VIP compra 24h sem assistir nada")
+	CheckNear(OfflineSettle.CapHoursForCharacter(charB, acctB, old), 25.0, 0.01, "VIP + anúncio compõem sem teto")
+
+	# O settle LÊ o cap composto: 14h de janela, 1h de base + as 3h assistidas =
+	# 4h pagas. Com o cap antigo de 12h isto liquidaria 12h; o que não coube no
+	# teto não é pago e não se acumula.
+	sql.UpdateSettleAnchor(charA, now - 14 * 3600, 1.0)
+	var report : Dictionary = OfflineSettle.SettlePending(charA)
+	tele.Flush()
+	if Check(not report.is_empty(), "settle lê o cap do personagem"):
+		CheckNear(float(report.get("hours", 0.0)), 4.0, 0.01, "14h de janela pagam 4h (1h base + 3h de anúncio)")
+		CheckNear(float(report.get("cap_hours", 0.0)), 4.0, 0.01, "cap_hours vai no relatório")
+		Check(not bool(report.get("doubled", true)), "F2P nunca líquida dobrado")
+		CheckEq(int(report.get("chests", 0)), 1, "4h → 1 baú")
+	# Hora não liquidada não fica pendurada: o anchor avançou além das views.
+	OfflineSettle.nowOverride = int(report.get("last_settled_at", 0)) + 3600
+	var next : Dictionary = OfflineSettle.SettlePending(charA)
+	tele.Flush()
+	OfflineSettle.nowOverride = 0
+	if Check(not next.is_empty(), "settle seguinte produz"):
+		CheckNear(float(next.get("hours", 0.0)), 1.0, 0.01, "sem view nova, o teto volta à base")
+
+	# Piso e teto de baú (risco 1 do plano). A 1h o floor(h/4) pagaria 0 baú, e a
+	# janela AFK é justamente o produto do F2P; na outra ponta, o gate de pegada
+	# de 60 s permite uma coleta por minuto, que sem teto viraria 24 baús/dia.
+	var budgetChar : int = CreateFixture(sql, "idle_offad_c", "IdleOffAdC")
+	if Check(budgetChar != 0, "chest budget fixture created"):
+		var budgetAcct : int = sql.GetAccountIDForCharacter(budgetChar)
+		sql.SetCharacterFarmZone(budgetChar, 1)
+		var minted : int = 0
+		for i in 24:
+			sql.UpdateSettleAnchor(budgetChar, SQLCommons.Timestamp() - 3600, 1.0)
+			var r : Dictionary = OfflineSettle.SettlePending(budgetChar)
+			minted += int(r.get("chests", 0))
+			if i == 0:
+				CheckEq(int(r.get("chests", 0)), 1, "1h líquida garante 1 baú")
+				CheckEq(int(r.get("boss_keys", 0)), 0, "1h não fabrica chave de chefe")
+		tele.Flush()
+		CheckEq(minted, EconomyCatalog.ChestsPerDayFromSettle, "24 coletas de 1h pagam o teto do dia")
+		CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND origin = 'settle';", [budgetChar])[0]["n"]), minted, "o teto vale na tabela, não só no relatório")
+		sql.db.delete_rows("chest_instance", "char_id = %d" % budgetChar)
+		sql.db.delete_rows("character", "nickname = 'IdleOffAdC'")
+		sql.db.delete_rows("account", "username = 'idle_offad_c'")
+
+	# ok ⇒ a view está contável. Antes WatchAd respondia ok:true sem olhar o que
+	# TelemetryService.Flush() devolveu (0 quando a transação falha); com hora
+	# offline em jogo isso viraria anúncio assistido e não pago.
+	var viewsBefore : int = economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS)
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras com a janela normal: ok")
+	CheckEq(economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS), viewsBefore + 1, "ok: a view está na janela que os caps consultam")
+
+	# O ramo negativo, injetado pelo próprio seam: uma janela que não consegue
+	# ver a view recém-gravada não pode creditar.
+	AdsCosmeticsService.dayStartOverride = now + 3600
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ad_persist", "view fora da janela: ad_persist, não ok")
+	AdsCosmeticsService.dayStartOverride = 0
+
+	sql.db.delete_rows("telemetry_event", "account_id = %d OR account_id = %d" % [acctA, acctB])
+	sql.db.delete_rows("character", "nickname = 'IdleOffAdA' OR nickname = 'IdleOffAdB'")
+	sql.db.delete_rows("account", "username = 'idle_offad_a' OR username = 'idle_offad_b'")
+
+# Vitrine honesta (plano 2026-09-25, fatias 2 e 4). Duas famílias de defeito,
+# ambas medidas no mapeamento de venda: anunciar algo que a outra porta recusa
+# (o passe fora de temporada) e cobrar por algo que nenhum renderizador mostra
+# (frame, rebirth_fx). A função de filtro é pura de propósito — os dois ramos
+# são provados sem tocar banco; o banco prova só o fio que a liga ao estado.
+func SuiteStorefrontHonesty(sql : SQLService) -> void:
+	print("[suite] vitrine honesta: passe, rótulo de cobrança e renderizador (C3/C4)")
+	var economy : EconomyService = Launcher.Economy
+	var charID : int = CreateFixture(sql, "idle_vitrine_a", "IdleVitrineA")
+	if not Check(charID != 0, "vitrine fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var total : int = EconomyCatalog.SHOP_CATALOG.size()
+	var off : Array = Storefront.ShopCatalog(false)
+
+	CheckEq(Storefront.ShopCatalog(true).size(), total, "com temporada, a vitrine é o catálogo inteiro")
+	CheckEq(off.size(), total - Storefront.PassSkus.size(), "sem temporada, só os SKUs de passe somem")
+	var offSkus : Array = []
+	for e in off:
+		offSkus.append(str((e as Dictionary).get("sku", "")))
+	for passSku in Storefront.PassSkus:
+		Check(not offSkus.has(String(passSku)), "%s some da vitrine sem temporada" % String(passSku))
+
+	# `Storefront.PassSkus` é uma lista de SKUs; a verdade sobre o que É passe
+	# mora no kind do catálogo canônico. Sem este amarrio a lista vira quarta
+	# cópia à deriva — e o erro silencioso é filtrar demais (some produto pagável).
+	var parsed : Variant = JSON.parse_string(_RepoFile("res://data/conf/paid_catalog.json"))
+	if not Check(typeof(parsed) == TYPE_DICTIONARY, "catálogo pago canônico parseia"):
+		return
+	var paid : Dictionary = parsed
+	var jsonPass : Array = []
+	var placeholder : String = ""
+	for key in paid.keys():
+		var sku : String = String(key)
+		if sku.begins_with("_"):
+			continue
+		var item : Variant = paid[key]
+		if typeof(item) != TYPE_DICTIONARY:
+			continue
+		var entry : Dictionary = item
+		if str(entry.get("kind", "")) == "pass_premium":
+			jsonPass.append(sku)
+		# O `title` é impresso no Checkout Pro pelo companion
+		# (`build_preference_payload`: "título (sku)") — é o que o pagador lê no
+		# extrato, e o que uma contestação cita.
+		var title : String = str(entry.get("title", ""))
+		if not title.is_empty() and title.to_lower().contains("pending"):
+			placeholder += sku + " "
+	# Comparação bidirecional: filtrar de menos deixa botão mentiroso na vitrine,
+	# filtrar a mais esconde produto pagável — e os dois erros são silenciosos.
+	var drift : String = ""
+	for want in Storefront.PassSkus:
+		if not jsonPass.has(String(want)):
+			drift += String(want) + " "
+	for have in jsonPass:
+		if not Storefront.PassSkus.has(String(have)):
+			drift += String(have) + " "
+	Check(drift.is_empty(), "PassSkus == kind pass_premium do catálogo canônico (%s)" % drift)
+	Check(placeholder.is_empty(), "nenhum rótulo de cobrança com placeholder (%s)" % placeholder)
+
+	# O fio que liga o filtro ao estado consolidado que a Loja desenha. A env é
+	# salva e devolvida no fim: `CreateSeason` recusa -1 com a trava ligada, e o
+	# estado da env no fim do run não é decisão desta suíte.
+	var seasonsEnv : String = OS.get_environment("SHAMBLETA_ENABLE_SEASONS")
+	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "1")
+	for r in sql.QueryBindings("SELECT season_id FROM season WHERE status = 'active';", []):
+		economy.CloseSeason(int((r as Dictionary).get("season_id", 0)))
+	var stateOff : Dictionary = economy.GetEconomyState(accountID, charID)
+	CheckEq((stateOff.get("catalog", []) as Array).size(), off.size(), "estado sem temporada traz a vitrine filtrada")
+	Check(not bool(stateOff.get("season_active", true)), "estado declara season_active = false")
+	var seasonID : int = economy.CreateSeason(7)
+	if Check(seasonID > 0, "temporada criada para a vitrine"):
+		var stateOn : Dictionary = economy.GetEconomyState(accountID, charID)
+		CheckEq((stateOn.get("catalog", []) as Array).size(), total, "com temporada, os dois botões de passe voltam")
+		Check(bool(stateOn.get("season_active", false)), "estado declara season_active = true")
+		Check(economy.CloseSeason(seasonID), "temporada da vitrine fechada")
+	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", seasonsEnv)
+
+	# Cosmético sem renderizador: a oferta sai do botão (flag no payload) e a
+	# cobrança sai na porta do dinheiro. O resto da vitrine continua listado —
+	# colecionar o que se ganhou não é vender.
+	var col : Dictionary = economy.GetCosmetics(accountID)
+	var colSkus : Array = col.get("catalog", [])
+	CheckEq(colSkus.size(), EconomyCatalog.COSMETIC_CATALOG.size(), "a coleção continua listando o catálogo inteiro")
+	var sellable : int = 0
+	for c in colSkus:
+		var ce : Dictionary = c
+		if int(ce.get("price", 0)) > 0:
+			if bool(ce.get("rendered", false)):
+				sellable += 1
+			else:
+				Check(not Storefront.IsRenderedCosmetic(str(ce.get("id", ""))),
+					"%s: flag do estado bate com o catálogo" % str(ce.get("id", "")))
+	CheckEq(sellable, 1, "um único cosmético pago tem renderizador hoje")
+	Check(not Storefront.IsRenderedCosmetic("nao_existe"), "cosmético inexistente não é renderizável")
+	sql.IncRebirthCounter(charID)
+	sql.SetGems(accountID, 5000)
+	var blocked : Dictionary = economy.BuyCosmetic(accountID, charID, "rebirth_fx")
+	Check(str(blocked.get("reason", "")) == "not_rendered", "rebirth_fx cobrado com saldo => not_rendered")
+	CheckEq(economy.GetGems(accountID), 5000, "not_rendered: o gate é pré-débito, saldo intacto")
+	Check(not economy.HasCosmetic(accountID, "rebirth_fx"), "not_rendered não concedeu o cosmético")
+
+	sql.ExecuteBindings("DELETE FROM ledger_transaction WHERE account_id = ?;", [accountID])
+	sql.db.delete_rows("cosmetic_grant", "account_id = %d" % accountID)
+	sql.db.delete_rows("character", "nickname = 'IdleVitrineA'")
+	sql.db.delete_rows("account", "username = 'idle_vitrine_a'")

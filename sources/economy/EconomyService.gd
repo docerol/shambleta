@@ -312,6 +312,14 @@ func GetEconomyState(accountID : int, charID : int) -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
 	var vipActive : bool = until > now
 	var odds : Dictionary = GetChestOddsForCharacter(charID)
+	# O cap exibido na Loja é o do PERSONAGEM que pediu o estado: 1h de base +
+	# hora comprada em anúncio + perk de VIP. O anchor (last_settled_at) é o que
+	# separa hora ganha de hora já liquidada — sem ele a vitrine ofereceria de
+	# novo o que o jogador já coletou.
+	var anchor : int = int(Launcher.SQL.GetCharacter(charID).get("last_settled_at", 0))
+	# A vitrine segue a temporada: sem linha `active` na tabela, o companion recusa
+	# intent/preferência/sandbox do passe, então a Loja não oferece o botão.
+	var seasonActive : bool = not ActiveSeason().is_empty()
 	return {
 		"gems" = GetGems(accountID),
 		"chests" = chestIDs,
@@ -321,10 +329,11 @@ func GetEconomyState(accountID : int, charID : int) -> Dictionary:
 		"chest_cost" = EconomyCatalog.ChestCostGems,
 		"vip" = {"active" = vipActive, "until" = until, "mods" = OfflineSettle.VIPModFactor if vipActive else 1.0,
 			"tier" = Launcher.SQL.GetVIPTier(accountID) if vipActive else 0,
-			"cap_hours" = OfflineSettle.CapHoursForAccount(accountID, now)},
+			"cap_hours" = OfflineSettle.CapHoursForCharacter(charID, accountID, anchor, now)},
 		"vip1_cost" = EconomyCatalog.VIP1CostGems,
 		"vip2_cost" = EconomyCatalog.VIP2CostGems,
-		"catalog" = EconomyCatalog.SHOP_CATALOG,
+		"catalog" = Storefront.ShopCatalog(seasonActive),
+		"season_active" = seasonActive,
 		"starter_offer" = GetStarterOfferState(accountID),
 		"pending_grants" = GetPendingGrants(accountID),
 		"vendor" = GetVendorState(accountID),
@@ -594,14 +603,14 @@ func _ValidAdToken(token : String, placement : String) -> bool:
 func _AdAllowed(accountID : int, placement : String) -> Dictionary:
 	return adsCosmeticsService._AdAllowed(accountID, placement)
 
-func _RecordAdView(accountID : int, charID : int, placement : String) -> void:
-	adsCosmeticsService._RecordAdView(accountID, charID, placement)
+func _RecordAdView(accountID : int, charID : int, placement : String) -> bool:
+	return adsCosmeticsService._RecordAdView(accountID, charID, placement)
 
 func WatchAd(accountID : int, charID : int, placement : String, token : String) -> Dictionary:
 	return adsCosmeticsService.WatchAd(accountID, charID, placement, token)
 
-func IsAfkAdArmed(accountID : int, charID : int, anchorTs : int) -> bool:
-	return adsCosmeticsService.IsAfkAdArmed(accountID, charID, anchorTs)
+func AfkHoursEarned(accountID : int, charID : int, anchorTs : int) -> float:
+	return adsCosmeticsService.AfkHoursEarned(accountID, charID, anchorTs)
 
 func ClaimAdChest(accountID : int, charID : int, token : String) -> Dictionary:
 	return adsCosmeticsService.ClaimAdChest(accountID, charID, token)

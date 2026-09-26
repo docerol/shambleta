@@ -115,14 +115,14 @@ DEFAULT_CATALOG = {
                                   {"kind": "gems", "amount": 220}],
                      "currency": "BRL", "price": 9.90,
                      "one_time": True, "max_account_age": 3 * DAY,
-                     "title": "Recruta (pending entitlements)"},
+                     "title": "Recruta — VIP 7 dias + 220 gems"},
     # MONETIZATION §1 item 14: apoio no beta, título "Fundador".
     "founder.pack": {"kind": "bundle",
                      "contents": [{"kind": "gems", "amount": 1200},
                                   {"kind": "vip_days", "amount": 30}],
                      "currency": "BRL", "price": 39.90,
                      "one_time": True,
-                     "title": "Fundador (pending entitlements)"},
+                     "title": "Fundador — 1200 gems + VIP 30 dias"},
 }
 
 

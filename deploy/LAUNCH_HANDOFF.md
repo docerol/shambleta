@@ -200,7 +200,7 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
 - **Rewarded ads (Fase E, integração técnica entregue — T3)**: `AdProvider`
   com provider trocável (`SHAMBLETA_AD_PROVIDER=stub|portal`), 4 placements
   opt-in migrados p/ `ShowRewarded` async (token só após conclusão real no modo
-  portal), teto global 6/dia, VIP dobra quantidade, contrato JS + modo de teste
+  portal), `afkhoras` compra +1 h de offline por view (F2P líquida 1 h, VIP 24 h sem assistir), caps por placement (1 baú, 2 chaves), VIP dobra quantidade, contrato JS + modo de teste
   em `deploy/web/ads_bridge.js`. **Decisão do dono (2026-09-18): CrazyGames** —
   falta criar a conta no portal e trocar o corpo do `ads_bridge.js` pelo SDK
   real (só `ads_bridge.js` + env, sem mudar jogo). (Válvula fail-closed intacta:
@@ -318,7 +318,7 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   2FA inteiro (ativar → QR → código de 6 dígitos → errado/desativar — 13 chaves, das
   quais 12 liam inglês e `OK` é igual nos dois idiomas), o rótulo **"Itens obtidos:"**
   e **"Eficiência:"** no relatório AFK,
-  **"Anúncio 2× armado — vale ao coletar (4× com VIP)"** no painel de anúncio, e
+  **"Offline no teto — cada anúncio adiciona 1 hora"** no painel de anúncio (a antiga "Anúncio 2× armado" saiu em 2026-09-25, quando o anúncio passou a comprar hora), e
   **"no máximo"** na janela de personagem. Se alguma linha estourar o painel ou cortar
   com `…`, o defeito é de layout e só aparece agora, porque até ontem essas telas eram
   medidas em inglês.
@@ -432,6 +432,71 @@ script nesse repositório: `sources/scripts/tonori/tulimshar outskirts/` tem **e
 do diretório**, então um `for u in $(git ls-tree …)` sem `quote-while-read` parte o caminho,
 o `cat-file` falha e o par `Chest.gd`/`Chest.gd.uid` — que está inteiro em `HEAD` — aparece
 como falso órfão.
+
+**Estado re-medido na passada de monetização idle + vitrine (2026-09-25):** `HEAD` ==
+`origin/master` == `2fbbc40`. Durante a passada `git status --porcelain` chegou a retornar
+**34 caminhos** (26 `M` e 8 `??`); apagado o scratch, o estado é **28 caminhos** — 26 `M` e 2 `??`,
+nenhum `D`. Os dois soltos são produto: `sources/economy/Storefront.gd` e o sidecar
+`Storefront.gd.uid`, que entra junto exatamente pela regra do parágrafo acima (este repositório
+versiona `.uid`). Os seis `??` que não sobraram são scratch e foram apagados: quatro `tools/*.py`
+usados para re-mapear ponteiros e dois `tools/win_probe*.gd` da sonda de janelas do registro abaixo.
+Ordem honesta das medições: a **primeira** régua de nove gates foi corrida com o scratch ainda na
+árvore e derrubou no e2e — `godot exit=124` depois de o harness imprimir `== RESULT: 0 failures ==`,
+então os quatro gates seguintes (backup, benchmarks, companion, refund) nem rodaram e o run fechou
+`ALL_EXIT=1`. O harness solo fecha em 2,2 s contra o cap de 120 s do gate, em quatro execuções
+seguidas na mesma máquina sob a mesma carga: é saída atrasada, não regressão de código — e o run
+vermelho fica registrado aqui em vez de apagado por conveniência. O run que **sustenta o commit** é o
+segundo, já com o scratch fora, os três docs guardados re-medidos (a contagem de ponteiros abaixo é
+dele) e o preço em vigor do `pass.s1` registrado no ROADMAP: `ALL_EXIT=0`, 9× `Gate §24-8 OK`.
+Nenhum gate lê `tools/` (o preflight parseia os 6 harnesses, o anti-god-node mede `sources/` e
+`companion/`), então a limpeza não invalidaria a medição de qualquer forma. Nada foi commitado nem
+enviado por mim — commit e push pedem autorização explícita do dono.
+
+**A régua está verde, medida agora** (`./scripts/test.sh all`, com o exit code gravado no fim do
+log em vez de lido de pipe — pipe a `tail` destrói o código de saída, erro já cometido nesta
+sessão): os mesmos **9× `Gate §24-8 OK`**, com preflight de parse nos 6 harnesses e anti-god-node
+em 0 falhas nos 278 arquivos medidos (teto de 800 linhas, 6 em allowlist; `EconomyService.gd` está
+em 787 e `EconomyCatalog.gd` voltou a 758 porque a política de vitrine saiu para o arquivo novo),
+idle `== RESULT: 2327 checks, 0 failures ==` (contra os 2257 do snapshot datado acima — o
+acréscimo é a regra de hora comprada e a vitrine honesta, cada uma com suíte própria), RPC
+`10 checks`, e2e `0 failures`, backup `8 checks`, benchmarks `0 failures`, companion
+`== COMPANION: 170 checks, 0 failures ==` (a varredura de rótulo de cobrança nos dois catálogos é
+a parcela nova), security `47 checks`, refund CLI `12 checks`, fechando com 5× `godot exit=0` e
+3× `python exit=0`.
+
+**O export Web foi re-rodado depois da passada e a QA de navegador passou** (`scripts/export_web.sh`,
+`EXPORT_EXIT=0` gravado no fim do log): primeiro-load gzip **36 MiB** (`37666178` bytes, 18 arquivos),
+sendo engine 12 MiB + `.pck` 21 MiB + shell 3 MiB — a remoção do addon do Discord medida, não
+estimada, é o que consta em `2fbbc40`. O `playwright` do gate de browser fechou com
+`== RESULT: 10 checks, 0 failures ==`.
+
+**As janelas abertas de fato (2026-09-25)** — nenhum teste cobre o render, então a passada abriu
+cada janela num `godot --headless -s` com SceneTree próprio, autoloads reais e um fixture criado por
+`SQL.CreateFixture` (`tools/win_probe.gd` + `tools/win_probe_impl.gd`, apagadas depois; o print da
+rodada é a evidência, não o script). `economy.GetEconomyState` no fixture: `season_active=false
+catalog=8`. Loja instanciada de `presets/gui/Shop.tscn`: rótulos `VIP 1 — 440 gems / 30 days (24h
+offline, no ads)`, `VIP 2 — 880 gems / 30 days (24h offline, loot 2×)`, `VIP: inactive (offline cap
+1h + 1h per ad)`, e **8** botões de catálogo (550/1200/3000 gems, VIP 30d/90d, Starter, Founder,
+Support) com as duas assinaturas **ausentes** — que é o `season_active=false` virando vitrine honesta
+na tela, o comportamento que a Fatia 2 promete. Checkout com `ShowCheckoutIntent` do `42:pass.s1`:
+no nativo (`LauncherCommons.isWeb = false`) o rótulo é `Intent 42:pass.s1 — Passe S1 R$ 24.90.
+Compra apenas na versão web (o sandbox do companion responde 403 no nativo).` com o botão
+`disabled = true`; na web, `Press Pay to open secure checkout.` com `disabled = false`. AFK com
+4h/4h dobrada: `Ausente: 4.0h (teto 4h)`, `Itens obtidos: 2 (2×)`, `Baús: 1`, `Eficiência: → 60%`,
+`Offline no teto — cada anúncio adiciona 1 hora` e o botão `+1 hour offline (ad)` com
+`disabled = false`; a segunda rodada F2P (1h, sem dobrar) mostra `Ausente: 1.0h (teto 1h)` e
+`+300 XP` sem o `2×`. Cosméticos: exatamente **1** botão comprável na vitrine,
+`Renascido III — locked (rebirths 3)`. Os três strings novos do `.tscn`/`AfkReport` têm paridade no
+`data/i18n/ui.csv` — linha 15 (a linha do teto), 969 (o hint do anúncio) e 974 (o rótulo do botão).
+
+**Um detalhe que a sonda achou, e que não é bug do produto.** Na primeira rodada passei
+`"drops": []` no `NetClient.LastAFKReport` e o `ShowReport` morreu em
+`SCRIPT ERROR: Trying to assign value of type 'Array' to a variable of type 'Dictionary'` em
+`sources/gui/AfkReport.gd:42`, abortando o render no meio (`Baús: 0` e hint vazio). É bug da sonda:
+`OfflineSettle` declara `var drops : Dictionary[int,int]` e o `AfkReport.gd:42` tipa o mesmo
+`Dictionary`, então o caminho servidor-cliente de hoje nunca entrega `Array`. Vale registrar
+mesmo assim porque é uma fronteira: um payload malformado vindo da rede não degrada a janela, ele
+interrompe o método. Corrigido o fixture para `{9001: 2}`, o render completo saiu como acima.
 
 **Os 32 deletados foram re-verificados em 2026-09-25 e estão limpos.** Dos 15 `.gd`, dez são o
 fracionamento `SQL*.gd` (consolidado em `SQL.gd`), mais `WebhookValidator.gd`,

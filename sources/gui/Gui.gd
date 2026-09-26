@@ -641,7 +641,7 @@ func _on_guild_pressed() -> void:
 # P1 Social/AH: botão para Auction House (economia). A UI gráfica ainda está em desenvolvimento; este é o acesso rápido.
 func _on_ah_pressed() -> void:
 	if notificationLabel:
-		notificationLabel.AddNotification("Auction House: use /ah list, /ah buy, /ah sell (UI gráfica em desenvolvimento — P1 Social)", 4.0)
+		notificationLabel.AddNotification("Auction House: use /ah list, /ah buy, /ah cancel (UI gráfica em desenvolvimento — P1 Social)", 4.0)
 
 func HideManualSkillButtons():
 	if manualSkillBar and is_instance_valid(manualSkillBar):

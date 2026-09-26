@@ -95,6 +95,7 @@ de §0.1 já proíbe.
 - Por que é a âncora: valor percebido alto × preço acessível × recorrência natural (a temporada renova a compra sem churn de assinatura).
 
 ### 2.2 VIP (camada de hábito)
+> **Retificação 2026-09-25 (documento arquivado):** a regra de offline mudou — F2P liquida **1 h** e cada anúncio assistido soma **+1 h** até a coleta/divisor de dia; VIP1 = VIP2 = **24 h** sem assistir, e o que separa o tier 2 é **2× permanente no loot da liquidação** (não mais 36 h de cap). O texto abaixo é o desenho original de 2026-09, mantido como histórico.
 Desenho completo em ECONOMY_STUDY §3. O gatilho de venda é o **cap de coleta offline**: é o único limite que o jogador F2P sente de verdade num idle. VIP1 (24h cap) e VIP2 (36h + claim reset) vendem "respeito ao seu tempo", não poder.
 
 ### 2.3 Starter Pack (conversor de porta)

@@ -3,7 +3,7 @@ class_name AdsCosmeticsService
 
 # SOM-IDLE Fatia 8: domínio de monetização de janela extraído do EconomyService
 # (ROADMAP_COMERCIAL S3). Fase E - rewarded ads (rate-limit diário, token
-# assinado, armamento do 2x de AFK, bau/reroll/chave bonus) e Fase D -
+# assinado, compra de hora de AFK, bau/reroll/chave bonus) e Fase D -
 # cosmeticos/entitlements (guarda-roupa, equip, compra por gems, titulos de
 # suporte e vitrine do renascimento). Composicao com back-reference: este servico
 # NAO tem mutex proprio - toda mutacao passa pelo settleMutex do EconomyService
@@ -16,18 +16,27 @@ var _eco : EconomyService = null
 # Abstração + stubs: o client (AdProvider) devolve um token que o servidor
 # valida por formato + dia; o SDK real pluga sem mudar mais nada. Views vivem
 # em telemetry_event (kind 'ad_view', meta {"placement"}) — sem migração, sem
-# moeda nova, sem caminho p/ essência/favores (§0.1). Caps: 1 baú/dia, 2
-# chaves/dia, reroll-ad divide o contador pago (3/dia), afk2x vale 1 liquidação
-# (armado até o próximo settle), teto global 6/dia (anti-fadiga). VIP dobra o
-# bônus em quantidade (2×→4×, +1→+2 baús/chaves); reroll é acesso, não volume.
+# moeda nova, sem caminho p/ essência/favores (§0.1). Caps por placement: 1
+# baú/dia, 2 chaves/dia, reroll-ad divide o contador pago (3/dia). Não há teto
+# global de anúncios/dia desde 2026-09-25: a hora de offline é o prêmio e o
+# dono quis que todo anúncio disponível fosse mostrável. VIP não multiplica
+# anúncio nenhum — o ×2 do loot é perk do tier 2 (OfflineSettle._LootMult), e
+# baú/chave continuam dobrando a QUANTIDADE para quem tem VIP ativo.
 # SOM-IDLE M2 (era T7): o stub não é mais compilar-para-abrir — ele vive atrás
 # de SHAMBLETA_AD_STUB=1 com default fechado, ligado pelo deploy do beta. O
 # token stub é mintável pelo client por construção (é isso que a env controla);
-# enquanto não houver SSV no servidor, o teto de abuso são os caps server-side
-# (6/dia global + caps por placement), sem dinheiro envolvido no beta. Produção
+# enquanto não houver SSV no servidor, o teto de abuso são os caps por
+# placement, e no afkhoras o prêmio é hora de farm — não dinheiro. Produção
 # sem a env não credita nada.
 
+# Seam do divisor de dia (espelha OfflineSettle.nowOverride): sem isto a regra
+# "a hora ganha não se perde se você coletar antes do divisor" é indemonstrável
+# em harness headless — _AdDayStart() lia o relógio real direto.
+static var dayStartOverride : int = 0
+
 func _AdDayStart() -> int:
+	if dayStartOverride > 0:
+		return dayStartOverride
 	return EconomyCatalog.PassDayStartTS(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
 
 func AdViewsToday(accountID : int, placement : String = "") -> int:
@@ -46,18 +55,28 @@ func _ValidAdToken(token : String, placement : String) -> bool:
 	return parts.size() == 3 and parts[0] == "stub" and parts[1] == placement and parts[2] == str(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
 
 func _AdAllowed(accountID : int, placement : String) -> Dictionary:
-	if AdViewsToday(accountID) >= EconomyCatalog.AD_DAILY_CAP:
-		return {"ok": false, "reason": "ad_cap"}
 	if EconomyCatalog.AD_PLACEMENT_CAPS.has(placement) and AdViewsToday(accountID, placement) >= int(EconomyCatalog.AD_PLACEMENT_CAPS[placement]):
 		return {"ok": false, "reason": "placement_cap"}
 	return {"ok": true, "reason": "ok"}
 
-func _RecordAdView(accountID : int, charID : int, placement : String) -> void:
+# Persiste a view e PROVA que ela está no banco antes de o chamador creditar.
+# TelemetryService.Flush() devolve 0 quando a transação falha (o evento fica no
+# buffer) e o Record cai no BufferCap com pop_front: antes disso era um clique
+# perdido; com hora offline como prêmio, seria hora comprada e não paga. A
+# verificação é por re-leitura e não pelo retorno do Flush porque o buffer é
+# compartilhado — o número que Flush devolve não é atribuível a esta view.
+# Sem lock aqui: a cadeia RPC→WatchAd→Flush é síncrona na thread principal (o
+# único Thread do repositório é SQLBackups.gd:5) e não tem await, então não há
+# interleaving a excluir; e envolver em sql.Transaction deadlockaria, porque Flush
+# abre a dele e queryMutex (SQL.gd:511) não é reentrante.
+func _RecordAdView(accountID : int, charID : int, placement : String) -> bool:
+	var before : int = AdViewsToday(accountID, placement)
 	Launcher.Telemetry.Record("ad_view", accountID, charID, 0, JSON.stringify({"placement": placement}))
 	Launcher.Telemetry.Flush()
+	return AdViewsToday(accountID, placement) > before
 
-# Registra uma visualização (o armamento do afk2x É a view: vale até o
-# próximo settle, 1×/liquidação por construção).
+# Registra uma visualização. No afkhoras a view É o produto: ela vale hora de
+# offline até o divisor do dia ou até a coleta, o que vier primeiro.
 func WatchAd(accountID : int, charID : int, placement : String, token : String) -> Dictionary:
 	if not placement in EconomyCatalog.AD_PLACEMENTS:
 		return {"ok": false, "reason": "unknown_placement"}
@@ -66,13 +85,22 @@ func WatchAd(accountID : int, charID : int, placement : String, token : String) 
 	var gate : Dictionary = _AdAllowed(accountID, placement)
 	if not bool(gate.get("ok", false)):
 		return gate
-	_RecordAdView(accountID, charID, placement)
+	if not _RecordAdView(accountID, charID, placement):
+		return {"ok": false, "reason": "ad_persist"}
 	return {"ok": true, "reason": "ok"}
 
-# Armado p/ a liquidação pendente: view posterior ao anchor (não acumula).
-func IsAfkAdArmed(accountID : int, charID : int, anchorTs : int) -> bool:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND char_id = ? AND created_at > ? AND json_extract(meta, '$.placement') = ?;", [accountID, charID, anchorTs, EconomyCatalog.AD_AFK2X])
-	return not rows.is_empty() and int(rows[0]["n"]) > 0
+# Horas de offline compradas e ainda não liquidadas: views afkhoras depois de
+# max(divisor do dia, último settle). Por PERSONAGEM — o anchor
+# (character.last_settled_at) e o char_id da view são por personagem, e numa
+# conta com 6 personagens a leitura por conta lavaria o contador. O max() com o
+# divisor é o que implementa as duas metades da regra do dono: coletar antes do
+# divisor não perde o que foi assistido (o anchor avança e a janela continua), e
+# virar o dia sem coletar zera (a janela volta ao divisor).
+func AfkHoursEarned(accountID : int, charID : int, anchorTs : int) -> float:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND char_id = ? AND created_at > ? AND json_extract(meta, '$.placement') = ?;", [accountID, charID, maxi(_AdDayStart(), anchorTs), EconomyCatalog.AD_AFKHOURS])
+	if rows.is_empty():
+		return 0.0
+	return float(int(rows[0]["n"])) * EconomyCatalog.AD_OFFLINE_HOURS_PER_AD
 
 # Baú bônus (VIP dobra a quantidade).
 func ClaimAdChest(accountID : int, charID : int, token : String) -> Dictionary:
@@ -102,7 +130,8 @@ func RerollDailyShopAd(accountID : int, token : String) -> Dictionary:
 	var row : Dictionary = _eco._DailyRow(accountID, day)
 	if int(row["rerolls_used"]) >= EconomyCatalog.DAILY_REROLLS_MAX:
 		return {"ok": false, "reason": "reroll_cap"}
-	_RecordAdView(accountID, 0, EconomyCatalog.AD_REROLL)
+	if not _RecordAdView(accountID, 0, EconomyCatalog.AD_REROLL):
+		return {"ok": false, "reason": "ad_persist"}
 	return _eco._DoReroll(accountID, day, row)
 
 # Chave de boss extra (VIP dobra a quantidade).
@@ -171,7 +200,8 @@ func GetCosmetics(accountID : int) -> Dictionary:
 	for cid in EconomyCatalog.COSMETIC_CATALOG:
 		var e : Dictionary = EconomyCatalog.COSMETIC_CATALOG[cid]
 		catalog.append({"id": cid, "type": str(e.get("type", "")), "label": str(e.get("label", "")),
-			"price": int(e.get("price", 0)), "req_rebirths": int(e.get("req_rebirths", 0))})
+			"price": int(e.get("price", 0)), "req_rebirths": int(e.get("req_rebirths", 0)),
+			"rendered": Storefront.IsRenderedCosmetic(cid)})
 	return {"ok": true, "catalog": catalog, "owned": owned, "equipped": equipped,
 		"rebirths": _MaxRebirths(accountID)}
 
@@ -210,6 +240,12 @@ func BuyCosmetic(accountID : int, charID : int, cosmeticID : String) -> Dictiona
 		var balance : int = sql.GetGemsRaw(accountID)
 		if balance < price:
 			result["reason"] = "insufficient_gems"
+			return false
+		# Gate de produto: não se vende renderizador que o jogo não tem. Depois da
+		# leitura de saldo de propósito — antes dela, `rebirth_fx` a 0 gems morreria
+		# em not_rendered e a cobertura de insufficient_gems sumiria sem ninguém ver.
+		if not Storefront.IsRenderedCosmetic(cosmeticID):
+			result["reason"] = "not_rendered"
 			return false
 		if not sql.SetGemsRaw(accountID, balance - price):
 			return false

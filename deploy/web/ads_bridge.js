@@ -5,7 +5,7 @@
 //
 //   ShambletaAds.ad_ready(placement) -> bool
 //       "há um rewarded disponível para este placement?" (4 placements:
-//       "afk2x", "chest", "reroll", "bosskey").
+//       "afkhoras", "chest", "reroll", "bosskey").
 //   ShambletaAds.show_rewarded(placement, done_callback)
 //       exibe o rewarded; chama done_callback(true) SE o anúncio foi assistido
 //       até o fim, done_callback(false) se pulado/fechado antes. O Godot passa
@@ -16,7 +16,7 @@
 // Seleção via env SHAMBLETA_AD_PROVIDER ("stub" = sem SDK, "portal" = usa esta
 // ponte). Sem esta ponte carregada, o client cai para o stub — o servidor
 // continua fail-closed (formato + dia; token adulterado nunca credita) e os
-// caps (6/dia, 1 baú/dia, 2 chaves/dia) valem nos dois caminhos.
+// caps por placement (1 baú/dia, 2 chaves/dia) valem nos dois caminhos.
 //
 // Até a conta existir, este arquivo é o MODO DE TESTE: simula um anúncio de
 // 2s e confirma conclusão, para validar o fluxo ponta-a-ponta.

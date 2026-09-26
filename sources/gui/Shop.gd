@@ -64,17 +64,17 @@ func ShowState(state : Dictionary):
 	var vip2Cost : int = int(state.get("vip2_cost", 880))
 	buyChest1.text = "Buy 1 Chest — %d gems" % chestCost
 	buyChest5.text = "Buy 5 Chests — %d gems" % (chestCost * 5)
-	buyVip1.text = "VIP 1 — %d gems / 30 days (+20%% AFK)" % vip1Cost
-	buyVip2.text = "VIP 2 — %d gems / 30 days (+20%% AFK)" % vip2Cost
+	buyVip1.text = "VIP 1 — %d gems / 30 days (24h offline, no ads)" % vip1Cost
+	buyVip2.text = "VIP 2 — %d gems / 30 days (24h offline, loot 2×)" % vip2Cost
 
 	var vip : Dictionary = state.get("vip", {})
 	if bool(vip.get("active", false)):
 		var daysLeft : int = ceili((int(vip.get("until", 0)) - Time.get_unix_time_from_system()) / 86400.0)
 		vipLabel.text = "VIP%d: active (%d days left, idle faucet x%.1f, offline cap %.0fh)" % [
 			int(vip.get("tier", 0)), maxi(daysLeft, 0),
-			float(vip.get("mods", 1.0)), float(vip.get("cap_hours", 12.0))]
+			float(vip.get("mods", 1.0)), float(vip.get("cap_hours", 24.0))]
 	else:
-		vipLabel.text = "VIP: inactive (offline cap 12h)"
+		vipLabel.text = "VIP: inactive (offline cap 1h + 1h per ad)"
 
 	# Fase A: catálogo (botões construídos 1×; texto atualiza a cada estado).
 	var catalog : Array = state.get("catalog", [])
@@ -157,10 +157,10 @@ func ShowCheckoutIntent(intent : Dictionary):
 		intentLabel.text = "Checkout rejected: %s" % str(intent.get("reason", "?"))
 		return
 	_pendingIntent = intent
-	intentLabel.text = "Intent %s — %s R$ %.2f. Press Pay to open secure checkout." % [
-		str(intent.get("external_reference", "?")),
-		str(intent.get("label", "?")), float(intent.get("price", 0.0))]
-	paySandboxButton.disabled = false
+	intentLabel.text = "Intent %s — %s R$ %.2f. %s" % [
+		str(intent.get("external_reference", "?")), str(intent.get("label", "?")), float(intent.get("price", 0.0)),
+		"Press Pay to open secure checkout." if LauncherCommons.isWeb else "Compra apenas na versão web (o sandbox do companion responde 403 no nativo)."]
+	paySandboxButton.disabled = not LauncherCommons.isWeb
 
 	# SOM-IDLE F2: web-only checkout dialog for paid items.
 	if LauncherCommons.isWeb and not bool(intent.get("sandbox", false)):

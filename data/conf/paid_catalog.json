@@ -17,13 +17,13 @@
     "contents": [{"kind": "vip_days", "amount": 7}, {"kind": "gems", "amount": 220}],
     "currency": "BRL", "price": 9.90,
     "one_time": true, "max_account_age": 259200,
-    "title": "Recruta (pending entitlements)"
+    "title": "Recruta — VIP 7 dias + 220 gems"
   },
   "founder.pack": {
     "kind": "bundle",
     "contents": [{"kind": "gems", "amount": 1200}, {"kind": "vip_days", "amount": 30}],
     "currency": "BRL", "price": 39.90,
     "one_time": true,
-    "title": "Fundador (pending entitlements)"
+    "title": "Fundador — 1200 gems + VIP 30 dias"
   }
 }

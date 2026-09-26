@@ -375,6 +375,26 @@ badpay, baderr = server.build_preference_payload(cat, "nope", "1:nope")
 ok(badpay is None and baderr == "unknown_sku",
    "preference rejects unknown sku")
 
+# O título do item é o que o pagador lê no Checkout Pro e no extrato — e é a
+# linha que uma contestação cita. "pending entitlements" estava nesse texto
+# (placeholder de engenharia prometendo algo não entregue): risco de chargeback,
+# não cosmética. Varre as DUAS cópias cobráveis (o arquivo canônico e o fallback
+# do companion) e amarra os títulos entre elas, porque a régua de preço já
+# existia e a de rótulo não — foi exatamente assim que o placeholder sobreviveu.
+for _name, _cat in (("paid_catalog.json", filecat), ("DEFAULT_CATALOG", cat)):
+    for _sku in sorted(k for k in _cat if not k.startswith("_")):
+        _p, _e = server.build_preference_payload(_cat, _sku, "1:%s" % _sku)
+        ok(_e is None, "preferência montável para %s em %s" % (_sku, _name))
+        _title = _p["items"][0]["title"]
+        ok("pending" not in _title.lower() and "tbd" not in _title.lower(),
+           "título da cobrança sem placeholder de engenharia: %s/%s" % (_name, _sku))
+        ok(_title.endswith("(%s)" % _sku),
+           "título da cobrança nomeia o SKU: %s/%s" % (_name, _sku))
+        if _name == "DEFAULT_CATALOG" and _sku in filecat:
+            ok(_title == server.build_preference_payload(
+                   filecat, _sku, "1:%s" % _sku)[0]["items"][0]["title"],
+               "o fallback imprime o rótulo do arquivo canônico: %s" % _sku)
+
 # mp_create_preference: mock da API do MP (nunca bate na API real nos testes)
 import urllib.request as _urlreq2
 _real2 = _urlreq2.urlopen

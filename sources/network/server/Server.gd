@@ -728,7 +728,7 @@ func _AltarAction(kind : String, itemID : int, peerID : int):
 				Network.CommandFeedback("Salvaged: +%d gold." % int(result.get("gold", 0)), peerID)
 	_pushPostFight(charID, peerID)
 
-# Fase E (rewarded ads): arma 2× do AFK, baú bônus, reroll grátis e chave de
+# Fase E (rewarded ads): hora de offline, baú bônus, reroll grátis e chave de
 # boss. Sucessos empurram o estado fresco da janela correspondente.
 func WatchAd(placement : String, token : String, peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
@@ -738,7 +738,7 @@ func WatchAd(placement : String, token : String, peerID : int):
 		return
 	var result : Dictionary = Launcher.Economy.WatchAd(accountID, charID, placement, token)
 	Network.AdFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
-	if bool(result.get("ok", false)) and placement == EconomyCatalog.AD_AFK2X:
+	if bool(result.get("ok", false)) and placement == EconomyCatalog.AD_AFKHOURS:
 		Network.AFKReport(OfflineSettle.BuildReport(charID).to_dictionary(), peerID)
 
 func ClaimAdChest(token : String, peerID : int):

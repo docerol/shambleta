@@ -256,9 +256,6 @@ const SEASON_KINDS : Array[String] = ["power", "spend", "boss_kills", "guild_poi
 # (de EconomyService.gd:2345)
 const SeasonPrizeGems : Array[int] = [3000, 1800, 1200, 700, 500, 400, 300, 300, 200, 200]
 
-# (de EconomyService.gd:2431)
-const AD_AFK2X : String = "afk2x"
-
 # (de EconomyService.gd:2432)
 const AD_CHEST : String = "chest"
 
@@ -268,14 +265,27 @@ const AD_REROLL : String = "reroll"
 # (de EconomyService.gd:2434)
 const AD_BOSSKEY : String = "bosskey"
 
+# Regra do dono 2026-09-25: o rewarded ad do AFK passou a COMPRAR HORA de
+# offline, e o placement que dobrava loot de uma liquidação (afk2x) saiu — o
+# único multiplicador que restou é o ×2 do tier 2, que não vem de anúncio.
+const AD_AFKHOURS : String = "afkhoras"
+
 # (de EconomyService.gd:2435)
-const AD_PLACEMENTS : Array[String] = ["afk2x", "chest", "reroll", "bosskey"]
+const AD_PLACEMENTS : Array[String] = ["afkhoras", "chest", "reroll", "bosskey"]
+
+# Horas de offline por view de afkhoras. Não há teto de anúncios por dia: se
+# houver anúncio disponível, ele é mostrado — o que limita a hora ganha é o
+# próprio inventário da rede de anúncios, e o divisor de 24h.
+const AD_OFFLINE_HOURS_PER_AD : float = 1.0
+
+# Teto de baús nascidos do settle por personagem/dia. Com cap de 1h e piso de 1
+# baú por coleta, ClaimOfflineSettle (gate de pegada 60s em Server.gd:490)
+# pagaria um baú por minuto; 6/dia é o que floor(h/4) com cap de 12h já produzia,
+# então o patamar do faucet não muda — muda a origem da hora.
+const ChestsPerDayFromSettle : int = 6
 
 # (de EconomyService.gd:2436)
 const AD_PLACEMENT_CAPS : Dictionary = {"chest": 1, "bosskey": 2}
-
-# (de EconomyService.gd:2442)
-const AD_DAILY_CAP : int = 6
 
 # SOM-IDLE M2: o token stub ("stub:<placement>:<dia>") é mintável por qualquer
 # cliente — quem o aceita decide se anúncio forjado credita. Antes era

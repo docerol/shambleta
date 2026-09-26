@@ -74,6 +74,8 @@ Substitui o input humano do `PlayerAgent`.
 - Failsafe: se o agente ficar preso/travado > N s, respawn na entrada da zona; se a formação morrer, perda parcial de eficiência da sessão (ver ECONOMY §5.3 "death tax").
 
 ### 4.2 `OfflineSettle` — `sources/idle/OfflineSettle.gd`
+> **Retificação 2026-09-25 (documento arquivado):** o teto não é mais fixo por VIP — `CapHoursForCharacter` = 1 h de base (F2P) + 1 h por anúncio `afkhoras` assistido desde a última coleta, ou 24 h com VIP ativo; o tier 2 ainda multiplica o loot por 2. O texto abaixo é o contrato original.
+
 - No login de personagem: `last_settled_at` → agora, teto de acumulação (`OfflineCapHours`, default 12h; VIP estende — ECONOMY §3).
 - Recompensa = `taxa_média_da_zona × horas × modificador_offline × bônus(VIP/guild/boosts)` com rolagem de drops por distribuição da zona (tabela `zone_drop_rate`), não simulação frame a frame.
 - **Atomicidade:** settle inteiro dentro de `BEGIN/COMMIT` (SQLite) escrevendo no ledger — sem caminho de duplicação.
@@ -220,6 +222,8 @@ CREATE TABLE shop_sku ( sku_id TEXT PRIMARY KEY, kind TEXT, payload TEXT, price_
 - Boss de zona: spawna com cooldown por guild/tick; primeira kill da semana dá drop garantido (tap de engajamento).
 
 ## 8. Matemática do progresso offline (contrato)
+
+> `CapHours(vip)` de 2026-09-25 em diante é `CapHoursForCharacter(char)` = cap comprado pela conta (1 h / 24 h VIP) + horas `afkhoras` assistidas desde a última coleta. O `×2` do tier 2 não entra em `mods`: multiplica XP/ouro/drops da liquidação.
 
 ```
 hours           = min(now - last_settled_at, CapHours(vip))          // cap 12h base, 24h VIP1, 36h VIP2

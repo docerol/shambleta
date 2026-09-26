@@ -53,9 +53,9 @@ layout_mode = 2
 text = ""
 autowrap_mode = 3
 
-[node name="DoubleAd" type="Button" parent="Layout"]
+[node name="OfflineAd" type="Button" parent="Layout"]
 layout_mode = 2
-text = "Double rewards (ad)"
+text = "+1 hour offline (ad)"
 
 [connection signal="pressed" from="Layout/Collect" to="." method="_on_collect_pressed"]
-[connection signal="pressed" from="Layout/DoubleAd" to="." method="_on_double_ad_pressed"]
+[connection signal="pressed" from="Layout/OfflineAd" to="." method="_on_offline_ad_pressed"]

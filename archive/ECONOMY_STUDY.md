@@ -52,6 +52,8 @@ estatística de ciclo, incrementada dentro da transação do renascimento.
 
 ## §4. VIP
 
+> **Retificação 2026-09-25 (documento arquivado):** cap offline hoje é 1 h no F2P (+1 h por anúncio assistido, placement `afkhoras`), 24 h em qualquer tier de VIP, e o tier 2 acrescenta **2× no loot da liquidação**. Os números de tier/cap abaixo são o desenho de 2026-09, mantidos como histórico.
+
 - `VIPModFactor = 1.2` — multiplicador aplicado ao ganho de `OfflineSettle`
   quando `GetVIPUntil(accountID) > agora` (conta com VIP ativo).
 - VIP também multiplica a recompensa de boss (ver §6).

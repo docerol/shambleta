@@ -130,7 +130,7 @@ func _run_tests():
 				var coChar : int = suites.CreateFixture(sql, "idle_co_account", "IdleCoTester")
 				if suites.Check(coChar != 0, "checkout fixture created (charID %d)" % coChar):
 					suites.SuiteCheckout(sql, coChar, sql.GetAccountIDForCharacter(coChar))
-				# Fase B: VIP cap 12/24/36h + loja diária/ofertas
+				# Fase B: cap offline 1h/24h/24h + loja diária/ofertas
 				var capChar : int = suites.CreateFixture(sql, "idle_cap_account", "IdleCapTester")
 				if suites.Check(capChar != 0, "vip cap fixture created (charID %d)" % capChar):
 					suites.SuiteVIPCap(sql, capChar, sql.GetAccountIDForCharacter(capChar))
@@ -158,8 +158,12 @@ func _run_tests():
 			suites.SuitePassDeluxe(sql)
 			# Fase D: cosméticos (catálogo, vitrine, backfill, títulos)
 			suites.SuiteCosmetics(sql)
-			# Fase E: rewarded ads (tokens, caps, 4 placements, 2×/4×)
+			# Fase E: rewarded ads (tokens, caps por placement, afkhoras)
 			suites.SuiteAds(sql)
+			# Offline comprado com anúncio (C1): o placement afkhoras, as horas
+			# ganhas por personagem e o cap composto. Colado no SuiteAds porque é
+			# o mesmo domínio e herda a env do stub que ele liga.
+			suites.SuiteOfflineAdHours(sql)
 			# Fase F: guild premium + AH premium + 4 corridas + torneios
 			suites.SuiteGuildPremium(sql)
 			suites.SuiteMarketplace(sql)
@@ -266,6 +270,9 @@ func _run_tests():
 		# Depois da régua de ponteiros, no mesmo espírito: leitura da árvore, nenhum
 		# estado tocado. Varre `sources/` procurando navegação externa sem o ramo Web.
 		suites.SuiteExternalLinksWebBranch()
+		# Vitrine por último: é a única suíte que mexe em `season` depois da régua
+		# de ponteiros, e fecha toda temporada ativa ao sair — nada herda o estado.
+		suites.SuiteStorefrontHonesty(sql)
 	else:
 		print("FATAL: DB not initialized — DB-backed suites skipped")
 

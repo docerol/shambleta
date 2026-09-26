@@ -57,7 +57,9 @@ func ShowCosmetics(data : Dictionary):
 		if not (e is Dictionary):
 			continue
 		var price : int = int(e.get("price", 0))
-		if price <= 0:
+		# Fail-closed no flag do servidor: sem `rendered` o botão some, mas a
+		# recusa de verdade é do `BuyCosmetic` (`not_rendered`), não daqui.
+		if price <= 0 or not bool(e.get("rendered", false)):
 			continue
 		var cid : String = str(e.get("id", ""))
 		var req : int = int(e.get("req_rebirths", 0))

@@ -4,12 +4,12 @@ Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, `text =` e
 
 | Domínio | Chaves | Cobertas pt_BR | Faltando |
 |---|---|---|---|
-| tr() código (UI) | 83 | 83 | 0 |
+| tr() código (UI) | 86 | 86 | 0 |
 | text= .gd (UI, via Localizer) | 52 | 16 | 36 |
-| cenas .tscn (via Localizer) | 159 | 139 | 20 |
+| cenas .tscn (via Localizer) | 159 | 140 | 19 |
 | conteúdo NPCs/quests (fase 2) | 730 | 664 | 66 |
 
-**UI total:** 285 chaves, 231 cobertas (81%), 54 faltando. **Conteúdo:** 66 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
+**UI total:** 288 chaves, 235 cobertas (82%), 53 faltando. **Conteúdo:** 66 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
 
 ## Faltando (UI)
 
@@ -28,7 +28,6 @@ Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, `text =` e
 - Daily shop (resets 03:00 BRT)
 - Default
 - Desmanchar
-- Double rewards (ad)
 - Empty — earn titles in the pass, the 1st rebirth, or the shop below.
 - Eventos
 - Fast level-up (2× gems, no gold)
@@ -59,7 +58,7 @@ Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, `text =` e
 - Top guilds (season points race)
 - Tournament: none (next rotates in soon)
 - Tournament: —
-- VIP: inactive (offline cap 12h)
+- VIP: inactive (offline cap 1h + 1h per ad)
 - Welcome to Shambleta!⏎⏎This is an idle RPG — your character fights on its own. Let's take a quick tour.
 - When you come back, your AFK earnings are ready to claim.⏎⏎Check the AFK report window for offline progress.
 - You're all set!⏎⏎Your character will now farm automatically. Come back later to collect your rewards.

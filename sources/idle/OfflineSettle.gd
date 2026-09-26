@@ -2,16 +2,21 @@ extends RefCounted
 class_name OfflineSettle
 
 # SOM-IDLE: F2 idle-spike settle (TECH_SPEC_CORE.md §3)
-# OfflineFactor = 0.6, BaseCapHours = 12, death tax 5%, chests floor(h/4) cap 3.
+# OfflineFactor = 0.6, death tax 5%, chests floor(h/4) cap 3.
+# O cap de horas não é mais um número fixo da conta: F2P liquida 1h, cada
+# anúncio assistido desde a última coleta soma +1h, e VIP dá as 24h sem
+# assistir nada (regra do dono, 2026-09-25). Ver CapHoursForCharacter.
 # The whole settle runs in ONE SQLite transaction; idempotency is enforced by
 # re-reading last_settled_at INSIDE the transaction before any write.
 
 const OfflineFactor : float = 0.6
-const BaseCapHours : float = 12.0
-# SOM-IDLE Fase B: cap diferenciado por tier (MONETIZATION §2.2) — F2P sente o
-# teto de 12h; VIP1 estende a 24h; VIP2 a 36h. Expirado volta a 12h.
+# Baseline de quem não assistiu anúncio nem tem VIP.
+const BaseCapHours : float = 1.0
+# SOM-IDLE Fase B: cap diferenciado por tier (MONETIZATION §2.2). Desde a regra
+# de 2026-09-25 os dois tiers dão as mesmas 24h sem anúncio nenhum; o que
+# separa o tier 2 é o ×2 permanente no loot da liquidação (_LootMult).
 const CapHoursVIP1 : float = 24.0
-const CapHoursVIP2 : float = 36.0
+const CapHoursVIP2 : float = 24.0
 const DeathTaxPct : int = 5
 const MaxChests : int = 3
 const ChestHoursPerChest : int = 4
@@ -42,11 +47,12 @@ class SettleReport:
 	var essenceEarned : int = 0
 	var lastSettledAt : int = 0
 	var mods : float = 1.0
-	# Fase E: rewarded ad no claim (2× F2P, 4× VIP). `armed` = preview (vale no
-	# próximo Collect); `doubled` = aplicado. Só XP/ouro/drops dobram — baús,
-	# chaves e favores nunca (MONETIZATION §2.5/§0.1).
-	var armed : bool = false
+	# `doubled` = o ×2 do tier 2 foi aplicado a esta liquidação. Só XP/ouro/drops
+	# dobram — baús, chaves e favores nunca (MONETIZATION §2.5/§0.1).
 	var doubled : bool = false
+	# Teto que limitou `hours` (base F2P + horas compradas em anúncio + perk de
+	# VIP) — a janela mostra "Away: 3.0h (cap 6h)". 0 = relatório vazio.
+	var capHours : float = 0.0
 
 	func to_dictionary() -> Dictionary:
 		return {
@@ -67,8 +73,8 @@ class SettleReport:
 			"essence_earned": essenceEarned,
 			"last_settled_at": lastSettledAt,
 			"mods": mods,
-			"armed": armed,
 			"doubled": doubled,
+			"cap_hours": capHours,
 		}
 
 # Test seams (headless `-s` runs have no Launcher/SQL autoload context)
@@ -99,14 +105,19 @@ static func BuildReport(charID : int, now : int = 0) -> SettleReport:
 	if char.is_empty():
 		return report
 
-	var elapsed : int = (now if now > 0 else _now()) - int(char.get("last_settled_at", 0) if char.get("last_settled_at", 0) != null else 0)
+	var clock : int = now if now > 0 else _now()
+	var elapsed : int = clock - int(char.get("last_settled_at", 0) if char.get("last_settled_at", 0) != null else 0)
 	report.charID = charID
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = _statInt(char, "farm_zone", 0)
 	report.lastSettledAt = _statInt(char, "last_settled_at", 0)
-	report.hours = minf(float(elapsed) / 3600.0, CapHoursForAccount(report.accountID))
+	# Cap do PERSONAGEM: o que a compra da conta dá (1h no F2P, 24h no VIP) mais
+	# o que este personagem assistiu desde a última coleta. O anchor entra no
+	# corte porque hora já liquidada não pode ser vendida de novo.
+	report.capHours = CapHoursForCharacter(charID, report.accountID, report.lastSettledAt, clock)
+	report.hours = minf(float(elapsed) / 3600.0, report.capHours)
 	report.efficiency = clampf(float(char.get("session_efficiency", 1.0) if char.get("session_efficiency", 1.0) != null else 1.0), MinEfficiency, 1.0)
-	_ApplyFormula(sql, report, _AdMult(report.accountID, charID, report.lastSettledAt))
+	_ApplyFormula(sql, report, _LootMult(report.accountID, clock))
 	return report
 
 # Applies a pending settle for charID. Returns empty dict when nothing to settle.
@@ -132,31 +143,38 @@ static func SettlePending(charID : int) -> Dictionary:
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = zoneID
 	report.lastSettledAt = now
-	report.hours = minf(float(now - lastSettled) / 3600.0, CapHoursForAccount(report.accountID))
+	# O corte das horas compradas é o anchor VELHO (lastSettled), não
+	# report.lastSettledAt: este já é `now` e filtraria toda view da própria
+	# janela que estamos liquidando.
+	report.capHours = CapHoursForCharacter(charID, report.accountID, lastSettled, now)
+	report.hours = minf(float(now - lastSettled) / 3600.0, report.capHours)
 	report.efficiency = clampf(float(char.get("session_efficiency", 1.0) if char.get("session_efficiency", 1.0) != null else 1.0), MinEfficiency, 1.0)
 	# NOTE: session deaths are already baked into session_efficiency on disconnect
 	# (NetServer SOM-IDLE hook); the spike does not track a separate death count.
 
-	_ApplyFormula(sql, report, _AdMult(report.accountID, charID, lastSettled))
+	_ApplyFormula(sql, report, _LootMult(report.accountID, now))
 	if not _Apply(sql, report):
 		return {}
 	return report.to_dictionary()
 
-# Fase E: multiplicador do ad armado (0/2/4). VIP dobra o bônus (2×→4×) no
-# momento do settle. Puro p/ seams; null-safe sem Economy (retorna 1).
-static func _AdMult(accountID : int, charID : int, anchorTs : int) -> int:
-	var eco : EconomyService = _economy()
-	if eco == null or not eco.IsAfkAdArmed(accountID, charID, anchorTs):
+# Multiplicador de loot da liquidação (1 ou 2). Desde a regra de 2026-09-25 o
+# único ×2 é o perk permanente do VIP tier 2: anúncio não entra aqui, anúncio
+# compra HORA (CapHoursForCharacter). Só XP/ouro/drops escalam.
+static func _LootMult(accountID : int, now : int = 0) -> int:
+	if accountID <= 0:
 		return 1
 	var sql : SQLService = _sql()
-	if sql.GetVIPUntil(accountID) > _now():
-		return 4
-	return 2
+	var t : int = now if now > 0 else _now()
+	if sql.GetVIPTier(accountID) == 2 and sql.GetVIPUntil(accountID) > t:
+		return 2
+	return 1
 
 # ------------------------------------------------------------------ formula
 
-# SOM-IDLE Fase B: teto de horas liquidáveis por conta — 12h F2P / 24h VIP1 /
-# 36h VIP2 (válido só com janela ativa; expirado volta ao base). Pura p/ seams.
+# Teto comprado pela CONTA: 1h no F2P, 24h em qualquer tier de VIP (válido só
+# com janela ativa; expirado volta ao base). É a metade que não depende de
+# anúncio — a outra metade (horas assistidas) entra em CapHoursForCharacter.
+# Pura p/ seams.
 static func CapHoursForAccount(accountID : int, now : int = 0) -> float:
 	if accountID <= 0:
 		return BaseCapHours
@@ -170,6 +188,20 @@ static func CapHoursForAccount(accountID : int, now : int = 0) -> float:
 		2:
 			return CapHoursVIP2
 	return BaseCapHours
+
+# Horas de offline compradas com anúncio e ainda não liquidadas (0 sem Economy
+# no caminho, p/ o seam headless continuar puro).
+static func AdHoursEarned(accountID : int, charID : int, anchorTs : int) -> float:
+	var eco : EconomyService = _economy()
+	if eco == null:
+		return 0.0
+	return eco.AfkHoursEarned(accountID, charID, anchorTs)
+
+# Teto liquidável do PERSONAGEM = o que a conta comprou (F2P/VIP) + o que o
+# personagem assistiu e ainda não coletou. A leitura é por personagem porque o
+# anchor é character.last_settled_at e a view carrega char_id.
+static func CapHoursForCharacter(charID : int, accountID : int, anchorTs : int, now : int = 0) -> float:
+	return CapHoursForAccount(accountID, now) + AdHoursEarned(accountID, charID, anchorTs)
 
 # SOM-IDLE: F3 — settle mods by account: VIP window (+20% idle faucet),
 # guild hook reserved (F4). Kept as a pure function for test seams.
@@ -209,9 +241,9 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	# SOM-IDLE newbie boost: primeiras 48h (até level 10) rendem 5× offline.
 	var charLevel : int = int(sql.GetCharacter(report.charID).get("level", 1))
 	var newbieMult : float = float(FarmZoneData.NewbieBoostFactor) if charLevel < FarmZoneData.NewbieBoostMaxLevel else 1.0
-	# Fase E: ad armado dobra XP/ouro/drops da liquidação (4× com VIP). Baús,
-	# chaves e favores intactos. Essência de overflow acompanha o XP dobrado
-	# (mesmo eixo tempo-por-tempo do VIP 1.2× — §2.5, não é faucet de essência).
+	# Tier 2: o ×2 dobra XP/ouro/drops da liquidação. Baús, chaves e favores
+	# intactos. Essência de overflow acompanha o XP dobrado (mesmo eixo
+	# tempo-por-tempo do VIP 1.2× — §2.5, não é faucet de essência).
 	report.doubled = adMult > 1
 	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp * float(adMult) * newbieMult)
 	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold * float(adMult) * newbieMult)
@@ -226,13 +258,21 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	if frac >= 0.5:
 		dropCount += 1
 	dropCount *= adMult
-	report.armed = adMult > 1
 	if dropCount > 0:
 		# SOM-IDLE: F3 — tier-banded drop pool (deterministic pick per char+zone)
 		var itemHash : int = FarmZoneData.GetDropForRoll(report.zoneID, report.charID + report.zoneID)
 		report.drops[itemHash] = dropCount
 
-	report.chests = mini(floori(h / float(ChestHoursPerChest)), MaxChests)
+	# Baús: 1 a cada 4h liquidadas, no máx. MaxChests por coleta. Com o baseline
+	# de 1h o floor() sozinho pagaria 0 baú para quem não assistiu anúncio
+	# nenhum, e a janela AFK é exatamente o produto do F2P — então 1h vale 1 baú
+	# (abaixo de 1h não há piso: coleta de 20 minutos não entrega nada). O teto
+	# diário por personagem fecha a outra ponta: com gate de pegada de 60 s em
+	# Server.gd:490, uma coleta por minuto pagaria 1 baú por minuto.
+	var chestWanted : int = mini(floori(h / float(ChestHoursPerChest)), MaxChests)
+	if chestWanted == 0 and h >= 1.0:
+		chestWanted = 1
+	report.chests = mini(chestWanted, _ChestBudgetToday(sql, report.charID))
 
 	# SOM-IDLE: chaves de boss também acumulam offline (idle-first) — kills
 	# equivalentes da sessão × KeyDropPPM, com o mesmo carry determinístico de
@@ -243,6 +283,19 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	if keyExpected - float(keyCount) >= 0.5:
 		keyCount += 1
 	report.bossKeysEarned = maxi(0, keyCount)
+
+# Baús que ainda cabem no dia do personagem. `created_at` de chest_instance é
+# carimbado pelo SQL com o relógio real, então a janela contada aqui também é
+# real — régua e prêmio no mesmo relógio, senão o nowOverride do harness
+# descentralizaria o contador. Leitura fora de transação: queryMutex não é
+# reentrante e _Apply abre a dele logo abaixo.
+static func _ChestBudgetToday(sql : SQLService, charID : int) -> int:
+	var dayStart : int = EconomyCatalog.PassDayStartTS(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
+	var rows : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND origin = 'settle' AND created_at >= ?;", [charID, dayStart])
+	var minted : int = 0
+	if not rows.is_empty():
+		minted = int(rows[0]["n"])
+	return maxi(0, EconomyCatalog.ChestsPerDayFromSettle - minted)
 
 # ------------------------------------------------------------------ apply (transactional)
 

@@ -47,7 +47,7 @@ O risco do projeto não é falta de competência de engenharia. É que **a engen
 | Login | sessão | `AutoFarmOnLogin` já coloca o char na zona 1 farmando — **login é farmando** `[CÓDIGO]` |
 | Input ativo | agência | manual **pausa** a policy (`NoteActivity`) e retoma após 10s → jogar ativo não aumenta renda de farm `[CÓDIGO]` |
 | UI | 8 janelas essenciais | shell de **~24 janelas** de MMO carregadas (`Gui.gd:129-151`), muitas em hotkey `[CÓDIGO]` |
-| Mercado | Grand Exchange | **comandos de texto** `/ah list|buy|cancel|browse`; a janela é read-only e o próprio `Gui.gd:681` diz "UI gráfica em desenvolvimento" `[CÓDIGO]` |
+| Mercado | Grand Exchange | **comandos de texto** `/ah list|buy|cancel|browse`; a janela é read-only e o próprio `Gui.gd:644` diz "UI gráfica em desenvolvimento" `[CÓDIGO]` |
 | Moeda na UI de leilão | gems | o preço exibido é `price_gold` rotulado como **"gems"** (`AuctionHouseWindow.gd:_render_list`) `[CÓDIGO]` |
 | Temporada/Passe | implementado | **OFF** (`SeasonsBetaLock=true` + env) `[CÓDIGO]` |
 | Anúncios reward | portais | **stub**, token `stub:<placement>:<dia>` mintável `[CÓDIGO]` |
@@ -122,8 +122,8 @@ A arquitetura do loop é honesta e o warm-start é excelente — você já está
 | Rebirth / essência / favores | ON | `RebirthData.gd` |
 | Boss ladder + interrupt | ON (**só 4 bosses**) | `BossService` |
 | Baús + pity | ON, odds públicas | `TradeChestService` |
-| VIP (caps 12/24/36 h, ×1,2) | ON | `OfflineSettle.gd:13-23` |
-| Anúncios reward | ON mas **stub** | `EconomyCatalog.gd:262` `[CÓDIGO]` |
+| VIP (cap offline 1 h free / 24 h, ×1,2; tier 2 líquida 2×) | ON | `OfflineSettle.gd:12-29` |
+| Anúncios reward | ON mas **stub** | `EconomyCatalog.gd:297` `[CÓDIGO]` |
 | Auction House | ON p/ jogadores, **bots OFF** | `SHAMBLETA_AH_BOTS` |
 | Torneio / arena ELO | ON, **mas criado só pelo job de 24 h** | `TournamentArenaService.gd:136-260` |
 | Guildas (pontos, buff 2%/nível) | ON | `GuildService` |
@@ -160,7 +160,7 @@ Game Design **6,5**. Perde ponto apenas onde o design entra em conflito consigo 
 
 Analisada como sistema ao longo do fluxo completo (aquisição → armazenamento → transformação → transferência → venda → compra → retirada → destruição), não endpoint por endpoint.
 
-**Ouro** (`stat.gp`, por personagem) — faucets: kills live (z1 ≈ 22,5k/h; z24 ≈ 2,4M/h), settle offline com caps 12/24/36 h e newbie ×5, boss +30% na fronteira. Sinks: morte, corrupção/craft (500×tier²), chave de boss (10.000), guilda (5k + níveis até 10M), torneio (1k). **AH e trade não queimam ouro.** Rebirth preserva `gp`.
+**Ouro** (`stat.gp`, por personagem) — faucets: kills live (z1 ≈ 22,5k/h; z24 ≈ 2,4M/h), settle offline com cap de 1 h no F2P (24 h no VIP; +1 h por anúncio assistido) e newbie ×5, boss +30% na fronteira. Sinks: morte, corrupção/craft (500×tier²), chave de boss (10.000), guilda (5k + níveis até 10M), torneio (1k). **AH e trade não queimam ouro.** Rebirth preserva `gp`.
 
 Sustentabilidade `[CÓDIGO + aritmética]`: em endgame com 16 h online + 8 h offline×0,6, a emissão é ≈ **49M ouro/semana** contra queima recorrente de ≈ 3,1M → **razão de reposição ≈ 0,06**. Não é um bug pontual: é **inflação estrutural por construção**, porque o único sink proporcional à renda é a taxa de morte. O AH — que num MMO sério é o grande queimador de ouro — queima **zero**. Correção de maior alavanca: taxa de venda do AH em ouro, queimada, 1–2% (proporcional ao volume, auto-estabilizante).
 
@@ -205,11 +205,11 @@ O fluxo ponta-a-ponta existe e é server-authoritative `[CÓDIGO]`: botão → `
 1. **O grant não chega.** `[CÓDIGO]` `LauncherCommons.gd:23`: `IsTesting = not OS.has_feature("production")`. Nenhum dos 7 presets em `export_presets.cfg` declara `custom_features="production"` (todos `""`), e `deploy/server/Dockerfile:31` é `CMD ["/app/Shambleta.x86_64", "--server"]` sem injetar feature. Logo o servidor abre `user://testing.db` (`SQLCommons.gd:47`), enquanto `deploy/companion/Dockerfile:20` abre hardcoded `.../app_userdata/Shambleta/live.db`. O volume é compartilhado (`deploy/docker-compose.yml`, comentário "MESMO volume do game") — **o nome do arquivo é que diverge**. O `grant_queue` escrito pelo companion nunca é lido pelo jogo. Silencioso, sem crash, sem teste que o pegue.
 2. **Mesmo sem isso, não se cobra: `SHAMBLETA_MP_ACCESS_TOKEN` está vazio no compose** (fail-closed → 503) `[CÓDIGO]`. É onboarding de conta PJ, não engenharia.
 3. **SKU morto:** `pass.s1` existe no `companion/catalog.json` mas **não** no `SHOP_CATALOG` do jogo (`EconomyCatalog.gd:65-74` traz só `.deluxe`) → `GetCheckoutIntent("pass.s1")` responde `unknown_sku`. `[CÓDIGO]` O passe padrão é incomprável pelo client. Correção de uma linha.
-4. **Catálogos divergindo:** `vip.1mo` a **R$24,90** no código contra R$14,90 no ROADMAP; `pass.s1` R$24,90 contra R$19,90 no ROADMAP; `AHListFeeGems=5` contra "10 flat" no ROADMAP. `[CÓDIGO]` O preço que o jogador vê é o do client, o que o companion cobra é o do `catalog.json` — dois artefatos mantidos em sincronia manual.
+4. **Catálogos divergindo:** `vip.1mo` a **R$24,90** no código contra R$14,90 no ROADMAP (alinhado em 2026-09-25: o ROADMAP passou a 24,90); `pass.s1` R$24,90 contra R$19,90 no ROADMAP; `AHListFeeGems=5` contra "10 flat" no ROADMAP. `[CÓDIGO]` O preço que o jogador vê é o do client, o que o companion cobra é o do `catalog.json` — dois artefatos mantidos em sincronia manual.
 
 **Tabela de SKUs reais:** `gems.550/.1200/.3000` R$19,90/39,90/79,90 · `vip.1mo` 24,90 · `vip.3mo` 59,90 · `starter.pack` 9,90 one-time D0–D3 · `founder.pack` 39,90 one-time · `pass.s1` 24,90 **(quebrado)** · `pass.s1.deluxe` 44,90 · `donate.support` 4,90. A curva escalona bem (R$/gem 0,036 → 0,033 → 0,027, −26% no topo), existe entrada barata (R$4,90/R$9,90) e existe segunda compra porque gems são sink recorrente. Falta um ímã de *primeira* compra de gems.
 
-**Fairness — é P2W?** Não no sentido competitivo, e isso é verificável `[CÓDIGO]`: VIP dá cap offline 12→24→36 h, fator ×1,2, trade diário 20→40 e 2× nos prêmios de anúncio. **Favores (`favor_xp`/`favor_gold`) não são compráveis com gems** — custam essência, que vem do overflow de XP. Não existe botão gems→poder. Pior caso quantificado: logar 1×/dia com cap 36 h vs 12 h = 3× de coleta, ×1,2 de taxa → **~3,6× rendimento idle**, uma vantagem de progressão em semanas, não de ranking. O VIP é comprável com gems ganhas (440g), então um F2P dedicado chega lá de graça. Verifiquei também que a arena **não** multiplica poder por VIP — só concede tickets extras (`TournamentArenaService.gd:29-51`), o que honra a exigência da comunidade `[recorrente]`.
+**Fairness — é P2W?** Não no sentido competitivo, e isso é verificável `[CÓDIGO]`: VIP dá cap offline 24 h contra 1 h de base (regra de 2026-09-25: o F2P soma +1 h por anúncio assistido, sem teto de anúncios/dia), fator ×1,2, trade diário 20→40 e, no tier 2, 2× no loot da liquidação. **Favores (`favor_xp`/`favor_gold`) não são compráveis com gems** — custam essência, que vem do overflow de XP. Não existe botão gems→poder. Pior caso quantificado: logar 1×/dia sem assistir nada coleta 1 h contra 24 h do VIP = 24× de janela, ×1,2 de taxa e ×2 do tier 2 → vantagem grande, mas **comprável com atenção**, não só com dinheiro: 23 anúncios/dia põem o F2P na mesma janela. O VIP é comprável com gems ganhas (440g), então um F2P dedicado chega lá de graça. Verifiquei também que a arena **não** multiplica poder por VIP — só concede tickets extras (`TournamentArenaService.gd:29-51`), o que honra a exigência da comunidade `[recorrente]`.
 
 Ressalva honesta: parte da comunidade idle lê "VIP multiplica a velocidade de coleta" como P2W disfarçado de QoL `[consenso dividido]`. A defesa não é técnica, é de comunicação — e depende de o cap free ser generoso (ver §22).
 
@@ -224,7 +224,7 @@ Os primitivos são certos e os números são ruins.
 **Certo** `[CÓDIGO]`: escrow por lot com cadeia `parent_uid`, entrega all-or-nothing numa transação, taxa de listagem 5 gems **+ creator fee 1%**, bot de estoque **finito e que nunca recompra** (portanto sink, não fonte), self-buy/self-trade bloqueados, `RunFraudScan` diário rodando.
 
 **Errado:**
-- **Não existe camada de rede.** Não há RPC de `list`/`buy`/`cancel` no `Network.gd`/`Server.gd`. `AuctionHouseService.ListItemForSale` existe como função e **não tem chamador externo**. A `AuctionHouseWindow.gd` declara isso no próprio cabeçalho ("Nota honesta: não há RPC de listagem no servidor") e o `Gui.gd:681` instrui o jogador a **digitar `/ah list`, `/ah buy`, `/ah sell`** porque a "UI gráfica [está] em desenvolvimento". Guilda tem o mesmo padrão: create/join/leave por comando. `[CÓDIGO]`
+- **Não existe camada de rede.** Não há RPC de `list`/`buy`/`cancel` no `Network.gd`/`Server.gd`. `AuctionHouseService.ListItemForSale` existe como função e **não tem chamador externo**. A `AuctionHouseWindow.gd` declara isso no próprio cabeçalho ("Nota honesta: não há RPC de listagem no servidor") e o `Gui.gd:644` instrui o jogador a **digitar `/ah list`, `/ah buy`, `/ah cancel`** porque a "UI gráfica [está] em desenvolvimento" (na data desta auditoria o terceiro comando era `/ah sell`, que `WorldCommands.CommandAH` nunca conheceu; trocado em 2026-09-25). Guilda tem o mesmo padrão: create/join/leave por comando. `[CÓDIGO]`
 - **A janela erra a moeda:** `BrowseListings` seleciona `price_gold`, e `_render_list` imprime `"%s [%s] x%d — %d gems"`. O jogador lê "gems" onde é ouro. `[CÓDIGO]`
 - **Liquidez nasce vazia:** os bots cobrem **6 consumíveis** (Apple→CactusPotion, 60–600 gold) e estão **OFF em beta**. Para equipamento, zero. Um mercado sem contraparte no primeiro dia não se recupera sozinho. `[CÓDIGO]`
 - **Wash trade é detectado, não prevenido:** não há teto de preço nem appraisal por tier, então listar junk caro e comprar em ouro transfere valor por dentro do AH pagando só 5 gems + 1%. `[CÓDIGO]` p/ ausência do guard; `[INFERÊNCIA]` p/ prevalência.
@@ -240,7 +240,7 @@ Tudo de bom primeiro, porque é real `[CÓDIGO]`: SQL param-bound em todo o DAO 
 
 **V1 — CRÍTICA — a identidade do chamador vem do chamador.** `[CÓDIGO]`
 
-`Network.gd` expõe **101** funções `@rpc("any_peer", …)`; **100** delas terminam em `peerID : int = NetworkCommons.PeerAuthorityID`, ou seja, um valor lido do pacote. No servidor, `CallServer` (Network.gd:958-972) re-despacha `methodName` com `args + [peerID]` usando **esse** valor; `Interface.gd` faz `Network.callv(methodName, args + [peerID])` sobre `bulks[peerID]`. `Peers.GetPeer/GetAccount/GetCharacter/GetAgent/GetPermission` indexam `peers[peerID]` direto, e os ids dos peers são reais e sequenciais (atribuídos pelo transporte em `Server.gd:1208`), portanto **enumeráveis**. Contagem confirmada por mim: **130** resoluções de identidade `Peers.Get*(peerID)` em `Server.gd` e **zero** ocorrências de `get_remote_sender_id()` em todo `sources/`.
+`Network.gd` expõe **101** funções `@rpc("any_peer", …)`; **100** delas terminam em `peerID : int = NetworkCommons.PeerAuthorityID`, ou seja, um valor lido do pacote. No servidor, `CallServer` (Network.gd:994) re-despacha `methodName` com `args + [peerID]` usando **esse** valor; `Interface.gd` faz `Network.callv(methodName, args + [peerID])` sobre `bulks[peerID]`. `Peers.GetPeer/GetAccount/GetCharacter/GetAgent/GetPermission` indexam `peers[peerID]` direto, e os ids dos peers são reais e sequenciais (atribuídos pelo transporte em `Server.gd:1297-1305`), portanto **enumeráveis**. Contagem confirmada por mim: **130** resoluções de identidade `Peers.Get*(peerID)` em `Server.gd` e **zero** ocorrências de `get_remote_sender_id()` em todo `sources/`.
 
 O caminho completo foi rastreado até o efeito, conforme exige o método:
 `DeleteAccount` (`Server.gd:36-47`): `peer = GetPeer(peerID)` → `accountID = peer.accountID` → `SQL.EraseAccount(accountID)`.
@@ -253,7 +253,7 @@ O exploit em si é `[INFERÊNCIA]` — não foi executado contra um servidor nes
 
 **V2 — Janela TOTP ~±15 minutos.** `[CÓDIGO]` `TwoFactorAuth.gd:103-107`: `candidateCounter = baseCounter + drift * TOTP_STEP_SECONDS` e depois `GenerateTOTP(secret, candidateCounter * TOTP_STEP_SECONDS)` — mas `GenerateTOTP` já divide o timestamp por 30 internamente. O duplo escalonamento faz os contadores testados serem `base + {−30, 0, +30}` **steps**, com drift ∈ {−1,0,1}. Aceita códigos defasados ±900 s, com 3 contras simultâneas, onde a RFC 6238 pede ±1 step. Verifiquei linha por linha. Mitigado em parte pelo desafio single-use, expirado e vinculado ao peer (`Peers.ValidateTwoFactorChallenge`), que está bem feito — mas a primitiva está errada.
 
-**V3 — Recompensa de anúncio mintável, e não é configurável.** `[CÓDIGO]` `EconomyCatalog.gd:262` é `const AdStubEnabled : bool = true` — **const, não env**. `_ValidAdToken` aceita `stub:<placement>:<dia>` (`AdsCosmeticsService.gd:36-43`), e o `AdProvider.ShowRewarded` chama `_MintStub` **mesmo no modo `portal`**, depois do callback do SDK: não existe prova de exibição verificável no servidor em nenhum dos dois caminhos. Um cliente forja o token e coleta o cap diário (1 baú / 2 chaves de boss / reroll / 2× AFK) sem ver anúncio. Não rouba dinheiro diretamente, mas destrói a segunda fonte de receita e faz o relatório de ads mentir.
+**V3 — Recompensa de anúncio mintável, e não é configurável.** `[CÓDIGO]` `EconomyCatalog.gd:297` era `const AdStubEnabled : bool = true` — **const, não env** (SOM-IDLE M2 fechou isso: hoje é `static func` atrás de `SHAMBLETA_AD_STUB=1`, default desligado, ligado só pelo deploy do beta). `_ValidAdToken` aceita `stub:<placement>:<dia>` (`AdsCosmeticsService.gd:47-55`), e o `AdProvider.ShowRewarded` chama `_MintStub` **mesmo no modo `portal`**, depois do callback do SDK: não existe prova de exibição verificável no servidor em nenhum dos dois caminhos. Um cliente forja o token e coleta o cap diário (1 baú / 2 chaves de boss / reroll / horas de offline) sem ver anúncio. Não rouba dinheiro diretamente, mas destrói a segunda fonte de receita e faz o relatório de ads mentir.
 
 **V4 — 2FA é inatingível.** `[CÓDIGO]` `Settings.gd:602/614/655` tem botões reais que chamam `Network.SetupTwoFactor` / `VerifyTwoFactorSetup` / `DisableTwoFactor`; os três `@rpc` existem (`Network.gd:86-96`); a persistência inteira existe (`SQL.SetTwoFactorSecret/SetTwoFactorEnabled/ConsumeTwoFactorToken`). **`Server.gd` não tem nenhum dos três handlers** — `ENetServer.callv("SetupTwoFactor", …)` cai num método inexistente. E `Settings.gd:599` ainda consulta `Launcher.SQL.IsTwoFactorEnabled(...)`, que é `null` num processo cliente (SQL só nasce em `Launcher.Server()`, `Launcher.gd:60-74`). Dois defeitos independentes no mesmo botão. Resultado: **ninguém consegue ativar 2FA no produto** — nem o staff, que é justamente a conta que a V1 torna valiosa.
 
@@ -336,7 +336,7 @@ Pontos verdadeiros: `_essential_windows()` retorna exatamente 8 janelas `[TESTE]
 
 Pontos que custam caro:
 1. **Botão visível que não funciona.** O 2FA em `Settings.gd` aparece, clicável, e nada acontece (V4). Um botão morto ensina o jogador a não confiar na interface. `[CÓDIGO]`
-2. **A interface manda o jogador usar o terminal.** `Gui.gd:681`: use `/ah list`, `/ah buy`, `/ah sell` ("UI gráfica em desenvolvimento"). Mercado é a feature social central e é texto puro. `[CÓDIGO]`
+2. **A interface manda o jogador usar o terminal.** `Gui.gd:644`: use `/ah list`, `/ah buy`, `/ah cancel` ("UI gráfica em desenvolvimento"; o terceiro era `/ah sell`, inexistente — corrigido em 2026-09-25). Mercado é a feature social central e é texto puro. `[CÓDIGO]`
 3. **Rótulo de moeda errado** na janela de leilão (ouro exibido como gems). `[CÓDIGO]`
 4. **Onboarding é 100% descritivo.** Nenhuma micro-ação guiada: não manda abrir 1 baú, ver o relatório AFK, acertar 1 interrupt. Cita F2/F6 e 6 janelas de uma vez. O tour explica onde olhar, não o que fazer. `[CÓDIGO]`
 5. **Densidade de MMO sobre núcleo idle:** ~24 janelas carregadas (minimap, emote, dialogue, formation, social, leaderboard, seasonPass…) para um jogo que se joga sozinho. `[CÓDIGO]`
@@ -444,7 +444,7 @@ O concorrente mais perigoso é **Melvor**: mesma promessa ("idle RPG profundo co
 - Prestígio é **condicional**: odiado quando reseta sem ganho tangível, aceito quando **acelera**. O design de essência/favores está no lado certo (§8), e isso é uma vitória a proteger.
 - Passe 100% cosmético é **respeitado**; FOMO obrigatório é odiado.
 - "VIP sem poder" é **contestável**: multiplicar velocidade de coleta é lido por parte do público idle/MMO como P2W disfarçado de QoL `[consenso dividido]`.
-- Anúncio **recompensado e opt-in é aceito**; intersticial obrigatório e back-to-back gera abandono. Não extraí um número de "X/dia" com estudo nomeável — a régua é subjetiva e o teto atual (6/dia) é defensável.
+- Anúncio **recompensado e opt-in é aceito**; intersticial obrigatório e back-to-back gera abandono. Não extraí um número de "X/dia" com estudo nomeável — a régua é subjetiva e continua subjetiva depois de 2026-09-25, quando o teto global de 6/dia saiu e cada anúncio passou a comprar 1 h de offline: agora é o próprio jogador que pisa no acelerador.
 - Trade P2P + AH é desejado, com taxas transparentes aceitas; **RMT e bots são condenados**.
 - Salva na nuvem sincronizado web↔Android↔desktop é **expectativa**, e o server-authoritative resolve isso nativamente — o diferencial mais defensável do produto.
 
@@ -458,10 +458,10 @@ Aplicando ao código: o design **já fecha parte** do enquadramento — odds pú
 
 **C1 — "O cap offline free não pode punir quem dorme."**
 *Hipótese da comunidade:* `[recorrente]` em r/incremental_games, multi-ano.
-*Implementação atual:* caps 12 h (free) / 24 h (VIP t1) / 36 h (VIP t2), fator 0,6→0,8, VIP ×1,2 (`OfflineSettle.gd:12-23`).
-*Verificação no código:* confirmado; é o mecanismo documentado. **A penalidade relativa é 3× de coleta entre free e VIP máx.**
+*Implementação atual:* cap 1 h (free, +1 h por anúncio assistido desde a última coleta) / 24 h (qualquer tier de VIP, sem anúncio), fator 0,6→0,8, VIP ×1,2 e 2× de loot no tier 2 (`OfflineSettle.gd:12-29`).
+*Verificação no código:* confirmado; é o mecanismo documentado. **A penalidade relativa é 24× de janela entre o F2P que não assiste nada e o VIP — e cai para 1× para quem assistiu 23 anúncios**, porque a hora tem preço de atenção, não de dinheiro.
 *Impacto:* churn no D2–D7 de F2P + percepção de P2W; também afeta a régua de D7.
-*Melhoria:* subir o cap free para ~16–20 h (continua premiando log diário e o VIP continua melhor), e **mostrar XP/h real** no relatório AFK em vez de o número só existir na doc.
+*Melhoria:* decidida em 2026-09-25 pelo dono, e por outro caminho — o cap free não subiu, ele ficou em 1 h e **passou a ser comprável com anúncio** (+1 h por view, sem teto de views/dia), em vez de ser dado de graça. Continua aberta a segunda metade: **mostrar XP/h real** no relatório AFK em vez de o número só existir na doc.
 *Matriz negócio:* custo S, risco baixíssimo, protege retenção que sustenta LTV. **Fazer.**
 
 **C2 — "VIP não pode tocar PvP/ranking."**
@@ -489,7 +489,7 @@ Aplicando ao código: o design **já fecha parte** do enquadramento — odds pú
 *Matriz:* custo de decisão alto, custo de código S-M. **Decidir antes do beta, não depois da multa.**
 
 **C5 — "Anúncio nunca obrigatório, com teto."**
-*Implementação:* `AD_DAILY_CAP = 6`, caps por placement (chest 1, bosskey 2), só placements opt-in (`AdsCosmeticsService.gd`).
+*Implementação:* caps por placement (chest 1, bosskey 2) — o `AD_DAILY_CAP = 6` global saiu em 2026-09-25, quando o anúncio passou a comprar hora de offline e o dono quis que todo anúncio disponível fosse mostrável; só placements opt-in (`AdsCosmeticsService.gd`).
 *Verificação:* **conforme** com a preferência documentada. O problema não é o desenho, é a fraude do §12-V3.
 *Melhoria:* SSV server-side; o desenho atual pode ficar como está.
 
@@ -584,8 +584,8 @@ ele boota o que era, e a CI dele roda o portão antigo. O que não existe fora d
 **O risco concreto é o commit parcial**, porque os arquivos rastreados já chamam os soltos pelo nome:
 `scripts/test.sh:25,40` e `.github/workflows/godot-ci.yml:187,212,220,234,256,278` executam
 `ci_gate_log.sh` e o harness de identidade; `Server.gd:1177,1181`, `SQL.gd:1275` e
-`WorldCommands.gd:1295` usam `class_name ChatModeration`; `Launcher.gd:26,75` e
-`IdleTests.gd:5314,5468,5474` usam `class_name MetricsServer`. Commitar o conjunto `M` sem o
+`WorldCommands.gd:1295` usam `class_name ChatModeration`; `Launcher.gd:25,83` e
+`IdleTests.gd:5348,5502,5505` usam `class_name MetricsServer`. Commitar o conjunto `M` sem o
 conjunto `??` entrega uma árvore que não parseia e um portão que não roda. A conta completa está em
 `deploy/LAUNCH_HANDOFF.md` §5, e fechar isso é commit — não
 código.
@@ -746,7 +746,7 @@ foi medido — e por isso a metade seguinte fica registrada como HIPÓTESE, sem 
 o caminho do servidor de produção: ele roda de um `.pck` exportado (`deploy/server/Dockerfile`) e
 a ordem dentro do pacote não é observável neste host (sem templates de export instalados), enquanto
 o teste de contrato (`boot: a base corrente chegou à versão do diretório de patches`,
-`tests/IdleTests.gd:4966`) enxerga só o source. Fechado por contrato explícito: `patches.sort()`
+`tests/IdleTests.gd:5000`) enxerga só o source. Fechado por contrato explícito: `patches.sort()`
 em `sources/system/FileSystem.gd:250`, que tem exatamente dois consumidores — o `ApplyMigrations`
 e o teste — e não muda nada do que roda hoje nos dois caminhos medidos.
 
@@ -789,7 +789,8 @@ para reduzir; havia um gap de observabilidade meu, agora fechado.
 não tem um único referência em `sources/` (`grep -rln AuctionHouseWindow sources` devolve só o
 próprio arquivo), e os dois botões de HUD "AH"/"Leilão" (`sources/gui/ManualHudBar.gd:63-78`, depois da fatia (t)) caem em
 `_on_ah_pressed`, que manda uma notificação dizendo para o jogador digitar `/ah list`, `/ah buy`,
-`/ah sell`. Não é bug e não foi "esquecido na passada": o servidor tem `BrowseListings`
+`/ah sell` (comando que não existia; a régua de 2026-09-25 passou o texto para
+`/ah cancel`). Não é bug e não foi "esquecido na passada": o servidor tem `BrowseListings`
 (`sources/economy/AuctionHouseService.gd:161`) mas a resposta sai por `Network.CommandFeedback` —
 texto no chat, não estrutura — então ligar o painel exigiria **RPC novo de listagem**, e o §24 já
 colou isso como **U1, pós-beta** ("AH com RPC e botões"). Ligar agora seria embarcar uma UI sem
@@ -805,7 +806,7 @@ lista subiu para seis nomes sem referência por classe, e cinco deles **estão v
 (1 cena cada) são carregados por caminho em `.tscn`/`.tres`, onde `class_name` não aparece. A
 conclusão que o número permite é estreita e escura ao mesmo tempo: `AuctionHouseWindow` é o único
 painel do repositório sem host de cena **e** sem chamador — e, ainda assim, a lógica pura dele já
-está sob a régua (cinco checks em `tests/IdleTests.gd:3492-3497`: busca, ordenação por preço,
+está sob a régua (cinco checks em `tests/IdleTests.gd:3526-3531`: busca, ordenação por preço,
 filtro de tipo, teto de preço e histórico). Falta host, não falta teste.
 
 **(m) a porta do dinheiro não tinha maçaneta — um `_ready` que abortava, e o buraco de cobertura
@@ -830,7 +831,7 @@ checkout do Mercado Pago abria com título, preço e detalhe, e **sem botão de 
 inteira do item 5 do §24 (chave PJ, `POST /checkout/preference`, intent assinado) terminava numa
 janela que não tinha o que apertar. Terceiro caso desta família registrado no repositório — os
 dois primeiros estão narrados na suíte que cuida do `Onboarding` (um `_label.autowrap` e um método
-que não existia, um em cima do outro): `tests/IdleTests.gd:1498-1504` narra
+que não existia, um em cima do outro): `tests/IdleTests.gd:1511-1517` narra
 exatamente a mesma coisa no `Onboarding` (`_label.autowrap` derrubando `_ready`, "os três botões
 nunca eram criados"), com uma segunda peça morta em cima (o `get_sessionfirstlogin` que não
 existia). Varredura da família em `sources/` — `.rect_*`, `.valign`, `.align =`, `.autowrap =`,
@@ -845,7 +846,7 @@ medidor de baixo o endereça por caminho). Dor de cabeça de cobertura é assim:
 (`Localizer` `Gui.gd:707`, `Onboarding` `Gui.gd:287`, `BossInterruptOverlay` `Gui.gd:722`,
 `UIHighlight` `Gui.gd:162) e portanto têm `_ready` rodado junto com o HUD; dois são adiados
 (`ActivitiesWindow` por `EnsureActivities()` `Gui.gd:75-77`, já montado na suíte em
-`tests/IdleTests.gd:850`, e `Checkout`). A fronteira é literal, e é o que dá peso à frase
+`tests/IdleTests.gd:863`, e `Checkout`). A fronteira é literal, e é o que dá peso à frase
 "rodado junto com o HUD": o boot do cliente faz `Root.add_child.call_deferred(Scene)` sobre a
 instância de `presets/Client.tscn` e depois **`await Scene.ready`** (`Launcher.gd:202-214`), com
 `Launcher.GUI = Scene.get_node("Canvas")` — `Canvas` é `presets/gui/Game.tscn`, que em
@@ -900,7 +901,7 @@ construídos por nenhum harness?" não merece uma resposta de memória, então v
 `_RuntimeBuiltGuiPanels()` varre `sources/**/*.gd` procurando `class_name` e os `preload` + `X.new()`
 correspondentes e devolve painel → construtores; o resultado (seis: `Activities`,
 `BossInterruptOverlay`, `Checkout`, `Localizer`, `Onboarding`, `UIHighlight`) está colado no const
-`runtimeBuiltGuiPanels` (`tests/IdleTests.gd:1104-1111`) e a suíte compara os dois. A primeira versão
+`runtimeBuiltGuiPanels` (`tests/IdleTests.gd:1117-1124`) e a suíte compara os dois. A primeira versão
 do medidor achou **um** dos seis: o PCRE do Godot não trata `^` como início de linha sem `(?m)`, e
 o padrão de `class_name` era ancorado. O const é a parte incômoda de propósito — nascer um painel
 novo em runtime faz a suíte falhar com os dois conjuntos impressos, e o que se faz quando ela falha
@@ -931,8 +932,7 @@ lê ainda não mudou. Dezenove chamadas não tinham linha. Distribuição medida
   É a string que explica **por que** a cobrança está bloqueada, na porta do dinheiro. Sem linha, a
   conta barrada no gate de idade — ou qualquer conta sem o aceite vigente, inclusive as pré-046 — lê
   `Payment blocked…` em inglês e não sabe o que fazer.
-- `sources/gui/AfkReport.gd` — **4**. Três são linhas faltantes (`Drops: %d`, `Efficiency: %s %d%%`,
-  `2× ad armed — applies on Collect (4× with VIP)`). A quarta é outra coisa e o medidor é que mostra:
+- `sources/gui/AfkReport.gd` — **4**. Três são linhas faltantes (`Drops: %d`, `Efficiency: %s %d%%`, `2× ad armed — applies on Collect (4× with VIP)` — a terceira foi substituída em 2026-09-25 por `Offline at the cap — each ad adds 1 hour`, porque o anúncio passou a comprar hora em vez de dobrar o loot). A quarta é outra coisa e o medidor é que mostra:
   `AfkReport.gd:19` chamava `tr("Carregando...")` — **chave escrita em português**. O catálogo já tinha
   `"Loading..."` → "Carregando...", então não faltava tradução nenhuma; sobrava uma chave que ninguém
   cadastra, e `tr()` de chave ausente devolve a própria chave. O conserto certo foi trocar a chamada
@@ -949,8 +949,8 @@ de eco** (`en == pt_BR == chave`: `"+%s XP"`, `"..."`, `"ARGH."`, `"Blackjack!"`
 falha: o `pt_BR` das strings de consentimento é cobrado uma a uma no bloco LGPD, e uma regra
 "eco = falha" derrubaria a suíte por linhas que estão certas.
 
-**A invariante.** `tests/IdleTests.gd:1038-1050`, dentro de `SuiteGuiPanels()` — que
-`tests/run_idle_tests.gd:258` chama, então ela roda no gate da CI e não só no harness rápido. Se o
+**A invariante.** `tests/IdleTests.gd:1051-1063`, dentro de `SuiteGuiPanels()` — que
+`tests/run_idle_tests.gd:262` chama, então ela roda no gate da CI e não só no harness rápido. Se o
 pt_BR compilado não carregar, o guard falha;
 senão varre as 95 chamadas e exige `semTraducao == 0`, imprimindo `arquivo :: chave` de cada uma. O
 harness de checkout foi de 77 para **79 checks** com ela (a presença do catálogo + a varredura).
@@ -1010,16 +1010,21 @@ linha fora do lugar e um caminho errado; uma das oito veio da régua nova no pri
 - `ROADMAP_COMERCIAL.md:90` → a linha das metas declaradas é `:28`.
 - `auditoria-tecnica-shambleta.md:116-118` → `:123-125` (a retificação dos spans). **Esta não foi achada por leitura: foi o primeiro run da régua que a devolveu.**
 - `server/Peers.gd:270` → o caminho certo é `sources/network/server/Peers.gd:270`. A linha estava certa; achou-a a resolução por nome cru da régua, que é o item (1) abaixo.
+- As quatro ocorrências de `Gui.gd` na linha 681 (a tabela de mercado, os dois achados de UI e a própria nota desta régua) passaram para `Gui.gd:644`. Nenhum ponteiro era errado por acaso: a linha certa nunca esteve onde a prosa dizia, e a régua não podia achar — as strings citadas continham `/ah`, e o parser de mensagem pula citação com barra. A classe exata de defeito que deixa o portão verde enquanto a cobertura evapora. Corrigido junto do texto do botão, que anunciava `/ah sell` (subcomando que `WorldCommands.CommandAH` nunca conheceu) e agora anuncia `/ah cancel`.
+- Três mentiras de vitrine fechadas na mesma passada, cada uma com a suíte que a impede de voltar (`SuiteStorefrontHonesty`, `companion/test_webhook.py`): o rótulo impresso na cobrança (`starter.pack`/`founder.pack` diziam "pending entitlements" no Checkout Pro — e o fallback do companion tinha o mesmo texto, amarrado ao arquivo canônico por asserção nova); os dois botões de passe, que a Loja oferecia fora de temporada sabendo que o companion recusa intent/preferência/sandbox (`Storefront.ShopCatalog` filtra a payload, `season_active` viaja no estado); e a venda de cosmético sem renderizador (`rebirth_fx`, `rebirth_f5`, `rebirth_f10` — gate `not_rendered` no `BuyCosmetic`, colocada depois da leitura de saldo justamente para não canibalizar a cobertura de `insufficient_gems`).
+- **Cinco ponteiros que a régua não lê, e por quê.** A fatia de monetização idle inseriu linhas no meio de `tests/IdleTests.gd` e a remoção do Discord tinha inserido no meio de `sources/launcher/LauncherCommons.gd`; nenhum dos dois deslocamentos é visível para a regra (1), que só sabe que a linha cabe no arquivo. Re-medidos contra a árvore: o check de boot `boot: a base corrente chegou à versão do diretório de patches` saiu da linha 4879 para a 5000; `isWeb` saiu da 34 para `LauncherCommons.gd:33`; as duas ocorrências de `MetricsServer` em `Launcher.gd` estão agora nas linhas 25 e 83 (eram 26 e 75) e as três de `tests/IdleTests.gd` nas linhas 5348, 5502 e 5505 (eram 5314, 5468 e 5474); e o par que descreve a identidade chegando do transporte — linha 1208 de `sources/network/server/Server.gd` e linha 958 de `sources/network/Network.gd` — está hoje em `Server.gd:1297-1305` (de `func ConnectPeer` até `Peers.AddPeer`) e `Network.gd:994` (`func CallServer`). Três dos cinco nem chegavam à régua: dois são correntes de vírgula e um é parêntese sem backtick no fim, então o parser não os vê. O critério que achou a família toda custa menos que uma regra nova: ponteiro de linha única caindo em linha em branco é defeito certo, e o resto veio de reler a prosa contra o arquivo citado. Registrar aqui em vez de calar é o ponto: um portão verde sobre noventa por cento da evidência não é um portão sobre a evidência.
 
 Régua: `SuiteEvidencePointers` em `tests/IdleTests.gd` (registrada por último em
 `tests/run_idle_tests.gd`, porque não toca estado nenhum — só relê a documentação contra a árvore
 atual). Três regras:
 
 - **(1) linha cabe no arquivo, com resolução por nome cru.** Se o arquivo citado existe, a linha
-citada tem que caber nele. A documentação escreve ponteiro das duas formas — re-medido em 2026-09-25
-na linha `[info]` do próprio run, são **145** ocorrências `arquivo:linha` nos três docs: **56** com
-caminho e **89** com nome cru
-(`Gui.gd:681`). No começo a régua só resolvia caminho, ou seja: das 145 ocorrências de hoje ela veria 56 —
+citada tem que caber nele. A documentação escreve ponteiro das duas formas — re-medido nesta passada,
+contando nos três docs o mesmo regex que a régua usa: **161** ocorrências `arquivo:linha` no formato que
+ela parseia, **67** com caminho e **94** com nome cru (o exemplo cru é
+`Gui.gd:644`). Dessas, **159** resolvem contra a árvore e cabem no arquivo — as duas restantes são o par
+histórico do caminho errado, descrito acima de propósito. No começo a régua só resolvia caminho, ou seja:
+das 161 ocorrências de hoje ela veria 67 —
 um terço da evidência que dizia estar olhando. Por isso ela agora indexa a árvore (`res://`, pulando dot-dirs) e resolve nome
 cru quando o nome é **único** na árvore; ausente é histórico legítimo (a prosa sobre o `gut_runner.gd`
 apagado tem que poder existir) e ambíguo não tem como decidir. Dos 47 nomes crus citados, 46 são únicos;
@@ -1035,30 +1040,40 @@ substring `Check`, que casava com `consentCheckBox` e fingia um teste onde há u
 a citação é prosa sobre prosa e o match continua solto, que é o ramo que pegou a oitava referência da
 lista.
 - **(3) nome de suíte existe.** Todo `Suite*` citado nos docs tem que ser `func` em
-`tests/IdleTests.gd`. Medido antes de escrever a regra: os 89 `func Suite*` do repositório inteiro
-vivem todos naquele arquivo (`grep -rn "^func Suite" tests/*.gd` por arquivo), e os 29 nomes citados
-nos três docs resolvem contra eles — um scanner independente em Python e a regra em GDScript
-chegaram ao mesmo 29, que é o tipo de concordância que justifica a regra ficar. Nome não drifta com
+`tests/IdleTests.gd`. Medido de novo nesta passada: os 91 `func Suite*` do repositório inteiro
+vivem todos naquele arquivo (`grep -rn "^func Suite" tests/*.gd` por arquivo), e os 32 nomes citados
+nos três docs resolvem contra eles. Quando a regra foi escrita eram 89 definidas e 29 citadas; a
+diferença são as duas suítes que o trabalho de vitrine acrescentou, e um scanner independente em Python
+e a regra em GDScript bateram o mesmo número nas duas ocasiões, que é o tipo de concordância que
+justifica a regra ficar. Nome não drifta com
 edição, e é a classe de defeito que já foi achado nesta auditoria: documentação afirmando
 cobertura de um teste inexistente.
 
-Cobertura medida no run de hoje: **148** referências `arquivo:linha` resolvidas e dentro do arquivo;
-**6** pares de ponteiro + mensagem de check citada na prosa e batendo com a linha; **29** nomes de
-suíte existentes.
+Cobertura medida no run desta passada: **159** referências `arquivo:linha` resolvidas e dentro do
+arquivo; **11** pares de ponteiro + mensagem de check citada na prosa e batendo com a linha; **32** nomes
+de suíte existentes. O movimento de 157 para 159 não é drift: são as duas citações que o registro do
+render real das janelas em `deploy/LAUNCH_HANDOFF.md` acrescentou — a linha 42 de `AfkReport.gd`, uma
+vez por caminho e uma vez por nome cru —, cada uma conferida contra o arquivo antes de escrita.
 O guard imprime os três números no log, porque um "0 falhas" sozinho não diz quanto foi olhado — que
-é exatamente a classe do problema. Das 150 ocorrências do parágrafo acima, duas ficam de fora por
+é exatamente a classe do problema. Das 161 ocorrências do parágrafo acima, duas ficam de fora por
 construção, e as duas são o mesmo ponteiro: `server/Peers.gd:270`, que este documento cita duas vezes
 exatamente como exemplo do desvio de caminho — e é este próprio achado. Nome com barra não é chutado
 por matching de sufixo, então a régua não adivinha nem ali; o outro lado do par
-(`sources/network/server/Peers.gd:270`) está dentro das 148. Custo medido na sonda rápida que roda a
+(`sources/network/server/Peers.gd:270`) está dentro das 159. Custo medido na sonda rápida que roda a
 suíte sozinha: 2.000 a 2.409 ms em quatro medições seguidas nesta máquina (2.409, 2.286, 2.184 e
 2.000), porque a régua é O(tree) e o número individual não é reprodutível entre runs — o índice da árvore
-(varredura recursiva de `res://` pulando dot-dirs, balde de três caminhos por nome; 3.753 arquivos na
-árvore de hoje pelo mesmo critério) é construído uma vez por processo. Os números da régua bateram com
-os do scanner independente em Python escrito do zero fora da árvore: 148 resolvidas e 29 nomes citados,
-zero fantasmas contra os 89 `func Suite*` definidos.
+(varredura recursiva de `res://` pulando dot-dirs, balde de três caminhos por nome; 3.753 arquivos no
+critério da própria régua, medido no run em que a linha foi escrita) é construído uma vez por processo. Os
+números da régua bateram com
+os do scanner independente em Python escrito do zero fora da árvore, re-rodado nesta passada: 161
+ocorrências contadas, **158** resolvendo por caminho único e cabendo no arquivo — mais uma, o
+`README.md` de linha 69, que o scanner recusa porque há quatro `README.md` na árvore e a régua aceita
+pela regra da raiz do projeto, fechando as 159 impressas no log — e 32 nomes citados, zero fantasmas
+contra os 91 `func Suite*` definidos. A varredura em Python também foi re-usada na outra direção e é
+ela que mostra o registro acima não ser otimismo: os 3 que ficam de fora são exatamente o par histórico
+de caminho e o `README.md`.
 
-As três têm prova de que **discriminam**, não só de que passam. (1): mutação do ponteiro do check de boot (a linha que hoje é `:4879`) → `:999999`
+As três têm prova de que **discriminam**, não só de que passam. (1): mutação do ponteiro do check de boot (a linha que hoje é `:5000`) → `:999999`
 devolveu uma falha com o diagnóstico linha-exata (`tem 6897 linhas`, o tamanho do arquivo naquele
 instante) e o arquivo voltou byte-idêntico (digest `3dd28b1d…` antes e depois). (2): dois ramos
 sondados — reverter o ponteiro `.md` para o drift antigo (`:123-125` → `:116-118`) devolve
@@ -1070,8 +1085,9 @@ nome inventado por extenso: a regra (3) varre prosa, não só backticks, e o doc
 na própria régua até eu cortar o token.
 
 **O limite, dito em vez de escondido, e a razão do formato.** Probei uma quarta regra — exigir que o
-identificador logo depois do ponteiro apareça na linha citada. Medido na árvore de hoje, com a mesma
-varredura independente em Python: dos 148 ponteiros que a régua resolve, **127** têm um identificador
+identificador logo depois do ponteiro apareça na linha citada. Medido na árvore daquele run, com a mesma
+varredura independente em Python: dos 148 ponteiros que a régua resolvia então — 159 na desta passada, e
+a proporção é o que importa aqui —, **127** têm um identificador
 colado no ponteiro, e **114 deles falhariam** — nove de cada dez ponteiros acusados por run. A classe
 está medida, não deduzida: 23 são prosa pura, palavra da frase que vem depois (`ating`, `corrige`,
 `muitas`, `narrativa`), e 91 são tokens que existem na árvore mas não na linha citada — nome do
@@ -1091,7 +1107,7 @@ os cobre porque nome de suíte não depende de janela.
 guardado nesta passada.** O beta roda no navegador, e o export Web é o alvo medido do produto. O
 caminho do dinheiro já tinha aprendido isso da pior maneira: abrir a página de pagamento com
 `OS.shell_open` não leva ninguém a lugar nenhum no Web, e por isso `sources/gui/Checkout.gd:194-198`
-faz `JavaScriptBridge.eval` com `window.open` quando `LauncherCommons.isWeb` (`sources/launcher/LauncherCommons.gd:34`,
+faz `JavaScriptBridge.eval` com `window.open` quando `LauncherCommons.isWeb` (`sources/launcher/LauncherCommons.gd:33`,
 `OS.has_feature("web")`) e só cai no `shell_open` no desktop. Dois outros sites navegavam para fora com
 o `shell_open` cru: o handler de clique de link do painel de texto, `sources/gui/Scrollable.gd:51-58`,
 que é **exatamente o painel do aceite** — o jogador marcando a caixa de 18+ com o corpo dos Termos na
@@ -1101,7 +1117,7 @@ frente, e o corpo tem dois `[url=]` (`data/db/agreement.json:63`); e o botão do
 de quatro funções **de um arquivo** e afirmam que navegar mora num lugar só — régua de um arquivo para
 um problema de cliente inteiro.
 **O que entrou:** os dois ramos nos dois sites (mesma forma do checkout, sem abstração nova), e
-`SuiteExternalLinksWebBranch` (`tests/IdleTests.gd:7213-7245`, chamada em `tests/run_idle_tests.gd:268`
+`SuiteExternalLinksWebBranch` (`tests/IdleTests.gd:7250-7282`, chamada em `tests/run_idle_tests.gd:272`
 logo depois da régua de ponteiros, pelo mesmo motivo — só lê a árvore, nenhum estado tocado). A régua é
 por **bloco**: varre os `.gd` de `sources/`, e para cada `OS.shell_open(` exige que a função contenedora
 tenha `JavaScriptBridge` **e** `isWeb`; linha de comentário não conta como ramo. Medido: 3 sítios em
@@ -1162,8 +1178,8 @@ removeu o coletor, que ficou sem chamador. Amarrei a volta dele por fonte, em `S
 defeito era justamente uma chamada que *parecia* certa e nenhum comportamento desta suíte a distingue de
 uma coleta honesta. Dois checks, cada mensagem inteira na mesma linha do ponteiro — quebrada entre duas
 linhas a régua não acha na fonte e **pula a citação em silêncio**:
-`tests/IdleTests.gd:3908` "S5: o servidor não coleta hardware próprio como identidade do jogador"
-e `tests/IdleTests.gd:3910` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
+`tests/IdleTests.gd:3942` "S5: o servidor não coleta hardware próprio como identidade do jogador"
+e `tests/IdleTests.gd:3944` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
 `EconomyService.FlagMultiAccount` ficou (fila, dedupe e validação já cobertos por check), e o que falta
 agora é o produtor — o que não é fiação: exige entropia por instalação (um id persistido no cliente),
 coleta no cliente e base legal para levar esses campos. Decisão de dono, e pós-beta: sem detector, a fila
@@ -1192,9 +1208,9 @@ créditos no GitHub Actions e a CI não roda** (decisão registrada em 2026-09-2
 Espelhei o gate dentro do `all` pelo mesmo quádruplo de §24-8
 (`gate_sh`, marcador `Gate anti-god-node:` com a contagem de falhas lida DA LINHA de resultado,
 `scripts/check_god_nodes.sh:57`) e amarrei a divergência por fonte, em `SuiteOpsA2`:
-`tests/IdleTests.gd:5042` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
+`tests/IdleTests.gd:5076` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
 atrás de `scripts/*.sh`, descarta os dois que não são gate (o avaliador do quádruplo e o próprio `test.sh`)
-e exige o resto no runner; `tests/IdleTests.gd:5041` "portão: a CI roda exatamente um gate de script próprio"
+e exige o resto no runner; `tests/IdleTests.gd:5075` "portão: a CI roda exatamente um gate de script próprio"
 é o âncora do número, para o guard não passar verde por varredura vazia nem continuar verde quando alguém
 abre um segundo gate na CI. Verificado contra o estado que produziu a CI vermelha: com o `scripts/test.sh`
 de HEAD, a varredura devolve `mirrored=1`, `missing=[scripts/check_god_nodes.sh]` — o guard falha; com o
@@ -1216,8 +1232,8 @@ O buraco é o catálogo por dentro, e nenhum dos dois lados (nem o `tr()`, nem o
 Tirei as quatro linhas repetidas, regerei os dois `.translation` pelo mesmo passo da CI
 (`godot --headless --path . --import`) e bati no compilado: `Attack` → **Ataque**, zero `Atacar`.
 Amarrei por censo na mesma passada, com o tamanho ancorado de always-green que é a regra da casa:
-`tests/IdleTests.gd:1071` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `:1072` "i18n: nenhuma
-chave repetida no ui.csv". Re-medido no fim: **971** chaves, **971** distintas.
+`tests/IdleTests.gd:1084` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `tests/IdleTests.gd:1085`
+"i18n: nenhuma chave repetida no ui.csv". Re-medido no fim: **971** chaves, **971** distintas.
 
 **O que separa "beta" de "pronto" hoje, em uma linha por dono:** código — nada pendente em
 Bloco 0 ou Bloco 1, com uma ressalva que vale como método: as passadas que escreveram os itens (m), (n),
