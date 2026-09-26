@@ -6,10 +6,17 @@ static var entities : Dictionary[int, Entity]		= {}
 static var target : Entity							= null
 static var hovered : Entity							= null
 
+# Speech grouping
 static var speechEntities : Array[EntityInteractive]= []
 static var speechRearrangePending : bool			= false
 
-# Speech grouping
+# Geometry of speechEntities for the current pass. Reading a flat array beats
+# walking interactive.entity.position / speechContainer.size once per pair.
+static var speechXs : Array[float]					= []
+static var speechYs : Array[float]					= []
+static var speechStacks : Array[float]				= []
+const speechFallbackHeight : float					= 32.0
+
 static func ScheduleSpeechRearrange():
 	if not speechRearrangePending:
 		speechRearrangePending = true
@@ -17,19 +24,70 @@ static func ScheduleSpeechRearrange():
 
 static func RearrangeSpeech():
 	speechRearrangePending = false
-	speechEntities.sort_custom(func(a, b): return a.entity.position.y > b.entity.position.y)
 
-	for currentIdx in range(speechEntities.size()):
-		var currentInteractive : EntityInteractive = speechEntities[currentIdx]
+	var count : int = speechEntities.size()
+	if count == 0:
+		return
+
+	# Compact in place: a freed entity would otherwise reach the position read.
+	var valid : int = 0
+	for i in count:
+		var candidate : EntityInteractive = speechEntities[i]
+		if candidate != null and candidate.entity != null:
+			speechEntities[valid] = candidate
+			valid += 1
+	if valid != count:
+		speechEntities.resize(valid)
+		count = valid
+	if count == 0:
+		return
+
+	# Bubbles appear and disappear one at a time, so the list is almost always
+	# already top-to-bottom: insertion sort is then O(count) and, unlike
+	# sort_custom, allocates neither a range() nor a per-call lambda.
+	for i in count:
+		if i == 0:
+			continue
+		var moving : EntityInteractive = speechEntities[i]
+		var movingY : float = moving.entity.position.y
+		var swapIdx : int = i - 1
+		while swapIdx >= 0 and speechEntities[swapIdx].entity.position.y < movingY:
+			speechEntities[swapIdx + 1] = speechEntities[swapIdx]
+			swapIdx -= 1
+		speechEntities[swapIdx + 1] = moving
+
+	if speechXs.size() < count:
+		speechXs.resize(count)
+		speechYs.resize(count)
+		speechStacks.resize(count)
+
+	var xThreshold : int = ActorCommons.speechGroupXThreshold
+	var yThreshold : int = ActorCommons.speechGroupYThreshold
+	for i in count:
+		var interactive : EntityInteractive = speechEntities[i]
+		var entityPos : Vector2 = interactive.entity.position
+		speechXs[i] = entityPos.x
+		speechYs[i] = entityPos.y
+		var speechContainer : BoxContainer = interactive.speechContainer
+		var containerHeight : float = speechContainer.size.y if speechContainer != null and speechContainer.size.y > 0 else speechFallbackHeight
+		speechStacks[i] = interactive.speechYExtraOffset + containerHeight + ActorCommons.speechStackGap
+
+	# Y is sorted descending, so the neighbours inside yThreshold of the current
+	# bubble are a contiguous tail of [0, i) and `first` only moves forward: the
+	# grouping window is scanned once per pass instead of restarted per bubble.
+	var first : int = 0
+	for i in count:
+		var currentY : float = speechYs[i]
+		while first < i and speechYs[first] - currentY > yThreshold:
+			first += 1
+		var currentX : float = speechXs[i]
 		var stackHeight : float = 0.0
-		for neighbourIdx in currentIdx:
-			var neighbourInteractive = speechEntities[neighbourIdx]
-			if abs(currentInteractive.entity.position.x - neighbourInteractive.entity.position.x) <= ActorCommons.speechGroupXThreshold and \
-			abs(currentInteractive.entity.position.y - neighbourInteractive.entity.position.y) <= ActorCommons.speechGroupYThreshold:
-				var speechContainer : BoxContainer = neighbourInteractive.speechContainer
-				var containerHeight : float = speechContainer.size.y if speechContainer != null and speechContainer.size.y > 0 else 32.0
-				stackHeight = max(stackHeight, neighbourInteractive.speechYExtraOffset + containerHeight + ActorCommons.speechStackGap)
-		currentInteractive.TweenSpeechOffset(stackHeight)
+		var neighbourIdx : int = first
+		while neighbourIdx < i:
+			if absf(currentX - speechXs[neighbourIdx]) <= xThreshold:
+				stackHeight = maxf(stackHeight, speechStacks[neighbourIdx])
+			neighbourIdx += 1
+		speechEntities[i].TweenSpeechOffset(stackHeight)
 
 # Entities access
 static func Get(agentRID : int) -> Entity:

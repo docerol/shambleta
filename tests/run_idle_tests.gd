@@ -183,6 +183,7 @@ func _run_tests():
 			suites.SuiteAutoIdle()
 			suites.SuiteMobVariants(sql)
 			suites.SuiteAchievements(sql)
+			suites.SuiteProgressUpsert(sql)
 			await suites.SuiteTormentRush(sql, economy)
 			# SOM-IDLE: rebirth (híbrido B+C, XP_PROGRESSION §4.2) — awaited: a
 			# metade B exige agente vivo no cap (o motor de renascimento é async).

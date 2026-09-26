@@ -51,10 +51,22 @@ class Peer:
 				if peerID == lastPeerID:
 					Network.AuthError(NetworkCommons.AuthError.ERR_DUPLICATE_CONNECTION, lastPeerID)
 			Peers.accounts[data.accountID] = NetworkCommons.PeerUnknownID
-		if data:
+		if data and data.accountID != NetworkCommons.PeerUnknownID:
 			Peers.accounts[data.accountID] = peerID
 			accountID = data.accountID
 			permission = data.permission
+		else:
+			# Desconexão (Server.DesconnectPeer passa `DisconnectedAccount`, cujo
+			# accountID é PeerUnknownID). O ramo anterior era `if data:`, então uma
+			# sessão logada que saía escrevia accounts[-2] = peerID e deixava
+			# accounts[contaReal] apontando para um peer morto. peerID é reciclado
+			# pelo transporte: o gauge `logged_accounts` (MetricsServer) contava o
+			# fantasma para sempre, e Server.ArenaAttack entrega o board do defensor
+			# por `accounts[conta]` — ou seja, para quem herdasse o número.
+			if accountID != NetworkCommons.PeerUnknownID and Peers.accounts.get(accountID, NetworkCommons.PeerUnknownID) == peerID:
+				Peers.accounts.erase(accountID)
+			accountID = NetworkCommons.PeerUnknownID
+			permission = ActorCommons.Permission.NONE
 		Network.online_accounts_update.emit()
 
 	func SetCharacter(id : int):
@@ -100,6 +112,12 @@ static func SetTransport(peerID : int, transport : TransportType):
 static func RemovePeer(peerID : int):
 	var peer : Peers.Peer = GetPeer(peerID)
 	if peer:
+		# Queda de conexão não passa por SetAccount, então o vínculo inverso
+		# (accountID → peerID) precisa morrer aqui pelo mesmo motivo do ramo de
+		# desconexão acima. O `== peerID` é o que impede o login novo de uma conta
+		# perder o binding para o peer antigo que só agora foi varrido.
+		if peer.accountID != NetworkCommons.PeerUnknownID and accounts.get(peer.accountID, NetworkCommons.PeerUnknownID) == peerID:
+			accounts.erase(peer.accountID)
 		peers.erase(peerID)
 		Network.peer_update.emit()
 

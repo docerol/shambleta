@@ -4492,11 +4492,20 @@ func SuiteAuthHardening(sql : SQLService) -> void:
 	var sessData : Peers.AccountData = Peers.AccountData.new(a1, sql.GetAccountPermission(a1))
 	CheckEq(int(Peers.FinalizeLogin(sessPeerObj, "idle_a1_user", sessData, 0, false)), int(NetworkCommons.AuthError.ERR_OK), "login binds peer to account")
 	CheckEq(Peers.GetAccount(sessPeer), a1, "peer resolves to account (logged in)")
+	# O mapa inverso accountID→peerID é o que alimenta o gauge `logged_accounts`
+	# e a entrega do board de arena ao defensor; peerID é reciclado pelo
+	# transporte, então sobrar entrada aqui é métrica inflada e mensagem na sessão
+	# de outra pessoa.
+	CheckEq(Peers.accounts.get(a1, NetworkCommons.PeerUnknownID), sessPeer, "reverse map binds account to peer")
 	sessPeerObj.SetAccount(Peers.DisconnectedAccount)
 	CheckEq(Peers.GetAccount(sessPeer), NetworkCommons.PeerUnknownID, "logout unbinds peer")
+	Check(not Peers.accounts.has(a1), "logout apaga a conta do mapa inverso")
+	Check(not Peers.accounts.has(NetworkCommons.PeerUnknownID), "logout não cria conta fantasma no mapa")
 	CheckEq(int(Peers.FinalizeLogin(sessPeerObj, "idle_a1_user", sessData, 0, false)), int(NetworkCommons.AuthError.ERR_OK), "re-login ok")
 	CheckEq(Peers.GetAccount(sessPeer), a1, "peer resolves again after re-login")
+	CheckEq(Peers.accounts.get(a1, NetworkCommons.PeerUnknownID), sessPeer, "re-login rebinda o mapa inverso")
 	Peers.RemovePeer(sessPeer)
+	Check(not Peers.accounts.has(a1), "queda de conexão apaga o vínculo inverso")
 
 	# E-mail verification flag + LGPD anonymization
 	Check(not sql.IsEmailVerified(a1), "e-mail starts unverified")
@@ -4853,6 +4862,15 @@ func SuiteChatHardening() -> void:
 		chat.AddLocalFeedback("linha nossa")
 		Check(localTab.text.contains("[color=#") and localTab.text.ends_with("[/color]"), "chat: o wrapper [color] nosso continua markup")
 		Check(localTab.get_parsed_text().ends_with("linha nossa\n"), "chat: e a linha nossa sai formatada do parser, não literal")
+		# Teto de histórico: o chat global nunca para e o buffer por aba era o que
+		# crescia até o fim da sessão. Contado no texto, não em `get_line_count()`
+		# (que é 0 sem layout — aba escondida, headless), então este check só vale
+		# porque o corte lê a própria fonte.
+		for dropIdx in 250:
+			chat.AddLocalFeedback("bulk-%d" % dropIdx)
+		CheckEq(localTab.text.count("[/color]"), ChatContainer.ChunkKeep, "chat: histórico da aba cortado no teto")
+		Check(localTab.text.contains("bulk-249"), "chat: a linha mais recente sobrevive ao corte")
+		Check(not localTab.text.contains("bulk-1\n"), "chat: a mais antiga caiu com o corte")
 
 	CheckEq(edit.max_length, NetworkCommons.ChatMaxSize, "chat: caixa de digitação para no teto do servidor")
 
@@ -7027,6 +7045,64 @@ func SuiteAchievements(sql : SQLService) -> void:
 	for uname in ["idle_ach_account"]:
 		sql.db.delete_rows("account", "username = '%s'" % uname)
 	sql.ExecuteBindings("DELETE FROM achievement_state WHERE account_id = ?;", [accountID])
+
+# O save de progresso virou um upsert em lote numa transação (round trips contados
+# no gate de benchmarks). O benchmark mede CUSTO; esta suíte mede SEMÂNTICA, que é
+# onde um ON CONFLICT escrito errado morde: linha que não atualiza, chave que
+# collide com outro personagem e chunk de 200 que engole o resto.
+func SuiteProgressUpsert(sql : SQLService) -> void:
+	print("[suite] progress upsert semantics")
+	var charID : int = CreateFixture(sql, "idle_upsert_account", "IdleUpsertChar")
+	var otherID : int = CreateFixture(sql, "idle_upsert_other", "IdleUpsertOther")
+	if not Check(charID != 0 and otherID != 0, "upsert fixtures created"):
+		return
+	var questID : int = "idle_upsert_quest".hash()
+	var mobID : int = "idle_upsert_mob".hash()
+	var skillID : int = "idle_upsert_skill".hash()
+	Check(sql.SetQuest(charID, questID, 1), "quest: insert")
+	Check(sql.SetQuest(charID, questID, 2), "quest: update sobre linha existente")
+	Check(sql.SetBestiary(charID, mobID, 7), "bestiary: insert")
+	Check(sql.SetBestiary(charID, mobID, 41), "bestiary: update")
+	Check(sql.SetSkill(charID, skillID, 1), "skill: insert")
+	Check(sql.SetSkill(charID, skillID, 5), "skill: update")
+	Check(sql.SetQuest(otherID, questID, 9), "mesma quest em outro personagem")
+	var mineQuests : Array[Dictionary] = sql.GetQuests(charID)
+	CheckEq(mineQuests.size(), 1, "update não duplicou a linha de quest")
+	CheckEq(_ProgressValue(mineQuests, "quest_id", "state", questID), 2, "quest ficou no último valor escrito")
+	CheckEq(_ProgressValue(sql.GetQuests(otherID), "quest_id", "state", questID), 9, "PK composta não cruzou personagens")
+	# UpdateProgress: lote numa transação, com a linha existente SENDO ATUALIZADA
+	# (não reinserida) e 250 entradas atravessando os dois chunks de 200.
+	var progress : ActorProgress = ActorProgress.new(null, false)
+	progress.quests[questID] = 3
+	progress.bestiary[mobID] = 99
+	progress.skills[skillID] = 7
+	Check(sql.UpdateProgress(charID, progress), "UpdateProgress: 3 entradas")
+	CheckEq(sql.GetQuests(charID).size(), 1, "UpdateProgress não duplicou quest")
+	CheckEq(_ProgressValue(sql.GetQuests(charID), "quest_id", "state", questID), 3, "UpdateProgress atualizou quest existente")
+	CheckEq(_ProgressValue(sql.GetBestiaries(charID), "mob_id", "killed_count", mobID), 99, "UpdateProgress atualizou bestiary")
+	CheckEq(_ProgressValue(sql.GetSkills(charID), "skill_id", "level", skillID), 7, "UpdateProgress atualizou skill")
+	var bulk : ActorProgress = ActorProgress.new(null, false)
+	for i in range(250):
+		bulk.quests[("idle_bulk_%d" % i).hash()] = i % 4
+	Check(sql.UpdateProgress(charID, bulk), "UpdateProgress: 250 entradas em 2 chunks")
+	var afterBulk : Array[Dictionary] = sql.GetQuests(charID)
+	# 250 do lote + a questID de antes: o save não apaga o que não estava no lote.
+	CheckEq(afterBulk.size(), 251, "chunk perdido no upsert de 250")
+	CheckEq(_ProgressValue(afterBulk, "quest_id", "state", "idle_bulk_249".hash()), 1, "última linha do segundo chunk chegou")
+	CheckEq(_ProgressValue(afterBulk, "quest_id", "state", "idle_bulk_0".hash()), 0, "primeira linha do primeiro chunk chegou")
+	CheckEq(_ProgressValue(afterBulk, "quest_id", "state", questID), 3, "quest de fora do lote foi preservada")
+	CheckEq(_ProgressValue(sql.GetQuests(otherID), "quest_id", "state", questID), 9, "lote não atravessou personagem")
+	sql.db.delete_rows("quest", "char_id = %d" % charID)
+	sql.db.delete_rows("bestiary", "char_id = %d" % charID)
+	sql.db.delete_rows("skill", "char_id = %d" % charID)
+	sql.db.delete_rows("quest", "char_id = %d" % otherID)
+
+# Lê uma linha de progresso pelo id, sem estourar quando o fixture falhou.
+func _ProgressValue(rows : Array[Dictionary], keyColumn : String, valueColumn : String, entryID : int) -> int:
+	for row in rows:
+		if int(row.get(keyColumn, 0)) == entryID:
+			return int(row.get(valueColumn, -1))
+	return -999
 
 # Tormento (D2) + boss rush com key.
 func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:

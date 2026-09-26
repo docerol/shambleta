@@ -419,7 +419,7 @@ func GetCharacterID(accountID : int, nickname : String) -> int:
 	return NetworkCommons.PeerUnknownID if results.is_empty() else results[0]["char_id"]
 
 func GetCharacter(charID : int) -> Dictionary:
-	var results : Array[Dictionary] = db.select_rows("character", "char_id = %d" % charID, ["*"])
+	var results : Array[Dictionary] = QueryBindings("SELECT * FROM character WHERE char_id = ?;", [charID])
 	if results.size() > 1: push_error("Duplicated character row %d" % charID); return {}
 	return {} if results.is_empty() else results[0]
 
@@ -435,7 +435,8 @@ func UpdateCharacter(player : PlayerAgent) -> bool:
 	var newTimestamp : int = SQLCommons.Timestamp()
 	var data : Dictionary = {}
 
-	data["total_time"] = SQLCommons.GetOrAddValue(GetCharacter(charID), "total_time", 0) + newTimestamp - SQLCommons.GetOrAddValue(GetCharacter(charID), "last_timestamp", newTimestamp)
+	var stored : Dictionary = GetCharacter(charID)
+	data["total_time"] = SQLCommons.GetOrAddValue(stored, "total_time", 0) + newTimestamp - SQLCommons.GetOrAddValue(stored, "last_timestamp", newTimestamp)
 	data["last_timestamp"] = newTimestamp
 
 	if map != null and not map.HasFlags(WorldMap.Flags.NO_REJOIN) and ActorCommons.IsAlive(player):
@@ -455,7 +456,7 @@ func UpdateCharacter(player : PlayerAgent) -> bool:
 		data["explore_x"] = player.exploreOrigin.pos.x
 		data["explore_y"] = player.exploreOrigin.pos.y
 
-	return ExecuteBindings("UPDATE character SET total_time = total_time + ?, last_timestamp = ?, pos_x = ?, pos_y = ?, pos_map = ?, respawn_x = ?, respawn_y = ?, respawn_map = ?, explore_x = COALESCE(?, explore_x), explore_y = COALESCE(?, explore_y) WHERE char_id = ?;", [newTimestamp - SQLCommons.GetOrAddValue(GetCharacter(charID), "last_timestamp", newTimestamp), newTimestamp, data.get("pos_x", 0), data.get("pos_y", 0), data.get("pos_map", 0), data.get("respawn_x", 0), data.get("respawn_y", 0), data.get("respawn_map", 0), data.get("explore_x", 0), data.get("explore_y", 0), charID])
+	return ExecuteBindings("UPDATE character SET total_time = total_time + ?, last_timestamp = ?, pos_x = ?, pos_y = ?, pos_map = ?, respawn_x = ?, respawn_y = ?, respawn_map = ?, explore_x = COALESCE(?, explore_x), explore_y = COALESCE(?, explore_y) WHERE char_id = ?;", [newTimestamp - SQLCommons.GetOrAddValue(stored, "last_timestamp", newTimestamp), newTimestamp, data.get("pos_x", 0), data.get("pos_y", 0), data.get("pos_map", 0), data.get("respawn_x", 0), data.get("respawn_y", 0), data.get("respawn_map", 0), data.get("explore_x", 0), data.get("explore_y", 0), charID])
 
 # Stats
 func GetAttribute(charID : int) -> Dictionary:
@@ -511,6 +512,7 @@ func GetStat(charID : int) -> Dictionary:
 func Transaction(callable : Callable) -> bool:
 	var committed : bool = false
 	queryMutex.lock()
+	txCounter += 1
 	if db.query("BEGIN TRANSACTION;"):
 		var result : bool = callable.call()
 		if result and db.query("COMMIT;"):
@@ -923,81 +925,77 @@ func UpdateEquipment(charID : int, data : Dictionary) -> bool:
 	return db.update_rows("equipment", "char_id = %d" % charID, data)
 
 # Progress
-func UpdateProgress(charID : int, progress : ActorProgress):
-	progress.questMutex.lock()
-	for entryID in progress.quests:
-		if not Launcher.SQL.SetQuest(charID, entryID, progress.quests[entryID]):
-			push_error("UpdateProgress: SetQuest falhou charID=%d entryID=%d" % [charID, entryID])
-	progress.questMutex.unlock()
+# Uma transação e um upsert multi-linha por tabela. Antes: três statements por
+# entrada (SELECT, depois UPDATE ou INSERT — cada um no seu próprio BEGIN/END da
+# godot-sqlite), i.e. ~3×(quests+bestiary+skills) round trips e um fsync por
+# linha escrita, crescendo junto com o progresso do jogador para sempre.
+const UpsertChunkRows : int = 200
 
-	progress.bestiaryMutex.lock()
-	for entryID in progress.bestiary:
-		if not Launcher.SQL.SetBestiary(charID, entryID, progress.bestiary[entryID]):
-			push_error("UpdateProgress: SetBestiary falhou charID=%d mobID=%d" % [charID, entryID])
-	progress.bestiaryMutex.unlock()
+static func _SnapshotEntries(source : Dictionary, mutex : Mutex) -> Dictionary:
+	if mutex == null:
+		return source.duplicate()
+	mutex.lock()
+	var snapshot : Dictionary = source.duplicate()
+	mutex.unlock()
+	return snapshot
 
-	for entryID in progress.skills:
-		if not Launcher.SQL.SetSkill(charID, entryID, progress.skills[entryID]):
-			push_error("UpdateProgress: SetSkill falhou charID=%d skillID=%d" % [charID, entryID])
-
+func _UpsertProgress(table : String, keyColumn : String, valueColumn : String, charID : int, entries : Dictionary) -> bool:
+	if entries.is_empty():
+		return true
+	var ids : Array = entries.keys()
+	ids.sort()
+	var i : int = 0
+	while i < ids.size():
+		var chunk : Array = ids.slice(i, mini(i + UpsertChunkRows, ids.size()))
+		var placeholders : PackedStringArray = []
+		var params : Array = []
+		for entryID in chunk:
+			placeholders.append("(?,?,?)")
+			params.append(charID)
+			params.append(entryID)
+			params.append(int(entries[entryID]))
+		var sql : String = "INSERT INTO %s (char_id, %s, %s) VALUES %s ON CONFLICT (char_id, %s) DO UPDATE SET %s = excluded.%s;" % [table, keyColumn, valueColumn, ", ".join(placeholders), keyColumn, valueColumn, valueColumn]
+		if not ExecNoLock(sql, params):
+			push_error("UpdateProgress: upsert em %s falhou charID=%d (%s)" % [table, charID, db.error_message])
+			return false
+		i += UpsertChunkRows
 	return true
+
+func UpdateProgress(charID : int, progress : ActorProgress):
+	var quests : Dictionary = _SnapshotEntries(progress.quests, progress.questMutex)
+	var bestiary : Dictionary = _SnapshotEntries(progress.bestiary, progress.bestiaryMutex)
+	var skills : Dictionary = _SnapshotEntries(progress.skills, null)
+	var ok : bool = false
+	ok = Transaction(func() -> bool:
+		var upserted : bool = _UpsertProgress("quest", "quest_id", "state", charID, quests)
+		upserted = _UpsertProgress("bestiary", "mob_id", "killed_count", charID, bestiary) and upserted
+		upserted = _UpsertProgress("skill", "skill_id", "level", charID, skills) and upserted
+		return upserted
+	)
+	if not ok:
+		push_error("UpdateProgress: transação de progresso falhou charID=%d" % charID)
+	return ok
 
 # Skill
 func SetSkill(charID : int, skillID : int, value : int) -> bool:
-	var results : Array[Dictionary] = db.select_rows("skill", "char_id = %d AND skill_id = %d" % [charID, skillID], ["*"])
-	if results.size() > 1: push_error("Duplicated skill for %d on character %d" % [skillID, charID]); return false
-
-	if not results.is_empty():
-		results[0]["level"] = value
-		return db.update_rows("skill", "char_id = %d AND skill_id = %d" % [charID, skillID], results[0])
-
-	var data : Dictionary = {
-		"char_id": charID,
-		"skill_id": skillID,
-		"level": value,
-	}
-	return db.insert_row("skill", data)
+	return ExecuteBindings("INSERT INTO skill (char_id, skill_id, level) VALUES (?,?,?) ON CONFLICT (char_id, skill_id) DO UPDATE SET level = excluded.level;", [charID, skillID, value])
 
 func GetSkills(charID : int) -> Array[Dictionary]:
-	return db.select_rows("skill", "char_id = %d" % [charID], ["*"])
+	return QueryBindings("SELECT * FROM skill WHERE char_id = ?;", [charID])
 
 # Bestiary
 func SetBestiary(charID : int, mobID : int, value : int) -> bool:
-	var results : Array[Dictionary] = db.select_rows("bestiary", "char_id = %d AND mob_id = %d" % [charID, mobID], ["*"])
-	if results.size() > 1: push_error("Duplicated bestiary row for %d on character %d" % [mobID, charID]); return false
-
-	if not results.is_empty():
-		results[0]["killed_count"] = value
-		return db.update_rows("bestiary", "char_id = %d AND mob_id = %d" % [charID, mobID], results[0])
-
-	var data : Dictionary = {
-		"char_id": charID,
-		"mob_id": mobID,
-		"killed_count": value,
-	}
-	return db.insert_row("bestiary", data)
+	return ExecuteBindings("INSERT INTO bestiary (char_id, mob_id, killed_count) VALUES (?,?,?) ON CONFLICT (char_id, mob_id) DO UPDATE SET killed_count = excluded.killed_count;", [charID, mobID, value])
 
 func GetBestiaries(charID : int) -> Array[Dictionary]:
-	return db.select_rows("bestiary", "char_id = %d" % [charID], ["*"])
+	return QueryBindings("SELECT * FROM bestiary WHERE char_id = ?;", [charID])
 
 # Quest
 func SetQuest(charID : int, questID : int, value : int) -> bool:
-	var results : Array[Dictionary] = db.select_rows("quest", "char_id = %d AND quest_id = %d" % [charID, questID], ["*"])
-	if results.size() > 1: push_error("Duplicated quest row for %d on character %d" % [questID, charID]); return false
-
-	if not results.is_empty():
-		results[0]["state"] = value
-		return db.update_rows("quest", "char_id = %d AND quest_id = %d" % [charID, questID], results[0])
-
-	var data : Dictionary = {
-		"char_id": charID,
-		"quest_id": questID,
-		"state": value,
-	}
-	return db.insert_row("quest", data)
+	return ExecuteBindings("INSERT INTO quest (char_id, quest_id, state) VALUES (?,?,?) ON CONFLICT (char_id, quest_id) DO UPDATE SET state = excluded.state;", [charID, questID, value])
 
 func GetQuests(charID : int) -> Array[Dictionary]:
-	return db.select_rows("quest", "char_id = %d" % [charID], ["*"])
+	return QueryBindings("SELECT * FROM quest WHERE char_id = ?;", [charID])
 
 # Auth Token
 func AddAuthToken(accountID : int, tokenHash : String, ipAddress : String) -> bool:
@@ -1226,9 +1224,46 @@ func GetBanList(filter : String = "") -> Array[Dictionary]:
 	return QueryBindings("SELECT ban.account_id, account.username, ban.unban_timestamp, ban.reason FROM ban INNER JOIN account ON ban.account_id = account.account_id WHERE ban.unban_timestamp > ? AND account.username LIKE ?;", [now, "%" + filter + "%"])
 
 # Commons
+# Contadores de round trip: o gate de benchmark precisa de um número por ação
+# (login/logout/settle/claim) para que uma otimização de SQL seja provável, não
+# afirmada. Incrementados sob `queryMutex` para não perder escrita de thread.
+var queryCounter : int = 0
+var txCounter : int = 0
+
+func QueryCount() -> int:
+	return queryCounter
+
+func TransactionCount() -> int:
+	return txCounter
+
+func ResetCounters() -> void:
+	queryCounter = 0
+	txCounter = 0
+
+# Primitiva sancionada para dentro de `Transaction()`: os helpers com lock
+# re-entrariam em `queryMutex` e o `db.query_with_bindings` cru escaparia da
+# contagem.
+func ExecNoLock(query : String, params : Array = []) -> bool:
+	queryCounter += 1
+	if params.is_empty():
+		return db.query(query)
+	return db.query_with_bindings(query, params)
+
+func ExecNoLockQuery(query : String, params : Array = []) -> Array[Dictionary]:
+	queryCounter += 1
+	var ok : bool = false
+	if params.is_empty():
+		ok = db.query(query)
+	else:
+		ok = db.query_with_bindings(query, params)
+	if ok:
+		return db.query_result
+	return []
+
 func Query(query : String) -> Array[Dictionary]:
 	var data : Array[Dictionary] = []
 	queryMutex.lock()
+	queryCounter += 1
 	if db.query(query):
 		data = db.query_result
 	queryMutex.unlock()
@@ -1237,6 +1272,7 @@ func Query(query : String) -> Array[Dictionary]:
 func QueryBindings(query : String, params : Array) -> Array[Dictionary]:
 	var data : Array[Dictionary] = []
 	queryMutex.lock()
+	queryCounter += 1
 	if db.query_with_bindings(query, params):
 		data = db.query_result
 	queryMutex.unlock()
@@ -1244,6 +1280,7 @@ func QueryBindings(query : String, params : Array) -> Array[Dictionary]:
 
 func ExecuteBindings(query : String, params : Array) -> bool:
 	queryMutex.lock()
+	queryCounter += 1
 	var ret : bool = db.query_with_bindings(query, params)
 	queryMutex.unlock()
 	return ret
@@ -1265,6 +1302,18 @@ func _post_launch():
 			Query("PRAGMA journal_mode=WAL;")
 			Query("PRAGMA busy_timeout=5000;")
 			Query("PRAGMA synchronous=NORMAL;")
+			# O auto-checkpoint padrão do SQLite (1000 páginas de WAL) escolhe o commit
+			# de um jogador qualquer para pagar o stall inteiro: medido no gate de
+			# benchmark com o default, p50 387 µs mas 2 de cada 200 iterações pagaram
+			# 249 ms e 270 ms de checkpoint dentro do próprio COMMIT — e o loop do
+			# servidor é um só, então o pico de um jogador é o pico de todos.
+			# Baratear o checkpoint não dá: o custo é fsync, e com o teto em 64
+			# páginas o mesmo gate devolveu 26 de 200 settles lentos, todos entre 227
+			# e 316 ms — fatiar só multiplica o custo fixo. O que se compra é a taxa:
+			# a 4000 páginas, 800 settles fecham p50 382 µs / p99 527 µs com 2 hitches
+			# de ~427 ms, ~1,0 ms amortizado por settle contra ~2,5 ms do default. O
+			# pico unitário é maior de propósito: é nessa troca que a curva tem joelho.
+			Query("PRAGMA wal_autocheckpoint=4000;")
 			if not Launcher.Debug and not LauncherCommons.isWeb:
 				backups = SQLBackups.new()
 

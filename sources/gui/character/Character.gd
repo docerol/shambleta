@@ -331,6 +331,14 @@ func _ready():
 	FSM.enter_game.connect(Clear)
 
 func _physics_process(_delta: float):
+	# The preview entities below only exist for this panel: nothing else reads
+	# their orientation or sit state, and both are recomputed from live input on
+	# the first frame the panel is back. Reading input while hidden was four
+	# Input.get_action_strength calls plus the virtual stick's node walk, per
+	# physics frame, on a screen the player is not looking at.
+	if not is_visible_in_tree():
+		return
+
 	if currentCharacterID != ActorCommons.InvalidCharacterSlot:
 		var entity : Entity = charactersNode[currentCharacterID]
 		if entity:

@@ -4,6 +4,13 @@ class_name ChatContainer
 const ChatLabelScene : PackedScene = preload(Path.GuiPst + "labels/ChatLabel.tscn")
 const WhisperUnreadIcon : Texture2D = preload("res://data/graphics/gui/tab/tab_warn.png")
 
+# Teto do histórico por aba, em pedaços de AddLine (um pedaço = nick + mensagem de
+# uma linha). O corte mantém os ChunkKeep últimos e só reescreve o buffer quando
+# ele estoura — contar no texto, e não em `get_line_count()`, é o que faz o teto
+# valer também em aba escondida e em headless, onde a contagem do motor é 0.
+const ChunkKeep : int = 200
+const ChunkEnd : String = "[/color]"
+
 @onready var tabContainer : TabContainer		= $ChatTabContainer
 @onready var lineEdit : LineEdit				= $NewText
 
@@ -50,13 +57,42 @@ func AddSystemChat(channelName : String, text : String):
 	AddLine(channelIdx, text + "\n", UICommons.TextColor)
 
 func AddLine(channelID : GUICommons.ChatChannel, text : String, color : Color):
-	if tabContainer:
-		var tab : Control = tabContainer.get_tab_control(channelID)
-		if tab and tab is RichTextLabel:
-			# SOM-IDLE C1: `text` é conteúdo de terceiros (linha de chat, nick de
-			# quem fala) e o rótulo é bbcode_enabled → escapa o texto, mantém vivo
-			# só o [color=...] que a gente mesmo monta.
-			tab.text += "[color=#" + color.to_html(false) + "]" + Util.EscapeBBCode(text) + "[/color]"
+	var tab : Control = tabContainer.get_tab_control(channelID) if tabContainer else null
+	var label : RichTextLabel = tab as RichTextLabel
+	if label == null:
+		return
+	# SOM-IDLE C1: `text` é conteúdo de terceiros (linha de chat, nick de
+	# quem fala) e o rótulo é bbcode_enabled → escapa o texto, mantém vivo
+	# só o [color=...] que a gente mesmo monta.
+	#
+	# `append_text()` foi tentado aqui e não serve: medido num RichTextLabel com
+	# bbcode ligado nesta engine, ele renderiza mas NÃO atualiza `.text` — e
+	# `.text` é o contrato que o portão verifica (IdleTests "o wrapper [color]
+	# nosso continua markup") e a única fonte do corte abaixo. O custo real desta
+	# tela nunca foi o parse por linha, era o buffer crescer sem teto: com o corte
+	# em ChunkKeep, o re-parse de cada linha passa a custar no máximo ChunkKeep
+	# linhas.
+	label.text += "[color=#" + color.to_html(false) + "]" + Util.EscapeBBCode(text) + ChunkEnd
+	TrimHistory(label)
+
+# Teto de histórico por aba, contado no próprio buffer (não em `get_line_count()`,
+# que é 0 enquanto o rótulo não tem layout — aba escondida, headless, boot).
+# Mantém os ChunkKeep últimos pedaços, onde um pedaço é uma AddLine inteira: nick
+# e mensagem da mesma linha caem juntos. Acima do teto cada linha nova reescreve o
+# buffer — e portanto re-parseia no máximo ChunkKeep linhas, que é o que torna o
+# custo por linha constante em vez de crescer com a sessão.
+static func TrimHistory(label : RichTextLabel):
+	var chunks : int = label.text.count(ChunkEnd)
+	if chunks <= ChunkKeep:
+		return
+	var raw : String = label.text
+	var cut : int = 0
+	for _dropIdx in chunks - ChunkKeep:
+		var found : int = raw.find(ChunkEnd, cut)
+		if found < 0:
+			return
+		cut = found + ChunkEnd.length()
+	label.text = raw.substr(cut)
 
 #
 func GetChannelIndex(channelName : String) -> GUICommons.ChatChannel:

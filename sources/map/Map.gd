@@ -267,7 +267,13 @@ func PickupNearestDrop():
 #
 func _post_launch():
 	isInitialized = true
-	FSM.exit_game.connect(LeaveGame)
+	# Gui.gd:482 é o padrão da casa: conectar uma vez por instância e desfazer em
+	# Destroy(). Sem o guard, cada relançamento do client empilhava um LeaveGame
+	# no sinal do FSM — o Map antigo, ainda vivo, também era chamado.
+	if not FSM.exit_game.is_connected(LeaveGame):
+		FSM.exit_game.connect(LeaveGame)
 
 func Destroy():
 	LeaveGame()
+	if FSM.exit_game.is_connected(LeaveGame):
+		FSM.exit_game.disconnect(LeaveGame)

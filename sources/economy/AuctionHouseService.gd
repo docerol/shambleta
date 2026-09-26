@@ -20,13 +20,18 @@ var _eco : EconomyService = null
 static func AHBotsEnabled() -> bool:
 	return OS.get_environment("SHAMBLETA_AH_BOTS") == "1"
 
-var _ahBotsAttempted : bool = false
+var _ahBotsChecked : bool = false
 
-# Boot-once via _process (server): roda quando o SQL abre, tenta uma vez.
+# Boot-once via _process (server): roda quando o SQL abre, decide uma vez e
+# nunca mais pergunta. `SHAMBLETA_AH_BOTS` é do processo e não muda depois do
+# boot; com a trava desligada — que é o estado do beta — a versão antiga fazia
+# um `OS.get_environment` por frame no main thread do server, para sempre.
 func _trySeedAuctionBots():
-	if _ahBotsAttempted or not AHBotsEnabled():
+	if _ahBotsChecked:
 		return
-	_ahBotsAttempted = true
+	_ahBotsChecked = true
+	if not AHBotsEnabled():
+		return
 	var created : int = EnsureAuctionBots()
 	if created > 0:
 		Util.PrintLog("Economy", "AH bot seed: %d listings" % created)

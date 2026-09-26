@@ -92,9 +92,14 @@ func Server():
 
 func Reset(clientStarted : bool, serverStarted : bool):
 	if not clientStarted:
+		# Debug/Camera/Map nunca entram na árvore (só `Action` é add_child'ado em
+		# Client()), e queue_free() em nó fora da árvore é no-op silencioso — a
+		# instância ficava viva para sempre. free() é o que libera um Node órfão.
+		# Action fica com queue_free() porque ESTÁ na árvore (free() ali seria
+		# freeing during notification).
 		if Debug:
 			Debug.Destroy()
-			Debug.queue_free()
+			Debug.free()
 			Debug = null
 		if Action:
 			Action.set_name("ActionDestroyed")
@@ -103,11 +108,11 @@ func Reset(clientStarted : bool, serverStarted : bool):
 			Action = null
 		if Camera:
 			Camera.Destroy()
-			Camera.queue_free()
+			Camera.free()
 			Camera = null
 		if Map:
 			Map.Destroy()
-			Map.queue_free()
+			Map.free()
 			Map = null
 		if GUI:
 			GUI.Destroy()
