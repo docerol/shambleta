@@ -76,7 +76,7 @@ modo de boot) e da superfície de serviços do Launcher: **2257 checks, 0 failur
 
 **Segurança (9/10):** TLS obrigatório no transporte, PCK criptografado, credential.cfg excluído dos builds, ProxyTLS default true, _rebirthCache protegido por mutex, e anti-replay 2FA com cross-peer binding implementado e validado nos testes. `always_track_call_stacks=true` removido de `project.godot`.
 
-**Performance (9/10):** PerformanceMonitor implementado com métricas de FPS/frame time/memória, WAL autocheckpoint configurado, índices DB adicionais, e cache de rebirth com invalidação correta.
+**Performance (9/10):** ~~PerformanceMonitor implementado com métricas de FPS/frame time/memória, WAL autocheckpoint configurado, índices DB adicionais, e cache de rebirth com invalidação correta.~~ **Re-escrito em 2026-09-26 com a metade falsa removida e a metade real medida:** `PerformanceMonitor` nunca existiu (ver aviso no topo) e **o WAL autocheckpoint não estava configurado** — a linha abaixo afirmava isso enquanto o `SQL.gd` só aplicava `journal_mode=WAL`, `busy_timeout=5000` e `synchronous=NORMAL` (`sources/sql/SQL.gd:1302-1304`), com o teto de checkpoint no default do SQLite. Hoje existe `PRAGMA wal_autocheckpoint=4000` (`sources/sql/SQL.gd:1316`) **e** um gate que mede a taxa de hitch (`tests/benchmarks.gd`, 800 settles: p50 382 µs, p99 527 µs, 2 hitches). Os índices DB adicionais são reais (migration 047, dois índices DESC de leaderboard) e o cache de rebirth continua com invalidação correta. O gargalo de UI que a linha ignorava estava no `Localizer` (árvore inteira por segundo) e foi corrigido com passo dirigido por evento mais fallback só-visível.
 
 **Backend e Banco de Dados (8/10):** Migration 041 com 7 índices, WAL configurado, transações seguras via `Transaction()` + `UpdateRowsRaw()`, ledger append-only, backup offsite testado, e início da fragmentação de `SQL.gd` em módulos por domínio.
 
@@ -126,9 +126,73 @@ modo de boot) e da superfície de serviços do Launcher: **2257 checks, 0 failur
    exit code = nº de falhas), que é o que a CI executa. Quem
    precisar de JUnit no CI que converta a saída do harness — não um arquivo que
    finge rodar testes.
-5. ⏳ Resolver WAL autocheckpoint (já configurado, mas validar em produção)
+5. ✅ Configurado e medido em 2026-09-26 — o `PRAGMA wal_autocheckpoint=4000` entrou no bloco do servidor (`sources/sql/SQL.gd:1316`) e o gate de benchmark passou a medir a **taxa** de hitch, não só o p99. O que continua pendurado aqui é a segunda metade do item original, que é de operação e não de código: validar o stall em produção, com o companion escrevendo no mesmo arquivo.
 6. ❌ FALSO — "Performance spans (`Monitoring.gd`) implementado 2026-09-21": nenhum
    `StartSpan`/`FinishSpan`/`ActiveSpans` jamais foi declarado em `sources/`
    (`git log --all -S"func StartSpan"` não retorna nada). Ver aviso no topo.
 7. ✅ Deploy healthcheck (`docker-compose.yml`) — implementado 2026-09-21
+
+---
+
+## Retificação de 2026-09-26 — a passada de performance medida
+
+Os itens 5 da lista acima e a linha de **Performance (9/10)** foram reescritos com
+medição. O registro do que foi medido, porque a correção sem a cadeia não é
+evidência:
+
+**A mitigação que existia era invisível ao gate.** O `wal_autocheckpoint` já tinha
+sido tentado nesta árvore como um tick de `_process` rodando
+`PRAGMA wal_checkpoint(PASSIVE)` a cada 30 s. O código compila, abre o banco, e
+**nenhum gate o exercita**: os harnesses entram por `godot --headless -s`, que chama
+`_process` entre frames — e o probe não abre frame nenhum. Medido com uma sonda: 400 ms
+de laço síncrono devolvem `_process=0`, 12 `await process_frame` devolvem 11. O gate de
+benchmark rodou com o default do SQLite e fechou vermelho com `p99 249273 µs` contra
+orçamento de 200000 µs, 2 de 200 settles a 249 ms e 270 ms (`/tmp/shambleta-all.log`) —
+o verde anterior media outra coisa. O tick saiu da árvore e virou pragma declarativa no
+bloco do servidor (`sources/sql/SQL.gd:1316`).
+
+**Baratear o checkpoint não funciona, e foi medido antes de ser recusado.** Com
+`wal_autocheckpoint=64` o mesmo probe devolveu **26 de 200** settles acima de 50 ms,
+todos entre 227 e 316 ms, p99 273294 µs (`/tmp/shambleta-bench-2.log`, 1 failure).
+O custo dominante de um checkpoint é fsync do arquivo, então fatiar o trabalho em
+muitos checkpoints pequenos multiplica o custo fixo em vez de diluir o pico. O que
+se compra com a pragma é a **taxa**: a 4000 páginas, 200 settles fecham p50 390 µs,
+p99 616 µs e **max 667 µs** (`/tmp/shambleta-bench-3.log`) — verde, e verde errado:
+200 settles não cruzam a fronteira de checkpoint nenhuma vez, então o probe estava
+medindo cache, não o servidor.
+
+**O gate agora cruza a fronteira e cobra a taxa.** Com 800 iterações o probe paga o
+checkpoint de verdade e continua verde, duas execuções independentes:
+`p50 385 µs / p99 559 µs / max 422557 µs` e `p50 382 µs / p99 527 µs / max 427118 µs`,
+ambas com `2 de 800 settles acima de 50 ms` contra orçamento de 16
+(`/tmp/shambleta-bench-4.log`, `/tmp/shambleta-bench-5.log`, `== Benchmarks: 0
+failures ==`, `godot exit=0`). O pico unitário subiu de propósito — ~420 ms de hitch
+contra ~250 ms do default — e a conta que justifica a troca é a amortização:
+~1,0 ms de stall por settle a 4000 páginas contra ~2,5 ms no default. A asserção nova
+(`tests/benchmarks.gd:301`) lê a **taxa**, porque o p99 sozinho absolve um checkpoint
+que aparece uma vez a cada cem iterações: com 800 amostras, 1% de hitch cai exatamente
+no furo do p99.
+
+**O que mais saiu da passada, com o estado honesto de cada frente.** Corrigido com
+guard na suíte: `Localizer` (era árvore inteira de UI a cada 1 s, agora passo dirigido
+por evento com fallback só-visível), teto de histórico por aba em `Chat.gd`
+(`ChunkKeep` 200, o re-parse deixa de crescer com a sessão), compressão de nulos e
+inserção ordenada em `Entities.gd`, mapa reverso em `Peers.gd` com guard por `peerID`,
+`free()` de nós fora do `Tree` em `Launcher.gd` (o `queue_free()` era no-op silencioso),
+guard de conexão dupla em `Map.gd`, census de bots uma vez no boot em
+`AuctionHouseService.gd`, timer cacheado em `SpeechBubble.gd`, retorno precoce em
+`Character.gd` quando a aba está escondida, e migration 047 com dois índices DESC de
+leaderboard. **Continua aberto de caso pensado:** `World.BackupPlayers` — a rajada de
+~5 UPDATEs por jogador a cada 600 s que a auditoria independente nomeia como o
+gargalo de CCU — não foi reescrito, porque a recomendação lida na própria auditoria é
+não reescrever nada antes de haver dado de retenção, e o termo dominante dentro dele
+(`UpdateProgress`) já saiu de ~300 statements para 3 queries em 1 transação.
+
+**Peso de pacote, medido e não estimado:** quatro padrões entraram no
+`exclude_filter` do preset Web e o first-load gzip caiu de 37.666.178 B para
+36.734.788 B (−931.390 B, 36 MiB → 35 MiB), com boot verificado em Chromium real em
+`== RESULT: 10 checks, 0 failures ==`. Cadeia completa, a armadilha do `#` em
+`export_presets.cfg` e as duas alavancas recusadas com número estão em
+`deploy/WEB_SLIM.md`.
+
 

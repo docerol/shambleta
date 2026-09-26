@@ -470,6 +470,64 @@ sendo engine 12 MiB + `.pck` 21 MiB + shell 3 MiB — a remoção do addon do Di
 estimada, é o que consta em `2fbbc40`. O `playwright` do gate de browser fechou com
 `== RESULT: 10 checks, 0 failures ==`.
 
+**Passada de performance (2026-09-26) — o que ela achou, e é a parte que importa para o handoff.**
+`HEAD` == `origin/master` == `e72f0af`, e a árvore está com **20 caminhos** sujos (19 `M` + 1 `??`),
+nenhum `D`: o único solto é `data/conf/migrations/047_performance_indexes_iii.sql`, produto, que entra
+junto com os 19. Dos 19 modificados, cinco são documentação (esta, o roadmap, as duas auditorias e o
+`WEB_SLIM.md`), um é o preset Web, nove são `sources/` e três são harnesses de teste. O achado não é de
+performance, é de **medição**: o teto de checkpoint do WAL tinha
+sido posto como um tick de `PRAGMA wal_checkpoint(PASSIVE)` dentro de `_process`, e os gates entram
+por `godot --headless -s` — que chama `_process`, mas só entre frames, e o probe é um laço síncrono que
+não abre frame nenhum (sondado nesta máquina com um `Node` contador: 400 ms de laço devolvem `_process=0`,
+12 `await process_frame` devolvem 11). O gate de benchmark rodou com o default do
+SQLite e fechou vermelho na régua: `p99 249273 µs` contra orçamento de 200000 µs, 2 de 200 settles a
+249 ms e 270 ms (`/tmp/shambleta-all.log`, `== Benchmarks: 1 failures ==`, `wrapper exit=1`). Ou seja:
+o verde anterior era verde sobre a ausência do remédio. O tick saiu e virou
+`PRAGMA wal_autocheckpoint=4000` no bloco do servidor (`sources/sql/SQL.gd:1316`), junto das outras três
+pragmas. A cadeia de medição completa — 64 páginas (pior: 26 de 200 hitches), 4000 páginas com 200
+iterações (verde **cego**: `max 667 µs`, nunca cruza a fronteira do checkpoint), e 4000 com 800
+(`p50 382 µs / p99 527 µs / max 427118 µs`, 2 hitches de 800, orçamento 16, reproduzido em
+`/tmp/shambleta-bench-4.log` e `/tmp/shambleta-bench-5.log`) — está em `deploy/WEB_SLIM.md` e no item (8)
+da auditoria. Lição que vale para qualquer mitigação futura neste repositório: **se mora em
+`_process`, nenhum benchmark daqui a exercita**; ou se expõe o efeito no laço medido, ou se declara no
+endereço do runtime real.
+
+**O gate de benchmark foi reconstruído junto**, porque o probe antigo media o que não existia: o
+XP walk era `totalXp += 10` (a auditoria chamou de medir zero) e saiu; entraram leaderboard com
+asserção de `EXPLAIN QUERY PLAN` (usa `idx_character_leaderboard`, ordem `power_score DESC`, nenhum
+temp B-tree — é o guard da migration 047), browse do leilão via `idx_auction_browse`, progresso em
+lote (`1 ms, 3 queries, 1 tx para 150 entradas`) e orçamento de **taxa** de hitch além do p99
+(`tests/benchmarks.gd:301`), porque com 800 amostras 1% de hitch cai exatamente no furo do p99.
+Medido agora: `Settle benchmark: 1 ms, 11 queries, 1 tx` · `Zone catalog: 0 ms for 24 zones` ·
+`Leaderboard: 1 ms, 50 de 60 personagens` · `Auction browse: 0 ms, 20 de 200 listing(s)` ·
+`Progress save: 1 ms, 3 queries, 1 tx` · `== Benchmarks: 0 failures ==`, `godot exit=0`. A suíte idle
+subiu para `2356 checks, 0 failures` (`/tmp/shambleta-idle.log`) com `SuiteProgressUpsert`, que é a
+parte de **semântica** do save em lote (linha que não atualiza, chave que colide com outro personagem,
+chunk que engole o resto) — o benchmark mede custo, a suíte mede correção.
+
+**Fecho da passada, medido com a documentação já congelada:** `./scripts/test.sh all` fecha
+`ALL_EXIT=0` com os nove `Gate §24-8 OK` — preflight de parse nos 6 harnesses, anti-god-node 0 falhas
+em 278 arquivos, idle `2356 checks, 0 failures` (os 165 ponteiros `arquivo:linha` dos três documentos de
+evidência conferidos, 11 com mensagem de check batendo na linha, 33 nomes de suíte resolvidos), RPC 10,
+e2e 0 falhas, backup 8 (migration 47 = live 47), benchmarks 0 falhas (`p50 383 µs / p99 566 µs / max
+479731 µs`, 2 hitches de 800), companion 170, security 47, refund CLI 12, com 5× `godot exit=0` e 3×
+`python exit=0` (`/tmp/shambleta-all-final2.log`). Terceira execução independente do probe, e a única
+que roda o gate inteiro na mesma árvore que descreve.
+
+**Peso de pacote, medido depois:** quatro padrões a mais no `exclude_filter` do preset Web (`tests/*`
+e três arquivos de logo de imprensa) → first-load gzip **35 MiB** (`36734788` bytes, 18 arquivos,
+`−931390` B contra a medição de `2fbbc40`), `.pck` 21 → 20 MiB, engine 12 e shell 3 inalterados
+(`scripts/export_web.sh`, saída em `/tmp/shambleta-export-B.log`). Boot
+revificado em Chromium real: `== RESULT: 10 checks, 0 failures ==`, e a string da migration 047 continua
+dentro do `.pck` (o `include_filter` de `data/conf/*` não foi tocado). **Armadilha registrada, porque
+custa caro e é silenciosa:** um bloco de comentário `#` acima de `exclude_filter` em
+`export_presets.cfg` faz `ConfigFile.load()` devolver OK e a chave **desaparecer** — o export passa a
+empacotar tudo e nada reclama. O arquivo ficou sem linha iniciada por `#`; o rationale vive na
+documentação. Também fica aberto, com número e sem execução: `application/boot_splash/embed=false`
+cortaria 2,4 MiB de uma cópia raw do splash dentro do `.pck`, mas nenhuma asserção cobre o splash do
+engine no Web (`scripts/qa_web.mjs:174` só coleta `splashLoaded` do `<img>` do shell) — é verificação
+de navegador, não suposição.
+
 **As janelas abertas de fato (2026-09-25)** — nenhum teste cobre o render, então a passada abriu
 cada janela num `godot --headless -s` com SceneTree próprio, autoloads reais e um fixture criado por
 `SQL.CreateFixture` (`tools/win_probe.gd` + `tools/win_probe_impl.gd`, apagadas depois; o print da

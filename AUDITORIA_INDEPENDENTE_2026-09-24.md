@@ -164,7 +164,7 @@ Analisada como sistema ao longo do fluxo completo (aquisição → armazenamento
 
 Sustentabilidade `[CÓDIGO + aritmética]`: em endgame com 16 h online + 8 h offline×0,6, a emissão é ≈ **49M ouro/semana** contra queima recorrente de ≈ 3,1M → **razão de reposição ≈ 0,06**. Não é um bug pontual: é **inflação estrutural por construção**, porque o único sink proporcional à renda é a taxa de morte. O AH — que num MMO sério é o grande queimador de ouro — queima **zero**. Correção de maior alavanca: taxa de venda do AH em ouro, queimada, 1–2% (proporcional ao volume, auto-estabilizante).
 
-**Gemas** (`wallet.gems`, por conta, 100% com ledger) — faucets: compras (550/1200/3000), passe free 100/temporada, conquistas 450 one-shot, prêmios de temporada/torneio, referral 200±200. Sinks: baú 120, VIP 440/880, trade 10, listagem AH 5, reroll 20, boss pack 240, finale 400, skip 50×(n+1), slot de vault 200. Anúncios **não dão gems**. Para F2P a moeda é quase neutra (acumula pouco); para pagante a banda 0,8–1,2 da `ROADMAP_COMERCIAL.md:56` é atingível — mas **não verificável sem telemetria de produção**, o que é um problema de medição, não de design.
+**Gemas** (`wallet.gems`, por conta, 100% com ledger) — faucets: compras (550/1200/3000), passe free 100/temporada, conquistas 450 one-shot, prêmios de temporada/torneio, referral 200±200. Sinks: baú 120, VIP 440/880, trade 10, listagem AH 5, reroll 20, boss pack 240, finale 400, skip 50×(n+1), slot de vault 200. Anúncios **não dão gems**. Para F2P a moeda é quase neutra (acumula pouco); para pagante a banda 0,8–1,2 da `ROADMAP_COMERCIAL.md:83` (re-endereçada em 2026-09-26: o texto estava em `:56` na revisão auditada) é atingível — mas **não verificável sem telemetria de produção**, o que é um problema de medição, não de design.
 
 **Integridade de estado — o que a auditoria encontrou:**
 
@@ -277,7 +277,7 @@ O efeito foi rastreado até o canal: pelos RPCs de auth viajam a senha do login,
 
 **Arquitetura 7,0.** Cinco autoloads (`project.godot:29-33`); `Launcher._ready()` decide cliente vs `--server`, fixa 30 fps/30 física e instancia os serviços de servidor. Um único processo headless atende todos os peers. O caminho do pacote é limpo e legível: transporte → `multiplayerAPI.poll()` → `@rpc` no `Network` → handler em `Server.gd` → serviço → `SQL.gd` → godot-sqlite → `live.db`, com egress coalescido por peer/frame em `Interface.bulks` (reduz syscalls). Três transports abstraídos atrás da mesma interface, AOI, settle rate-based (liquida em spikes de login/claim, não por kill), ledger append-only, **42 migrations versionadas** com índices 040/041/042 cobrindo os hot-paths reais. Isso é arquitetura competente para o porte.
 
-O que cobra o desconto: service-locator onipresente (`Launcher.SQL` / `Launcher.Economy` alcançados de qualquer lugar, sem injeção — quase nada é testável isoladamente dos autoloads); acoplamento circular facade↔kernel (`EconomyKernel` depende de `_eco.settleMutex`, reconhecido em `ROADMAP_COMERCIAL.md:45`); e o **modelo de locks é decorativo** — o `settleMutex` global que `SettleTransaction` pegaria nunca é usado porque **`SettleTransaction` não tem chamadores** `[CÓDIGO]`, enquanto `Server.gd:312,413` chama `SettlePending` direto. A serialização real é "uma thread, um pacote por vez". Se um `await` entrar num handler, vira corrida de verdade.
+O que cobra o desconto: service-locator onipresente (`Launcher.SQL` / `Launcher.Economy` alcançados de qualquer lugar, sem injeção — quase nada é testável isoladamente dos autoloads); acoplamento circular facade↔kernel (`EconomyKernel` depende de `_eco.settleMutex`, reconhecido em `ROADMAP_COMERCIAL.md:76` — re-endereçado em 2026-09-26, estava em `:45` na revisão auditada); e o **modelo de locks é decorativo** — o `settleMutex` global que `SettleTransaction` pegaria nunca é usado porque **`SettleTransaction` não tem chamadores** `[CÓDIGO]`, enquanto `Server.gd:312,413` chama `SettlePending` direto. A serialização real é "uma thread, um pacote por vez". Se um `await` entrar num handler, vira corrida de verdade.
 
 **Código 6,0.** 344 arquivos `.gd`, 53.267 linhas. Consistência de estilo alta, `EconomyService` foi reduzido de 3.839 para 763 linhas em 12 fatias **sem quebrar chamadores**, e existe um gate ativo (`check_god_nodes.sh`, teto de 800 linhas com allowlist declarada de 6 arquivos) `[TESTE]`. Há até comentários de honestidade raros em código-próprio — o cabeçalho da `AuctionHouseWindow` admitindo a ausência de RPC.
 
@@ -320,9 +320,9 @@ servidor garante e a suíte mede.
 
 ## 14. PERFORMANCE E ESCALABILIDADE
 
-**Performance 6,0.** As mitigações são reais e não só de debug: WAL + `synchronous=NORMAL` + `busy_timeout` aplicados no servidor (`SQL.gd:1177-1180` `[CÓDIGO]` — corrige um item de auditoria antiga), dirty-check de entidades, pausa de física de IA ociosa, AOI, índices, batching de egress. Rodei os benchmarks `[TESTE]`: settle 1 ms (budget 500), XP walk 0 ms, catálogo 0 ms/24 zonas, load probe 200 settles P99 1 ms, 0 falhas. **O número é verdadeiro e mede pouco**: são 200 settles **sequenciais no mesmo personagem**, numa `testing.db` ociosa, sem o lock global e sem carga concorrente; e o "XP walk" é um laço `totalXp += 10` que mede zero. `[CÓDIGO]` Os jobs de CI só leem exit code, sem grep de `SCRIPT ERROR`/`PASSED`, e vazamentos de RID/recursos no teardown não alteram o exit code — classe de falha invisível ao pipeline `[TESTE]`.
+**Performance 6,0.** As mitigações são reais e não só de debug: WAL + `synchronous=NORMAL` + `busy_timeout` aplicados no servidor (`SQL.gd:1302-1304` `[CÓDIGO]` — corrige um item de auditoria antiga; re-endereçado em 2026-09-26, quando a passada de performance empurrou essas três linhas de `:1177-1180` — o conteúdo delas não mudou), dirty-check de entidades, pausa de física de IA ociosa, AOI, índices, batching de egress. Rodei os benchmarks `[TESTE]`: settle 1 ms (budget 500), XP walk 0 ms, catálogo 0 ms/24 zonas, load probe 200 settles P99 1 ms, 0 falhas. **O número é verdadeiro e mede pouco**: são 200 settles **sequenciais no mesmo personagem**, numa `testing.db` ociosa, sem o lock global e sem carga concorrente; e o "XP walk" é um laço `totalXp += 10` que mede zero. `[CÓDIGO]` Os jobs de CI só leem exit code, sem grep de `SCRIPT ERROR`/`PASSED`, e vazamentos de RID/recursos no teardown não alteram o exit code — classe de falha invisível ao pipeline `[TESTE]`. **Retificado em 2026-09-26, item (8) do bloco de correções do §25: o veredito "mede pouco" foi executado e derrubado** — o probe hoje faz 800 settles, cruza a fronteira do checkpoint do WAL, cobra taxa de hitch além do p99, e o gate provou estar verde sobre uma mitigação que ele nunca executava.
 
-Gargalos concretos: `BackupPlayers` a cada 600 s faz ~5 UPDATEs por jogador na main thread → a 1k CCU são ~5.000 UPDATEs em rajada (hitch de centenas de ms), a 10k vira stall multi-segundo com storm de desconexões; `Localizer.gd:28-71` percorre **a árvore inteira de UI a cada 1 s** alocando Array e `set_meta` por nó — ruído de GC justamente no alvo web/mobile. `[CÓDIGO]`
+Gargalos concretos: `BackupPlayers` a cada 600 s faz ~5 UPDATEs por jogador na main thread → a 1k CCU são ~5.000 UPDATEs em rajada (hitch de centenas de ms), a 10k vira stall multi-segundo com storm de desconexões; `Localizer.gd:28-71` percorre **a árvore inteira de UI a cada 1 s** alocando Array e `set_meta` por nó — ruído de GC justamente no alvo web/mobile. `[CÓDIGO]` (2026-09-26: o `Localizer` foi corrigido — passo dirigido por evento com fallback que só anda nos rótulos visíveis; o ponteiro acima endereça a revisão de 2026-09-24, na árvore de hoje a cadência está em `Localizer.gd:75-87` e a andada podada em `Localizer.gd:109-128`. Números e o resto da passada estão no item (8) do bloco de correções do §25. `BackupPlayers` continua aberto de caso pensado, e o termo dominante dentro dele — `UpdateProgress`, ~300 statements por jogador — já saiu de rajada pura para 3 queries em 1 transação.)
 
 **SQLite não é o teto a 1k–10k** `[INFERÊNCIA]`: ~1k CCU ≈ 8–20 writes/s sustentados, folgado no WAL. O que dói é a rajada e a contenção do writer único quando game e companion escrevem no mesmo arquivo (`busy_timeout=5000` enfileira até 5 s).
 
@@ -525,7 +525,7 @@ Eixos 1–10: **Ip** impacto no jogador · **Re** receita · **Rt** retenção �
 | O1 | Preços/taxas/prêmios como `const` (sem A/B, sem oferta) | 3 | 8 | 4 | 6 | 3 | 5 | **P2** |
 | U2 | Onboarding não-guiado; botão 2FA visível inerte | 6 | 2 | 6 | 8 | 6 | 5 | **P2** |
 | R1 | `Monitoring.SetPlayer` inexistente; `SQLCharacter` 100% stub; `SettleTransaction` morto | 3 | 1 | 1 | 9 | 9 | 4 | **P2** |
-| R2 | `BackupPlayers` em rajada; `Localizer` O(N)/s | 4 | 2 | 3 | 8 | 6 | 4 | **P2** |
+| R2 | `BackupPlayers` em rajada; `Localizer` O(N)/s — **metade feita em 2026-09-26: `Localizer` fechado, `BackupPlayers` aberto de caso pensado (item (8) do §25)** | 4 | 2 | 3 | 8 | 6 | 4 | **P2** |
 | R3 | Docs descrevem arquivos/refs inexistentes | 2 | 3 | 2 | 9 | 7 | 4 | **P2** |
 | W1 | Wash-trade sem teto/appraisal; fraude sem enforcement | 4 | 6 | 4 | 7 | 5 | 4 | **P2** |
 | W2 | i18n 77% real vs 100% reportado; strings hardcoded em janelas novas | 4 | 1 | 3 | 9 | 7 | 3 | **P3** |
@@ -1208,9 +1208,9 @@ créditos no GitHub Actions e a CI não roda** (decisão registrada em 2026-09-2
 Espelhei o gate dentro do `all` pelo mesmo quádruplo de §24-8
 (`gate_sh`, marcador `Gate anti-god-node:` com a contagem de falhas lida DA LINHA de resultado,
 `scripts/check_god_nodes.sh:57`) e amarrei a divergência por fonte, em `SuiteOpsA2`:
-`tests/IdleTests.gd:5076` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
+`tests/IdleTests.gd:5094` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
 atrás de `scripts/*.sh`, descarta os dois que não são gate (o avaliador do quádruplo e o próprio `test.sh`)
-e exige o resto no runner; `tests/IdleTests.gd:5075` "portão: a CI roda exatamente um gate de script próprio"
+e exige o resto no runner; `tests/IdleTests.gd:5093` "portão: a CI roda exatamente um gate de script próprio"
 é o âncora do número, para o guard não passar verde por varredura vazia nem continuar verde quando alguém
 abre um segundo gate na CI. Verificado contra o estado que produziu a CI vermelha: com o `scripts/test.sh`
 de HEAD, a varredura devolve `mirrored=1`, `missing=[scripts/check_god_nodes.sh]` — o guard falha; com o
@@ -1351,3 +1351,55 @@ incluindo o gate de estrutura que antes só existia na CI.*
 > `tests/IdleTests.gd` neste arquivo (quatro deles no próprio bloco de histórico), 6 tinham mensagem
 > citável e foram pegos; os outros 11 passam por cima de qualquer derrape. Enquanto um `arquivo:linha`
 > for a forma de evidência, a metade muda continua sendo conferida por mão.
+> (8) A passada de performance de 2026-09-26 foi executar o veredito do §14 — o
+> benchmark **media pouco** — e ao medir achou uma classe de defeito que nenhum gate
+> desta máquina via: **mitigação escrita dentro de `_process` é invisível para quem mede
+> num laço síncrono** — e é assim que os harnesses medem. O teto de checkpoint do WAL já
+> tinha sido tentado aqui como um tick de 30 s
+> rodando `PRAGMA wal_checkpoint(PASSIVE)`; o código compilava, o banco abria, e o tick nunca
+> rodava onde ele precisava rodar — a medição é um laço síncrono, e `_process` não é chamado
+> dentro de um. Sondado nesta máquina com um `Node` contador sob `godot --headless -s`:
+> 400 ms de laço síncrono devolvem `_process=0`, e 12 `await process_frame` devolvem 11 — ou
+> seja, `-s` chama `_process` normalmente, mas não no meio do probe, e o gate inteiro fecha
+> muito abaixo dos 30 s do acumulador. Cinco dos nove gates daqui são harnesses Godot assim. O gate de
+> benchmark rodou com o default do SQLite e fechou vermelho: `p99 249273 µs` contra
+> orçamento de 200000 µs, 2 de 200 settles a 249 ms e 270 ms (`/tmp/shambleta-all.log`).
+> O que estava verde antes era verde sobre a ausência do remédio, não sobre o remédio. O
+> tick saiu da árvore e virou pragma declarativa no bloco do servidor
+> (`sources/sql/SQL.gd:1316`), no mesmo lugar das outras três.
+> Duas contas que só a medição respondeu, e que mudaram o desenho do gate. (a) **baratear
+> checkpoint não existe como alavanca**: com o teto em 64 páginas o mesmo probe devolveu
+> 26 de 200 settles acima de 50 ms, todos entre 227 e 316 ms, p99 273294 µs
+> (`/tmp/shambleta-bench-2.log`, 1 failure) — o custo dominante é fsync do arquivo, então
+> fatiar multiplica o fixo em vez de diluir o pico. (b) **verde pode ser cegueira**: a 4000
+> páginas, 200 settles fecham p50 390 µs / p99 616 µs / max 667 µs
+> (`/tmp/shambleta-bench-3.log`) sem cruzar a fronteira de checkpoint uma única vez, ou
+> seja, medindo cache e não servidor. O probe passou a 800 iterações e a cobrar a **taxa**
+> de hitch além do p99 (`tests/benchmarks.gd:301`), porque com 800 amostras 1% de hitch
+> cai exatamente no furo do p99. Estado reproduzido em três execuções independentes:
+> `p50 382 µs / p99 527 µs / max 427118 µs`, `p50 385 µs / p99 559 µs / max 422557 µs` e, rodando
+> dentro da própria régua de nove gates que fecha esta passada, `p50 383 µs / p99 566 µs / max
+> 479731 µs` (`/tmp/shambleta-all-final2.log`) — sempre **2 hitches de 800** contra orçamento de 16,
+> `== Benchmarks: 0 failures ==`, `godot exit=0`.
+> O pico unitário subiu de propósito (~420 a ~480 ms contra ~250 ms do default) porque a troca
+> comprada é a amortização: ~1,1 ms de stall por settle contra ~2,5 ms.
+> O resto da frente de código, com o estado real de cada item: `Localizer` deixou de varrer
+> a árvore inteira por segundo (fecha a segunda metade de R2 na tabela do §23), `Chat.gd`
+> ganhou teto de histórico por aba que torna o re-parse constante em vez de crescer com a
+> sessão, `Entities.gd` compacta nulos e insere ordenado, `Peers.gd` resolve logout por mapa
+> reverso com guard de `peerID`, `Launcher.gd` trocou o `queue_free()` de nós fora do `Tree`
+> — que era no-op silencioso — por `free()`, `Map.gd` ganhou guard de conexão dupla, o censo
+> de bots do leilão passou a rodar uma vez no boot, `SpeechBubble.gd` e `Character.gd`
+> pararam de trabalhar invisíveis, e a migration 047 põe os dois índices DESC de leaderboard.
+> `World.BackupPlayers` **não** foi reescrito, e a recomendação do próprio §14 continua de pé
+> ("não reescrever nada agora") — com a ressalva medida de que o termo dominante dentro dele,
+> `UpdateProgress`, já saiu de ~300 statements por jogador para 3 queries em 1 transação.
+> Fora do código continua o que sempre esteve fora: validar o stall em produção, com o
+> companion escrevendo no mesmo arquivo, é medição de servidor real.
+> E o pacote, medido: quatro padrões a mais no `exclude_filter` do preset Web (`tests/*` e
+> três arquivos de logo de imprensa) baixaram o first-load gzip de 37.666.178 B para
+> 36.734.788 B — −931.390 B, 36 MiB → 35 MiB — com boot verificado em Chromium real em
+> `== RESULT: 10 checks, 0 failures ==`. A cadeia completa, a armadilha do `#` em
+> `export_presets.cfg` (um comentário acima da chave faz `ConfigFile.load()` devolver OK e
+> a chave **sumir**, com o export empacotando tudo) e as duas alavancas recusadas com número
+> estão em `deploy/WEB_SLIM.md`.
