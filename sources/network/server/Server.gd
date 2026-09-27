@@ -730,6 +730,18 @@ func _AltarAction(kind : String, itemID : int, peerID : int):
 
 # Fase E (rewarded ads): hora de offline, baú bônus, reroll grátis e chave de
 # boss. Sucessos empurram o estado fresco da janela correspondente.
+
+# C2 (auditoria 2026-09-24): a exibição de um anúncio custa uma autorização
+# mintada aqui. O client não constrói token — ele pede, e o que volta é um nonce
+# de uso único vinculado a esta conta e a este placement (ou vazio, com o motivo).
+func RequestAdSlot(placement : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.AdSlot(placement, "", "not_logged_in", peerID)
+		return
+	var minted : Dictionary = Launcher.Economy.MintAdSlot(accountID, placement)
+	Network.AdSlot(placement, str(minted.get("token", "")), str(minted.get("reason", "db_error")), peerID)
+
 func WatchAd(placement : String, token : String, peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
 	var accountID : int = Peers.GetAccount(peerID)

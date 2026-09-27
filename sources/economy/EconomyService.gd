@@ -426,8 +426,8 @@ func _NamedSeasonBoard(seasonID : int, kind : String, limit : int) -> Array:
 # mudam. O serviço usa o MESMO settleMutex + helpers raw daqui (composição com
 # back-reference), então a semântica de locking é idêntica à pré-fatiamento.
 
-func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey : String, payload : String = "{}") -> bool:
-	return checkoutService.EnqueueGrant(accountID, kind, amount, idempotencyKey, payload)
+func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey : String, payload : String = "{}", pricePaid : int = 0, currency : String = "") -> bool:
+	return checkoutService.EnqueueGrant(accountID, kind, amount, idempotencyKey, payload, pricePaid, currency)
 
 func ProcessPendingGrants(limit : int = 50) -> Dictionary:
 	return checkoutService.ProcessPendingGrants(limit)
@@ -597,8 +597,8 @@ func _AdDayStart() -> int:
 func AdViewsToday(accountID : int, placement : String = "") -> int:
 	return adsCosmeticsService.AdViewsToday(accountID, placement)
 
-func _ValidAdToken(token : String, placement : String) -> bool:
-	return adsCosmeticsService._ValidAdToken(token, placement)
+func MintAdSlot(accountID : int, placement : String) -> Dictionary:
+	return adsCosmeticsService.MintAdSlot(accountID, placement)
 
 func _AdAllowed(accountID : int, placement : String) -> Dictionary:
 	return adsCosmeticsService._AdAllowed(accountID, placement)

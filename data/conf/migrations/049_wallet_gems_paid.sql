@@ -1,0 +1,23 @@
+-- 049 — Gems pagas separadas das ganhas (auditoria 2026-09-24, item B).
+--
+-- O estorno do art.49 media fungibilidade com saldo total: `RequestGemRefund`
+-- exigia `GetGems(accountID) >= amount`, i.e. "a carteira ainda tem o número".
+-- Gems são fungíveis e o faucet F2P é generoso (baú de anúncio, passe,
+-- renascimento, loja diária, settle). Rota medida no código:
+--   compra 550 pagas → gasta as 550 em VIP/baús → coleta 550 do faucet
+--   → saldo volta a 550 → o portão passa → dinheiro devolvido POR UM BEM JÁ
+--   CONSUMIDO, e o VIP fica de pé. O jogador não precisa de bug nenhum: é a
+--   regra escrita.
+--
+-- Correção: a carteira registra quanto do saldo ainda é dinheiro entregue
+-- (`gems_paid`). O portão do estorno passa a pedir a prova na coluna certa, e
+-- `SetGemsRaw` drena o saldo pago primeiro em qualquer gasto — que é a
+-- semântica comercial: unidade gasta é unidade comprada, não a que sobrou de
+-- graça. Ganho de faucet nunca aumenta `gems_paid`.
+--
+-- LEGADO: linha processada antes desta migration tem `gems_paid` 0 e o estorno
+-- dela passa a ser recusado (`not_paid`). Fail-closed de propósito: não há como
+-- reconstruir o saldo pago do histórico sem saber o que foi gasto, e errar para
+-- o lado de não devolver dinheiro é o único erro reversível — o operador
+-- devolve à mão, com o recibo na mão, pelo companion.
+ALTER TABLE wallet ADD COLUMN gems_paid INTEGER NOT NULL DEFAULT 0;

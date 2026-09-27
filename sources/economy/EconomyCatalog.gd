@@ -273,9 +273,7 @@ const AD_AFKHOURS : String = "afkhoras"
 # (de EconomyService.gd:2435)
 const AD_PLACEMENTS : Array[String] = ["afkhoras", "chest", "reroll", "bosskey"]
 
-# Horas de offline por view de afkhoras. Não há teto de anúncios por dia: se
-# houver anúncio disponível, ele é mostrado — o que limita a hora ganha é o
-# próprio inventário da rede de anúncios, e o divisor de 24h.
+# Horas de offline por view de afkhoras.
 const AD_OFFLINE_HOURS_PER_AD : float = 1.0
 
 # Teto de baús nascidos do settle por personagem/dia. Com cap de 1h e piso de 1
@@ -284,18 +282,35 @@ const AD_OFFLINE_HOURS_PER_AD : float = 1.0
 # então o patamar do faucet não muda — muda a origem da hora.
 const ChestsPerDayFromSettle : int = 6
 
-# (de EconomyService.gd:2436)
-const AD_PLACEMENT_CAPS : Dictionary = {"chest": 1, "bosskey": 2}
+# Teto de views por placement/dia. Coberto inteiro desde C2 (auditoria
+# 2026-09-24): antes só `chest` e `bosskey` estavam aqui, e a ausência de
+# `afkhoras` era o faucet — hora offline não tem cap próprio além do inventário
+# de anúncios, que sem verificação no servidor é infinito. 12 é o teto que a
+# economia já tinha antes da hora vir de anúncio (o cap de settle era 12h, e
+# `ChestsPerDayFromSettle = 6` é o que floor(12/4) produzia): o número não
+# afrouxa o faucet, só devolve a origem da hora. `reroll` = 3 é o
+# `DAILY_REROLLS_MAX` compartilhado com a versão paga — o ad não compra
+# rotação extra, só a mesma sem gems.
+const AD_PLACEMENT_CAPS : Dictionary = {"chest": 1, "bosskey": 2, "afkhoras": 12, "reroll": 3}
 
-# SOM-IDLE M2: o token stub ("stub:<placement>:<dia>") é mintável por qualquer
-# cliente — quem o aceita decide se anúncio forjado credita. Antes era
-# `const AdStubEnabled = true`, i.e. compilar era a única forma de fechar e o
-# default de todo deploy era o caminho aberto. Agora o default é fechado: só
-# SHAMBLETA_AD_STUB=1 liga, e quem liga é o deploy do beta
-# (deploy/docker-compose.yml), não o binário. Sem SDK real/SSV no servidor,
-# produção não seta a env e todo token stub volta bad_token.
+# SOM-IDLE M2 → C2: esta env continua sendo o interruptor do servidor para
+# "acredito na declaração de exibição do client", e continua com default
+# fechado. O que mudou é o que ela liga: antes habilitava um formato de token
+# público e infinitamente reutilizável ("stub:<placement>:<dia>"); agora o
+# servidor minta um nonce de uso único por exibição (`ad_slot`) e a env só
+# autoriza a mintagem. Sem a env, `MintAdSlot` recusa e nenhum placement
+# credita — em produção o default é este. Antes era `const AdStubEnabled =
+# true`, i.e. compilar era a única forma de fechar. `SHAMBLETA_AD_PROVIDER`
+# (client) escolhe se o anúncio mostrado é stub ou SDK do portal; não tem poder
+# nenhum sobre o servidor.
 static func AdStubEnabled() -> bool:
 	return OS.get_environment("SHAMBLETA_AD_STUB").strip_edges() == "1"
+
+# Validade de um slot mintado. Curado de propósito: o slot é a autorização para
+# MOSTRAR um anúncio, não para receber prêmio. Passado o prazo (anúncio fechado
+# antes do fim, janela perdida, client morto) a linha vence, sai da contagem de
+# pendentes e a cota do placement volta a estar disponível no próximo clique.
+const AD_SLOT_TTL_SECONDS : int = 300
 
 # (de EconomyService.gd:2539)
 const COSMETIC_CATALOG : Dictionary = {

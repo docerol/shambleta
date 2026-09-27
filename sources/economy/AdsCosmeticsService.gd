@@ -13,21 +13,23 @@ var _eco : EconomyService = null
 
 # ------------------------------------------------------------------ Fase E: rewarded ads (MONETIZATION §2.5)
 #
-# Abstração + stubs: o client (AdProvider) devolve um token que o servidor
-# valida por formato + dia; o SDK real pluga sem mudar mais nada. Views vivem
-# em telemetry_event (kind 'ad_view', meta {"placement"}) — sem migração, sem
-# moeda nova, sem caminho p/ essência/favores (§0.1). Caps por placement: 1
-# baú/dia, 2 chaves/dia, reroll-ad divide o contador pago (3/dia). Não há teto
-# global de anúncios/dia desde 2026-09-25: a hora de offline é o prêmio e o
-# dono quis que todo anúncio disponível fosse mostrável. VIP não multiplica
-# anúncio nenhum — o ×2 do loot é perk do tier 2 (OfflineSettle._LootMult), e
-# baú/chave continuam dobrando a QUANTIDADE para quem tem VIP ativo.
-# SOM-IDLE M2 (era T7): o stub não é mais compilar-para-abrir — ele vive atrás
-# de SHAMBLETA_AD_STUB=1 com default fechado, ligado pelo deploy do beta. O
-# token stub é mintável pelo client por construção (é isso que a env controla);
-# enquanto não houver SSV no servidor, o teto de abuso são os caps por
-# placement, e no afkhoras o prêmio é hora de farm — não dinheiro. Produção
-# sem a env não credita nada.
+# Abstração + stubs: o client (AdProvider) pede ao servidor a autorização para
+# exibir (`MintAdSlot`), mostra o anúncio e devolve o nonce. Antes o servidor
+# validava "formato + dia" de um token que qualquer client sabia construir;
+# desde C2 (auditoria 2026-09-24) a autoridade é uma linha em `ad_slot`, consumida
+# por `DELETE`. Views vivem em telemetry_event (kind 'ad_view', meta
+# {"placement"}) — sem moeda nova, sem caminho p/ essência/favores (§0.1). Cap
+# por placement, coberto inteiro: 1 baú/dia, 2 chaves/dia, 3 rerolls/dia
+# (contador compartilhado com o pago) e 12 horas de offline/dia. VIP não
+# multiplica anúncio nenhum — o ×2 do loot é perk do tier 2
+# (OfflineSettle._LootMult), e baú/chave continuam dobrando a QUANTIDADE para
+# quem tem VIP ativo.
+# SOM-IDLE M2 (era T7): nada aqui é aberto por compilação. SHAMBLETA_AD_STUB=1 é
+# o que autoriza o servidor a mintar slots, i.e. a aceitar a declaração de
+# exibição feita pelo próprio client; o default é fechado e produção não seta a
+# env. Enquanto não houver SSV no servidor essa é a fronteira: o teto do abuso
+# passa a ser a cota da conta por placement (não o vocabulário de strings), e no
+# afkhoras o prêmio é hora de farm — não dinheiro.
 
 # Seam do divisor de dia (espelha OfflineSettle.nowOverride): sem isto a regra
 # "a hora ganha não se perde se você coletar antes do divisor" é indemonstrável
@@ -44,18 +46,78 @@ func AdViewsToday(accountID : int, placement : String = "") -> int:
 		return int(Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND created_at >= ?;", [accountID, _AdDayStart()])[0]["n"])
 	return int(Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'ad_view' AND account_id = ? AND created_at >= ? AND json_extract(meta, '$.placement') = ?;", [accountID, _AdDayStart(), placement])[0]["n"])
 
-func _ValidAdToken(token : String, placement : String) -> bool:
-	# Stub: "stub:<placement>:<dia UTC-3>" — aceito SOMENTE com o stub ligado por
-	# env (SHAMBLETA_AD_STUB=1, o deploy do beta). Default do servidor é fechado:
-	# sem a env, nenhum token stub credita, em nenhum placement. Produção com SDK
-	# real exige callback verificado no servidor (formato próprio), nunca "stub:".
+# C2 (auditoria 2026-09-24): o credential deixa de ser um formato derivável e
+# passa a ser uma linha. Mintar um slot é o que a exibição de um anúncio custa:
+# o servidor reserva a cota, gera o nonce e o amarra à conta e ao placement. A
+# env do stub continua o interruptor — sem ela não há mintagem, e logo não há
+# crédito em nenhum placement (era exatamente o default de produção antes, e
+# continua sendo).
+func MintAdSlot(accountID : int, placement : String) -> Dictionary:
+	if not placement in EconomyCatalog.AD_PLACEMENTS:
+		return {"ok": false, "reason": "unknown_placement"}
 	if not EconomyCatalog.AdStubEnabled():
+		return {"ok": false, "reason": "ad_source"}
+	if accountID <= 0:
+		return {"ok": false, "reason": "not_logged_in"}
+	_PurgeExpiredSlots()
+	var gate : Dictionary = _AdAllowed(accountID, placement)
+	if not bool(gate.get("ok", false)):
+		return gate
+	var now : int = SQLCommons.Timestamp()
+	var nonce : String = _NewAdNonce()
+	if not Launcher.SQL.ExecuteBindings("INSERT INTO ad_slot (account_id, placement, nonce, created_at, expires_at) VALUES (?, ?, ?, ?, ?);", [accountID, placement, nonce, now, now + _SlotTTL()]):
+		return {"ok": false, "reason": "db_error"}
+	return {"ok": true, "reason": "ok", "token": "slot:" + nonce}
+
+# Seam do harness: com TTL 0 a linha já nasce vencida, que é como a suíte prova
+# o ramo de expiração sem dormir nem mexer no relógio do banco.
+static var slotTTLOverride : int = -1
+
+func _SlotTTL() -> int:
+	return EconomyCatalog.AD_SLOT_TTL_SECONDS if slotTTLOverride < 0 else slotTTLOverride
+
+static func _NewAdNonce() -> String:
+	# 16 bytes de CSPRNG, não `randi()`: o nonce é a única coisa entre um client
+	# forjado e a cota de outra conta, e `hash()`/`randi()` são previsíveis e
+	# colidem em 32 bits. Mesmo gerador do segredo de 2FA (TwoFactorAuth.gd:16).
+	return Crypto.new().generate_random_bytes(16).hex_encode()
+
+# Slots ainda válidos desta conta/placement. Entram na conta do cap juntos com
+# as views: sem isso, clicar 12 vezes sem assistir nenhuma reservaria o dia
+# inteiro e o player seguinte (ou o mesmo, no outro personagem) ficava sem cota
+# — e com isso, o outro lado: estocar authorization não dá prêmio extra.
+func _AdSlotsOutstanding(accountID : int, placement : String) -> int:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ad_slot WHERE account_id = ? AND placement = ? AND expires_at > ?;", [accountID, placement, SQLCommons.Timestamp()])
+	return 0 if rows.is_empty() else int(rows[0]["n"])
+
+func _PurgeExpiredSlots() -> void:
+	Launcher.SQL.ExecuteBindings("DELETE FROM ad_slot WHERE expires_at <= ?;", [SQLCommons.Timestamp()])
+
+# Consumo = DELETE condicionado. A linha some no primeiro uso, então não existe
+# replay: a segunda tentativa com o mesmo nonce acha 0 linhas e devolve false.
+# Os filtros de conta e placement são o que impede um nonce mintado para
+# `chest` de virar hora de `afkhoras`, e o de vencimento é o que impede um slot
+# abandonado (anúncio fechado antes do fim) de valer depois.
+# `changes()` depois do `DELETE` na mesma conexão é o precedente de
+# SQL.ConsumeTwoFactorToken (SQL.gd:1174).
+func _ConsumeAdSlot(token : String, accountID : int, placement : String) -> bool:
+	if not token.begins_with("slot:"):
 		return false
-	var parts : PackedStringArray = token.split(":")
-	return parts.size() == 3 and parts[0] == "stub" and parts[1] == placement and parts[2] == str(EconomyCatalog.ShopDay(SQLCommons.Timestamp()))
+	var nonce : String = token.substr(5)
+	if nonce.is_empty():
+		return false
+	if not Launcher.SQL.ExecuteBindings("DELETE FROM ad_slot WHERE nonce = ? AND account_id = ? AND placement = ? AND expires_at > ?;", [nonce, accountID, placement, SQLCommons.Timestamp()]):
+		return false
+	var changed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT changes() AS c;", [])
+	return not changed.is_empty() and int(changed[0]["c"]) > 0
 
 func _AdAllowed(accountID : int, placement : String) -> Dictionary:
-	if EconomyCatalog.AD_PLACEMENT_CAPS.has(placement) and AdViewsToday(accountID, placement) >= int(EconomyCatalog.AD_PLACEMENT_CAPS[placement]):
+	if not EconomyCatalog.AD_PLACEMENT_CAPS.has(placement):
+		# Cap ausente não é licença — é exatamente o defeito que o C2 veio
+		# fechar. Todo placement de `AD_PLACEMENTS` tem de estar no dicionário.
+		return {"ok": false, "reason": "uncapped_placement"}
+	var used : int = AdViewsToday(accountID, placement) + _AdSlotsOutstanding(accountID, placement)
+	if used >= int(EconomyCatalog.AD_PLACEMENT_CAPS[placement]):
 		return {"ok": false, "reason": "placement_cap"}
 	return {"ok": true, "reason": "ok"}
 
@@ -76,11 +138,12 @@ func _RecordAdView(accountID : int, charID : int, placement : String) -> bool:
 	return AdViewsToday(accountID, placement) > before
 
 # Registra uma visualização. No afkhoras a view É o produto: ela vale hora de
-# offline até o divisor do dia ou até a coleta, o que vier primeiro.
+# offline até o divisor do dia ou até a coleta, o que vier primeiro. O token é o
+# slot devolvido por `MintAdSlot` — sem ele não há crédito, e ele vale uma vez.
 func WatchAd(accountID : int, charID : int, placement : String, token : String) -> Dictionary:
 	if not placement in EconomyCatalog.AD_PLACEMENTS:
 		return {"ok": false, "reason": "unknown_placement"}
-	if not _ValidAdToken(token, placement):
+	if not _ConsumeAdSlot(token, accountID, placement):
 		return {"ok": false, "reason": "bad_token"}
 	var gate : Dictionary = _AdAllowed(accountID, placement)
 	if not bool(gate.get("ok", false)):
@@ -121,7 +184,7 @@ func ClaimAdChest(accountID : int, charID : int, token : String) -> Dictionary:
 
 # Reroll via ad: mesma rotação e contador do pago (3/dia somados), sem gems.
 func RerollDailyShopAd(accountID : int, token : String) -> Dictionary:
-	if not _ValidAdToken(token, EconomyCatalog.AD_REROLL):
+	if not _ConsumeAdSlot(token, accountID, EconomyCatalog.AD_REROLL):
 		return {"ok": false, "reason": "bad_token"}
 	var gate : Dictionary = _AdAllowed(accountID, EconomyCatalog.AD_REROLL)
 	if not bool(gate.get("ok", false)):

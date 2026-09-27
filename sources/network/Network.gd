@@ -671,8 +671,14 @@ func CubeUpcycle(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
 func SalvageItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("SalvageItem", [itemID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
-# Fase E (rewarded ads, MONETIZATION §2.5): 4 placements opt-in. O token vem
-# do AdProvider (stub agora, SDK depois); o servidor valida e credita.
+# Fase E (rewarded ads, MONETIZATION §2.5): 4 placements opt-in. O token não é
+# mais construído no client — `RequestAdSlot` reserva a cota no servidor, que
+# devolve um nonce de uso único por `AdSlot`; o client só o devolve depois de o
+# anúncio terminar.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func RequestAdSlot(placement : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("RequestAdSlot", [placement], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func WatchAd(placement : String, token : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("WatchAd", [placement, token], AuthPeerID(peerID), NetworkCommons.DelayConfig)
@@ -692,6 +698,13 @@ func ClaimAdBossKey(token : String, peerID : int = NetworkCommons.PeerAuthorityI
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func AdFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("AdFeedback", [ok, reason], peerID)
+
+# Resposta do `RequestAdSlot`: token vazio = nada mintado (cota cheia, source
+# desligado, erro de banco) e `reason` diz por quê. É o único caminho por onde um
+# credential de anúncio sai do servidor.
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func AdSlot(placement : String, token : String, reason : String, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("AdSlot", [placement, token, reason], peerID)
 
 # Fase F (guild premium + torneios): estado da guild, level-up fast, vault
 # slots, copas semanais.

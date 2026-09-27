@@ -45,9 +45,10 @@ func _run_tests():
 	# (`deploy/docker-compose.yml`) — o par ligado/desligado é provado em
 	# `SuiteSeasonLock` e a ativação em si, em `SuiteSeasonBootstrap`.
 	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "1")
-	# SOM-IDLE M2: o stub de rewarded ad é fechado por default no servidor; a suíte
-	# de ads roda o caminho do beta (que liga a env no compose). O par
-	# ligado/desligado é provado dentro do próprio SuiteAds.
+	# SOM-IDLE M2 → C2: o servidor é fechado por default para credential de
+	# anúncio mintado por declaração do client; a suíte de ads roda o caminho do
+	# beta, que liga a env aqui (o compose de produção NÃO liga — `SuiteDeployMode`).
+	# O par ligado/desligado é provado dentro do próprio SuiteAds.
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	var sql : Node = launcher.SQL
 	var economy : Node = launcher.Economy
@@ -160,6 +161,9 @@ func _run_tests():
 			suites.SuiteCosmetics(sql)
 			# Fase E: rewarded ads (tokens, caps por placement, afkhoras)
 			suites.SuiteAds(sql)
+			# Auditoria C2: o credential é linha de uso único — replay, dono,
+			# placement e prazo. Colado no SuiteAds porque é o mesmo objeto.
+			suites.SuiteAdNonce(sql)
 			# Offline comprado com anúncio (C1): o placement afkhoras, as horas
 			# ganhas por personagem e o cap composto. Colado no SuiteAds porque é
 			# o mesmo domínio e herda a env do stub que ele liga.
@@ -201,6 +205,9 @@ func _run_tests():
 
 		# SOM-IDLE: A1 auth hardening + A2 ops hardening
 		suites.SuiteAuthHardening(sql)
+		# Auditoria C1: chave de dicionário não é identificador de coluna. Fica
+		# junto do bloco de auth porque o privilégio alvo é `account.permission`.
+		suites.SuiteColumnWhitelist(sql)
 		suites.SuiteTwoFactor(sql)
 		# SOM-IDLE M1: handlers de setup do 2FA no NetServer (o facade existia sem
 		# implementação — o painel de conta nunca respondeu).

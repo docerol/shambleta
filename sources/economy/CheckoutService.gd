@@ -117,7 +117,7 @@ func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 # entram como tier 1; só vip.3mo sobe a 2. Nunca rebaixa tier ativo.
 
 # Enfileira um grant (idempotente pela chave: duplicada = já na fila, sem erro).
-func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey : String, payload : String = "{}") -> bool:
+func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey : String, payload : String = "{}", pricePaid : int = 0, currency : String = "") -> bool:
 	if idempotencyKey.is_empty() or amount <= 0 or not EconomyCatalog.GrantKinds.has(kind):
 		return false
 	var sql : SQLService = Launcher.SQL
@@ -125,7 +125,11 @@ func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey :
 		return true
 	if sql.QueryBindings("SELECT account_id FROM account WHERE account_id = ?;", [accountID]).is_empty():
 		return false
-	return sql.ExecuteBindings("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount, payload, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?);", [idempotencyKey, accountID, kind, amount, payload, SQLCommons.Timestamp()])
+	# B (auditoria 2026-09-24): `pricePaid` é o que o provedor cobrou (centavos),
+	# não o que o jogo concedeu — a coluna é de 044 e é ela que separa dinheiro
+	# de sandbox. Um grant com price 0 entra como unidade de jogo e o estorno do
+	# art.49 não tem o que devolver.
+	return sql.ExecuteBindings("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount, payload, status, created_at, price_paid, currency) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?);", [idempotencyKey, accountID, kind, amount, payload, SQLCommons.Timestamp(), pricePaid, currency])
 
 # Consome a fila: cada grant na própria transação (um ruim não trava os outros).
 # Retorna {"processed": N, "failed": M}.
@@ -197,6 +201,10 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 		var balance : int = sql.GetGemsRaw(accountID)
 		if not sql.SetGemsRaw(accountID, balance + amount):
 			return false
+		# B (auditoria 2026-09-24): dinheiro entregue vira saldo pago; grant de
+		# sandbox/GM (price 0, K1) é unidade de jogo e não tem o que estornar.
+		if int(grant.get("price_paid", 0)) > 0 and not sql.AddGemsPaidRaw(accountID, amount):
+			return false
 		return _eco._LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, amount, balance + amount, "grant:%s" % str(grant["idempotency_key"]))
 	if kind == "gold":
 		var parsed : Variant = JSON.parse_string(str(grant.get("payload", "")))
@@ -265,6 +273,11 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 			var gbal : int = sql.GetGemsRaw(accountID)
 			if not sql.SetGemsRaw(accountID, gbal + 150):
 				return false
+			# B: as 150 do deluxe são dinheiro se esta linha carregou preço — o
+			# bundle põe o preço numa só perna (044), então nas demais elas entram
+			# como unidade de jogo e o estorno da perna fica com o operador.
+			if int(grant.get("price_paid", 0)) > 0 and not sql.AddGemsPaidRaw(accountID, 150):
+				return false
 			if not _eco._LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, 150, gbal + 150, "grant:%s" % str(grant["idempotency_key"])):
 				return false
 		return true
@@ -315,9 +328,12 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 	return false
 
 # ------------------------------------------------------------------ CDC art.49 — direito de arrependimento
-# Compra à distância: o consumidor desiste em 7 dias. Como gems são fungíveis,
-# "não consumidas" = o saldo atual cobre o montante comprado. Regras (na ordem):
-#   não_found / window_expired / already_refunded / gems_consumed.
+# Compra à distância: o consumidor desiste em 7 dias. "Não consumida" é medido na
+# coluna de origem, não no saldo: `wallet.gems_paid` (migration 049) é a parte do
+# saldo que ainda é dinheiro entregue, e é ela que tem de cobrir o montante
+# comprado. Saldo total não prova nada — com faucet F2P o número se repõe de
+# graça e o bem já foi gasto. Regras (na ordem):
+#   não_found / window_expired / already_refunded / gems_consumed / not_paid.
 # O estorno do DINHEIRO cabe ao companion/provedor (onboarding pendente — handoff);
 # aqui o jogo reverte as gems + grava no ledger (prova de auditoria, append-only).
 
@@ -344,12 +360,20 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 	# (4) gems não consumidas: saldo atual >= montante comprado
 	if sql.GetGems(accountID) < amount:
 		return {"ok" = false, "reason" = "gems_consumed"}
+	# (5) B (auditoria 2026-09-24): a prova é na coluna certa. Saldo total não
+	# diz nada sobre ORIGEM — com o faucet F2P (anúncio, passe, settle, loja
+	# diária) dá para gastar as gems pagas e repor o número de graça, e o item
+	# comprado fica de pé com o dinheiro devolvido. `gems_paid` é o que ainda é
+	# dinheiro; conta antiga (pré-049) tem 0 e cai aqui, fail-closed: o operador
+	# devolve à mão com o recibo, pelo companion.
+	if sql.GetGemsPaid(accountID) < amount:
+		return {"ok" = false, "reason" = "not_paid"}
 	# aplica o estorno de forma atômica (re-verifica o saldo sob o lock)
 	var applied : bool = false
 	_eco.settleMutex.lock()
 	if sql.Transaction(func() -> bool:
 		var current : int = sql.GetGemsRaw(accountID)
-		if current < amount:
+		if current < amount or sql.GetGemsPaidRaw(accountID) < amount:
 			return false
 		if not sql.SetGemsRaw(accountID, current - amount):
 			return false

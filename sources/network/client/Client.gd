@@ -1,6 +1,10 @@
 extends NetInterface
 class_name NetClient
 
+# C2: quem espera o slot é o AdProvider (módulo carregado por preload, sem
+# class_name — mesma regra dos quatro botões de anúncio em sources/gui/).
+const AdProvider = preload("res://sources/ads/AdProvider.gd")
+
 # SOM-IDLE onboarding: último AFK report (lido pela janela AfkReport).
 static var LastAFKReport : Dictionary = {}
 # Hero class do personagem logado (cache do CharacterInfo; server revalida).
@@ -491,6 +495,14 @@ func AdFeedback(ok : bool, reason : String, _peerID : int):
 		Launcher.GUI.notificationLabel.AddNotification(("Ad reward: " if ok else "Ad rejected: ") + reason)
 		if ok and Launcher.GUI.afkWindow and Launcher.GUI.afkWindow.is_visible():
 			Network.GetAFKReport()
+
+# C2: resposta do pedido de slot. O token vai ao AdProvider, que é quem tem o
+# callback do botão esperando; token vazio libera o botão e explica por quê —
+# sem isto o clique que não recebeu resposta deixaria a UI muda para sempre.
+func AdSlot(placement : String, token : String, reason : String, _peerID : int):
+	AdProvider.OnAdSlot(placement, token, reason)
+	if token.is_empty() and Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification("Ad rejected: " + reason)
 
 # Fase F (guild premium + torneios).
 func GuildState(state : Dictionary, _peerID : int):

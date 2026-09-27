@@ -1,7 +1,7 @@
 // Shambleta — ponte de rewarded ads (SOM-IDLE Fase E, MONETIZATION §2.5).
 //
 // O client Godot (sources/ads/AdProvider.gd, provider "portal") procura
-// `window.ShamletaAds` com dois métodos:
+// `window.ShambletaAds` com dois métodos:
 //
 //   ShambletaAds.ad_ready(placement) -> bool
 //       "há um rewarded disponível para este placement?" (4 placements:
@@ -10,13 +10,21 @@
 //       exibe o rewarded; chama done_callback(true) SE o anúncio foi assistido
 //       até o fim, done_callback(false) se pulado/fechado antes. O Godot passa
 //       um Callable como done_callback (JavaScriptBridge invoca de volta).
+//       Este arquivo NÃO vê nem devolve token: a autorização é pedida ao
+//       servidor antes (Network.RequestAdSlot) e o que volta para o jogo é o
+//       nonce de uso único que o servidor mintou (`ad_slot`, TTL 300 s).
+//       done_callback(false) = nada entregue = nada creditado.
 //
 // Decisão do dono (2026-09-18): CRAZYGAMES. Trocar o corpo das duas funções
 // abaixo pelo SDK real quando a conta do portal existir; o jogo não muda.
 // Seleção via env SHAMBLETA_AD_PROVIDER ("stub" = sem SDK, "portal" = usa esta
-// ponte). Sem esta ponte carregada, o client cai para o stub — o servidor
-// continua fail-closed (formato + dia; token adulterado nunca credita) e os
-// caps por placement (1 baú/dia, 2 chaves/dia) valem nos dois caminhos.
+// ponte). Sem esta ponte carregada, o client cai para o stub — e em nenhum dos
+// dois caminhos o client fabrica credential: sem slot mintado pelo servidor o
+// crédito é recusado (`bad_token`), os caps por placement (1 baú/dia,
+// 2 chaves/dia, 3 rerolls/dia, 12 horas de offline/dia) contam views **mais** as
+// reservas ainda não gastas, e a mintagem só existe se `SHAMBLETA_AD_STUB=1`
+// estiver no servidor (C2, auditoria 2026-09-24 — default fechado, fora do
+// compose de produção). O que a ponte ainda não prova é exibição: isso é SSV.
 //
 // Até a conta existir, este arquivo é o MODO DE TESTE: simula um anúncio de
 // 2s e confirma conclusão, para validar o fluxo ponta-a-ponta.

@@ -63,13 +63,14 @@ services:
       # 6118, e o companion escreve grants no live.db — receita perdida).
       # Literal de propósito: não deve poder ser desligado por env ausente.
       SHAMBLETA_PRODUCTION: "1"
-      # SOM-IDLE M2: rewarded ads do beta rodam no token stub ("stub:<place>:<dia>"),
-      # que é mintável pelo client por construção. O servidor nasce FECHADO para
-      # isso (EconomyCatalog.AdStubEnabled() exige a env) — esta linha é o beta
-      # assumindo o abuso em troca de não ter conta no portal (caps 6/dia, 1 baú,
-      # 2 chaves limitam o estrago; nenhum dinheiro envolvido). Quando o SSV real
-      # do portal entrar, apague a linha: sem ela nenhum token stub credita.
-      SHAMBLETA_AD_STUB: "1"
+      # C2 (auditoria 2026-09-24): este arquivo É a produção, e a produção nasce
+      # fechada para anúncio auto-declarado — `SHAMBLETA_AD_STUB` fica FORA dele
+      # de propósito. Antes vinha `"1"` aqui, o que fazia o default de todo deploy
+      # ser o caminho em que o client afirma que assistiu e o servidor credita
+      # (hoje com cota e nonce de uso único, mas ainda sem prova de exibição).
+      # O beta que quiser rewarded ads antes do SSV do portal liga a env no painel
+      # (deploy/COOLIFY.md, "Criar o projeto"), nunca no repositório. Sem a env,
+      # `MintAdSlot` devolve `ad_source` e nenhum placement credita.
       # G1 (auditoria 2026-09-24, Bloco 1 #7): o beta LIGA o espinho sazonal.
       # Sem esta env, `SeasonsEnabled()` é false e criação/fechamento/liquidação
       # viram no-op — o shell entregaria Season Pass e placar de temporada sobre

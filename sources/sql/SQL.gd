@@ -5,6 +5,7 @@ class_name SQLService
 var db : Object						= null
 var backups : SQLBackups			= null
 var queryMutex : Mutex				= Mutex.new()
+var _tableColumns : Dictionary		= {}
 
 # Migrations
 func HasVersion() -> bool:
@@ -62,6 +63,7 @@ func ApplyMigrations():
 		ApplyMigration(patches[currentVersion])
 		currentVersion += 1
 	SetVersion(currentVersion)
+	_tableColumns.clear()
 
 func ApplyMigration(migrationFile : String):
 	var migration : String = FileAccess.get_file_as_string(migrationFile)
@@ -339,6 +341,16 @@ func UpdateAccount(accountID : int, platform : int = NetworkCommons.Platform.UNK
 
 # Characters
 func AddCharacter(accountID : int, nickname : String, stats : Dictionary, traits : Dictionary, attributes : Dictionary) -> bool:
+	# C1: os três dicts vêm do RPC de criação de personagem (Server.CreateCharacter)
+	# e o addon interpola as CHAVES no statement. `CheckTraits`/`CheckAttributes`
+	# validam os campos obrigatórios mas nunca recusam chave extra, e o `traits`
+	# ainda por cima aceita o que o cliente mandar antes de fazer merge com os
+	# defaults. Recusar ANTES do insert: sem isto, a chave hostil já tinha criado
+	# o personagem e executado o UPDATE injetado. A regra exclui também as chaves
+	# primárias: `char_id` é coluna real de stat/trait/attribute, e um cliente que
+	# a envia move a própria linha de trait para o personagem de outra pessoa.
+	if not CheckWritableKeys("stat", stats) or not CheckWritableKeys("trait", traits) or not CheckWritableKeys("attribute", attributes):
+		return false
 	var charData : Dictionary = {
 		"account_id": accountID,
 		"nickname": nickname,
@@ -506,9 +518,15 @@ func GetStat(charID : int) -> Dictionary:
 # NOTE: godot-sqlite's update_rows/delete_rows wrap their statement in their
 # own BEGIN/END — calling them inside this lambda nests transactions and
 # corrupts the commit sequence (nested END commits the outer work, outer
-# COMMIT then fails). Inside a lambda, use UpdateRowsRaw/insert_row/
-# select_rows/db.query_with_bindings ONLY — never update_rows/delete_rows
-# and never the QueryBindings/ExecuteBindings helpers (queryMutex re-entry).
+# COMMIT then fails). Measured on this repo's libgdsqlite (2026-09-26): the
+# inner BEGIN fails, the UPDATE/DELETE runs, the inner END commits the whole
+# lambda, and the outer ROLLBACK answers "no transaction is active" while the
+# writer still returns true. `insert_row` does NOT show that behaviour and is
+# allowed. Inside a lambda, use UpdateRowsRaw/DeleteRowsRaw/insert_row/
+# select_rows/ExecNoLock ONLY. The QueryBindings/ExecuteBindings helpers are
+# also off the list: they re-lock queryMutex, which does survive re-entry on
+# Godot 4.7 (its Mutex is recursive) — but recursion is an implementation
+# detail, not a promise, and a lambda that outlives it deadlocks the process.
 func Transaction(callable : Callable) -> bool:
 	var committed : bool = false
 	queryMutex.lock()
@@ -518,12 +536,102 @@ func Transaction(callable : Callable) -> bool:
 		if result and db.query("COMMIT;"):
 			committed = true
 		else:
-			db.query("ROLLBACK;")
+			# SOM-IDLE auditoria A: um ROLLBACK que não acha transação ativa é a
+			# assinatura de um writer aninhado — `db.update_rows`/`delete_rows`
+			# fazem BEGIN/END próprios e o END interno comita o lambda inteiro.
+			# Sem este grito a corrupção era silenciosa nos dois sentidos: o
+			# lambda devolvia false, o chamador reportava rejeição, e a escrita
+			# ficava no banco. Não tentamos consertar: só não deixamos passar.
+			if not db.query("ROLLBACK;"):
+				push_error("SQL.Transaction: o ROLLBACK não achou transação ativa — um writer aninhado (db.update_rows/delete_rows fazem BEGIN/END próprios) comitou o trabalho do lambda no meio da transação. Dentro de Transaction() só ops raw: UpdateRowsRaw/DeleteRowsRaw/insert_row/ExecNoLock.")
 	queryMutex.unlock()
 	return committed
 
+# C1: whitelist de colunas para os writers que montam SQL a partir de um
+# dicionário. O que escapa é o VALOR; a CHAVE é interpolada — `db.update_rows`
+# (addon) monta `chave=valor` cru e `UpdateRowsRaw` monta `chave=?`, que ainda é
+# a chave no texto do statement. Enquanto o dicionário é literal do servidor isso
+# é inofensivo; no `AddCharacter` os três dicts vêm do RPC de criação de
+# personagem. Medido em 2026-09-25 contra o libgdsqlite deste repositório, uma
+# chave de trait do tipo
+# `gender = 'x' WHERE 1=1; UPDATE account SET permission = 3 WHERE account_id = 7;--`
+# devolvia `true` e gravava permission = 3 na conta: o addon executou os dois
+# statements. Trocar de helper não fecha — a mesma chave via `UpdateRowsRaw`
+# devolveu `true` e deixou permission = 4. A régua é nome E posse: identifier
+# simples e coluna real da tabela, lida de PRAGMA table_info e cacheada por
+# tabela (as migrations só rodam no boot, antes de qualquer escrita, e
+# ApplyMigrations limpa o cache).
+static func IsPlainIdentifier(text : String) -> bool:
+	# UTF-8, não ASCII: `to_ascii_buffer` estoura ERR_FAIL em texto não-ASCII e
+	# devolve buffer parcial. Aqui o multi-byte vira byte >= 0x80, que a checagem de
+	# faixa abaixo já recusa.
+	var bytes : PackedByteArray = text.to_utf8_buffer()
+	if bytes.is_empty():
+		return false
+	if not _IsIdentifierByte(bytes[0], true):
+		return false
+	for byte in bytes:
+		if not _IsIdentifierByte(byte, false):
+			return false
+	return true
+
+static func _IsIdentifierByte(byte : int, first : bool) -> bool:
+	return (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122) or byte == 95 or (not first and byte >= 48 and byte <= 57)
+
+func _SchemaOf(table : String) -> Dictionary:
+	if not IsPlainIdentifier(table):
+		push_error("SQL: nome de tabela rejeitado: %s" % table)
+		return {"cols": PackedStringArray(), "pks": PackedStringArray()}
+	if _tableColumns.has(table):
+		return _tableColumns[table]
+	var columns : PackedStringArray = PackedStringArray()
+	var primaries : PackedStringArray = PackedStringArray()
+	if db.query("PRAGMA table_info(%s);" % table):
+		for row in db.query_result:
+			var name : String = str(row.get("name", ""))
+			columns.append(name)
+			if int(row.get("pk", 0)) > 0:
+				primaries.append(name)
+	var schema : Dictionary = {"cols": columns, "pks": primaries}
+	# Resultado vazio NÃO é cacheado: tabela que ainda não existe (migration roda
+	# depois, ou nome errado) voltaria a ser consultada em vez de ficar congelada
+	# como "sem colunas" para o resto do processo.
+	if not columns.is_empty():
+		_tableColumns[table] = schema
+	return schema
+
+func ColumnsOf(table : String) -> PackedStringArray:
+	return _SchemaOf(table)["cols"]
+
+# false sem tocar no banco se qualquer chave não for coluna da tabela.
+func CheckColumnKeys(table : String, data : Dictionary) -> bool:
+	var columns : PackedStringArray = ColumnsOf(table)
+	if columns.is_empty():
+		return false
+	for key in data:
+		var name : String = str(key)
+		if not IsPlainIdentifier(name) or not columns.has(name):
+			push_error("SQL: chave de coluna rejeitada em %s: %s" % [table, name])
+			return false
+	return true
+
+# Como CheckColumnKeys, mas para dicionário que veio de fora: a chave primária é
+# coluna real e passaria na régua de posse, mas escrevê-la MOVE a linha para outra
+# entidade (`char_id` em stat/trait/attribute, `account_id` onde ela é pk).
+func CheckWritableKeys(table : String, data : Dictionary) -> bool:
+	if not CheckColumnKeys(table, data):
+		return false
+	var primaries : PackedStringArray = _SchemaOf(table)["pks"]
+	for key in data:
+		if primaries.has(str(key)):
+			push_error("SQL: chave primária não escrevível em %s: %s" % [table, str(key)])
+			return false
+	return true
+
 # Transaction-safe UPDATE (no implicit BEGIN/END — unlike update_rows)
 func UpdateRowsRaw(table : String, conditions : String, data : Dictionary) -> bool:
+	if not CheckColumnKeys(table, data):
+		return false
 	var keys : PackedStringArray = PackedStringArray()
 	var bindings : Array = []
 	for key in data:
@@ -791,7 +899,14 @@ func GetVIPUntil(accountID : int) -> int:
 	return 0 if value == null else int(value)
 
 func SetVIPUntil(accountID : int, untilTimestamp : int) -> bool:
-	return db.update_rows("account", "account_id = %d" % accountID, {"vip_until" = untilTimestamp})
+	# SOM-IDLE auditoria A: raw, porque este setter roda DENTRO de um
+	# Transaction() (ShopService.BuyDailyOffer, PassService._GrantPassRewardRaw).
+	# `db.update_rows` faz o próprio BEGIN/END: medido contra o libgdsqlite deste
+	# repositório, o BEGIN interno falha ("cannot start a transaction within a
+	# transaction"), o UPDATE roda e o END interno COMITA o lambda inteiro. O
+	# ROLLBACK de fora vira no-op ("no transaction is active") e o método ainda
+	# devolve true — i.e. gems já cobradas com o pedido devolvido como rejeitado.
+	return UpdateRowsRaw("account", "account_id = %d" % accountID, {"vip_until" = untilTimestamp})
 
 # SOM-IDLE Fase B: tier do VIP (migration 022) — 0 = sem tier, 1 = VIP1 (24h
 # cap), 2 = VIP2 (36h cap). Null-safe (conta antiga sem a coluna ⇒ 0).
@@ -801,7 +916,9 @@ func GetVIPTier(accountID : int) -> int:
 	return 0 if value == null else int(value)
 
 func SetVIPTier(accountID : int, tier : int) -> bool:
-	return db.update_rows("account", "account_id = %d" % accountID, {"vip_tier" = clampi(tier, 0, 2)})
+	# Raw pela mesma razão de SetVIPUntil: chamado no mesmo lambda (a oferta de
+	# dias de VIP liga janela e tier juntos).
+	return UpdateRowsRaw("account", "account_id = %d" % accountID, {"vip_tier" = clampi(tier, 0, 2)})
 
 # SOM-IDLE: F3 — cached power score for the offline leaderboard
 func UpdatePowerScore(charID : int, score : int) -> bool:
@@ -833,12 +950,20 @@ func GetGems(accountID : int) -> int:
 	var value : Variant = rows[0].get("gems", 0) if not rows.is_empty() else 0
 	return 0 if value == null else int(value)
 
+func GetGemsPaid(accountID : int) -> int:
+	var rows : Array[Dictionary] = QueryBindings("SELECT gems_paid FROM wallet WHERE account_id = ?;", [accountID])
+	var value : Variant = rows[0].get("gems_paid", 0) if not rows.is_empty() else 0
+	return 0 if value == null else int(value)
+
 func SetGems(accountID : int, gems : int) -> bool:
 	# NOTE: update_rows reports success on 0 matched rows — gate the insert on
 	# row existence explicitly (same trap as SaveFormation, F3 report §bugs).
 	if QueryBindings("SELECT account_id FROM wallet WHERE account_id = ?;", [accountID]).is_empty():
-		return db.insert_row("wallet", {"account_id" = accountID, "gems" = gems, "updated_at" = SQLCommons.Timestamp()})
-	return db.update_rows("wallet", "account_id = %d" % accountID, {"gems" = gems, "updated_at" = SQLCommons.Timestamp()})
+		return db.insert_row("wallet", {"account_id" = accountID, "gems" = gems, "gems_paid" = 0, "updated_at" = SQLCommons.Timestamp()})
+	# B: mesma regra de drain do SetGemsRaw — `gems_paid <= gems` vale para
+	# qualquer writer, inclusive os de teste que chamam esta variante.
+	var newPaid : int = clampi(GetGemsPaid(accountID) - maxi(0, GetGems(accountID) - gems), 0, maxi(0, gems))
+	return db.update_rows("wallet", "account_id = %d" % accountID, {"gems" = gems, "gems_paid" = newPaid, "updated_at" = SQLCommons.Timestamp()})
 
 # db-direct variants for use INSIDE SQL.Transaction() lambdas (no queryMutex,
 # no implicit update_rows transaction wrapper)
@@ -847,12 +972,33 @@ func GetGemsRaw(accountID : int) -> int:
 	var value : Variant = rows[0].get("gems", 0) if not rows.is_empty() else 0
 	return 0 if value == null else int(value)
 
+# B (auditoria 2026-09-24): `gems_paid` é a parte do saldo que ainda é dinheiro
+# entregue — migration 049. Só AddGemsPaidRaw aumenta a coluna (grant com
+# price_paid > 0), e qualquer gasto drena ela primeiro: sem isso o faucet F2P
+# repõe o número e o estorno do art.49 devolve dinheiro por um bem já consumido.
+func GetGemsPaidRaw(accountID : int) -> int:
+	var rows : Array = db.select_rows("wallet", "account_id = %d" % accountID, ["gems_paid"])
+	if rows.is_empty():
+		return 0
+	return int((rows[0] as Dictionary).get("gems_paid", 0))
+
+func AddGemsPaidRaw(accountID : int, amount : int) -> bool:
+	if amount <= 0:
+		return false
+	return UpdateRowsRaw("wallet", "account_id = %d" % accountID, {"gems_paid" = GetGemsPaidRaw(accountID) + amount})
+
 func SetGemsRaw(accountID : int, gems : int) -> bool:
 	# NOTE: update_rows reports success on 0 matched rows — gate the insert on
 	# row existence explicitly (same trap as SaveFormation, F3 report §bugs).
-	if db.select_rows("wallet", "account_id = %d" % accountID, ["account_id"]).is_empty():
-		return db.insert_row("wallet", {"account_id" = accountID, "gems" = gems, "updated_at" = SQLCommons.Timestamp()})
-	return UpdateRowsRaw("wallet", "account_id = %d" % accountID, {"gems" = gems, "updated_at" = SQLCommons.Timestamp()})
+	var wallet : Array = db.select_rows("wallet", "account_id = %d" % accountID, ["gems", "gems_paid"])
+	if wallet.is_empty():
+		return db.insert_row("wallet", {"account_id" = accountID, "gems" = gems, "gems_paid" = 0, "updated_at" = SQLCommons.Timestamp()})
+	var row : Dictionary = wallet[0]
+	var spent : int = maxi(0, int(row.get("gems", 0)) - gems)
+	# Pago primeiro, e nunca acima do total: `gems_paid <= gems` é o que faz o
+	# portão do estorno ser prova de origem e não contagem de saldo.
+	var newPaid : int = clampi(int(row.get("gems_paid", 0)) - spent, 0, maxi(0, gems))
+	return UpdateRowsRaw("wallet", "account_id = %d" % accountID, {"gems" = gems, "gems_paid" = newPaid, "updated_at" = SQLCommons.Timestamp()})
 
 func UpdateStat(charID : int, stats : ActorStats) -> bool:
 	if stats == null:

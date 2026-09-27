@@ -88,7 +88,7 @@ Configurar os dois no repositório é o passo pendente, não escrever o arquivo.
 - Filename is `live.db` in every non-testing build, staging included — what makes
   staging a separate database is the separate volume (`game-data-staging`)
 - A fresh volume self-bootstraps: `SQL` copies `data/conf/templates/sqlite.template.db`
-  into the missing `live.db` and then runs `ApplyMigrations()` over the 45 versioned
+  into the missing `live.db` and then runs `ApplyMigrations()` over the 49 versioned
   migrations in `data/conf/migrations/`. There is no seed SQL file to load and no
   import step to remember — the schema and its seeds are the migrations
 - That first-boot path was measured on 2026-09-24 rather than assumed, because
@@ -96,7 +96,12 @@ Configurar os dois no repositório é o passo pendente, não escrever o arquivo.
   returns the patch names sorted (001..046 on a filesystem whose raw readdir order is
   not sorted), applying 002→046 over the shipped template is clean, and it lands the
   same schema as a long-lived development database (53 tables, 1 view, 362
-  `table.column` pairs, `version = 46`). `Query()` returns a result set, not a status,
+  `table.column` pairs, `version = 46`). Re-measured on 2026-09-26 on the same boot
+  path (the backup-restore harness's fresh database): `002→049` is clean and lands 54
+  tables, 1 view and 367 `table.column` pairs with `version = 49`, and both new objects
+  are there — `ad_slot` (048) and `wallet.gems_paid` (049)
+  (`== Backup Restore Probe: 8 checks, 0 failures ==`).
+  `Query()` returns a result set, not a status,
   so a failing migration is reported by the SQLite addon's own log line
   (`verbosity_level = NORMAL` at boot) and not by the version counter — a half-built
   schema would show up in the container log, which is what makes

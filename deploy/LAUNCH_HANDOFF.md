@@ -204,15 +204,36 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   em `deploy/web/ads_bridge.js`. **Decisão do dono (2026-09-18): CrazyGames** —
   falta criar a conta no portal e trocar o corpo do `ads_bridge.js` pelo SDK
   real (só `ads_bridge.js` + env, sem mudar jogo). (Válvula fail-closed intacta:
-  formato errado nunca credita.)
+  formato errado nunca credita.) **Refeito na passada de segurança de 2026-09-26
+  (achado (w) da auditoria):** o credential deixou de ser um formato derivável
+  (`stub:<placement>:<dia>`, revalidável infinitas vezes) e passou a ser uma
+  linha `ad_slot` de uso único mintada pelo servidor com TTL de 300 s; o cap
+  diário agora conta **views + reservas pendentes** (antes só as views, e doze
+  cliques sem assistir reservavam o dia); `afkhoras` (12) e `reroll` (3) entraram
+  no `AD_PLACEMENT_CAPS`, que não os tinha; e a env `SHAMBLETA_AD_STUB` **saiu**
+  do `deploy/docker-compose.yml` — ela é a autorização do servidor para aceitar a
+  declaração de exibição do próprio client, e o default de produção é fechado
+  (a harness liga a env ela mesma). A válvula continua fail-closed: sem slot
+  válido nada credita. **O que isto não é:** prova de exibição. Enquanto não
+  houver SSV do provedor, o teto do abuso é a cota da conta por placement, e o
+  prêmio do `afkhoras` é hora de farm — não dinheiro.
 - **Reembolso do dinheiro**: `RequestGemRefund` reverte as gems + marca
   `grant_queue.status='refunded'`; o companion faz a varredura com
   `server.py refund-sweep` (exige `SHAMBLETA_MP_REFUNDS=1` + access token;
   `--dry-run` p/ auditar). **Pendente: conta MP PJ** (handoff §2).
+  **Gate corrigido na passada de 2026-09-26 (achado (y)):** "gems não
+  consumidas" era medido no saldo **total** de uma moeda fungível com duas
+  origens, e o roteiro comprar→gastar tudo→repor com anúncio→pedir o dinheiro de
+  volta passava. Hoje existe `wallet.gems_paid` (migration `049`), alimentado só
+  por grant com `price_paid > 0` e drenado primeiro por qualquer gasto; o
+  reembolso exige saldo pago ≥ montante e devolve `not_paid` caso contrário.
+  Consequência operacional: conta criada antes de 049 tem saldo pago 0 e **não é
+  estornável por este portão** (fail-closed deliberado) — um caso desses é de
+  suporte/companion, não do jogo.
 
 ## 3. Operação
 - **Schema dentro do container (única peça do boot não verificável neste host)**: o `game`
-  roda do binário com o `.pck` embutido (`deploy/server/Dockerfile`) e as 46 migrations vêm de
+  roda do binário com o `.pck` embutido (`deploy/server/Dockerfile`) e as 49 migrations vêm de
   `res://data/conf/migrations/`, que só entra no pacote se o `include_filter` do preset
   `Linux/X11 Headless Server` (`export_presets.cfg`) alcançar o subdiretório. Medido aqui:
   `data/conf/*` alcança — `*` cruza `/` nos dois matchers do Godot 4.7.2. **Não medido:** a
@@ -513,6 +534,21 @@ e2e 0 falhas, backup 8 (migration 47 = live 47), benchmarks 0 falhas (`p50 383 �
 479731 µs`, 2 hitches de 800), companion 170, security 47, refund CLI 12, com 5× `godot exit=0` e 3×
 `python exit=0` (`/tmp/shambleta-all-final2.log`). Terceira execução independente do probe, e a única
 que roda o gate inteiro na mesma árvore que descreve.
+
+**Fecho da passada de segurança, medido com a documentação já congelada (2026-09-26):**
+`./scripts/test.sh all` fecha `ALL_EXIT=0` com os nove `Gate §24-8 OK` — preflight nos 6 harnesses,
+anti-god-node 0 falhas em 278 arquivos, idle **2440 checks, 0 failures** (guarda de ponteiros:
+188 referências `arquivo:linha` conferidas nos três documentos de evidência, 16 com mensagem de check
+batendo na linha, 37 nomes de suíte resolvidos — zero fora do arquivo, zero derrapados, zero
+fantasmas), RPC 10, e2e 0 falhas, backup 8 com **migration 49 = live 49** e schema do backup batendo
+com o vivo, benchmarks 0 falhas (`p50 442 µs / p99 1268 µs / max 437354 µs`, 2 hitches de 800,
++0 objetos / +0 recursos), companion 170, security 47, refund CLI 12, com 5× `godot exit=0` e
+3× `python exit=0` (`/tmp/gate_all_cab.log`). O mesmo run re-mede o boot de volume novo descrito em
+`deploy/STAGING.md`: `002→049` limpo sobre o template, landing 54 tabelas, 1 view e 367 pares
+`table.column` — os dois objetos novos estão lá (`ad_slot` da 048, `wallet.gems_paid` da 049). Os
+quatro achados fechados nesta passada e o que cada um deixou de provado estão em
+`ROADMAP_COMERCIAL.md` (bullet "Passada de segurança") e em `AUDITORIA_INDEPENDENTE_2026-09-24.md`
+(itens (v) a (y) do §Reparos executados).
 
 **Peso de pacote, medido depois:** quatro padrões a mais no `exclude_filter` do preset Web (`tests/*`
 e três arquivos de logo de imprensa) → first-load gzip **35 MiB** (`36734788` bytes, 18 arquivos,

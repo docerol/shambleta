@@ -105,12 +105,15 @@ public bind`. Veja `deploy/TLS.md` para o guia completo.
      outro caso o handshake recebe o `index.html`. A suíte amarra isto nos dois
      arquivos de deploy (`SuiteDeployMode`).
    - `SHAMBLETA_OFFSITE_BACKUPS` = vazio (ou caminho de montagem offsite).
-   - `SHAMBLETA_AD_STUB` = já vem `"1"` no `deploy/docker-compose.yml` (game).
-     Rewarded ads do beta rodam no token stub, que é mintável pelo client; o
-     servidor é **fechado por default** e só credita com esta env. Ao plugar o
-     SDK real com verificação no servidor (SSV), **apague a linha** — sem ela
-     nenhum `stub:*` credita. `SHAMBLETA_AD_PROVIDER` (`stub`|`portal`) é do
-     client e não muda a regra do servidor.
+   - `SHAMBLETA_AD_STUB` = **não vai no compose** (C2, auditoria 2026-09-24). É o
+     interruptor do servidor para "acredito na afirmação de exibição do client":
+     ligado, `MintAdSlot` passa a reservar a cota do placement e devolver o nonce
+     de uso único; desligado (o default, e o de produção), nenhum placement
+     credita e o botão recebe `Ad rejected: ad_source`. O beta que quiser ads
+     antes do SSV do portal liga esta env **no painel**, sabendo que o teto do
+     abuso é a cota (12 horas, 1 baú, 2 chaves, 3 rerolls por conta/dia) e não
+     uma verificação. `SHAMBLETA_AD_PROVIDER` (`stub`|`portal`) é do client e não
+     muda a regra do servidor.
    - `SHAMBLETA_AH_BOTS` = trava de feature, desligada no beta (bots de AH só em
      staging/soft-launch; o beta aposta no mercado entre jogadores reais).
    - `SHAMBLETA_ENABLE_SEASONS` = **ligada no beta** — já vem `"1"` no

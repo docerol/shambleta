@@ -70,6 +70,10 @@ func CreateFixture(sql : SQLService, accountName : String, nickname : String, gp
 	var accountID : int = sql.GetAccountID(accountName)
 	if accountID == NetworkCommons.PeerUnknownID:
 		return 0
+	# C2: cota de anúncio é estado de conta. Sem este wipe um slot pendente de uma
+	# suíte anterior (ou de uma run abortada) entraria na conta do cap e o teste
+	# seguinte morreria em placement_cap sem motivo aparente.
+	sql.db.delete_rows("ad_slot", "account_id = %d;" % accountID)
 	if not sql.AddCharacter(accountID, nickname, ActorCommons.DefaultStats, ActorCommons.DefaultTraits, ActorCommons.DefaultAttributes):
 		return 0
 	var charID : int = sql.GetCharacterID(accountID, nickname)
@@ -80,6 +84,19 @@ func CreateFixture(sql : SQLService, accountName : String, nickname : String, gp
 	# Seed starting gold for delta assertions
 	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = gp})
 	return charID
+
+# C2 (auditoria 2026-09-24): o credential de anúncio deixou de ser um formato
+# derivável pelo client e passou a ser nonce mintado pelo servidor. As suítes
+# compram o direito de assistir aqui, em vez de concatenar a string antiga.
+func AdToken(accountID : int, placement : String) -> String:
+	return str(Launcher.Economy.MintAdSlot(accountID, placement).get("token", ""))
+
+# Quantos slots vivos uma conta tem num placement. É a prova de que a cota é
+# reserva no banco: sem esta leitura, "mintou" e "reservou demais" são a mesma
+# frase.
+func _AdSlotCount(sql : SQLService, accountID : int, placement : String) -> int:
+	var rows : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS n FROM ad_slot WHERE account_id = ? AND placement = ?;", [accountID, placement])
+	return 0 if rows.is_empty() else int(rows[0]["n"])
 
 # ------------------------------------------------------------------ suites
 
@@ -191,6 +208,8 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	# regra de 2026-09-25, então 12h liquidáveis têm de ser COMPRADAS: 11 views de
 	# afkhoras + 1h de base. O golden continua medindo os mesmos números de sempre
 	# (xp/ouro/tax/drops/chaves/baús) e passa a exercitar o caminho do anúncio.
+	# 11 é também o que cabe no cap de views do placement (12/dia, C2) — o `break`
+	# abaixo é a prova visível de que a cota não estourou no meio do run.
 	# dayStartOverride = 1 prende a janela no anchor, não no relógio real — sem
 	# isso a suíte quebraria sozinha ao cruzar a meia-noite UTC-3 no meio do run.
 	var now : int = SQLCommons.Timestamp()
@@ -198,10 +217,13 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	sql.UpdateSettleAnchor(charID, now - 12 * 3600, 0.8)
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	AdsCosmeticsService.dayStartOverride = 1
+	var armedViews : int = 0
 	for _adView in 11:
 		if not bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS,
-			"stub:%s:%d" % [EconomyCatalog.AD_AFKHOURS, EconomyCatalog.ShopDay(now)]).get("ok", false)):
+			AdToken(accountID, EconomyCatalog.AD_AFKHOURS)).get("ok", false)):
 			break
+		armedViews += 1
+	CheckEq(armedViews, 11, "golden: as 11 horas compradas passaram no cap de views")
 
 	var report : Dictionary = OfflineSettle.SettlePending(charID)
 	OS.set_environment("SHAMBLETA_AD_STUB", "")
@@ -324,6 +346,60 @@ func SuiteSettleChaos(sql : SQLService, charID : int) -> void:
 	CheckEq(countAfter, countBefore, "item write rolled back on poison")
 	CheckEq(rowsAfter, rowsBefore, "no ledger rows leaked on poison")
 
+# SOM-IDLE auditoria A: o writer aninhado é medido aqui, não afirmado. O defeito
+# não é o VIP — é `Transaction()` aceitar um lambda que fecha a própria
+# transação pelo caminho do addon. Os dois primeiros checks são a régua do que o
+# addon faz; os dois últimos, do que a casa usa.
+func SuiteTransactionNesting(sql : SQLService, charID : int, accountID : int) -> void:
+	print("[suite] transação aninhada: update_rows comita em silêncio, raw não (A)")
+	var tierBefore : int = sql.GetVIPTier(accountID)
+	# Dentro de 0..2 de propósito: `SetVIPTier` clampa, e um valor fora da faixa
+	# faria o check (3) medir o clamp em vez de medir o rollback.
+	var wanted : int = 1 if tierBefore != 1 else 2
+
+	# (1) A medição. `db.update_rows` faz BEGIN/END próprios: dentro do BEGIN de
+	# `Transaction()` o BEGIN interno falha, o UPDATE roda, o END interno COMITA o
+	# lambda. O pedido de rollback chega tarde demais e o método ainda devolve
+	# true — exatamente o par "cobrado e rejeitado" que o beta entregaria.
+	# O resultado sai por dicionário porque closure GDScript captura por valor:
+	# atribuir variável local aqui não chega fora do lambda (mesma razão do
+	# `result` em ShopService/EconomyKernel.GrantBossKey).
+	var probe : Dictionary = {}
+	var poisoned : bool = sql.Transaction(func() -> bool:
+		probe["wrote"] = sql.db.update_rows("account", "account_id = %d" % accountID, {"vip_tier" = wanted})
+		return false)
+	Check(not poisoned, "aninhado: lambda pedindo rollback devolve false")
+	Check(bool(probe.get("wrote", false)), "aninhado: o writer do addon devolve true (é assim que ele escapa)")
+	CheckEq(sql.GetVIPTier(accountID), wanted, "aninhado: a escrita sobreviveu ao rollback pedido")
+	Check(sql.db.query_with_bindings("UPDATE account SET vip_tier = ? WHERE account_id = ?;", [tierBefore, accountID]), "aninhado: estado restaurado")
+
+	# (2) O mesmo pedido pelo caminho cru — `SetVIPTier` é raw desde a auditoria,
+	# e é dentro de um lambda (BuyDailyOffer/_GrantPassRewardRaw) que ele roda.
+	var rawPoisoned : bool = sql.Transaction(func() -> bool:
+		sql.SetVIPTier(accountID, wanted)
+		return false)
+	Check(not rawPoisoned, "raw: lambda pedindo rollback devolve false")
+	CheckEq(sql.GetVIPTier(accountID), tierBefore, "raw: o rollback é respeitado")
+
+	# (3) Commit honesto pelo mesmo caminho, para o teste não provar só o lado
+	# que interessa ao defeito.
+	Check(sql.Transaction(func() -> bool:
+		return sql.SetVIPTier(accountID, wanted)), "raw: commit do lambda aprovado")
+	CheckEq(sql.GetVIPTier(accountID), wanted, "raw: tier comitado quando o lambda aprova")
+	sql.SetVIPTier(accountID, tierBefore)
+
+	# (4) `insert_row` (o writer de `AddChestInstance`, usado no settle, na loja
+	# e no baú de anúncio) NÃO mostra o comportamento: o BEGIN interno falha e o
+	# END não chega a rodar, então a linha fica presa na transação e o rollback
+	# honesto a leva. Pinosso porque é a diferença entre as duas famílias de
+	# writer do addon, e nada no repositório a documenta além deste check.
+	var closedBefore : int = sql.GetClosedChests(charID).size()
+	var chestPoisoned : bool = sql.Transaction(func() -> bool:
+		sql.AddChestInstance(charID, 0, "nesting-probe")
+		return false)
+	Check(not chestPoisoned, "insert_row: lambda pedindo rollback devolve false")
+	CheckEq(sql.GetClosedChests(charID).size(), closedBefore, "insert_row aninhado respeita o rollback")
+
 func SuiteLedgerTriggers(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] ledger append-only triggers")
 	var insertOK : bool = sql.ExecuteBindings(
@@ -355,6 +431,7 @@ func SuiteDBBacked(sql : SQLService, economy : EconomyService) -> bool:
 	SuiteSettleGolden(sql, economy, charID, accountID)
 	SuiteSettleIdempotency(sql, charID, 2)
 	SuiteSettleChaos(sql, charID)
+	SuiteTransactionNesting(sql, charID, accountID)
 	SuiteLedgerTriggers(sql, charID, accountID)
 	SuiteReconcile(economy)
 
@@ -1594,7 +1671,7 @@ func SuiteFaucetHarness(sql : SQLService) -> void:
 			for hours in [1, 2]:
 				for _extraHour in hours - 1:
 					harnessEconomy.WatchAd(harnessAcct, charID, EconomyCatalog.AD_AFKHOURS,
-						"stub:%s:%d" % [EconomyCatalog.AD_AFKHOURS, EconomyCatalog.ShopDay(SQLCommons.Timestamp())])
+						AdToken(harnessAcct, EconomyCatalog.AD_AFKHOURS))
 				sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - hours * 3600, eff)
 				var report : Dictionary = OfflineSettle.SettlePending(charID)
 				if Check(not report.is_empty(), "settle z%d %dh eff %.1f" % [zoneID, hours, eff]):
@@ -2705,17 +2782,17 @@ func SuiteCosmetics(sql : SQLService) -> void:
 
 # Fase E (rewarded ads, MONETIZATION §2.5): tokens, caps por placement e o
 # afkhoras — anúncio COMPRA HORA de offline, não multiplicador de loot. Stub em
-# vez de SDK; servidor valida tudo.
+# vez de SDK; o servidor mintaa o credential e valida tudo.
 func SuiteAds(sql : SQLService) -> void:
 	print("[suite] rewarded ads (Fase E)")
-	# SOM-IDLE M2: o stub é env com default FECHADO (era `const true` — compilar
-	# era a única forma de fechar). O par abaixo prova os dois lados com o MESMO
-	# token bem formado; o resto da suíte roda o caminho do beta (stub ligado).
+	# SOM-IDLE M2 → C2: o stub continua env com default FECHADO (era `const true`
+	# — compilar era a única forma de fechar). O que mudou é o que a env liga: antes
+	# habilitava um token público reutilizável, agora habilita a mintagem de um
+	# nonce de uso único. O par abaixo prova os dois lados com o MESMO credential
+	# bem formado; o resto da suíte roda o caminho do beta (stub ligado).
 	var economy : EconomyService = Launcher.Economy
 	var tele : TelemetryService = Launcher.Telemetry
 	var now : int = SQLCommons.Timestamp()
-	var day : int = EconomyService.ShopDay(now)
-	var tok : Callable = func(p : String) -> String: return "stub:%s:%d" % [p, day]
 	var charID : int = CreateFixture(sql, "idle_ads_account", "IdleAdsTester")
 	if not Check(charID != 0, "ads fixture created"):
 		return
@@ -2723,18 +2800,21 @@ func SuiteAds(sql : SQLService) -> void:
 	sql.SetGems(accountID, 1000)
 	sql.SetCharacterFarmZone(charID, 1)
 
-	# Trava fechada: nada credita, nada é registrado (sem view, sem baú, sem
-	# chave, sem reroll) — e a única diferença para o bloco seguinte é a env.
+	# Trava fechada: o servidor não minta, e sem credential nada é registrado
+	# (nenhuma view, nenhum baú, nenhuma chave, nenhum reroll) — a única diferença
+	# para o bloco seguinte é a env.
+	var forged : String = "slot:" + "f".repeat(32)
 	OS.set_environment("SHAMBLETA_AD_STUB", "")
 	Check(not EconomyCatalog.AdStubEnabled(), "ads: stub fechado sem a env (default)")
-	Check(not economy._ValidAdToken(tok.call("chest"), "chest"), "ads off: token bem formado rejeitado")
+	Check(str(economy.MintAdSlot(accountID, "chest").get("reason", "")) == "ad_source", "ads off: servidor recusa mintar credential")
+	CheckEq(_AdSlotCount(sql, accountID, "chest"), 0, "ads off: nenhuma linha de slot reservada")
 	var viewsOff : int = economy.AdViewsToday(accountID)
 	var keysOff : int = sql.GetCharacterBossKeys(charID)
 	var closedOff : int = int(sql.GetChestStats(charID)["closed"])
-	Check(str(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, tok.call("afkhoras")).get("reason", "")) == "bad_token", "ads off: watch não credita")
-	Check(str(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("reason", "")) == "bad_token", "ads off: baú não credita")
-	Check(str(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("reason", "")) == "bad_token", "ads off: chave não credita")
-	Check(str(economy.RerollDailyShopAd(accountID, tok.call("reroll")).get("reason", "")) == "bad_token", "ads off: reroll não credita")
+	Check(str(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, forged).get("reason", "")) == "bad_token", "ads off: watch não credita")
+	Check(str(economy.ClaimAdChest(accountID, charID, forged).get("reason", "")) == "bad_token", "ads off: baú não credita")
+	Check(str(economy.ClaimAdBossKey(accountID, charID, forged).get("reason", "")) == "bad_token", "ads off: chave não credita")
+	Check(str(economy.RerollDailyShopAd(accountID, forged).get("reason", "")) == "bad_token", "ads off: reroll não credita")
 	CheckEq(economy.AdViewsToday(accountID), viewsOff, "ads off: nenhuma view de anúncio")
 	CheckEq(sql.GetCharacterBossKeys(charID), keysOff, "ads off: nenhuma chave creditada")
 	CheckEq(int(sql.GetChestStats(charID)["closed"]), closedOff, "ads off: nenhum baú creditado")
@@ -2743,60 +2823,74 @@ func SuiteAds(sql : SQLService) -> void:
 	Check(not EconomyCatalog.AdStubEnabled(), "ads: valor não-1 não liga o stub (sem modo acidental)")
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	Check(EconomyCatalog.AdStubEnabled(), "ads: beta liga o stub por env")
-	Check(economy._ValidAdToken(tok.call("chest"), "chest"), "ads on: o mesmo token passa a valer")
-	Check(not economy._ValidAdToken("stub:chest:99999", "chest"), "ads on: dia errado continua rejeitado")
+	Check(str(economy.MintAdSlot(accountID, "bosskey").get("reason", "")) == "ok", "ads on: o mesmo mint passa a valer")
+	CheckEq(_AdSlotCount(sql, accountID, "bosskey"), 1, "ads on: o slot é linha no banco, não string")
+	# Sondagem não é prêmio: devolve a reserva, senão ela come 1 das 2 cotas do
+	# placement e o teste da chave extra morre em placement_cap por causa daqui.
+	sql.db.delete_rows("ad_slot", "account_id = %d AND placement = 'bosskey';" % accountID)
 
-	# Client: provider trocável (env; default stub) + token no formato que o
-	# servidor valida (stub:<placement>:<dia>). Portal real pluga via
-	# deploy/web/ads_bridge.js sem mudar placements/RPCs/servidor.
+	# Client: provider trocável (env; default stub) e NENHUM token construído aqui.
+	# Portal real pluga via deploy/web/ads_bridge.js sem mudar placements/RPCs/
+	# servidor — o que ele passa a devolver é o slot do servidor.
 	var adScript : GDScript = load("res://sources/ads/AdProvider.gd")
 	Check(adScript.call("Provider") == "stub", "ads: default provider is stub")
-	var stubTok : String = adScript.call("ShowStub", "chest")
-	Check(stubTok == tok.call("chest"), "ads: client stub token matches server day")
+	Check(not adScript.has_method("_MintStub") and not adScript.has_method("ShowStub"), "AdProvider perdeu a mintagem local")
+	var adSrc : String = _RepoFile("res://sources/ads/AdProvider.gd")
+	Check(not adSrc.contains("\"stub:"), "fonte do client não fabrica credential")
+	Check(adSrc.contains("Network.RequestAdSlot") and adSrc.contains("_waiters"), "client pede a autorização ao servidor e espera a resposta")
 
-	Check(str(economy.WatchAd(accountID, charID, "nope", tok.call("nope")).get("reason", "")) == "unknown_placement", "unknown placement rejected")
-	Check(str(economy.WatchAd(accountID, charID, "afk2x", tok.call("afk2x")).get("reason", "")) == "unknown_placement", "afk2x saiu dos placements")
+	Check(str(economy.WatchAd(accountID, charID, "nope", AdToken(accountID, "nope")).get("reason", "")) == "unknown_placement", "unknown placement rejected")
+	Check(str(economy.WatchAd(accountID, charID, "afk2x", AdToken(accountID, "afk2x")).get("reason", "")) == "unknown_placement", "afk2x saiu dos placements")
 	Check(str(economy.WatchAd(accountID, charID, "chest", "bogus").get("reason", "")) == "bad_token", "bad token rejected")
-	Check(str(economy.WatchAd(accountID, charID, "chest", "stub:bosskey:%d" % day).get("reason", "")) == "bad_token", "cross-placement token rejected")
 
 	# Baú bônus 1/dia (origem 'ad', sem gems)
 	var ch0 : int = int(sql.GetChestStats(charID)["closed"])
-	Check(bool(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("ok", false)), "ad chest claimed")
+	Check(bool(economy.ClaimAdChest(accountID, charID, AdToken(accountID, "chest")).get("ok", false)), "ad chest claimed")
 	CheckEq(int(sql.GetChestStats(charID)["closed"]), ch0 + 1, "ad chest granted")
 	var adChest : int = 0
 	for chest in sql.GetClosedChests(charID):
 		if str(chest.get("origin", "")) == "ad":
 			adChest = int(chest["id"])
 	Check(adChest > 0, "ad chest origin marked")
-	Check(str(economy.ClaimAdChest(accountID, charID, tok.call("chest")).get("reason", "")) == "placement_cap", "chest 1/day enforced")
+	# O cap passou a morder na reserva, não na entrega: quem diz "chega" é o mint,
+	# e sem slot mintado não há credential para creditar.
+	Check(str(economy.MintAdSlot(accountID, "chest").get("reason", "")) == "placement_cap", "chest 1/day enforced no mint")
+	Check(str(economy.ClaimAdChest(accountID, charID, "").get("reason", "")) == "bad_token", "chest sem slot: nada creditado")
 
 	# Chave extra 2/dia
 	var k0 : int = sql.GetCharacterBossKeys(charID)
-	Check(bool(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("ok", false)), "ad key 1 claimed")
-	Check(bool(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("ok", false)), "ad key 2 claimed")
+	Check(bool(economy.ClaimAdBossKey(accountID, charID, AdToken(accountID, "bosskey")).get("ok", false)), "ad key 1 claimed")
+	Check(bool(economy.ClaimAdBossKey(accountID, charID, AdToken(accountID, "bosskey")).get("ok", false)), "ad key 2 claimed")
 	CheckEq(sql.GetCharacterBossKeys(charID), k0 + 2, "2 ad keys credited")
-	Check(str(economy.ClaimAdBossKey(accountID, charID, tok.call("bosskey")).get("reason", "")) == "placement_cap", "bosskey 2/day enforced")
+	Check(str(economy.MintAdSlot(accountID, "bosskey").get("reason", "")) == "placement_cap", "bosskey 2/day enforced no mint")
 
 	# Reroll via ad divide o contador pago (3/dia somados)
 	var ds0 : Dictionary = economy.GetDailyShop(accountID)
-	Check(bool(economy.RerollDailyShopAd(accountID, tok.call("reroll")).get("ok", false)), "ad reroll ok")
+	Check(bool(economy.RerollDailyShopAd(accountID, AdToken(accountID, "reroll")).get("ok", false)), "ad reroll ok")
 	Check(bool(economy.RerollDailyShop(accountID).get("ok", false)), "paid reroll 2 ok")
 	Check(bool(economy.RerollDailyShop(accountID).get("ok", false)), "paid reroll 3 ok")
 	Check(str(economy.RerollDailyShop(accountID).get("reason", "")) == "reroll_cap", "shared reroll cap enforced")
 
-	# Teto global de 6 anúncios/dia SAIU (regra do dono 2026-09-25): se existe
-	# anúncio disponível ele deve ser mostrável, porque no afkhoras cada view vale
-	# 1h de farm. Os caps que continuam são por placement (baú 1, chave 2).
+	# C2: `afkhoras` entrou no dicionário de caps. Antes da auditoria só baú e
+	# chave tinham teto, e a hora offline — o prêmio do F2P — era um loop: cada
+	# view valia 1h sem nenhum teto por dia. O número é o teto que a economia já
+	# tinha antes de a hora vir de anúncio (o cap de settle era 12h).
 	var capChar : int = CreateFixture(sql, "idle_ads_cap", "IdleAdsCap")
 	if Check(capChar != 0, "cap fixture created"):
 		var capAcct : int = sql.GetAccountIDForCharacter(capChar)
 		var accepted : int = 0
-		for i in 9:
-			if bool(economy.WatchAd(capAcct, capChar, EconomyCatalog.AD_AFKHOURS, tok.call("afkhoras")).get("ok", false)):
+		for i in 14:
+			if bool(economy.WatchAd(capAcct, capChar, EconomyCatalog.AD_AFKHOURS, AdToken(capAcct, EconomyCatalog.AD_AFKHOURS)).get("ok", false)):
 				accepted += 1
-		CheckEq(accepted, 9, "9 views afkhoras aceitas na mesma conta")
-		CheckEq(economy.AdViewsToday(capAcct, EconomyCatalog.AD_AFKHOURS), 9, "as 9 views estão no banco")
-		Check(bool(economy.ClaimAdChest(capAcct, capChar, tok.call("chest")).get("ok", false)), "baú continua após 9 anúncios")
+		var afkCap : int = int(EconomyCatalog.AD_PLACEMENT_CAPS[EconomyCatalog.AD_AFKHOURS])
+		CheckEq(accepted, afkCap, "afkhoras para no cap do dia (%d views)" % afkCap)
+		CheckEq(economy.AdViewsToday(capAcct, EconomyCatalog.AD_AFKHOURS), afkCap, "as views aceitas estão no banco")
+		# O cap NÃO trunca a metade assistida: a hora comprada é soma, não teto
+		# absoluto. O que o cap de views fecha é a quantidade de horas que dá para
+		# comprar; o teto liquidável continua sendo o da conta + essas horas.
+		CheckNear(OfflineSettle.CapHoursForCharacter(capChar, capAcct, SQLCommons.Timestamp() - 3600), OfflineSettle.CapHoursForAccount(capAcct) + float(afkCap), 0.001, "cap liquidável = hora da conta + cap de views × 1h")
+		Check(str(economy.MintAdSlot(capAcct, EconomyCatalog.AD_AFKHOURS).get("reason", "")) == "placement_cap", "mint fecha junto com o watch")
+		Check(bool(economy.ClaimAdChest(capAcct, capChar, AdToken(capAcct, "chest")).get("ok", false)), "baú continua após o cap do afkhoras")
 		sql.db.delete_rows("character", "nickname = 'IdleAdsCap'")
 		sql.db.delete_rows("account", "username = 'idle_ads_cap'")
 
@@ -2810,7 +2904,7 @@ func SuiteAds(sql : SQLService) -> void:
 		CheckNear(float(base.get("hours", 0.0)), 1.0, 0.001, "F2P líquida 1h sem anúncio")
 		Check(not bool(base.get("doubled", true)), "baseline settle not doubled")
 	for i in 3:
-		Check(bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, tok.call("afkhoras")).get("ok", false)), "afkhoras view %d" % (i + 1))
+		Check(bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, AdToken(accountID, EconomyCatalog.AD_AFKHOURS)).get("ok", false)), "afkhoras view %d" % (i + 1))
 	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 4 * 3600, 1.0)
 	var dbl : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
@@ -2845,10 +2939,10 @@ func SuiteAds(sql : SQLService) -> void:
 			CheckNear(float(vdbl.get("cap_hours", 0.0)), 24.0, 0.001, "tier 2 tem 24h de teto")
 			CheckNear(float(vdbl.get("hours", 0.0)), 4.0, 1.0, "tier 2 líquida as 4h do anchor")
 		var vc0 : int = int(sql.GetChestStats(vipChar)["closed"])
-		Check(bool(economy.ClaimAdChest(vipAcct, vipChar, tok.call("chest")).get("ok", false)), "vip ad chest claimed")
+		Check(bool(economy.ClaimAdChest(vipAcct, vipChar, AdToken(vipAcct, "chest")).get("ok", false)), "vip ad chest claimed")
 		CheckEq(int(sql.GetChestStats(vipChar)["closed"]), vc0 + 2, "VIP chest doubled")
 		var vk0 : int = sql.GetCharacterBossKeys(vipChar)
-		Check(bool(economy.ClaimAdBossKey(vipAcct, vipChar, tok.call("bosskey")).get("ok", false)), "vip ad key claimed")
+		Check(bool(economy.ClaimAdBossKey(vipAcct, vipChar, AdToken(vipAcct, "bosskey")).get("ok", false)), "vip ad key claimed")
 		CheckEq(sql.GetCharacterBossKeys(vipChar), vk0 + 2, "VIP key doubled")
 		# Tier 1 mantém as 24h mas não herda o multiplicador.
 		Check(sql.SetVIPTier(vipAcct, 1), "vip tier 1")
@@ -2863,6 +2957,73 @@ func SuiteAds(sql : SQLService) -> void:
 
 	sql.db.delete_rows("character", "nickname = 'IdleAdsTester'")
 	sql.db.delete_rows("account", "username = 'idle_ads_account'")
+
+# C2 (auditoria 2026-09-24): as propriedades do credential em si. `SuiteAds` prova
+# a env e os caps; aqui é o nonce — uma linha, um uso, um dono, um placement e um
+# prazo. Cada ramo consome cota (o cap é por conta/placement/dia), então a suíte
+# roda em duas contas de fixture e devolve as sondagens que não viram prêmio.
+func SuiteAdNonce(sql : SQLService) -> void:
+	print("[suite] credential de anúncio: uso único, dono, placement e prazo (C2)")
+	var economy : EconomyService = Launcher.Economy
+	var charA : int = CreateFixture(sql, "idle_nonce_a", "IdleNonceA")
+	var charB : int = CreateFixture(sql, "idle_nonce_b", "IdleNonceB")
+	if not Check(charA != 0 and charB != 0, "nonce fixtures created"):
+		return
+	var acctA : int = sql.GetAccountIDForCharacter(charA)
+	var acctB : int = sql.GetAccountIDForCharacter(charB)
+	OS.set_environment("SHAMBLETA_AD_STUB", "1")
+
+	# Replay: o mesmo nonce uma segunda vez, no placement e na conta certos. É o
+	# defeito que o formato público tinha (`stub:<place>:<dia>` era revalidável
+	# infinitas vezes) e o que o DELETE condicionado fecha.
+	var slot : String = AdToken(acctA, EconomyCatalog.AD_AFKHOURS)
+	Check(slot.begins_with("slot:") and not slot.contains("stub:"), "credential tem prefixo próprio, não o formato público")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, slot).get("reason", "")) == "ok", "primeiro uso credita")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, slot).get("reason", "")) == "bad_token", "replay do mesmo nonce não credita")
+	CheckEq(economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS), 1, "replay não fabrica view")
+
+	# Dono: o nonce de A não vale para B — e a tentativa de B não pode queimar o
+	# slot de A, que é o que prova que a recusa veio do filtro de conta.
+	var slotA : String = AdToken(acctA, EconomyCatalog.AD_AFKHOURS)
+	Check(str(economy.WatchAd(acctB, charB, EconomyCatalog.AD_AFKHOURS, slotA).get("reason", "")) == "bad_token", "nonce de outra conta não credita")
+	CheckEq(_AdSlotCount(sql, acctA, EconomyCatalog.AD_AFKHOURS), 1, "roubo tentado não queima o slot do dono")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, slotA).get("reason", "")) == "ok", "o dono continua podendo gastar o próprio slot")
+
+	# Placement: o mesmo nonce amarrado ao placement mintado.
+	var chestSlot : String = AdToken(acctA, EconomyCatalog.AD_CHEST)
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, chestSlot).get("reason", "")) == "bad_token", "nonce de baú não vira hora de offline")
+	CheckEq(_AdSlotCount(sql, acctA, EconomyCatalog.AD_CHEST), 1, "nonce de baú continua de baú")
+
+	# Prazo: TTL 0 faz a linha nascer vencida, que é o estado de um anúncio
+	# fechado antes do fim. Sem o filtro de `expires_at` o credential viveria até
+	# o fim do dia.
+	AdsCosmeticsService.slotTTLOverride = 0
+	var dead : String = AdToken(acctA, EconomyCatalog.AD_BOSSKEY)
+	Check(dead.begins_with("slot:"), "mint com TTL 0 devolve o credential")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_BOSSKEY, dead).get("reason", "")) == "bad_token", "slot vencido não credita")
+	AdsCosmeticsService.slotTTLOverride = -1
+
+	# Reserva: a cota conta views + pendentes. Estocar autorização não compra
+	# prêmio extra, e um clique sem assistir já ocupou o lugar. bosskey tem cap
+	# 2: as duas reservas passam, a terceira é recusada sem nenhuma view creditada.
+	Check(str(economy.MintAdSlot(acctB, EconomyCatalog.AD_BOSSKEY).get("reason", "")) == "ok", "bosskey 1/2 reservado")
+	Check(str(economy.MintAdSlot(acctB, EconomyCatalog.AD_BOSSKEY).get("reason", "")) == "ok", "bosskey 2/2 reservado")
+	CheckEq(_AdSlotCount(sql, acctB, EconomyCatalog.AD_BOSSKEY), 2, "duas pendências estocadas, nenhuma view")
+	CheckEq(economy.AdViewsToday(acctB, EconomyCatalog.AD_BOSSKEY), 0, "reserva não conta como view")
+	Check(str(economy.MintAdSlot(acctB, EconomyCatalog.AD_BOSSKEY).get("reason", "")) == "placement_cap", "mint seguinte: a pendente conta na cota")
+	# Vencer devolve a cota: sem o purge, um anúncio abandonado travaria o
+	# placement pelo resto do dia.
+	sql.db.update_rows("ad_slot", "account_id = %d AND placement = 'bosskey'" % acctB, {"expires_at" = 1})
+	Check(str(economy.MintAdSlot(acctB, EconomyCatalog.AD_BOSSKEY).get("reason", "")) == "ok", "mint depois do vencimento: a cota voltou")
+	CheckEq(_AdSlotCount(sql, acctB, EconomyCatalog.AD_BOSSKEY), 1, "o purge tirou a linha vencida, sobrou só a nova")
+
+	Check(str(economy.MintAdSlot(acctA, "nope").get("reason", "")) == "unknown_placement", "mint não conhece placement de fora")
+	Check(str(economy.MintAdSlot(0, EconomyCatalog.AD_CHEST).get("reason", "")) == "not_logged_in", "mint sem conta não reserva")
+
+	sql.db.delete_rows("ad_slot", "account_id = %d OR account_id = %d" % [acctA, acctB])
+	sql.db.delete_rows("telemetry_event", "account_id = %d OR account_id = %d" % [acctA, acctB])
+	sql.db.delete_rows("character", "nickname = 'IdleNonceA' OR nickname = 'IdleNonceB'")
+	sql.db.delete_rows("account", "username = 'idle_nonce_a' OR username = 'idle_nonce_b'")
 
 # Fase F (guild premium): pontos no settle, board, fast level-up, vault slots.
 func SuiteGuildPremium(sql : SQLService) -> void:
@@ -4519,6 +4680,86 @@ func SuiteAuthHardening(sql : SQLService) -> void:
 	sql.db.delete_rows("account", "username = 'idle_a1_other'")
 	sql.db.delete_rows("account", "account_id = %d" % a1)
 
+# SOM-IDLE auditoria C1 (2026-09-25): os writers de dicionário do godot-sqlite
+# escapam o VALOR e interpolam a CHAVE no statement — `db.update_rows` monta
+# `chave=valor` cru e `UpdateRowsRaw` monta `chave=?`, que continua sendo a chave
+# no texto do SQL. `AddCharacter` recebe traits/attributes direto do RPC de criação
+# de personagem, então ali a chave é entrada de cliente. A régua é coluna real da
+# tabela (PRAGMA table_info) e nunca chave primária. O que assere é estado do banco
+# depois da tentativa, não o bool de retorno: antes do conserto o retorno também
+# era true, e a conta perdia a privilégio.
+func SuiteColumnWhitelist(sql : SQLService) -> void:
+	print("[suite] chave de dicionário não é identificador de coluna (C1)")
+	for nick in ["IdleC1Hostile", "IdleC1Pk", "IdleC1Legit", "IdleC1Victim"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	for user in ["idle_c1_attacker", "idle_c1_victim"]:
+		sql.db.delete_rows("account", "username = '%s'" % user)
+	Check(sql.AddAccount("idle_c1_attacker", "testpass", "idle_c1_attacker@test.local"), "c1: conta do atacante criada")
+	Check(sql.AddAccount("idle_c1_victim", "testpass", "idle_c1_victim@test.local"), "c1: conta da vítima criada")
+	var attacker : int = sql.GetAccountID("idle_c1_attacker")
+	var victim : int = sql.GetAccountID("idle_c1_victim")
+	Check(attacker != NetworkCommons.PeerUnknownID and victim != NetworkCommons.PeerUnknownID, "c1: ids resolvem")
+	Check(sql.AddCharacter(victim, "IdleC1Victim", ActorCommons.DefaultStats, ActorCommons.DefaultTraits, ActorCommons.DefaultAttributes), "c1: vítima criada pelo caminho legítimo")
+	var victimChar : int = sql.GetCharacterID(victim, "IdleC1Victim")
+	var permBefore : int = int(sql.GetAccountPermission(victim))
+	var tierBefore : int = sql.GetVIPTier(victim)
+
+	# Payload medido na auditoria: duas instruções dentro da chave. Via update_rows
+	# o addon executava as duas e devolvia true (permission ia a 3).
+	var hostile : String = "gender = 'x' WHERE 1=1; UPDATE account SET permission = 3 WHERE account_id = %d;--" % victim
+	Check(not sql.AddCharacter(attacker, "IdleC1Hostile", ActorCommons.DefaultStats, {hostile: 0}, ActorCommons.DefaultAttributes), "c1: criação com chave hostil recusada")
+	CheckEq(sql.GetCharacters(attacker).size(), 0, "c1: a tentativa recusada não deixa personagem")
+	CheckEq(int(sql.GetAccountPermission(victim)), permBefore, "c1: permission da vítima inalterada")
+
+	# Trocar de helper não era a correção: a mesma chave pelo caminho raw, com o
+	# valor vinculado por `?`, também escrevia (medido: vip_tier ia a 2 na vítima).
+	var rawHostile : String = "vip_tier = 2 WHERE account_id = %d;--" % victim
+	Check(not sql.UpdateRowsRaw("account", "account_id = %d" % attacker, {rawHostile: 0}), "c1: UpdateRowsRaw recusa chave hostil")
+	CheckEq(sql.GetVIPTier(victim), tierBefore, "c1: vip_tier da vítima inalterado pelo caminho raw")
+
+	# A chave primária é coluna real e passaria na régua de posse, mas escrevê-la
+	# MOVE a linha: trait de um personagem pode acabar pendurado no de outra pessoa.
+	var pkTraits : Dictionary = ActorCommons.DefaultTraits.duplicate()
+	pkTraits["char_id"] = victimChar
+	Check(not sql.AddCharacter(attacker, "IdleC1Pk", ActorCommons.DefaultStats, pkTraits, ActorCommons.DefaultAttributes), "c1: chave primária não é escrevível pelo dict do cliente")
+	CheckEq(sql.GetCharacters(attacker).size(), 0, "c1: tentativa com char_id não cria personagem")
+	CheckEq(sql.GetCharacters(victim).size(), 1, "c1: personagem da vítima intacto")
+
+	# Coluna que não existe é recusada junto com o resto do dicionário, e o retorno
+	# falso tem que vir antes de qualquer escrita do próprio dicionário.
+	Check(not sql.UpdateRowsRaw("stat", "char_id = %d" % victimChar, {"gp" = 999, "gp_nao_existe" = 1}), "c1: coluna inexistente recusa o dicionário inteiro")
+	Check(sql.GetStat(victimChar).get("gp", -1) != 999, "c1: nenhuma das chaves do dicionário recusado foi escrita")
+
+	# O caminho legítimo continua passando, com o valor de verdade no banco — sem
+	# isto a suíte aprovava um guard que recusa tudo.
+	var legitTraits : Dictionary = ActorCommons.DefaultTraits.duplicate()
+	legitTraits["hairstyle"] = 3
+	legitTraits["haircolor"] = 1
+	legitTraits["race"] = 1
+	legitTraits["skintone"] = 1
+	legitTraits["gender"] = 0
+	Check(sql.AddCharacter(attacker, "IdleC1Legit", {"level": 1}, legitTraits, ActorCommons.DefaultAttributes), "c1: criação legítima passa")
+	var legitChar : int = sql.GetCharacterID(attacker, "IdleC1Legit")
+	Check(legitChar != NetworkCommons.PeerUnknownID, "c1: personagem legítimo criado")
+	CheckEq(int(sql.GetTrait(legitChar).get("hairstyle", -1)), 3, "c1: trait legítimo gravado")
+	Check(sql.UpdateRowsRaw("stat", "char_id = %d" % legitChar, {"gp" = 1234}), "c1: UpdateRowsRaw legítimo passa")
+	CheckEq(int(sql.GetStat(legitChar).get("gp", -1)), 1234, "c1: valor legítimo gravado pelo caminho raw")
+
+	# A whitelist é lida do schema, não de uma lista à mão: coluna nova de migration
+	# tem que passar sem mexer no guard, e tabela que não existe não pode escrever.
+	Check(sql.ColumnsOf("trait").has("hairstyle"), "c1: colunas vêm do PRAGMA, não de lista fixa")
+	Check(sql.ColumnsOf("inexistente").is_empty(), "c1: tabela inexistente não tem colunas")
+	Check(not sql.UpdateRowsRaw("inexistente", "id = 1", {"x": 1}), "c1: escrita em tabela inexistente recusada")
+	for bad in ["", "1col", "a b", "a; DROP TABLE account", "gender = 'x'", "a\tb", "àçã"]:
+		Check(not SQLService.IsPlainIdentifier(bad), "c1: identificador rejeitado: [%s]" % bad)
+	for good in ["gender", "hairstyle", "_x9", "last_settled_at"]:
+		Check(SQLService.IsPlainIdentifier(good), "c1: identificador aceito: [%s]" % good)
+
+	sql.db.delete_rows("character", "nickname = 'IdleC1Legit'")
+	sql.db.delete_rows("character", "nickname = 'IdleC1Victim'")
+	sql.db.delete_rows("account", "username = 'idle_c1_attacker'")
+	sql.db.delete_rows("account", "username = 'idle_c1_victim'")
+
 # SOM-IDLE beta (T9): desafio 2FA vinculado ao peer — binding conta/desafio,
 # expiração, consumo e replay. Sem Network/GUI (helper puro).
 func SuiteTwoFactor(sql : SQLService) -> void:
@@ -5341,11 +5582,16 @@ func SuiteDeployMode() -> void:
 	Check(_PresetCustomFeatures("Web") == "production", "preset web exporta com a feature production")
 	Check(serverDF.contains("SHAMBLETA_PRODUCTION=1"), "Dockerfile do server liga produção")
 	Check(_RepoFile("res://deploy/docker-compose.yml").contains("SHAMBLETA_PRODUCTION: \"1\""), "compose liga produção")
-	# SOM-IDLE M2: o stub de anúncio é fechado no servidor por default, então o
-	# beta só tem ads porque o compose ABRE a env explicitamente. Se a linha cair,
-	# os 4 placements viram bad_token em produção — e é assim que deve ser.
-	Check(_RepoFile("res://deploy/docker-compose.yml").contains("SHAMBLETA_AD_STUB: \"1\""), "compose do beta abre o stub de anúncio")
+	# C2 (auditoria 2026-09-24): o compose É a produção, e a produção não liga o
+	# credential auto-declarado. Antes vinha `SHAMBLETA_AD_STUB: "1"` aqui, i.e. o
+	# default de todo deploy era "o client afirma que assistiu e o servidor
+	# credita". Se a atribuição voltar ao repositório, este gate cai — e é assim
+	# que deve ser: ligar isso é decisão de painel, documentada no runbook. A régua
+	# é a atribuição, não o nome: o comentário logo acima do compose cita a env
+	# justamente para dizer que ela fica fora, e um `contains` no nome bateria nele.
+	Check(not compose.contains("SHAMBLETA_AD_STUB: \"1\""), "compose de produção não abre o credential auto-declarado")
 	Check(not serverDF.contains("SHAMBLETA_AD_STUB"), "imagem do server não liga o stub (fechado por default)")
+	Check(_RepoFile("res://deploy/COOLIFY.md").contains("SHAMBLETA_AD_STUB"), "runbook documenta a env (é decisão de painel, não de repositório)")
 
 	# SOM-IDLE L1: o `web` e o `companion` sobem com `depends_on: game:
 	# condition: service_healthy`, então a stack inteira do beta está pendurada num
@@ -6471,15 +6717,19 @@ func SuiteRefund(sql : SQLService) -> void:
 	var accountID : int = sql.GetAccountIDForCharacter(charID)
 	CheckEq(sql.GetGems(accountID), 0, "refund: fresh account zero gems")
 
-	# caminho feliz: compra → reembolso em até 7 dias, gems não gastas
+	# caminho feliz: compra → reembolso em até 7 dias, gems não gastas. B
+	# (auditoria 2026-09-24): o grant agora carrega o preço (centavos), que é o
+	# que faz dele dinheiro e não unidade de jogo.
 	var key : String = "r-buy1-%d" % tag
-	Check(economy.EnqueueGrant(accountID, "gems", 550, key), "refund: purchase enqueued")
+	Check(economy.EnqueueGrant(accountID, "gems", 550, key, "{}", 4990, "BRL"), "refund: purchase enqueued")
 	economy.ProcessPendingGrants(50)
 	CheckEq(sql.GetGems(accountID), 550, "refund: gems credited")
+	CheckEq(sql.GetGemsPaid(accountID), 550, "refund: o preço creditou o saldo pago")
 	var r : Dictionary = economy.RequestGemRefund(accountID, key)
 	Check(bool(r.get("ok", false)), "refund: approved (7d, unconsumed)")
 	CheckEq(int(r.get("amount", 0)), 550, "refund: amount = purchase")
 	CheckEq(sql.GetGems(accountID), 0, "refund: gems reversed")
+	CheckEq(sql.GetGemsPaid(accountID), 0, "refund: o pago saiu junto")
 	Check(not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "refund:" + key]).is_empty(), "refund: ledger row appended")
 	var gst : Array = sql.QueryBindings("SELECT status FROM grant_queue WHERE idempotency_key = ?;", [key])
 	Check(not gst.is_empty() and str(gst[0]["status"]) == "refunded", "refund: grant_queue marked refunded")
@@ -6488,11 +6738,33 @@ func SuiteRefund(sql : SQLService) -> void:
 
 	# gems consumidas → negado
 	var key2 : String = "r-buy2-%d" % tag
-	economy.EnqueueGrant(accountID, "gems", 550, key2)
+	economy.EnqueueGrant(accountID, "gems", 550, key2, "{}", 4990, "BRL")
 	economy.ProcessPendingGrants(50)
 	CheckEq(sql.GetGems(accountID), 550, "refund: second purchase credited")
 	Check(economy.AddGems(accountID, -100, "spend:test"), "refund: spend 100 gems")
+	CheckEq(sql.GetGemsPaid(accountID), 450, "gasto drena o saldo pago primeiro (não o de graça)")
 	Check(str(economy.RequestGemRefund(accountID, key2).get("reason", "")) == "gems_consumed", "refund: consumed -> denied")
+
+	# B: a troca de fungibilidade que o saldo total não via. Compra, gasta tudo,
+	# repõe o número com faucet (anúncio/passe/settle não têm preço) e pede o
+	# dinheiro de volta com o VIP já consumido. Antes deste corte o portão era
+	# `GetGems >= amount` — e este exato roteiro devolvia os 49,90.
+	var key3 : String = "r-buy3-%d" % tag
+	economy.EnqueueGrant(accountID, "gems", 550, key3, "{}", 4990, "BRL")
+	economy.ProcessPendingGrants(50)
+	Check(economy.AddGems(accountID, -1000, "spend:pagas"), "refund: gasta o saldo pago inteiro")
+	CheckEq(sql.GetGemsPaid(accountID), 0, "refund: nada pago sobrou")
+	Check(economy.AddGems(accountID, 550, "faucet:ad"), "refund: faucet repõe o número")
+	CheckEq(sql.GetGems(accountID), 550, "refund: saldo total voltou ao comprado")
+	CheckEq(sql.GetGemsPaid(accountID), 0, "refund: mas nada disso é dinheiro")
+	Check(str(economy.RequestGemRefund(accountID, key3).get("reason", "")) == "not_paid", "refund: faucet não compra direito de arrependimento")
+	CheckEq(sql.GetGems(accountID), 550, "refund: recusado não toca no saldo")
+
+	# Grant sem preço (sandbox/GM) nunca foi dinheiro: não tem o que estornar.
+	var key4 : String = "r-buy4-%d" % tag
+	Check(economy.EnqueueGrant(accountID, "gems", 100, key4), "refund: sandbox grant enqueued")
+	economy.ProcessPendingGrants(50)
+	Check(str(economy.RequestGemRefund(accountID, key4).get("reason", "")) == "not_paid", "refund: grant de sandbox não é estornável")
 
 	# fora da janela → negado (linha sintética antiga; ledger append-only não "envelhece")
 	var oldkey : String = "r-old-%d" % tag
@@ -7369,8 +7641,7 @@ func SuiteOfflineAdHours(sql : SQLService) -> void:
 	var economy : EconomyService = Launcher.Economy
 	var tele : TelemetryService = Launcher.Telemetry
 	var now : int = SQLCommons.Timestamp()
-	var day : int = EconomyService.ShopDay(now)
-	var tok : Callable = func(p : String) -> String: return "stub:%s:%d" % [p, day]
+	var tok : Callable = func(a : int, p : String) -> String: return AdToken(a, p)
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	var charA : int = CreateFixture(sql, "idle_offad_a", "IdleOffAdA")
 	var charB : int = CreateFixture(sql, "idle_offad_b", "IdleOffAdB")
@@ -7384,19 +7655,20 @@ func SuiteOfflineAdHours(sql : SQLService) -> void:
 	Check(EconomyCatalog.AD_PLACEMENTS.has(EconomyCatalog.AD_AFKHOURS), "afkhoras é placement conhecido")
 	CheckEq(int(EconomyCatalog.AD_OFFLINE_HOURS_PER_AD * 100.0), 100, "cada anúncio vale 1h")
 
-	# O placement novo não abriu porta de bypass: sem a env do beta, o token
-	# forjado continua sem valer nada.
+	# O placement novo não abriu porta de bypass: sem a env do beta não há mint,
+	# e um nonce chutado continua sem valer nada.
 	OS.set_environment("SHAMBLETA_AD_STUB", "")
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "bad_token", "afkhoras sem a env: bad_token")
+	Check(str(economy.MintAdSlot(acctA, EconomyCatalog.AD_AFKHOURS).get("reason", "")) == "ad_source", "afkhoras sem a env: mint recusado")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, "slot:" + "f".repeat(32)).get("reason", "")) == "bad_token", "afkhoras sem a env: bad_token")
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 
 	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "sem view: 0h compradas")
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_BOSSKEY, tok.call(EconomyCatalog.AD_BOSSKEY)).get("reason", "")) == "ok", "bosskey view registrada")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_BOSSKEY, tok.call(acctA, EconomyCatalog.AD_BOSSKEY)).get("reason", "")) == "ok", "bosskey view registrada")
 	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "view de outro placement não compra hora")
 
 	# Linearidade: 1 view = 1h, sem teto e sem acúmulo de sobra.
 	for i in 3:
-		Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras view %d ok" % (i + 1))
+		Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(acctA, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras view %d ok" % (i + 1))
 		CheckNear(economy.AfkHoursEarned(acctA, charA, old), float(i + 1), 0.01, "cap cresce 1h por view")
 
 	# Por PERSONAGEM: a mesma conta com outro personagem, ou outro personagem com
@@ -7414,7 +7686,7 @@ func SuiteOfflineAdHours(sql : SQLService) -> void:
 
 	# Composição do cap: comprado pela conta + assistido pelo personagem.
 	CheckNear(OfflineSettle.CapHoursForCharacter(charA, acctA, old), OfflineSettle.CapHoursForAccount(acctA) + 3.0, 0.01, "cap do personagem = comprado + 3h de anúncio")
-	Check(str(economy.WatchAd(acctB, charB, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "view do personagem B ok")
+	Check(str(economy.WatchAd(acctB, charB, EconomyCatalog.AD_AFKHOURS, tok.call(acctB, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "view do personagem B ok")
 	Check(sql.SetVIPUntil(acctB, now + 30 * 86400) and sql.SetVIPTier(acctB, 1), "vip tier 1 na conta B")
 	CheckNear(OfflineSettle.CapHoursForAccount(acctB), 24.0, 0.01, "VIP compra 24h sem assistir nada")
 	CheckNear(OfflineSettle.CapHoursForCharacter(charB, acctB, old), 25.0, 0.01, "VIP + anúncio compõem sem teto")
@@ -7464,13 +7736,13 @@ func SuiteOfflineAdHours(sql : SQLService) -> void:
 	# TelemetryService.Flush() devolveu (0 quando a transação falha); com hora
 	# offline em jogo isso viraria anúncio assistido e não pago.
 	var viewsBefore : int = economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS)
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras com a janela normal: ok")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(acctA, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras com a janela normal: ok")
 	CheckEq(economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS), viewsBefore + 1, "ok: a view está na janela que os caps consultam")
 
 	# O ramo negativo, injetado pelo próprio seam: uma janela que não consegue
 	# ver a view recém-gravada não pode creditar.
 	AdsCosmeticsService.dayStartOverride = now + 3600
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ad_persist", "view fora da janela: ad_persist, não ok")
+	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(acctA, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ad_persist", "view fora da janela: ad_persist, não ok")
 	AdsCosmeticsService.dayStartOverride = 0
 
 	sql.db.delete_rows("telemetry_event", "account_id = %d OR account_id = %d" % [acctA, acctB])
