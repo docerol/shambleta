@@ -64,12 +64,18 @@ docker compose up -d game
 
 1. Verificar `SHAMBLETA_WEBHOOK_SECRET`
 2. Verificar logs do companion: `docker compose logs companion`
-3. Verificar `grant_queue` no banco: `SELECT * FROM grant_queue WHERE granted_at IS NULL LIMIT 10;`
+3. Verificar `grant_queue` no banco: `SELECT id, account_id, kind, amount, created_at FROM grant_queue WHERE status = 'pending' ORDER BY id LIMIT 10;`
+   — a coluna de estado é `status` (`pending` → `processing` → `processed|failed|refunded`,
+   `data/conf/migrations/015_grant_queue.sql:4-14`), e o timestamp de entrada é
+   `created_at`. **Não existe `granted_at` em `grant_queue`**: essa coluna é de
+   `cosmetic_grant` (`data/conf/migrations/023_season_pass.sql:30`), e a query
+   que estava aqui devolvia `no such column: granted_at` — que é exatamente o
+   erro que te faz procurar webhook onde o webhook nunca chegou.
 
 ### Alta latência
 
 1. Verificar CPU/memória dos containers: `docker stats`
-2. Verificar `queryMutex` contention via `/metrics`
+2. Ler o `/metrics` do `game` pelo lado de dentro: `docker compose exec game curl -fsS http://127.0.0.1:9400/metrics`. A lista do que existe é o próprio corpo (as linhas `# HELP`), gerada em `sources/system/MetricsServer.gd` — hoje cobre processo (`shambleta_up`, `shambleta_uptime_seconds`), mundo (`shambleta_players_online`, `shambleta_accounts_logged_in`), fila de dinheiro (`shambleta_grant_queue_pending|failed|refunded`), reconcile (`shambleta_reconcile_divergences`, `shambleta_reconcile_age_seconds`) e fila de fraude (`shambleta_fraud_flags_open`). **Não existe métrica de espera do `queryMutex`** (a etapa que estava aqui mandava ler uma grandeza que nenhum código emite; `sources/sql/SQL.gd:7` tem o mutex, nenhum `/metrics` o expõe). Se a fila de grants é que está presa, o sinal é `shambleta_grant_queue_pending` crescendo.
 3. Considerar reduzir `MaxPlayerCount`
 
 ### Erros de TLS

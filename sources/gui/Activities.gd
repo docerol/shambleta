@@ -4,6 +4,15 @@ class_name ActivitiesWindow
 # Hub Atividades (GUI sem fricção): Conquistas | Tormento | Rush | Altar.
 # Construída em runtime (sem .tscn); dados via NetClient.Last* (RPCs Get*);
 # ações via Network.* (resultados no chat + pushes de estado atualizam as abas).
+#
+# SOM-IDLE auditoria 2026-09-27: chave de boss gasta gold e as TRÊS operações do
+# altar (corrupt/cube/salvage) DESTROEM um item do inventário — era um clique
+# sem freio nenhum. Idiom da casa (arm + ConfirmPending, espelho de
+# AuctionHousePanel/ArenaPanel): `Request*` só arma, `ConfirmPending()` é o
+# ÚNICO caminho de rede, e a linha do altar NOMEIA o item e a perda — quem
+# destrói um equipamento tem que ler o que está destruindo.
+var SendHook : Callable
+var _pending : Dictionary = {}
 
 const TAB_ACH : int = 0
 const TAB_TORMENT : int = 1
@@ -160,7 +169,18 @@ func _on_rush_start() -> void:
 	Network.RunBossRush()
 
 func _on_rush_buy_key() -> void:
-	Network.BuyBossKey()
+	RequestBuyBossKey()
+
+# A chave é cobrada em GOLD no servidor (`BOSS_KEY_GOLD_PRICE`) — a linha diz a
+# moeda certa porque susto bom é susto verdadeiro: gold gasto não volta.
+func RequestBuyBossKey() -> bool:
+	_pending = {
+		"method" = "BuyBossKey",
+		"args" = [],
+		"line" = "Comprar chave de boss? O gold sai na hora e a chave não é reembolsável.",
+	}
+	_Ask(str(_pending["line"]))
+	return true
 
 # --- Altar (corromper/cubo/desmanche) ----------------------------------
 func ShowAltar() -> void:
@@ -203,14 +223,93 @@ func _selectedAltarItem() -> int:
 		return 0
 	return int(altarItems[idx])
 
+# Texto exibido no seletor (nome + pilha) — é o que o jogador OLHOU, então é o
+# que a confirmação cita. Vazio quando a janela ainda não montou o altar.
+func _selectedAltarLabel() -> String:
+	if altarOption == null or altarItems.is_empty():
+		return ""
+	var idx : int = altarOption.selected
+	if idx < 0 or idx >= altarItems.size():
+		return ""
+	return altarOption.get_item_text(idx)
+
 func _on_altar_action(kind : String) -> void:
+	RequestAltar(kind)
+
+# As três falas do altar: só ARMAM. A linha nomeia o item e o que se perde —
+# "corromper" pode voltar coisa pior, "cubo" engole o item na loteria 3:1,
+# "desmanchar" destrói para devolver materiais. Um clique mudo aqui era perda
+# definitiva de equipamento.
+func RequestAltar(kind : String) -> bool:
 	var itemID : int = _selectedAltarItem()
 	if itemID <= 0:
-		return
+		return false
+	var methodName : String = "SalvageItem"
+	var question : String = "Desmanchar \"%s\"? O item é DESTRUÍDO em troca de materiais — não volta."
 	match kind:
 		"corrupt":
-			Network.CorruptItem(itemID)
+			methodName = "CorruptItem"
+			question = "Corromper \"%s\"? O item é consumido no altar e o resultado pode ser PIOR que ele — não volta."
 		"cube":
-			Network.CubeUpcycle(itemID)
+			methodName = "CubeUpcycle"
+			question = "Jogar \"%s\" no Cubo 3:1? O item entra no cubo e é consumido — não volta."
+	_pending = {
+		"method" = methodName,
+		"args" = [itemID],
+		"line" = question % _selectedAltarLabel(),
+	}
+	_Ask(str(_pending["line"]))
+	return true
+
+# ------------------------------------------------------------------ confirmação
+# Blocos espelhados de AuctionHousePanel (mesma régua da arena). Diferença
+# honesta: este hub é montado em runtime e suas abas são reconstruídas a cada
+# refresh — não há rótulo neutro estável para segurar a pergunta fora do modal,
+# então a pendência vive em `_pending` (o modal da casa é a superfície; sem
+# modal — client em boot ou harness headless — nada sai sozinho).
+func _Ask(text : String) -> void:
+	var modal : bool = Launcher.GUI != null and Launcher.GUI.messageBox != null
+	if modal:
+		UICommons.MessageBox(text, Callable(self, "ConfirmPending"), "Confirm")
+
+# ÚNICO caminho que fala com a rede. Sem confirmação, este método não é chamado.
+func ConfirmPending() -> void:
+	if _pending.is_empty():
+		return
+	var methodName : String = str(_pending.get("method", ""))
+	var args : Array = _pending.get("args", []) as Array
+	_pending = {}
+	_send(methodName, args)
+
+func CancelPending() -> void:
+	_pending = {}
+
+# Estado observável pelo jogador e pelo harness: o que está armado agora.
+func PendingCount() -> int:
+	return 0 if _pending.is_empty() else 1
+
+func PendingLine() -> String:
+	return str(_pending.get("line", ""))
+
+func PendingArgs() -> Array:
+	return (_pending.get("args", []) as Array).duplicate()
+
+# Costura de produção: `Network.<rpc>` sempre em nome literal (a porta de
+# dispatch de `Network` exige o mesmo formato dos demais calls). Os demais
+# RPCs desta janela (leituras de aba, rush, tormento, conquista) não gastam
+# nada do jogador e continuam direto em `Network.*`.
+func _send(methodName : String, args : Array) -> void:
+	if SendHook.is_valid():
+		SendHook.call(methodName, args)
+		return
+	match methodName:
+		"BuyBossKey":
+			Network.BuyBossKey()
+		"CorruptItem":
+			Network.CorruptItem(int(args[0]))
+		"CubeUpcycle":
+			Network.CubeUpcycle(int(args[0]))
+		"SalvageItem":
+			Network.SalvageItem(int(args[0]))
 		_:
-			Network.SalvageItem(itemID)
+			push_error("Activities: unknown send target " + methodName)

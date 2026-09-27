@@ -13,6 +13,11 @@ func _process(delta : float) -> void:
 	if _autoIdleAccum >= 1.0:
 		_autoIdleAccum = 0.0
 		IdlePolicyService.TickAutoIdle()
+	# Drena o passe de persistência em slices curtos (um chunk por frame). O worker
+	# só marca o início; o esvaziamento roda no thread principal, então cada fatia
+	# segura o queryMutex por pouco tempo e as writes de RPC não esperam um burst.
+	if _backupActive:
+		StepBackupPass()
 
 # Getters
 func GetMap(mapID : int) -> WorldMap:
@@ -87,6 +92,23 @@ func Spawn(map : WorldMap, agent : BaseAgent, instanceID : int = 0):
 		if inst == null:
 			push_error("Spawn could not proceed, map instance missing")
 			return
+
+		# P1 — escalabilidade: o cap também vale para quem entra por `Warp`, e até
+		# aqui ele NÃO valia: `Spawn` pegava `map.instances[instanceID]` e empurrava
+		# o player na lista fosse qual fosse a lotação. Como todo warp de NPC/porta
+		# cai em `NpcCommons.Warp` com instanceID 0
+		# (sources/actor/agent/NpcCommons.gd:153-156) — e `PlayerAgent.WarpTo` com
+		# `dest.instance`, que nunca é preenchido
+		# (sources/actor/agent/variants/PlayerAgent.gd:39-45) — o caminho de login
+		# era o único que respeitava o teto. Mesma busca limitada do `CreateAgent`,
+		# então os dois caminhos concordam por construção e não por cópia.
+		if agent is PlayerAgent:
+			var target : WorldInstance = WorldAgent.ResolvePlayerInstance(map, instanceID)
+			if target == null:
+				push_error("Spawn could not proceed, no free instance in family %d" % instanceID)
+				return
+			inst = target
+
 		if inst:
 			if agent.is_node_ready():
 				AgentCreated(agent, map.mapRID)
@@ -155,11 +177,59 @@ func AgentWarped(map : WorldMap, agent : BaseAgent):
 					BulkPreload(agent, agentRID, player.peerID)
 
 # Generic
+# Passe de persistência fatiado (write serialization, P1-5/P2): o worker SQLBackups
+# chama BackupPlayers() a cada BackupPlayersSec (600 s) via call_deferred. Antes
+# disso era um burst síncrono: um RefreshCharacter (≈ 5 upserts + 1 SELECT por
+# tabela) por jogador, todos de uma vez, atrás do queryMutex único — um servidor
+# cheio congelava as writes de RPC no meio do laço. Agora o passe congela o
+# snapshot e processa no máximo BackupChunkSize por chamada; o resto é drenado em
+# World._process. "Todos são persistidos dentro do ciclo" vale porque 600 s é
+# ordens de grandeza maior que (jogadores / chunk) frames, e o snapshot é varrido
+# antes do próximo passe.
+#
+# Pendência (não resolvida aqui — posse de outro agente): não há dirty-flag no
+# modelo de memória (PlayerAgent/Stat/Progress não expõem "mudou desde a última
+# gravação"), então TODO player regravado a cada passe. Sem esse sinal não dá para
+# pular quem não mudou; ver relatório.
+const BackupChunkSize : int = 16
+
+var _backupQueue : Array = []
+var _backupCursor : int = 0
+var _backupActive : bool = false
+
 func BackupPlayers():
+	_CollectBackupPass()
+	StepBackupPass()
+
+func _CollectBackupPass():
+	_backupQueue.clear()
 	for area : WorldMap in areas.values():
 		for inst : WorldInstance in area.instances.values():
 			for player : PlayerAgent in inst.players:
-				Launcher.SQL.RefreshCharacter(player)
+				_backupQueue.append(player)
+	_backupCursor = 0
+	_backupActive = not _backupQueue.is_empty()
+
+# Processa um chunk do passe corrente. Devolve true quando o passe terminou.
+func StepBackupPass() -> bool:
+	return _RunBackupChunk(_RefreshCharacterSafely)
+
+func _RefreshCharacterSafely(player):
+	if player != null and is_instance_valid(player):
+		Launcher.SQL.RefreshCharacter(player)
+
+# Avança no máximo BackupChunkSize itens, chamando `saveFn` para cada. `saveFn` é
+# injetável para o harness medir o tempo e a invariante de slicing de UM chunk com
+# trabalho real contra o DB temporário, sem precisar de PlayerAgents vivos na mesa.
+func _RunBackupChunk(saveFn : Callable) -> bool:
+	if not _backupActive:
+		return true
+	var end : int = mini(_backupCursor + BackupChunkSize, _backupQueue.size())
+	while _backupCursor < end:
+		saveFn.call(_backupQueue[_backupCursor])
+		_backupCursor += 1
+	_backupActive = _backupCursor < _backupQueue.size()
+	return not _backupActive
 
 
 func _post_launch():

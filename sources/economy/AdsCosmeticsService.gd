@@ -333,7 +333,7 @@ func _RebirthVitrine(accountID : int, rebirths : int) -> void:
 		GrantCosmetic(accountID, "rebirth_f1", "rebirth:1")
 
 func EquippedTitleLabel(accountID : int) -> String:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT cosmetic_id FROM cosmetic_equip WHERE account_id = ? AND slot = 'title';", [accountID])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT cosmetic_id FROM cosmetic_equip WHERE account_id = ? AND slot = ?;", [accountID, SQLCommons.CosmeticSlotTitle])
 	if rows.is_empty():
 		return ""
 	return EconomyCatalog.CosmeticLabel(str(rows[0].get("cosmetic_id", "")))

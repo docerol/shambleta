@@ -10,9 +10,31 @@ class_name BossService
 # Modelo escolhido em vez de fight-live-em-instance para manter o beta verde e
 # testável; a resolução pode virar combate 3D ao vivo depois trocando só Resolve().
 
-# Escada de bosses (nome do mapa da sala + nome de exibição + nível-piso).
-const BossNames : Array[String] = ["Dorian", "Gabriel", "Marvin", "Splatyna"]
-const BossFloorLevel : Array[int] = [5, 5, 5, 10]
+# Escada de bosses (nome do boss = _name da entidade no EntitiesDB + nome de
+# exibição + nível-piso + sala da arena).
+# SOM-IDLE 2026-09-27 (juiz: "4 bosses na escada, depois disso só boss-rush sobre
+# o mesmo roster"): a perna nova (índices 4..9) são entidades REAIS do cliente que
+# nunca entraram na escada — Skeleton, Xakelbael, Lynx, Goblin, Bandit, Bird — cada
+# uma com sala própria em presets/maps/server/** (o mob da arena está spawneado na
+# sala) e com a JANELA de interrupt apertada índice a índice: mesmo multiplicador
+# (1.5, o número que o BossLadder comunica), janela mais estreita. As duas
+# primeiras linhas de BossInterrupt*HalfWindow reproduzem exatamente as constantes
+# legacy [0.4,0.6] / [0.25,0.75], então nenhum duelo antigo muda de resultado.
+const BossNames : Array[String] = ["Dorian", "Gabriel", "Marvin", "Splatyna",
+	"Skeleton", "Xakelbael", "Lynx", "Goblin", "Bandit", "Bird"]
+const BossFloorLevel : Array[int] = [5, 5, 5, 10, 15, 16, 17, 18, 19, 20]
+# Sala de arena por índice — mesma ordem de FarmZoneData.BossMapNames (réguas em
+# tests/content_hygiene_test.gd: mapa real carregado + mob com o nome do boss lá).
+const BossArenas : Array[String] = [
+	"Splatyna's Dorian Dead End", "Splatyna's Gabriel Pit",
+	"Splatyna's Marvin Hole", "Splatyna's Chamber",
+	"Tulimshar West Chamber", "Splatyna Cave Entrance",
+	"Tulimshar Castle Corridors", "Candor Arena",
+	"Ship First Deck", "Ship Nard's Room",
+]
+# Meia-largura das janelas de timing em torno do centro 0.5 do ciclo do boss.
+const BossInterruptPerfectHalfWindow : Array[float] = [0.10, 0.10, 0.10, 0.10, 0.10, 0.09, 0.09, 0.08, 0.08, 0.07]
+const BossInterruptGoodHalfWindow : Array[float] = [0.25, 0.25, 0.25, 0.25, 0.25, 0.24, 0.22, 0.20, 0.18, 0.16]
 
 # Drop de chave: ppm sobre kills de farm válidos (damageRatio>0.5). 2000 ppm =
 # 0,2%/kill → ~1 chave por 500 kills; no par (~150/h) isso é ~1 chave a cada
@@ -50,22 +72,47 @@ const InterruptGoodMax : float = 0.75
 const InterruptPerfectMult : float = 1.5
 const InterruptGoodMult : float = 1.25
 
-static func InterruptBonus(timing : float) -> float:
-	if timing >= InterruptPerfectMin and timing <= InterruptPerfectMax:
+static func InterruptBonus(timing : float, bossIndex : int = -1) -> float:
+	if InterruptQuality(timing, bossIndex) == "perfect":
 		return InterruptPerfectMult
-	if timing >= InterruptGoodMin and timing <= InterruptGoodMax:
+	if InterruptQuality(timing, bossIndex) == "good":
 		return InterruptGoodMult
 	return 1.0
 
 # Classificação textual do mesmo timing (fonte única de verdade p/ caminho live
 # e sim): o servidor usa na hora do toque p/ o feedback da UI; o sim só aplica
 # o multiplicador. timing ∈ [0,1] = fase da janela aberta.
-static func InterruptQuality(timing : float) -> String:
-	if timing >= InterruptPerfectMin and timing <= InterruptPerfectMax:
+# bossIndex >= 0 usa a janela daquele boss (mais estreita na perna nova); sem
+# índice (ou índice fora da escada) vale a janela legacy das constantes acima —
+# é o contrato que o /boss, o IdlePolicy e as suítes antigas já exercitam.
+static func InterruptQuality(timing : float, bossIndex : int = -1) -> String:
+	var perfectHalf : float = InterruptPerfectMax - 0.5
+	var goodHalf : float = InterruptGoodMax - 0.5
+	if bossIndex >= 0 and bossIndex < BossInterruptPerfectHalfWindow.size():
+		perfectHalf = BossInterruptPerfectHalfWindow[bossIndex]
+		goodHalf = BossInterruptGoodHalfWindow[bossIndex]
+	if absf(timing - 0.5) <= perfectHalf:
 		return "perfect"
-	if timing >= InterruptGoodMin and timing <= InterruptGoodMax:
+	if absf(timing - 0.5) <= goodHalf:
 		return "good"
 	return "miss"
+
+# ------------------------------------------------------------------ escada: acesso e sala
+
+# Sala da arena do boss i (nome de mapa real do MapsDB). "" fora da escada.
+static func GetBossArena(index : int) -> String:
+	return BossArenas[index] if index >= 0 and index < BossArenas.size() else ""
+
+# Custo de chave do duelo — a escada cobra 1 chave por boss, e a perna nova não
+# infla o sink: o que aperta é o piso de nível, a janela de interrupt e o HP.
+static func GetBossKeyCost(index : int) -> int:
+	return 1
+
+# Janela efetiva (meia-largura) dos dois graus de timing do boss i.
+static func GetInterruptWindow(index : int) -> Dictionary:
+	if index >= 0 and index < BossInterruptPerfectHalfWindow.size():
+		return {"perfect" = BossInterruptPerfectHalfWindow[index], "good" = BossInterruptGoodHalfWindow[index]}
+	return {"perfect" = InterruptPerfectMax - 0.5, "good" = InterruptGoodMax - 0.5}
 
 static func GetBossCount() -> int:
 	return BossNames.size()
@@ -152,9 +199,11 @@ static func Resolve(player : Dictionary, bossLevel : int, interruptMult : float 
 		"interruptMult" = interruptMult,
 	}
 
-# Conveniência: resolve aplicando o bônus de timing diretamente.
-static func ResolveWithInterrupt(player : Dictionary, bossLevel : int, timing : float) -> Dictionary:
-	return Resolve(player, bossLevel, InterruptBonus(timing))
+# Conveniência: resolve aplicando o bônus de timing diretamente. `bossIndex >= 0`
+# pontua contra a janela DAQUELE boss (a escada aperta índice a índice); sem
+# índice vale a janela legacy — mesmo contrato das chamadas antigas.
+static func ResolveWithInterrupt(player : Dictionary, bossLevel : int, timing : float, bossIndex : int = -1) -> Dictionary:
+	return Resolve(player, bossLevel, InterruptBonus(timing, bossIndex))
 
 # Snapshot das stats do jogador para Resolve(). cycle = castDelay + cooldownAttack
 # (o ciclo real do auto-combat), com fallback para PlayerAttackCycle.

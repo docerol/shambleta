@@ -1,0 +1,18 @@
+# Caminhos que a doc cita para dizer que NÃO existem mais.
+#
+# O gate `scripts/check_doc_drift.sh` exige que todo caminho em code span de um
+# documento vivo esteja no repo. Essa regra é correta e por isso precisa de uma
+# exceção declarada: um runbook de lançamento que explica "a ponte Discord saiu
+# inteira, ficaram zero referências" tem que nomear o que saiu, e nomear é citar
+# um caminho que não existe. Sem este arquivo o gate teria duas saídas ruins:
+# apagar a frase (perde a decisão registrada) ou fingir que o diretório existe.
+#
+# Formato: uma entrada por linha, relativa à raiz, sem comentário na mesma linha
+# (o parser separa por espaços — o que não for caminho vira lixo na lista).
+# Motivo de cada entrada:
+#   sources/discord/       ponte removida em 2026-09-25 por decisão do dono
+#   addons/discord_gd      idem; a saída é medida no `index.pck` re-exportado
+#   companion/catalog.json renomeado para data/conf/paid_catalog.json (6277671)
+sources/discord/
+addons/discord_gd
+companion/catalog.json

@@ -24,6 +24,18 @@ class_name PassService
 # rewarded ad (Fase E) → abrir a loja.
 # Semanais (3/semana). W3 conta qualquer sink de gems; W5 aceita level-up OU
 # 3 depósitos (sem vault de gold no jogo).
+#
+# OPS-2 (2026-09-27): as TRILHAS do passe deixaram de ser constants do código e
+# passaram a poder ser declaradas pela temporada vigente em
+# `data/conf/seasons.json` (`pass_tiers`). Nada aqui mudou de REGRA: quando o
+# arquivo não declara trilha para a temporada da linha, continua valendo o
+# `EconomyCatalog` (que é o que todas as linhas existentes no banco veem hoje). A
+# curva de PT, o custo do skip e o valor das missões ficam no catálogo de
+# propósito — são uma regra só prometida no beta, e curva por temporada com uma
+# coluna `season_account_state.pt` compartilhada criaria duas escalas de nível
+# para o mesmo número. O que virou dado de configuração é o que cada nível
+# ENTREGA, o teto de nível da temporada, o começo/valor do bônus e a etiqueta de
+# origem do cosmético (`pass_s2:premium:12`).
 
 var _eco : EconomyService = null
 
@@ -46,6 +58,40 @@ func _PassStateRaw(accountID : int, seasonID : int) -> Dictionary:
 	return {"pt": int(r.get("pt", 0)), "premium": int(r.get("premium", 0)),
 		"claimed_free": claimedF, "claimed_premium": claimedP,
 		"skips_used": int(r.get("skips_used", 0))}
+
+# ------------------------------------------------------------------ passe por temporada (OPS-2)
+
+# A entrada do calendário que governa uma linha de temporada. `{}` significa "o
+# arquivo não declara nada para esta linha" — que é o estado de toda linha
+# anterior ao OPS-2 e de toda `/season create <dias>` (`rules_frozen` = "{}", sem
+# `config_id`) — e quer dizer "usa os defaults do catálogo", NUNCA "temporada
+# inexistente". Nenhum `season_*` já gravado é reescrito por aqui.
+func _SeasonEntry(season : Dictionary) -> Dictionary:
+	if season.is_empty():
+		return {}
+	return SeasonConfig.EntryForSeasonRow(SeasonConfig.Entries(), season)
+
+# Idem a partir do id, para quem só tem a temporada fechada na mão
+# (`_AutoClaimPass` liquida uma linha que não está mais `active`).
+func _EntryForSeasonID(seasonID : int) -> Dictionary:
+	if seasonID <= 0:
+		return {}
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT season_id, starts_at, ends_at, rules_frozen, status FROM season WHERE season_id = ?;", [seasonID])
+	return _SeasonEntry(rows[0]) if not rows.is_empty() else {}
+
+# Tabela da trilha: a da temporada quando declarada, a do catálogo quando não.
+func _PassTrackTable(entry : Dictionary, track : String) -> Dictionary:
+	var tiers : Dictionary = SeasonConfig.PassTiers(entry, track)
+	if not tiers.is_empty():
+		return tiers
+	return EconomyCatalog.PASS_FREE if track == "free" else EconomyCatalog.PASS_PREMIUM
+
+# Origem do cosmético ganha pelo passe. Continua `pass_s1:...` para a S1 do beta
+# (`SeasonConfig.ConfigID` da entrada é "s1"), então o que já foi concedido não
+# muda de etiqueta; a S2 nasce com a sua.
+func _PassCosmeticSource(entry : Dictionary, track : String, level : int) -> String:
+	var cid : String = SeasonConfig.ConfigID(entry)
+	return "pass_%s:%s:%d" % [cid if not cid.is_empty() else "s1", track, level]
 
 func _PassDoubleXP(season : Dictionary, now : int) -> bool:
 	var startsAt : int = int(season.get("starts_at", 0))
@@ -178,17 +224,25 @@ func GetSeasonPass(accountID : int) -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
 	var st : Dictionary = _PassStateRaw(accountID, sid)
 	var level : int = EconomyCatalog.PassLevelForPT(int(st.get("pt", 0)))
+	# Trilha e teto vêm da entrada da temporada quando ela declara uma (OPS-2);
+	# `{}` = defaults do catálogo, que é o que toda linha do beta usa hoje.
+	var entry : Dictionary = _SeasonEntry(season)
+	var maxLevel : int = SeasonConfig.PassMaxLevel(entry)
+	var bonusStart : int = SeasonConfig.PassBonusStart(entry)
+	var freeTable : Dictionary = _PassTrackTable(entry, "free")
+	var premiumTable : Dictionary = _PassTrackTable(entry, "premium")
 	var ms : Dictionary = _SeasonMissions(accountID, season)
 	var freeTodo : Array = []
 	var premTodo : Array = []
-	for lvl in range(1, mini(level, EconomyCatalog.PASS_MAX_LEVEL) + 1):
-		if EconomyCatalog.PASS_FREE.has(lvl) and not (lvl in st["claimed_free"]):
+	for lvl in range(1, mini(level, maxLevel) + 1):
+		if freeTable.has(lvl) and not (lvl in st["claimed_free"]):
 			freeTodo.append(lvl)
-		if int(st.get("premium", 0)) == 1 and ((EconomyCatalog.PASS_PREMIUM.has(lvl)) or lvl >= EconomyCatalog.PASS_BONUS_START) and not (lvl in st["claimed_premium"]):
+		if int(st.get("premium", 0)) == 1 and ((premiumTable.has(lvl)) or lvl >= bonusStart) and not (lvl in st["claimed_premium"]):
 			premTodo.append(lvl)
 	return {"ok": true, "season_id": sid, "ends_at": int(season.get("ends_at", 0)),
+		"season_config": SeasonConfig.ConfigID(entry), "theme": str(entry.get("theme", "")),
 		"day_index": EconomyCatalog.ShopDay(now) - EconomyCatalog.ShopDay(int(season.get("starts_at", now))),
-		"pt": int(st.get("pt", 0)), "level": level, "premium": int(st.get("premium", 0)),
+		"pt": int(st.get("pt", 0)), "level": level, "max_level": maxLevel, "premium": int(st.get("premium", 0)),
 		"skips_used": int(st.get("skips_used", 0)), "skips_max": EconomyCatalog.PASS_SKIP_MAX,
 		"double_xp": _PassDoubleXP(season, now),
 		"dailies": ms["dailies"], "weeklies": ms["weeklies"], "milestones": ms["milestones"],
@@ -258,12 +312,12 @@ func ClaimMission(accountID : int, missionID : String) -> Dictionary:
 	_eco.settleMutex.unlock()
 	return result
 
-func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : int, track : String) -> bool:
+func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : int, track : String, entry : Dictionary = {}) -> bool:
 	var sql : SQLService = Launcher.SQL
-	var table : Dictionary = EconomyCatalog.PASS_FREE if track == "free" else EconomyCatalog.PASS_PREMIUM
+	var table : Dictionary = _PassTrackTable(entry, track)
 	var reward : Dictionary = {}
-	if track == "premium" and level >= EconomyCatalog.PASS_BONUS_START:
-		reward = {"gems": EconomyCatalog.PASS_BONUS_GEMS}
+	if track == "premium" and level >= SeasonConfig.PassBonusStart(entry):
+		reward = {"gems": SeasonConfig.PassBonusGems(entry)}
 	elif table.has(level):
 		reward = table[level]
 	else:
@@ -291,7 +345,7 @@ func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : 
 				return false
 	var cosmetics : Array = reward.get("cosmetics", [])
 	for cid in cosmetics:
-		if not sql.ExecuteBindings("INSERT INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, str(cid), "pass_s1:%s:%d" % [track, level], SQLCommons.Timestamp()]):
+		if not sql.ExecuteBindings("INSERT INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, str(cid), _PassCosmeticSource(entry, track, level), SQLCommons.Timestamp()]):
 			return false
 	return true
 
@@ -306,6 +360,13 @@ func ClaimPassReward(accountID : int, charID : int, level : int, track : String)
 	if season.is_empty():
 		return {"ok": false, "reason": "no_season"}
 	var sid : int = int(season.get("season_id", 0))
+	# A temporada pode ter um teto menor que o catálogo (uma S2 com 25 níveis). O
+	# teto do catálogo logo acima continua sendo a régua de input: nível acima dele
+	# não é "acima do passe da temporada", é botão inexistente.
+	var entry : Dictionary = _SeasonEntry(season)
+	var maxLevel : int = SeasonConfig.PassMaxLevel(entry)
+	if level > maxLevel:
+		return {"ok": false, "reason": "bad_level"}
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
@@ -320,7 +381,7 @@ func ClaimPassReward(accountID : int, charID : int, level : int, track : String)
 		if level in st[key]:
 			result["reason"] = "already_claimed"
 			return false
-		if not _GrantPassRewardRaw(accountID, charID, sid, level, track):
+		if not _GrantPassRewardRaw(accountID, charID, sid, level, track, entry):
 			return false
 		var claimed : Array = (st[key] as Array).duplicate()
 		claimed.append(level)
@@ -353,7 +414,9 @@ func SkipPassLevel(accountID : int) -> Dictionary:
 			result["reason"] = "skip_cap"
 			return false
 		var level : int = EconomyCatalog.PassLevelForPT(int(st.get("pt", 0)))
-		if level >= EconomyCatalog.PASS_MAX_LEVEL:
+		# Catch-up para até o teto do PASSE DA TEMPORADA: numa S2 mais curta,
+		# comprar PT além do último nível seria gastar gem em nada.
+		if level >= SeasonConfig.PassMaxLevel(_SeasonEntry(season)):
 			result["reason"] = "max_level"
 			return false
 		var missing : int = int((EconomyCatalog.PassThresholds() as Array)[level]) - int(st.get("pt", 0))
@@ -396,6 +459,14 @@ func _PassMilestoneCredit(accountID : int, bossIndex : int) -> void:
 # p/ quem comprou). Chamado no settle da temporada fechada.
 func _AutoClaimPass(seasonID : int) -> Dictionary:
 	var done : Dictionary = {"claimed": 0}
+	# A temporada liquidada já saiu do ar, mas a entrada dela continua no arquivo
+	# (janela vencida é histórico, não erro) — é por ela que o auto-claim paga a
+	# trilha que o jogador viu na tela, não a tabela hardcodeada.
+	var entry : Dictionary = _EntryForSeasonID(seasonID)
+	var maxLevel : int = SeasonConfig.PassMaxLevel(entry)
+	var bonusStart : int = SeasonConfig.PassBonusStart(entry)
+	var freeTable : Dictionary = _PassTrackTable(entry, "free")
+	var premiumTable : Dictionary = _PassTrackTable(entry, "premium")
 	var eligible : Array = []
 	for row in Launcher.SQL.QueryBindings("SELECT account_id, pt, premium, claimed_free, claimed_premium FROM season_account_state WHERE season_id = ?;", [seasonID]):
 		var accountID : int = int(row["account_id"])
@@ -418,26 +489,36 @@ func _AutoClaimPass(seasonID : int) -> Dictionary:
 		var claimedP : Array = []
 		for x in (cp if cp is Array else []):
 			claimedP.append(int(x))
-		var changedF : bool = false
-		var changedP : bool = false
+		# O que autoriza o UPDATE é o crescimento do array, não uma flag: lambda GDScript
+		# captura LOCAL por valor, então `changedF = true` escrito dentro do corpo nunca
+		# chegava ao escopo de fora e os dois UPDATE de `claimed_*` eram sempre pulados — o
+		# reward saía pelo `_GrantPassRewardRaw`, o state da temporada ficava virgem e a
+		# passada seguinte revendia a trilha inteira (dupe de season pass no auto-claim de
+		# encerramento). O CONTEÚDO do array é compartilhado com o lambda, então tamanho
+		# maior que o snapshot é prova direta de que ESTA transação claimou algo.
+		var hadFree : int = claimedF.size()
+		var hadPremium : int = claimedP.size()
 		_eco.settleMutex.lock()
 		if Launcher.SQL.Transaction(func() -> bool:
-			for lvl in range(1, mini(level, EconomyCatalog.PASS_MAX_LEVEL) + 1):
-				if EconomyCatalog.PASS_FREE.has(lvl) and not (lvl in claimedF):
-					if not _GrantPassRewardRaw(accountID, charID, seasonID, lvl, "free"):
+			for lvl in range(1, mini(level, maxLevel) + 1):
+				if freeTable.has(lvl) and not (lvl in claimedF):
+					if not _GrantPassRewardRaw(accountID, charID, seasonID, lvl, "free", entry):
 						return false
 					claimedF.append(lvl)
-					changedF = true
-				if int(row.get("premium", 0)) == 1 and ((EconomyCatalog.PASS_PREMIUM.has(lvl)) or lvl >= EconomyCatalog.PASS_BONUS_START) and not (lvl in claimedP):
-					if not _GrantPassRewardRaw(accountID, charID, seasonID, lvl, "premium"):
+				if int(row.get("premium", 0)) == 1 and ((premiumTable.has(lvl)) or lvl >= bonusStart) and not (lvl in claimedP):
+					if not _GrantPassRewardRaw(accountID, charID, seasonID, lvl, "premium", entry):
 						return false
 					claimedP.append(lvl)
-					changedP = true
-			if changedF and not Launcher.SQL.ExecuteBindings("UPDATE season_account_state SET claimed_free = ? WHERE account_id = ? AND season_id = ?;", [JSON.stringify(claimedF), accountID, seasonID]):
+			if claimedF.size() > hadFree and not Launcher.SQL.ExecuteBindings("UPDATE season_account_state SET claimed_free = ? WHERE account_id = ? AND season_id = ?;", [JSON.stringify(claimedF), accountID, seasonID]):
 				return false
-			if changedP and not Launcher.SQL.ExecuteBindings("UPDATE season_account_state SET claimed_premium = ? WHERE account_id = ? AND season_id = ?;", [JSON.stringify(claimedP), accountID, seasonID]):
+			if claimedP.size() > hadPremium and not Launcher.SQL.ExecuteBindings("UPDATE season_account_state SET claimed_premium = ? WHERE account_id = ? AND season_id = ?;", [JSON.stringify(claimedP), accountID, seasonID]):
 				return false
 			return true):
-			done["claimed"] = int(done.get("claimed", 0)) + 1
+				# `claimed` é o número que o settle imprime como "rewards", então conta
+				# recompensa paga, não conta processada: passada sobre conta já liquidada
+				# volta true sem pagar nada. A prova é o MESMO array compartilhado com o
+				# lambda (cresceu de tamanho), não uma flag local — ver acima.
+				if claimedF.size() > hadFree or claimedP.size() > hadPremium:
+					done["claimed"] = int(done.get("claimed", 0)) + 1
 		_eco.settleMutex.unlock()
 	return done

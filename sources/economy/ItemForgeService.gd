@@ -11,6 +11,18 @@ class_name ItemForgeService
 
 var _eco : EconomyService = null
 
+# P1-4 (AUDITORIA_2026-09-27): fail-closed no boot. Este serviço nasce no
+# _init do EconomyService (composição), então a validação roda no boot do
+# servidor: se MOD_WEIGHTS divergir do enum Modifier (entrada faltando
+# ou peso 0 — o bug histórico que deixava elementais/DoT gratuitos no
+# budget), TODA submissão de forja é recusada até o catálogo ser consertado.
+var _craftWeightsErrors : PackedStringArray = PackedStringArray()
+
+func _init():
+	_craftWeightsErrors = CraftCatalog.ValidateModWeights()
+	for err : String in _craftWeightsErrors:
+		push_error("catálogo de forja divergente: %s" % err)
+
 # ------------------------------------------------------------------ item sinks (sem wipe)
 # Três sumidouros voluntários (a la comunidade ARPG): altar de corrupção
 # (risco estilo vaal), cubagem 3:1 e desmanche. Tudo server-side e atômico
@@ -220,13 +232,17 @@ func SalvageItem(charID : int, itemID : int) -> Dictionary:
 
 func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, name : String, modifiers : Dictionary) -> Dictionary:
 	var result : Dictionary = {"ok" = false, "reason" = ""}
+	# Fail-closed (P1-4): catálogo de pesos divergente do enum = forja parada.
+	if not _craftWeightsErrors.is_empty():
+		result["reason"] = "catalog_invalid"
+		return result
 	if slot < 0 or slot > 7:
 		result["reason"] = "invalid_slot"
 		return result
 	if baseItemHash <= 0:
 		result["reason"] = "invalid_base_item"
 		return result
-	var cleanName : String = EconomyCatalog.CraftNormName(name)
+	var cleanName : String = CraftCatalog.NormName(name)
 	if not NetworkCommons.CheckSize(name.strip_edges(), 3, 30):
 		result["reason"] = "invalid_name"
 		return result
@@ -247,7 +263,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		result["reason"] = "invalid_tier"
 		return result
 
-	var budgetCap : int = EconomyCatalog.CraftBudgetCap(tier, slot)
+	var budgetCap : int = CraftCatalog.BudgetCap(tier, slot)
 	if budgetCap <= 0:
 		result["reason"] = "slot_crafting_blocked"
 		return result
@@ -258,7 +274,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		if effect == CellCommons.Modifier.None:
 			result["reason"] = "invalid_modifier"
 			return result
-		var weight : float = EconomyCatalog.CRAFT_MOD_WEIGHTS[effect] if effect < EconomyCatalog.CRAFT_MOD_WEIGHTS.size() else 0.0
+		var weight : float = CraftCatalog.MOD_WEIGHTS[effect] if effect < CraftCatalog.MOD_WEIGHTS.size() else 0.0
 		var value : int = int(modifiers[modKey])
 		if value < 0:
 			# Drawbacks are free-form (doc §3.1) — ignore in budget sum.
@@ -268,8 +284,8 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		result["reason"] = "budget_exceeded"
 		return result
 
-	var rarity : String = EconomyCatalog.CraftRarityForUsage(float(budgetUsed) / float(budgetCap) * 100.0)
-	var fee : int = EconomyCatalog.CraftSubmitFee(tier)
+	var rarity : String = CraftCatalog.RarityForUsage(float(budgetUsed) / float(budgetCap) * 100.0)
+	var fee : int = CraftCatalog.SubmitFee(tier)
 	# #27: `smith_week` existia como kind com `fee_mod` no parâmetro, mas nenhum
 	# caminho de código lia o valor — o evento era inerte. Esta é a taxa que ele
 	# modula. Leitura pura, antes do lock (a consulta abaixo pega o queryMutex).
@@ -286,7 +302,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 			result["reason"] = "email_not_verified"
 			return false
 
-		# Daily cap: CRAFT_MAX_PER_DAY submissões hoje
+		# Daily cap: MAX_PER_DAY submissões hoje
 		var dayStart : int = now - (now % 86400)
 		var todayCount : int = 0
 		if dbNode.query_with_bindings(
@@ -294,7 +310,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 			[accountID, dayStart]):
 			if dbNode.query_result.size() > 0:
 				todayCount = int(dbNode.query_result[0].get("n", 0))
-		if todayCount >= EconomyCatalog.CRAFT_MAX_PER_DAY:
+		if todayCount >= CraftCatalog.MAX_PER_DAY:
 			result["reason"] = "daily_cap_reached"
 			return false
 
@@ -308,7 +324,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		# Check against existing official item names (edit distance < 2 = dup)
 		for itemHash in DB.ItemsDB.keys():
 			var existing : ItemCell = DB.ItemsDB[itemHash]
-			if existing.slot == slot and EconomyCatalog.CraftEditDistance(cleanName, EconomyCatalog.CraftNormName(existing.name)) < 2:
+			if existing.slot == slot and CraftCatalog.EditDistance(cleanName, CraftCatalog.NormName(existing.name)) < 2:
 				result["reason"] = "name_duplicate"
 				return false
 

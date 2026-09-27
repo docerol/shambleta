@@ -37,8 +37,12 @@ static var _enabled : bool = false
 # (godotengine/godot#37031) — o jogo não percebe o evento que teria de avisar.
 # Enquanto faltar o sender, mostrar o controle é prometer "avise-me quando
 # voltar" sem poder cumprir; W5 é P3 na tabela do audit e cai depois do beta.
+# O veredito NÃO mora mais aqui: `WebPushDelivery.SenderImplemented()` é a
+# declaração única e este gate a consulta. Um `return false` à parte era o
+# segundo lugar onde a mesma verdade tinha que ser lembrada — e foi exatamente
+# assim que `WebPushDelivery.gd` virou arquivo sem chamador.
 static func CanDeliver() -> bool:
-	return false
+	return WebPushDelivery.SenderImplemented()
 
 static func Initialize():
 	if not LauncherCommons.isWeb:

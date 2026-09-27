@@ -85,6 +85,14 @@ const DelayLogin : int					= 1000
 const DelayConfig : int					= 12000
 const DelayMinute : int					= 60000
 
+# P1-5 (AUDITORIA 2026-09-27): limiar vivo do gate de pegada (Peers.Footprint).
+# A unidade é MILISSEGUNDOS, pois Footprint compara contra Time.get_ticks_msec().
+# Vale 60 s (60000 ms) — o teto de uma coleta de settle / abertura de baú por
+# minuto (OfflineSettle "gate de pegada de 60 s"). As call-sites em Server.gd
+# passavam o literal `60` (ou seja, 60 ms — o gate abria a cada tick), por isso a
+# intenção agora mora numa constante nomeada e não num número solto.
+const FootprintGateMs : int				= 60000
+
 const Timeout : int						= 1000
 const TimeoutMin : int					= 30000
 const TimeoutMax : int					= 60000
@@ -156,9 +164,20 @@ const TokenExpirySec : int				= 30 * 24 * 60 * 60
 const TwoFactorChallengeSec : int			= 5 * 60
 
 # Password Reset
+# SOM-IDLE AUTH-P0 (auditoria 2026-09-27 §10): o orçamento de tentativa mora aqui,
+# junto de `MaxLoginAttempts`, porque as duas famílias de budget de auth sempre
+# viveram neste arquivo. O FORMATO do código é autoridade do `Hasher` (alfabeto +
+# comprimento) — `CheckResetCode` delega lá, e `ResetCodeSize` só espelha o número
+# para quem lê a constante sem abrir o Hasher.
 const ResetCodeExpiryMinutes : int		= 15
-const ResetCodeCooldownMinutes : int	= 5
-const ResetCodeSize : int				= 6
+const ResetCodeSize : int				= Hasher.DefaultResetCodeLength
+# Tentativas erradas contra UM pending reset: a N-ésima consome o pending e exige
+# nova solicitação (não bloqueia a conta — ver o porquê em `EmailService`).
+const ResetCodeMaxAttempts : int		= 5
+# Limite de SOLICITAÇÕES por conta (não por peer — o throttle de 1/s/peer do
+# `Peers` é multiplicável por conexão, e atrás do proxy o IP é compartilhado).
+const ResetRequestWindowMinutes : int	= 60
+const ResetRequestWindowMax : int		= 5
 
 # Auth hardening (SOM-IDLE A1: anti-bruteforce backoff)
 const MaxLoginAttempts : int			= 5
@@ -315,7 +334,11 @@ static func CheckEmailInformation(emailText : String) -> AuthError:
 	return AuthError.ERR_OK if CheckValid(emailText, EmailValidRegex) else AuthError.ERR_EMAIL_VALID
 
 static func CheckResetCode(code : String) -> bool:
-	return code.length() == ResetCodeSize and code.is_valid_int()
+	# Delega o formato ao Hasher (alfabeto + comprimento) e normaliza antes: quem
+	# cola o código do e-mail pode trazer minúscula/espaço, e o servidor compara o
+	# hash do texto normalizado — validar outra coisa aqui seria aprovar no client o
+	# que o server rejeita.
+	return Hasher.IsValidResetCode(Hasher.NormalizeResetCode(code))
 
 # SOM-IDLE C1: normaliza a linha de chat no servidor — corta no teto e remove a
 # sobra de espaço/quebra de linha, de modo que texto só-espaço vazio "" e o

@@ -1,0 +1,107 @@
+# Regras de alerta do server de jogo — a outra metade do `/metrics` (porta 9400).
+#
+# AUDITORIA §18: "divergência de reconcile não gera métrica nem sinal". A métrica
+# sozinha não fecha isso: sem regra, o número fica num dashboard que ninguém
+# abre às 3h. Este arquivo é o que transforma os gauges de
+# `sources/system/MetricsServer.gd` em sinal.
+#
+# Formato: Prometheus `group_rules` padrão, carregável por
+# `prometheus --config.file` (`rule_files: [deploy/alerts.rules.yml]`) ou por
+# qualquer distro que entenda o schema (Grafana LGTM, VictoriaMetrics rules).
+# O scrape do /metrics é por dentro do container do jogo, já que o bind é
+# 127.0.0.1 e sem auth — o mesmo motivo pelo qual este arquivo não expõe nada:
+# quem scrapeia tem que estar do lado de dentro.
+#
+# `tests/deploy_ops_test.gd` amarra as duas pontas: toda métrica citada aqui tem
+# que existir no corpo que o server emite. Regra apontando para métrica que não
+# existe é o alerta que nunca dispara e ninguém percebe.
+
+groups:
+  - name: shambleta-economia
+    rules:
+      # Dinheiro pago parado na fila: o jogador pagou e não recebeu. É o único
+      # sintoma que o cliente percebe como "o jogo me roubou".
+      - alert: GrantQueuePresa
+        expr: shambleta_grant_queue_pending > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "grants pagos sem crédito há mais de 10 min"
+          description: "{{ $value }} compras pagas aguardando crédito. O companion assinou e o server não consumiu a fila."
+
+      # 'failed' é revisão humana por definição: o grant não entrou e ninguém vai
+      # consertar sozinho.
+      - alert: GrantQueueFalha
+        expr: shambleta_grant_queue_failed > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "grants falharam e esperam revisão manual"
+
+      # divergence > 0 é o ledger dizendo uma coisa e a carteira outra. Não é page
+      # porque o débito não foi perdido na mão do jogador — é o
+      # reconciliador cumprindo o papel dele.
+      - alert: ReconcileComDivergencia
+        expr: shambleta_reconcile_divergences > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "reconcile achou divergência entre ledger e carteiras"
+          description: "{{ $value }} divergências no último run. Ver `reconcile_run` e a fila de revisão anti-fraude."
+
+      # O job diário roda atrás do backup (SQLBackups). Passar de 25 h sem um run
+      # significa backup desligado, ciclo travado ou processo sem _process — e é
+      # por isso que esta regra vale mais que a de cima: sem reconcile, "0
+      # divergências" é ausência de medida, não saúde.
+      - alert: ReconcileParado
+        expr: shambleta_reconcile_age_seconds > 90000
+        labels:
+          severity: page
+        annotations:
+          summary: "reconcile diário não roda há mais de 25 h"
+          description: "Idade do último run: {{ $value }} s (-1 = nunca rodou neste banco)."
+
+      - alert: FilaAntiFraudeAcumulada
+        expr: shambleta_fraud_flags_open > 20
+        for: 6h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "fila de revisão anti-fraude acumulando"
+          description: "{{ $value }} flags abertas. Referral hold e chargeback shortfall ficam presos nela."
+
+  - name: shambleta-processo
+    rules:
+      # O contrato do compose: `web` só sobe com `game` healthy. Se o probe sumiu,
+      # a stack inteira para de subir no próximo restart.
+      - alert: ServerSemServing
+        expr: shambleta_up == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "server de jogo não está servindo"
+
+      - alert: ServerSemMetrica
+        expr: up{job="shambleta-game"} == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "/metrics do jogo sem scrape (porta 9400 é loopback por diseño)"
+
+  - name: shambleta-escalabilidade
+    rules:
+      # O gargalo do processo é a queryMutex (sources/sql/SQL.gd:7) — um round trip
+      # que espera mais de 100 ms é um jogador travado no trabalho de outro, e é o
+      # sintoma que antecede o teto de tick medido em deploy/SCALING.md. A média não
+      # mostra isso (um passe de backup de 400 ms numa média de 3 µs some na média),
+      # por isso a régua é no degrade acumulado, não na razão.
+      - alert: QueryMutexTravando
+        expr: increase(shambleta_sql_query_mutex_wait_over_100ms[10m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "round trip de SQL esperou a queryMutex mais de 100 ms"
+          description: "{{ $value }} esperas >100 ms nos últimos 10 min. Antes de encostar no teto do tick, o processo encosta aqui."

@@ -61,6 +61,9 @@ var currentTargetRID : int					= 0
 # cuida da vitória quando o boss cai). Runtime-only.
 var bossRID : int							= 0
 var bossIndex : int							= -1
+# SOM-GAMEPLAY G1: ORDEM DE PRIORIDADE de cast (skill IDs, 1º = preferida).
+# Persistida em formation.skill_loadout (já era um Array[int] ordenado via
+# var_to_str — coluna nova nenhuma foi necessária; ver /priority).
 var skillLoadout : Array[int]				= []
 var autoPotionPct : float					= 35.0
 var autoPotionItemHash : int				= 215387671		# Apple spike default
@@ -82,6 +85,9 @@ var _killRegistered : bool					= false
 # uma janela de interrupt abre em ciclo; tocar nela (RequestBossInterrupt) pula o
 # cooldown do auto-ataque — DPS ~2x para quem aprende a janela, idêntico ao auto
 # para quem ignora (o idle continua 100% funcional, sem input obrigatório).
+# SOM-IDLE (2026-09-27): a LARGURA do que conta perfect/good é a do boss em duelo
+# (BossService.InterruptQuality/InterruptBonus recebem `bossIndex`); este ciclo é
+# apenas o relógio da janela aberta, igual para todos.
 const InterruptCycleSec : float				= 3.0
 const InterruptWindowSec : float			= 1.2
 var _interruptTimer : float					= 0.0		# avança só em duelo
@@ -200,10 +206,64 @@ func _isValid() -> bool:
 func _getInst() -> WorldInstance:
 	return WorldAgent.GetInstanceFromAgent(agent) as WorldInstance if agent else null
 
-func _getSkill() -> SkillCell:
-	var skillID : int = skillLoadout[0] if not skillLoadout.is_empty() else SkillCommons.SkillMeleeName.hash()
-	var cell : SkillCell = DB.GetSkill(skillID)
-	return cell
+# SOM-GAMEPLAY G1: skill PRIMÁRIA (comportamento antigo) ou a escolha da
+# prioridade declarada pelo jogador para o alvo informado. Com um único
+# candidato, ou sem alvo (interrupt), cai exatamente no caminho antigo.
+func _getSkill(target : BaseAgent = null) -> SkillCell:
+	var candidates : Array[int] = GetPriorityOrder()
+	if target == null or candidates.size() == 1:
+		return DB.SkillsDB.get(candidates[0], null)
+
+	var blocked : Dictionary = {}
+	var reachable : Dictionary = {}
+	for skillID : int in candidates:
+		var cell : SkillCell = DB.SkillsDB.get(skillID, null)
+		if cell == null or _skillBlocked(cell):
+			blocked[skillID] = true
+			reachable[skillID] = false
+			continue
+		blocked[skillID] = false
+		reachable[skillID] = _skillReaches(cell, target)
+
+	var chosen : int = SkillPriority.Select(candidates, blocked, reachable)
+	return DB.SkillsDB.get(chosen if chosen != SkillPriority.NoSkill else candidates[0], null)
+
+# Ordem efetiva de cast (carga declarada, sem duplicata, só aprendidas).
+func GetPriorityOrder() -> Array[int]:
+	return SkillPriority.ResolveOrder(skillLoadout, _learnedLoadout(), SkillCommons.SkillMeleeName.hash())
+
+# Quais IDs da carga o char REALMENTE tem — 1 lookup por skill declarada
+# (a carga é limitada a SkillPriority.MaxPrioritySkills), nunca um varredura
+# do SkillsDB por tick.
+func _learnedLoadout() -> Array[int]:
+	var learned : Array[int] = []
+	if agent == null or not is_instance_valid(agent):
+		return learned
+	for skillID : int in skillLoadout:
+		var cell : SkillCell = DB.SkillsDB.get(skillID, null)
+		if cell != null and not (skillID in learned) and SkillCommons.HasSkill(agent, cell):
+			learned.append(skillID)
+	return learned
+
+# Trava que impede o cast AGORA. Stamina fica de fora de propósito: no motor
+# stamina curta só piora o RNG do golpe (SkillCommons.GetRNG), não cancela o
+# cast — marcar a skill como bloqueada aqui mudaria o DPS medido pelas sims.
+func _skillBlocked(skill : SkillCell) -> bool:
+	if SkillCommons.IsCoolingDown(agent, skill):
+		return true
+	if not ClassBonus.CanUseSkill(agent, skill):
+		return true
+	if skill.modifiers == null:
+		return false
+	var manaCost : int = int(skill.modifiers.Get(CellCommons.Modifier.Mana))
+	if agent.stat.mana < -manaCost:
+		return true
+	var healthCost : int = int(skill.modifiers.Get(CellCommons.Modifier.Health))
+	return agent.stat.health < -healthCost
+
+func _skillReaches(skill : SkillCell, target : BaseAgent) -> bool:
+	var range : float = float(ActorCommons.GetSkillRange(agent, skill)) - AttackRangeBuffer
+	return agent.position.distance_to(target.position) <= range
 
 # ------------------------------------------------------------------ seek
 
@@ -292,7 +352,7 @@ func _tickCombat(delta : float):
 			NotifyInterruptWindow(target, false)
 		_consumeBossInterrupt(target)
 
-	var skill : SkillCell = _getSkill()
+	var skill : SkillCell = _getSkill(target)
 	if skill == null:
 		state = State.SEEK
 		return
@@ -328,25 +388,39 @@ func _tickCombat(delta : float):
 # de teste drive-lo com fase controlada — é a MESMA função que o tick chama.
 # Regras (espelham a sim): fora da janela = ignora; miss fecha a janela sem hit
 # (spam tem custo); good/perfect = hit extra com damageMult da fase.
-func _consumeBossInterrupt(target : BaseAgent) -> void:
+# Devolve o veredito aplicado ({phase, index, quality, mult}) — `{}` quando o
+# toque foi ignorado. É só espelho do que o servidor FEZ (a decisão continua
+# sendo daqui); o retorno existe para as réguas poderem aferir a janela efetiva
+# sem depender de física/instância, e nenhum chamador de produção é obrigado a
+# ler o resultado.
+func _consumeBossInterrupt(target : BaseAgent) -> Dictionary:
 	if not _interruptRequest:
-		return
+		return {}
 	_interruptRequest = false
 	if not _interruptWindow or target == null or not is_instance_valid(target) or not ActorCommons.IsAlive(target):
-		return
+		return {}
 	_interruptWindow = false
 	NotifyInterruptWindow(target, false)
 	var phase : float = clampf(_interruptTimer / InterruptWindowSec, 0.0, 1.0)
-	var quality : String = BossService.InterruptQuality(phase)
-	var mult : float = BossService.InterruptBonus(phase)
+	# SOM-IDLE 2026-09-27: a janela pontuada é a DO BOSS em duelo (bossIndex, posto
+	# por IdlePolicyService._BeginArena), não a meia-largura legacy que os 4
+	# primeiros bosses compartilhavam. Sem o índice aqui o aperto declarado na
+	# escada (BossService.BossInterrupt*HalfWindow) nunca chegava à luta ao vivo:
+	# o /boss comunicava ±0.07 no chefe e o servidor cobrava ±0.10 — content
+	# decorativo. O veredito volta com `index` para a régua apontar qual boss foi
+	# aferido.
+	var quality : String = BossService.InterruptQuality(phase, bossIndex)
+	var mult : float = BossService.InterruptBonus(phase, bossIndex)
 	NotifyInterruptFeedback(quality, mult)
+	var verdict : Dictionary = {"phase" = phase, "index" = bossIndex, "quality" = quality, "mult" = mult}
 	if quality == "miss":
-		return
-	var iskill : SkillCell = _getSkill()
+		return verdict
+	var iskill : SkillCell = _getSkill(target)
 	if iskill != null:
 		# hit-bônus server-side pelo mesmo caminho do auto-ataque (clamp, AI
 		# aggro, TargetAlteration, procs); rng fixo 0.5 = sem crit/dodge forçado.
 		Skill.Damaged(agent, target, iskill, 0.5, mult)
+	return verdict
 
 # Push da janela p/ o assistente (se houver); offline/bot é no-op seguro.
 func NotifyInterruptWindow(boss : BaseAgent, open : bool):

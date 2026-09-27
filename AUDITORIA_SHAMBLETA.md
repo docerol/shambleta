@@ -45,7 +45,7 @@
 - `Social.gd`: `guildList`, `RefreshGuild`, `ShowGuildState` (membros, vault, ações líder) — funcional.
 
 ### 5. Economia (9.5) — `sources/economy/EconomyService.gd` + `companion/server.py`
-- ~~`GetCheckoutIntent` (`EconomyService.gd` linha 822-824): `gateway_ready`, `f2p_friendly`, `webhook_verified`, `grant_queue_idempotent`.~~ **Retificado 2026-09-24:** as três primeiras eram `"true"` literais que este processo não pode atestar e não tinham nenhum consumidor; saíram da payload (guard em `SuiteCheckout`). A citação de arquivo/linha também estava desalinhada da árvore que citava: em `f781f71` as chaves estão em `EconomyService.gd:813`, e desde `bd69275` o código é `sources/economy/CheckoutService.gd`.
+- ~~`GetCheckoutIntent` (`EconomyService.gd` linha 822-824): `gateway_ready`, `f2p_friendly`, `webhook_verified`, `grant_queue_idempotent`.~~ **Retificado 2026-09-24:** as três primeiras eram `"true"` literais que este processo não pode atestar e não tinham nenhum consumidor; saíram da payload (guard em `SuiteCheckout`). A citação de arquivo/linha também estava desalinhada da árvore que citava: em `f781f71` as chaves estão na linha 813 de `EconomyService.gd`, e desde `bd69275` o código é `sources/economy/CheckoutService.gd`.
 - ~~`WebhookValidator.gd`~~ — **evidência inválida (2026-09-24):** o arquivo era um
   stub que devolvia `true` quando o secret tinha mais de 10 caracteres e não era
   chamado por nada; foi apagado. Quem valida a assinatura é o companion

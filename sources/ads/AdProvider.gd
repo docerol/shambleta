@@ -45,6 +45,16 @@ static func Provider() -> String:
 	return PROVIDER_STUB
 
 static func IsReady(_placement : String) -> bool:
+	# Kill-switch de runtime (OPS-2, flag `ads_rewarded`): com a flag desligada o
+	# botão de anúncio sai da UI antes de qualquer pedido ao servidor. Escopo
+	# honesto: este arquivo é o LADO CLIENT do rewarded (o mesmo `AdProvider.gd`
+	# roda no browser e no desktop), e aqui a flag controla superfície, não
+	# dinheiro — quem credita gems por anúncio é o servidor (`MintAdSlot`/
+	# `WatchAd`, em `sources/economy/`, fora da minha posse nesta passada), e o
+	# desligador de receita que já existe lá é `SHAMBLETA_AD_STUB`. O gate de
+	# verdade server-side desta rodada é `tournament_enter`, em WorldCommands.
+	if not FeatureFlags.Enabled(FeatureFlags.ADS_REWARDED):
+		return false
 	if Provider() == PROVIDER_PORTAL and LauncherCommons.isWeb:
 		# `js.has_method(...)` não consulta a ponte: Godot encaminha o nome para o
 		# lado JS, `ShambletaAds.has_method` não existe e cada chamada despejava um
@@ -66,6 +76,15 @@ static func IsReady(_placement : String) -> bool:
 # creditar). Primeiro pedido = assíncrono por construção (a autorização vem do
 # servidor); com o placement já autorizado, mostra na hora.
 static func ShowRewarded(placement : String, on_token : Callable) -> void:
+	# Mesmo portão de `IsReady`, e por um motivo operacional: `IsReady` é onde a UI
+	# esconde o botão, mas quem chega aqui por um caminho que não perguntou (botão
+	# já desenhado antes do `/flags reload`, atalho de teste) tem que receber a
+	# resposta na mesma. `on_token.call("")` é o contrato de "nada a creditar" que
+	# a UI já trata — ela reativa o botão. Registrar em `_waiters` sem ir ao
+	# servidor é que deixaria o botão preso para sempre.
+	if not FeatureFlags.Enabled(FeatureFlags.ADS_REWARDED):
+		on_token.call("")
+		return
 	_waiters[placement] = on_token
 	Network.RequestAdSlot(placement)
 

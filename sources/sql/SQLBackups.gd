@@ -104,6 +104,10 @@ func Run():
 	# valer no primeiro boot (abrir a S1 é o que torna o `pass.s1` do catálogo
 	# entregável), não 24 h depois.
 	var lastSeasonClockTimestamp : int = 0
+	# §12: a poda de ledger tem timer próprio (6 h) e não herda o do reconcile: a
+	# janela de retenção é de dias, e o que se quer limitar aqui é o writer que a
+	# rodada toma emprestado, não o calendário do produto.
+	var lastLedgerRetentionTimestamp : int = 0
 
 	while isRunning:
 		var timestamp : int = SQLCommons.Timestamp()
@@ -145,6 +149,17 @@ func Run():
 			var opened : int = 1 if Launcher.Economy.EnsureSeasonS1() > 0 else 0
 			if int(seasonTick.get("closed", 0)) > 0 or int(seasonTick.get("settled", 0)) > 0 or opened > 0:
 				Util.PrintLog("Economy", "Season clock: closed %d, settled %d, opened %d" % [int(seasonTick.get("closed", 0)), int(seasonTick.get("settled", 0)), opened])
+
+		if timestamp - lastLedgerRetentionTimestamp >= SQLCommons.LedgerRetentionIntervalSec \
+				and Launcher.SQL != null and Launcher.SQL.isInitialized:
+			lastLedgerRetentionTimestamp = timestamp
+			var retention : Dictionary = SQLRetention.RunRetentionJob(Launcher.SQL)
+			if int(retention.get("rows_dropped", 0)) > 0 or int(retention.get("resumed", 0)) > 0 \
+					or not bool(retention.get("ok", false)):
+				Util.PrintLog("SQL", "Ledger retention: rounds %d, lidas %d, dropadas %d, retomadas %d, ok %s" % [
+					int(retention.get("rounds", 0)), int(retention.get("rows_read", 0)),
+					int(retention.get("rows_dropped", 0)), int(retention.get("resumed", 0)),
+					str(retention.get("ok", false))])
 
 		if timestamp - lastDailyBackupTimestamp >= SQLCommons.DailyBackupIntervalSec:
 			var backupFilePath: String = CreateDailyBackup()

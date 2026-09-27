@@ -237,6 +237,13 @@ func _post_launch():
 	if Economy and not Economy.isInitialized:	Economy._post_launch()
 	# SOM-IDLE: D2 — telemetry after SQL
 	if Telemetry and not Telemetry.isInitialized:	Telemetry._post_launch()
+	# OPS-1/OPS-2 (AUDITORIA_2026-09-27 §15): flags de runtime e a superfície
+	# admin `/flags`, depois de SQL (lê a tabela da migration 053) e de Telemetria
+	# (o comando grava auditoria em `telemetry_event`). É chamada estático, sem
+	# serviço novo na árvore: `FeatureFlags` é estado por processo e o gate precisa
+	# rodar no mesmo processo que serve a feature. Idempotente — `Mode()` re-entra
+	# aqui a cada troca de client/server.
+	FlagsBootstrap.Install()
 	# SOM-IDLE F3: web push after GUI
 	if LauncherCommons.isWeb:
 		WebPushService.Initialize()

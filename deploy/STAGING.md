@@ -88,8 +88,11 @@ Configurar os dois no repositório é o passo pendente, não escrever o arquivo.
 - Filename is `live.db` in every non-testing build, staging included — what makes
   staging a separate database is the separate volume (`game-data-staging`)
 - A fresh volume self-bootstraps: `SQL` copies `data/conf/templates/sqlite.template.db`
-  into the missing `live.db` and then runs `ApplyMigrations()` over the 49 versioned
-  migrations in `data/conf/migrations/`. There is no seed SQL file to load and no
+  into the missing `live.db` and then runs `ApplyMigrations()` over **every** versioned
+  migration in `data/conf/migrations/` (the count belongs to that directory, not to this
+  page — `scripts/check_doc_drift.sh` rejects a number written here that the directory
+  does not have, and the runner requires the sequence to be gapless because it uses the
+  array index as the schema version). There is no seed SQL file to load and no
   import step to remember — the schema and its seeds are the migrations
 - That first-boot path was measured on 2026-09-24 rather than assumed, because
   `ApplyMigrations()` treats the *array index* as the schema version: `DirAccess`
@@ -145,8 +148,15 @@ Staging is used for:
   Ver `sources/sql/SQLBackups.gd` e `tests/test_backup_restore.gd`
 - TLS termina no proxy do Coolify (ou no túnel do cloudflared): o `game` binda
   `ws://` plain na 6108 com `SHAMBLETA_PROXY_TLS=1`. O `healthcheck` do compose é um
-  GET real em `http://localhost:9400/healthz` (loopback, plain) servido pelo próprio
-  processo do jogo — ver `deploy/COOLIFY.md`
+  GET real em `http://127.0.0.1:9400/healthz` (plain) servido pelo próprio
+  processo do jogo — ver `deploy/COOLIFY.md`. **`127.0.0.1` literal, nunca
+  `localhost`**: o `MetricsServer` binda somente IPv4 (`BindAddress = "127.0.0.1"`,
+  `sources/system/MetricsServer.gd:22`, porta `DefaultPort = 9400` em `:21`), então
+  num container com `::1` no `/etc/hosts` o `localhost` tenta IPv6 primeiro e leva
+  connection refused — o probe falha num servidor saudável. É por isto que o
+  `healthcheck` declarado no compose (`deploy/docker-compose.yml`, bloco `test:` do
+  serviço `game`) usa o endereço literal; a porta é conferida contra o código por
+  `scripts/check_compose.sh`.
 - **O cliente verifica o certificado do servidor** (`sources/network/client/Client.gd`,
   via `NetworkCommons.ClientTLSOptions()`). Antes era `TLSOptions.client_unsafe()`,
   que desligava cadeia e hostname no mesmo canal por onde passam senha, token de

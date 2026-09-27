@@ -461,6 +461,92 @@ ok(isinstance(_file_cat.get("_agreements"), dict)
            for v in ("tos", "privacy", "age")),
    "D6 o arquivo canônico declara as três versões vigentes")
 
+# ---- Parte E — SOM-W5: POST /push/test é interno e fail-closed (7 checagens)
+# A fila de push nunca é fronteira pública (o nginx só proxya /checkout e
+# /webhooks), mas mesmo no network interno do compose o endpoint exige token
+# próprio e DESAPARECE (503) quando o token não foi configurado — nada roda
+# "por padrão". O caminho autenticado drena com o sender honesto: as linhas
+# viram failed('vapid_sender_unimplemented'), nunca sent().
+import glob as _globw5
+import io as _iow5
+
+_w5dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "data", "conf", "migrations")
+_w5migs = sorted(_globw5.glob(os.path.join(_w5dir, "*_web_push.sql")))
+
+
+def _w5db(with_tables=True):
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE account (account_id INTEGER PRIMARY KEY,"
+                " last_timestamp INTEGER DEFAULT 0)")
+    if with_tables:
+        con.executescript(open(_w5migs[0]).read())
+        con.execute("INSERT INTO account VALUES (1, ?)", (int(time.time()),))
+        con.execute("INSERT INTO push_subscription VALUES "
+                    "(1, 'https://p/1', 'K', 'A', 0)")
+        con.execute("INSERT INTO push_outbox (account_id, title, body, status,"
+                    " created_at) VALUES (1, 't', 'b', 'pending',"
+                    " strftime('%s','now'))")
+    con.commit()
+    con.close()
+    return path
+
+
+class _PushSent:
+    code = None
+    obj = None
+
+
+class _PushSrv:
+    def __init__(self, token, db):
+        self.store = server.Store(db)
+        self.push_admin_token = token
+
+
+def _push_call(token, db, headers=None, body=b""):
+    os.environ.pop("SHAMBLETA_PUSH_SENDER", None)  # sender default = honesto
+    _PushSent.code = None
+    _PushSent.obj = None
+    h = server.Handler.__new__(server.Handler)
+    h.server = _PushSrv(token, db)
+    h.headers = dict(headers or {})
+    h.rfile = _iow5.BytesIO(body)
+    h._send = lambda code, obj: (setattr(_PushSent, "code", code),
+                                 setattr(_PushSent, "obj", obj))
+    h._push_test()
+    return _PushSent.code, _PushSent.obj
+
+
+_db_e = _w5db()
+_c, _o = _push_call("", _db_e)
+ok(_c == 503 and _o.get("error") == "push_disabled",
+   "E1 /push/test sem token configurado não existe (503, default fechado)")
+_c, _o = _push_call("sekret", _db_e)
+ok(_c == 401 and _o.get("error") == "bad_token",
+   "E2 token configurado, header ausente -> 401")
+_c, _o = _push_call("sekret", _db_e, {"X-Push-Token": "errado"})
+ok(_c == 401, "E3 header errado -> 401 (nada drena)")
+_c, _o = _push_call("sekret", _db_e, {"X-Push-Token": "sekret"})
+ok(_c == 200 and _o.get("sender") == "vapid" and _o["drain"]["failed"] == 1
+   and _o["drain"]["sent"] == 0,
+   "E4 autenticado: drena com o sender honesto (failed, nunca sent)")
+_c, _o = _push_call("sekret", _db_e, {"X-Push-Token": "sekret",
+                                      "Content-Length": str(len(b'{"limit":"x"}'))},
+                    body=b'{"limit":"x"}')
+ok(_c == 400 and _o.get("error") == "bad_grant", "E5 limit inválido -> 400")
+_c, _o = _push_call("sekret", _w5db(with_tables=False),
+                    {"X-Push-Token": "sekret"})
+ok(_c == 500 and "052" in str(_o.get("hint", "")),
+   "E6 banco sem a migration 052 -> db_error com hint, nunca sucesso silencioso")
+_cone = sqlite3.connect(_db_e)
+ok(_cone.execute("SELECT status, last_error FROM push_outbox").fetchone()
+   == ("failed", "vapid_sender_unimplemented"),
+   "E7 a fila registra o motivo técnico da não-entrega (auditável)")
+_cone.close()
+os.unlink(_db_e)
+
 if FAILS:
     print("== SECURITY: %d failures ==" % len(FAILS))
     for f in FAILS:

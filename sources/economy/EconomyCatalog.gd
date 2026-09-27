@@ -47,37 +47,98 @@ const VIP2CostGems : int = 880
 # (de EconomyService.gd:704)
 const VIPDays : int = 30
 
-# (de EconomyService.gd:728)
-const GrantKinds : Array[String] = ["gems", "gold", "vip_days", "pass_premium", "cosmetic"]
+# Os cinco primeiros são dinheiro entrando. `chargeback` é o reverso (P1-6): o
+# companion enfileira a linha quando o webhook chega `charged_back`, e o consumo
+# está em `CheckoutService._ApplyGrantRaw`. Faltava aqui, e a régua de aceitação
+# de `EnqueueGrant` barrava o clawback justamente na porta por onde o operador
+# re-enfileira um payment à mão — a fila só andava no caminho do companion, que
+# escreve o INSERT direto no banco e não passa por esta lista.
+const GrantKinds : Array[String] = ["gems", "gold", "vip_days", "pass_premium", "cosmetic", "chargeback"]
 
 # (de EconomyService.gd:732)
 const VIP_GRANT_TIERS : Dictionary = {
 	"vip.1mo": 1, "vip.3mo": 2, "founder.pack": 1, "starter.pack": 1,
 }
 
-# (de EconomyService.gd:739)
-const ChestCostGems : int = 120
+# FATIA 13 (gate anti-god-node): a REFERÊNCIA CONGELADA dos botões base
+# (`ChestCostGemsRef`, `MaxChestsPerPurchaseRef`, `TradeCooldownSecRef`,
+# `TradeDailyCapRef`, `TradeDailyCapVIPRef`, `BASE_KNOBS_REF`) e o espelho do
+# catálogo cobrável (`ShopCatalogRef`) — que eram consts aqui, linha a linha os
+# mesmos números de antes do corte — passaram a morar em
+# `EconomyBaseCatalog.gd`, junto do validador fail-closed que os amarra a
+# `data/conf/economy_base_catalog.json`. Decisão de quem lê o número e de quem
+# confere o arquivo no mesmo arquivo; nenhum valor mudou. O que paga continua
+# saindo daqui pelo estado em runtime abaixo.
+const ChestCostGemsRef : int = EconomyBaseCatalog.ChestCostGemsRef
 
-# (de EconomyService.gd:740)
-const MaxChestsPerPurchase : int = 10
+const MaxChestsPerPurchaseRef : int = EconomyBaseCatalog.MaxChestsPerPurchaseRef
 
-# (de EconomyService.gd:782)
-const SHOP_CATALOG : Array = [
-	{"sku": "gems.550", "label": "550 gems", "price": 19.90},
-	{"sku": "gems.1200", "label": "1200 gems", "price": 39.90},
-	{"sku": "gems.3000", "label": "3000 gems", "price": 79.90},
-	{"sku": "vip.1mo", "label": "VIP 30 days", "price": 24.90},
-	{"sku": "vip.3mo", "label": "VIP 90 days", "price": 59.90},
-	{"sku": "starter.pack", "label": "Starter: VIP 7d + 220 gems (D0–D3, one-time)", "price": 9.90},
-	{"sku": "founder.pack", "label": "Founder: 1200 gems + VIP 30d + title", "price": 39.90},
-	{"sku": "donate.support", "label": "Support: Apoiador title", "price": 4.90},
-	# SOM-IDLE M3: faltava este — o botão do passe (Server.gd, tier "standard")
-	# pede a intent com "pass.s1", que é cobrável no companion, e recebia
-	# unknown_sku. O deluxe estava listado e o padrão (R$ 24,90, o SKU principal
-	# da temporada) não. SuiteCatalogConsistency amarra as duas listas.
-	{"sku": "pass.s1", "label": "Pass S1 Premium: trilha premium da temporada", "price": 24.90},
-	{"sku": "pass.s1.deluxe", "label": "Pass S1 Deluxe: premium + 10 levels + gems", "price": 44.90},
-]
+const TradeCooldownSecRef : int = EconomyBaseCatalog.TradeCooldownSecRef
+
+const TradeDailyCapRef : int = EconomyBaseCatalog.TradeDailyCapRef
+
+const TradeDailyCapVIPRef : int = EconomyBaseCatalog.TradeDailyCapVIPRef
+
+const BASE_KNOBS_REF : Dictionary = EconomyBaseCatalog.BASE_KNOBS_REF
+
+const ShopCatalogRef : Array = EconomyBaseCatalog.ShopCatalogRef
+
+# Estado em runtime: os consumidores (`Storefront`, `CheckoutService`,
+# `ShopService`, `EconomyService.GetEconomyState`) leem daqui e passam a ler o
+# arquivo depois de `LoadBaseCatalog()`. O default é a própria referência
+# congelada, então um processo que nunca carrega o catálogo (ferramenta de
+# janela, harness isolado) continua com os números do código — nunca com lista
+# vazia. `LoadBaseCatalog` só sobrescreve quando o validador devolveu zero
+# erros (fail-closed: arquivo inválido não entra, e o erro vai para o log).
+static var ChestCostGems : int = ChestCostGemsRef
+
+static var MaxChestsPerPurchase : int = MaxChestsPerPurchaseRef
+
+static var SHOP_CATALOG : Array = ShopCatalogRef
+
+# Os dois `static var` de velocity de troca viviam em `EconomyService.gd:208`
+# e continuam lá (são sintonizáveis em runtime por decisão do SOM-IDLE D3); o
+# que mudou é a ORIGEM do default, agora lida daqui por `ApplyBaseCatalog`.
+static func BaseKnob(key : String, fallback : int) -> int:
+	if not BaseKnobs.has(key):
+		return fallback
+	return int(BaseKnobs.get(key, fallback))
+
+static var BaseKnobs : Dictionary = {
+	"chest_cost_gems": ChestCostGemsRef,
+	"max_chests_per_purchase": MaxChestsPerPurchaseRef,
+	"trade_cooldown_sec": TradeCooldownSecRef,
+	"trade_daily_cap": TradeDailyCapRef,
+	"trade_daily_cap_vip": TradeDailyCapVIPRef,
+}
+
+# ------------------------------------------------------------------ AH: profundidade de mercado
+# JUIZ MARKETPLACE 2026-09-27: a vitrine era uma janela de 40 linhas sem OFFSET
+# (leitura, não página) e o histórico de venda morava na memória do client. Os
+# três números abaixo são o esqueleto do mercado: tamanho de página (a janela
+# antiga de 40, preservada como página), janela do "recentemente vendido" lida
+# do servidor e o cap de ordens de compra abertas por conta — espelho do cap de
+# anúncios (`AHMaxOpenPerAccount`), porque uma bid é gold travado e gold
+# travado sem teto é um balde de escrow para encher o banco.
+const AHBrowsePageSize : int = 40
+
+const AHSoldHistoryWindow : int = 10
+
+const AHMaxBuyOrdersPerAccount : int = 3
+
+# Tetos de uma ordem de compra. `AHMaxBidQuantity`/`AHMaxBidUnitPrice` limitam o
+# produto antes da multiplicação (o escrow é `quantity × unit_price`, e overflow
+# de int num depósito é dinheiro criado); `AHMaxBuyOrderGold` é o teto absoluto
+# do depósito de uma ordem só; `AHMaxBidFillRounds` é o teto do laço que cruza a
+# ordem contra a vitrine — uma ordem nunca pode prender o main thread do server
+# varrendo um mercado grande.
+const AHMaxBidQuantity : int = 99
+
+const AHMaxBidUnitPrice : int = 100000000
+
+const AHMaxBuyOrderGold : int = 1000000000
+
+const AHMaxBidFillRounds : int = 25
 
 # (de EconomyService.gd:793)
 const STARTER_SKU : String = "starter.pack"
@@ -280,6 +341,10 @@ const AD_OFFLINE_HOURS_PER_AD : float = 1.0
 # baú por coleta, ClaimOfflineSettle (gate de pegada 60s em Server.gd:490)
 # pagaria um baú por minuto; 6/dia é o que floor(h/4) com cap de 12h já produzia,
 # então o patamar do faucet não muda — muda a origem da hora.
+# Banda nova (P1-retenção, AUDITORIA_2026-09-27): o cap F2P subiu de 1h para 8h
+# (OfflineSettle.BaseCapHours); floor(8/4) = 2 baús por coleta, e o teto diário
+# de 6 continua sendo o mesmo patamar que a janela de 12h de antes produzia —
+# o faucet de baú não se move com o cap novo.
 const ChestsPerDayFromSettle : int = 6
 
 # Teto de views por placement/dia. Coberto inteiro desde C2 (auditoria
@@ -474,44 +539,11 @@ const FraudLevelJump : int = 20
 # (de EconomyService.gd:3822)
 const FraudLevelJumpHours : float = 2.0
 
-# (de EconomyService.gd:3886)
-const CRAFT_BUDGET_CAP : Dictionary = {
-	1: [20, 20, 15, 15, 5, 0, 20, 20],
-	2: [30, 0, 0, 0, 0, 0, 0, 0],
-	3: [0, 0, 0, 0, 0, 0, 66, 0],
-	4: [0, 0, 0, 0, 0, 0, 95, 0],
-	5: [0, 0, 0, 0, 0, 0, 146, 0],
-	6: [0, 0, 0, 0, 0, 0, 0, 0],
-	7: [0, 0, 0, 0, 0, 0, 0, 0],
-	8: [0, 0, 0, 0, 0, 0, 0, 0],
-}
-
-# (de EconomyService.gd:3896)
-const CRAFT_SLOT_NAMES : Array[String] = ["CHEST", "LEGS", "FEET", "HANDS", "HEAD", "NECK", "WEAPON", "SHIELD"]
-
-# (de EconomyService.gd:3897)
-const CRAFT_MOD_WEIGHTS : Array[float] = [0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-
-# (de EconomyService.gd:3898)
-const CRAFT_RARITY_BANDS : Array = [[40, "Comum"], [65, "Incomum"], [85, "Raro"], [97, "Épico"], [101, "Lendário"]]
-
-# (de EconomyService.gd:3899)
-const CRAFT_RARITY_WEIGHT : Dictionary = {"Comum": 100, "Incomum": 60, "Raro": 30, "Épico": 12, "Lendário": 5}
-
-# (de EconomyService.gd:3900)
-const CRAFT_SUBMIT_FEE_BASE : int = 500
-
-# (de EconomyService.gd:3901)
-const CRAFT_MAX_PER_DAY : int = 3
-
-# (de EconomyService.gd:3902)
-const CRAFT_RESUB_MAX : int = 3
-
-# (de EconomyService.gd:3903)
-const CRAFT_RESUB_DAYS : int = 7
-
-# (de EconomyService.gd:3904)
-const CRAFT_CREATOR_FEE_PCT : int = 1
+# Fatia do forjeiro movida inteira para `CraftCatalog.gd` em 2026-09-27: budget
+# por (tier, slot), pesos de modifier (com a validação fail-closed contra o enum
+# Modifier), bandas de raridade, taxa de submissão e as puras de comparação de
+# nome. Nisto aqui só fica o que é contrato entre domínios — o forjeiro tem dono
+# de decisão próprio agora.
 
 # (de EconomyService.gd:874)
 static func ShopDay(now : int) -> int:
@@ -604,61 +636,6 @@ static func IsValidGuildTag(tag : String) -> bool:
 	return true
 
 
-# (de EconomyService.gd:3906)
-static func CraftBudgetCap(tier : int, slot : int) -> int:
-	if not CRAFT_BUDGET_CAP.has(tier) or slot < 0 or slot > 7:
-		return 0
-	return int((CRAFT_BUDGET_CAP[tier] as Array)[slot])
-
-
-# (de EconomyService.gd:3911)
-static func CraftRarityForUsage(pct : float) -> String:
-	for band in CRAFT_RARITY_BANDS:
-		if pct < float((band as Array)[0]):
-			return str((band as Array)[1])
-	return "Lendário"
-
-# Taxa de submissão em gold: 500 × tier² (proposta; confirmar após o beta).
-
-# (de EconomyService.gd:3918)
-static func CraftSubmitFee(tier : int) -> int:
-	return CRAFT_SUBMIT_FEE_BASE * tier * tier
-
-# Normaliza nome p/ checagens (pré-filtro + duplicata).
-
-# (de EconomyService.gd:3922)
-static func CraftNormName(name : String) -> String:
-	return name.strip_edges().to_lower()
-
-# Distância de edição simples (golpe tipo Gladiu5 vs Gladius). O(n*m), nomes
-# curtos — sem problema de performance no volume de submissões.
-
-# (de EconomyService.gd:3927)
-static func CraftEditDistance(a : String, b : String) -> int:
-	var prev : Array = []
-	for j in b.length() + 1:
-		prev.append(j)
-	for i in range(1, a.length() + 1):
-		var cur : Array = [i]
-		for j in range(1, b.length() + 1):
-			cur.append(mini(mini(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + (0 if a[i - 1] == b[j - 1] else 1)))
-		prev = cur
-	return int(prev[b.length()])
-
-# SOM-IDLE Fase H: validação + gravação de submissão de item criado.
-# ITEM_CRAFTING.md §2: paga taxa de gold sink, valida orçamento, nome e capa
-# diária; grava como 'pending'. GM aprova depois (WorldCommands).
-#
-# Validações (server-autorizado):
-# - slot válido (0–7), baseItemHash > 0, name não-vazio
-# - budget: soma ponderada de modifiers <= CraftBudgetCap(tier, slot) (0 = bloqueado)
-# - taxa: player tem gp >= CraftSubmitFee(tier); burnt + ledger mirror
-# - nome: não vazio, tamanho 3–30, não na blocklist, não duplicata (edit-distance < 2)
-# - daily cap: CRAFT_MAX_PER_DAY submissões hoje
-# - email verificado (D3 auth gate)
-#
-# Retorna {ok: bool, reason: String}.
-
 # (de EconomyService.gd:3635, renomeado sem underscore)
 static func AchievementByID(achievementID : String) -> Dictionary:
 	for entry in ACHIEVEMENTS:
@@ -670,104 +647,80 @@ static func AchievementByID(achievementID : String) -> Dictionary:
 #
 # ROADMAP Bloco 1 item 10: `data/conf/paid_catalog.json` é o catálogo cobrável e
 # está nos dois lados da fronteira — o companion cobra dele, o jogo anuncia o
-# `SHOP_CATALOG` abaixo e aplica o grant por `kind`. Três cópias sem validação
-# cruzada é o bug: um `kind` que `_GrantApplyAndMark` não conhece derruba o grant
-# para `false`, a linha fica `pending` na fila e o jogador pagou sem receber — a
-# mesma classe do D1, só que pela borda do catálogo. `data/conf/*` é exportado
-# pelos presets (Windows/Android/Linux/macOS), então o servidor em produção
-# também enxerga o arquivo; `companion/` não é.
-const PaidCatalogPath : String			= "res://data/conf/paid_catalog.json"
-
-const GRANT_KINDS : Array = ["gems", "gold", "vip_days", "pass_premium", "cosmetic", "item"]
-
-# Divergências entre catálogo cobrável, anúncio e aplicador (vazio = batendo).
-# Puro — recebe o texto, não toca disco, banco nem rede — para servir ao boot do
-# servidor e à suíte com o mesmo código.
+# `SHOP_CATALOG` abaixo e aplica o grant por `kind`. A VALIDAÇÃO saiu daqui na
+# FATIA 13 e mora em `EconomyBaseCatalog.gd`, junto da validação do catálogo base
+# e da referência congelada que as duas amarram ao disco; os dois caminhos
+# públicos continuam nestas linhas porque é por `EconomyCatalog.ValidatePaidCatalog*`
+# que o boot do servidor (`EconomyService._post_launch`) e a suíte chamam. O
+# validador recebe as tabelas deste arquivo como parâmetro — não lê `EconomyCatalog`
+# —, então a dependência corre num sentido só e não há ciclo.
 static func ValidatePaidCatalog(raw : String) -> PackedStringArray:
-	var errors : PackedStringArray = PackedStringArray()
-	var parsed : Variant = JSON.parse_string(raw)
-	if typeof(parsed) != TYPE_DICTIONARY:
-		errors.append("catálogo pago ausente ou não é um objeto JSON")
-		return errors
-	var paid : Dictionary = parsed
-	# §24-11 (Lei 15.211/2025): `_agreements` é a declaração do aceite que a OUTRA
-	# porta do dinheiro cobra — o companion recusa intent/preferência/sandbox
-	# quando o aceite gravado na conta não bate com ela. Validar contra os consts
-	# aqui fecha o ciclo "uma fonte, dois leitores" no mesmo regime do preço:
-	# bumpar `NetworkCommons.Agreement*` sem bumpar o arquivo (ou vice-versa) vira
-	# erro de boot, e não duas portas doendo com versões diferentes do contrato.
-	var agreements : Variant = paid.get("_agreements")
-	if typeof(agreements) != TYPE_DICTIONARY:
-		errors.append("_agreements: ausente ou não é um objeto — o companion fica sem versão vigente para cobrar e recusa todo checkout")
-	else:
-		var declared : Dictionary = agreements
-		_ValidateAgreementClause(declared, "tos", NetworkCommons.AgreementTosVersion, errors)
-		_ValidateAgreementClause(declared, "privacy", NetworkCommons.AgreementPrivacyVersion, errors)
-		_ValidateAgreementClause(declared, "age", NetworkCommons.AgreementAgeVersion, errors)
-	var advertised : Dictionary = {}
-	for entry in SHOP_CATALOG:
-		advertised[str(entry.get("sku", ""))] = float(entry.get("price", 0.0))
-	for key in paid.keys():
-		var sku : String = String(key)
-		# Chaves de comentário (`_note`) não são SKU.
-		if sku.begins_with("_"):
-			continue
-		var item : Variant = paid[key]
-		if typeof(item) != TYPE_DICTIONARY:
-			errors.append("%s: linha do catálogo não é um objeto" % sku)
-			continue
-		_ValidateSkuLine(sku, item, errors, true)
-		if not advertised.has(sku):
-			errors.append("%s: cobrável no gateway e não anunciado no SHOP_CATALOG" % sku)
-		elif absf(float((item as Dictionary).get("price", -1.0)) - float(advertised[sku])) > 0.005:
-			errors.append("%s: preço cobrado != preço anunciado" % sku)
-	for missing in advertised.keys():
-		if not paid.has(String(missing)):
-			errors.append("%s: anunciado e o gateway não cobra (intent vira unknown_sku)" % String(missing))
-	return errors
-
-# Uma cláusula do aceite (tos/privacy/idade). O comparison é de igualdade e não
-# de ordem: o predicate do jogo (`SQL.IsConsentAccepted`) também é, então
-# "2027" no arquivo não "autoriza" nada — só faz as duas portas discordarem.
-static func _ValidateAgreementClause(declared : Dictionary, clause : String, current : String, errors : PackedStringArray) -> void:
-	var value : String = str(declared.get(clause, ""))
-	if value != current:
-		errors.append("_agreements.%s: catálogo declara \"%s\", o jogo cobra \"%s\"" % [clause, value, current])
+	return EconomyBaseCatalog.ValidatePaidCatalog(raw, COSMETIC_CATALOG, SHOP_CATALOG)
 
 static func ValidatePaidCatalogFile() -> PackedStringArray:
-	if not FileAccess.file_exists(PaidCatalogPath):
-		return PackedStringArray(["%s não existe — o servidor não tem como validar o catálogo pago" % PaidCatalogPath])
-	return ValidatePaidCatalog(FileAccess.get_file_as_string(PaidCatalogPath))
+	return EconomyBaseCatalog.ValidatePaidCatalogFile(COSMETIC_CATALOG, SHOP_CATALOG)
 
-# Uma linha de catálogo, ou uma perna de bundle. O bundle não chega ao jogo (o
-# companion decompõe em N grants atômicos), mas cada perna tem que ser
-# aplicável: senão a compra entrega metade.
-static func _ValidateSkuLine(sku : String, line : Dictionary, errors : PackedStringArray, topLevel : bool, legIndex : int = 0) -> void:
-	# Uma perna de bundle precisa se distinguir da linha-mãe na mensagem: o
-	# operador lê o log do boot e tem de saber qual perna não entrega.
-	var label : String = sku if topLevel else "%s perna %d" % [sku, legIndex]
-	var kind : String = str(line.get("kind", ""))
-	if kind == "bundle":
-		if not topLevel:
-			errors.append("%s: bundle dentro de bundle" % label)
-			return
-		var contents : Variant = line.get("contents", null)
-		if typeof(contents) != TYPE_ARRAY or (contents as Array).is_empty():
-			errors.append("%s: bundle sem contents" % sku)
-			return
-		var legN : int = 0
-		for leg in (contents as Array):
-			legN += 1
-			if typeof(leg) != TYPE_DICTIONARY:
-				errors.append("%s: perna %d de bundle não é um objeto" % [sku, legN])
-				continue
-			_ValidateSkuLine(sku, leg, errors, false, legN)
-		return
-	if not GRANT_KINDS.has(kind):
-		errors.append("%s: kind \"%s\" não é aplicável por _GrantApplyAndMark" % [label, kind])
-		return
-	var amount : Variant = line.get("amount", 0)
-	if not (amount is int or amount is float) or int(amount) <= 0:
-		errors.append("%s: amount ausente ou não-positivo" % label)
-	if kind == "cosmetic" and not COSMETIC_CATALOG.has(str(line.get("cosmetic_id", ""))):
-		errors.append("%s: cosmetic_id fora do COSMETIC_CATALOG" % label)
+
+# ------------------------------------------------------------------ catálogo base (fonte única)
+#
+# JUIZ ECONOMIA 2026-09-27 (nota 9.4, teto declarado na própria ficha): "os
+# botões base são constants de código enquanto o catálogo pago já é dados E
+# validado". `data/conf/economy_base_catalog.json` é o preço do baú, o teto de
+# compra por vez e a fricção da troca direta; o regime é o MESMO de
+# `ValidatePaidCatalog` — chave desconhecida, preço não-positivo e SKU que
+# nenhum leitor conhece são erros de boot, e um arquivo com um número trocado
+# em relação à referência congelada do código também é. A terceira regra é o
+# ponto do corte: sem ela, "passar para dados" abre uma porta de rebalance
+# silencioso (alguém edita o JSON no servidor e o baú passa de 120 para 60 gems
+# sem um commit, sem review e sem harness). Não derruba o servidor: com erro,
+# nada do arquivo entra e os números do código continuam valendo, com o desvio
+# no log — exatamente a disciplina do catálogo pago acima.
+#
+# O `static func ValidateBaseCatalog` abaixo é a mesma régua de sempre, agora
+# delegada: corpo em `EconomyBaseCatalog.gd`, junto do `ValidatePaidCatalog` e da
+# tabela que ele confere. Ficam aqui o estado em runtime que os consumidores leem
+# e os três pontos de carga que o escrevem.
+static func ValidateBaseCatalog(raw : String) -> PackedStringArray:
+	return EconomyBaseCatalog.ValidateBaseCatalog(raw)
+
+# Erros da última carga (vazio = arquivo válido aplicado, ou nada tentado).
+static var BaseCatalogErrors : PackedStringArray = PackedStringArray()
+
+# Lê, valida e aplica. Retorna os erros (vazio = aplicado).
+static func LoadBaseCatalog() -> PackedStringArray:
+	if not FileAccess.file_exists(EconomyBaseCatalog.BaseCatalogPath):
+		BaseCatalogErrors = PackedStringArray(["%s não existe — o servidor segue com os números do código" % EconomyBaseCatalog.BaseCatalogPath])
+		return BaseCatalogErrors
+	return ApplyBaseCatalog(FileAccess.get_file_as_string(EconomyBaseCatalog.BaseCatalogPath))
+
+# Seam do harness: texto entra, estado sai, nenhum disco — é como a suíte prova
+# o ramo fail-closed (arquivo inválido NÃO pode sobrescrever nada) sem editar
+# `data/conf`.
+static func ApplyBaseCatalog(raw : String) -> PackedStringArray:
+	BaseCatalogErrors = ValidateBaseCatalog(raw)
+	if not BaseCatalogErrors.is_empty():
+		return BaseCatalogErrors
+	var doc : Dictionary = JSON.parse_string(raw)
+	var knobs : Dictionary = doc.get("knobs", {})
+	BaseKnobs = knobs.duplicate(true)
+	ChestCostGems = int(knobs.get("chest_cost_gems", ChestCostGemsRef))
+	MaxChestsPerPurchase = int(knobs.get("max_chests_per_purchase", MaxChestsPerPurchaseRef))
+	var lines : Array = []
+	for entry in (doc.get("shop", []) as Array):
+		lines.append((entry as Dictionary).duplicate(true))
+	SHOP_CATALOG = lines
+	return BaseCatalogErrors
+
+# Voltar ao estado congelado do código (harness troca o arquivo e devolve).
+static func ResetBaseCatalog() -> void:
+	BaseKnobs = BASE_KNOBS_REF.duplicate(true)
+	ChestCostGems = ChestCostGemsRef
+	MaxChestsPerPurchase = MaxChestsPerPurchaseRef
+	var lines : Array = []
+	for entry in ShopCatalogRef:
+		lines.append((entry as Dictionary).duplicate(true))
+	SHOP_CATALOG = lines
+	BaseCatalogErrors = PackedStringArray()
+
+# P1-4: a validação fail-closed dos pesos de forja mora em `CraftCatalog.gd`
+# (`ValidateModWeights`), junto da tabela que ela amarra ao enum Modifier.

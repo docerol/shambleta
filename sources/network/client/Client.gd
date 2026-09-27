@@ -23,6 +23,9 @@ static var LastBossResult : Dictionary = {}
 # Hub Atividades: caches das abas (janela Atividades).
 static var LastAchievements : Array = []
 static var LastTorment : Dictionary = {}
+# SOM-IDLE retenção: último estado do streak de login, carimbado e empurrado pelo
+# SERVIDOR no login (`IdlePolicyService`) e re-lido pelo `Server.GetStreak`.
+static var LastStreak : Dictionary = {}
 static var LastCheckoutIntent : Dictionary = {}
 static var LastDailyShop : Dictionary = {}
 static var LastReferralState : Dictionary = {}
@@ -35,6 +38,15 @@ static var LastRebirthState : Dictionary = {}
 static var LastRebirthResult : Dictionary = {}
 # SOM-IDLE (1d): último resultado de pedido de reembolso (CDC art.49).
 static var LastRefundResult : Dictionary = {}
+# P1 (auditoria 2026-09-27): caches de arena, eventos ao vivo e leilão. Os
+# broadcasts correspondentes já saíam do servidor sem contraparte aqui (ver os
+# handlers abaixo) — sem cache, as janelas não tinham o que desenhar ao abrir.
+static var LastActiveEvents : Dictionary = {}
+static var LastArenaDefense : Dictionary = {}
+static var LastArenaAttack : Dictionary = {}
+static var LastArenaBoard : Dictionary = {}
+static var LastAuctionListings : Dictionary = {}
+static var LastAuctionTrade : Dictionary = {}
 
 #
 func WarpPlayer(mapID : int, playerPos : Vector2, _peerID : int):
@@ -441,6 +453,79 @@ func ShopFeedback(ok : bool, reason : String, _peerID : int):
 	if Launcher.GUI:
 		Launcher.GUI.notificationLabel.AddNotification(("Shop: " if ok else "Shop rejected: ") + reason)
 
+# SOM-IDLE P1 (auditoria 2026-09-27): arena, eventos ao vivo e leilão já saíam do
+# servidor como broadcasts (`CallClient("ArenaBoardResult", …)` etc.) sem método
+# correspondente aqui — o dispatch terminava num nome inexistente e nada chegava
+# ao jogador. Cada handler abaixo é o formato da casa: cache estático `Last*`
+# (lido pelas janelas, que podem estar fechadas no momento do push), empurrão para
+# a janela visível e notificação quando o resultado é do próprio jogador.
+func ActiveEvents(state : Dictionary, _peerID : int):
+	LastActiveEvents = state
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.arenaWindow and Launcher.GUI.arenaWindow.is_visible():
+		Launcher.GUI.arenaWindow.ShowEvents(state)
+
+func ArenaDefenseResult(result : Dictionary, _peerID : int):
+	LastArenaDefense = result
+	if not Launcher.GUI:
+		return
+	if bool(result.get("ok", false)):
+		Launcher.GUI.notificationLabel.AddNotification("Arena defense saved (power %d)" % int(result.get("power", 0)))
+	else:
+		Launcher.GUI.notificationLabel.AddNotification("Arena defense rejected: " + str(result.get("reason", "?")))
+	if Launcher.GUI.arenaWindow and Launcher.GUI.arenaWindow.is_visible():
+		Launcher.GUI.arenaWindow.ShowDefense(result)
+
+func ArenaAttackResult(result : Dictionary, _peerID : int):
+	LastArenaAttack = result
+	if not Launcher.GUI:
+		return
+	if bool(result.get("ok", false)):
+		Launcher.GUI.notificationLabel.AddNotification("Arena: %s (elo %d)" % ["victory" if bool(result.get("win", false)) else "defeat", int(result.get("new_attacker_elo", 0))])
+	else:
+		Launcher.GUI.notificationLabel.AddNotification("Arena attack rejected: " + str(result.get("reason", "?")))
+	if Launcher.GUI.arenaWindow and Launcher.GUI.arenaWindow.is_visible():
+		Launcher.GUI.arenaWindow.ShowAttack(result)
+
+func ArenaBoardResult(board : Dictionary, _peerID : int):
+	LastArenaBoard = board
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.arenaWindow and Launcher.GUI.arenaWindow.is_visible():
+		Launcher.GUI.arenaWindow.ShowBoard(board)
+
+# Fase H: veredito da submissão de item criado (o GM decide a aprovação depois,
+# por comando — aqui o jogador só precisa saber se a submissão entrou).
+func CraftSubmitFeedback(ok : bool, reason : String, _peerID : int):
+	if Launcher.GUI:
+		Launcher.GUI.notificationLabel.AddNotification(("Craft submitted: " + reason) if ok else ("Craft rejected: " + reason))
+
+# P1-1/P1-2: o leilão. O cache é obrigatório — a janela é construída em runtime e
+# pode estar fechada quando a resposta chega; ao abrir, ela lê `LastAuctionListings`
+# em vez de esperar um push que já passou.
+func AuctionListings(state : Dictionary, _peerID : int):
+	LastAuctionListings = state
+	if not Launcher.GUI:
+		return
+	if Launcher.GUI.auctionHouseWindow and Launcher.GUI.auctionHouseWindow.is_visible():
+		Launcher.GUI.auctionHouseWindow.ShowState(state)
+
+func AuctionTradeResult(result : Dictionary, _peerID : int):
+	LastAuctionTrade = result
+	if not Launcher.GUI:
+		return
+	var panel : WindowPanel = Launcher.GUI.auctionHouseWindow
+	if panel != null and panel.is_visible():
+		panel.ShowTradeResult(result)
+		return
+	# Sem janela aberta o gasto ainda aconteceu e o jogador precisa ser avisado:
+	# o painel tem o mapa de motivo→texto, e sem painel construído sobra o reason.
+	var line : String = str(result.get("reason", "?"))
+	if panel != null:
+		line = panel.TradeLine(result)
+	Launcher.GUI.notificationLabel.AddNotification(line)
+
 # Fase A (checkout sandbox): intenção de compra — a Shop usa o
 # external_reference p/ simular o pagamento no companion (sandbox) ou pagar
 # no MP (prod). Ver Shop._on_checkout_intent.
@@ -509,6 +594,13 @@ func GuildState(state : Dictionary, _peerID : int):
 	LastGuildState = state
 	if Launcher.GUI and Launcher.GUI.socialWindow and Launcher.GUI.socialWindow.has_method("ShowGuildState"):
 		Launcher.GUI.socialWindow.ShowGuildState(state)
+	# O painel que o botão "Guilda" abre é quem gerencia a guilda hoje. Sem este
+	# empurrão ele ficaria preso ao snapshot lido na abertura — duas UIs de guilda
+	# na tela, uma delas meio viva.
+	if Launcher.GUI != null:
+		var guildPanel : Variant = Launcher.GUI.get("guildWindow")
+		if guildPanel != null and guildPanel.has_method("RenderState"):
+			guildPanel.call("RenderState", state)
 
 func GuildFeedback(ok : bool, reason : String, _peerID : int):
 	if Launcher.GUI:
@@ -598,6 +690,17 @@ func TormentState(state : Dictionary, _peerID : int):
 	LastTorment = state
 	if Launcher.GUI and Launcher.GUI.has_method("RefreshActivitiesTab"):
 		Launcher.GUI.RefreshActivitiesTab(1)
+
+# Streak de login: o servidor manda o estado no login (junto do ouro que ele
+# mesmo concedeu) e responde ao pedido da janela. Aqui é só espelho — nenhum
+# número é calculado no cliente.
+func StreakState(state : Dictionary, _peerID : int):
+	LastStreak = state
+	if Launcher.GUI == null:
+		return
+	var afk : Object = Launcher.GUI.get("afkWindow")
+	if afk != null and afk.has_method("ShowStreak"):
+		afk.call("ShowStreak", state)
 
 func RefreshOnlineList(players : PackedStringArray, _peerID : int):
 	if Launcher.GUI:

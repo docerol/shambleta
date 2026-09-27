@@ -1,8 +1,20 @@
 extends RefCounted
 class_name CommandManager
 
+# GM bypass deixou de ser consequência de build: um export acidental de debug
+# entregava a conta de qualquer jogador com permissão plena de comando. A
+# régua agora é sempre conferida; a única saída é o operador declarar
+# SHAMBLETA_GM_MODE=1 (dev/staging). Lido por função porque um static var só
+# seria atualizado por um bootstrap que não existe para esta classe.
+const GM_MODE_ENV : String = "SHAMBLETA_GM_MODE"
+
+static func GMModeEnabled() -> bool:
+	return OS.get_environment(GM_MODE_ENV) == "1"
+
 # Variables
 static var commands : Dictionary[StringName, Command]				= {}
+
+# Handling
 
 # Handling
 static func Register(commandName : StringName, callable : Callable, permission : ActorCommons.Permission, description : String):
@@ -32,7 +44,7 @@ static func Handle(caller : PlayerAgent, commandStr : String):
 	var playerPermission : ActorCommons.Permission = Peers.GetPermission(caller.peerID)
 	if not command:
 		Network.CommandFeedback("Command '%s' is not registered" % commandName, caller.peerID)
-	elif not OS.is_debug_build() and command._permission > playerPermission:
+	elif not GMModeEnabled() and command._permission > playerPermission:
 		Network.CommandFeedback("Command '%s' could not be called due to unmet permissions" % commandName, caller.peerID)
 	elif not args.is_empty() and args[0] == "?":
 		Network.CommandFeedback("Command usage: %s" % command._description, caller.peerID)

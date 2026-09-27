@@ -16,6 +16,12 @@ var _eco : EconomyService = null
 
 # Gems -> vip_until. Extends from the current window when still active.
 # Fase B: registra o tier (cap offline 24h/36h) — upgrade nunca rebaixa.
+# P1-10 (AUDITORIA_2026-09-27): débito + ledger + janela + tier num SÓ commit.
+# Antes eram duas transações (AddGems faz a própria; SetVIPUntil/SetVIPTier
+# autocomitam separadas) — crash entre elas deixava gem cobrada sem VIP (ou
+# VIP grátis sem gem). Pattern é o vizinho correto: BuyChests/BuyDailyOffer
+# (settleMutex + Transaction + ops raw; SetVIPUntil/SetVIPTier já são raw por
+# natureza — auditoria A).
 func PurchaseVIP(accountID : int, tier : int) -> bool:
 	if tier != 1 and tier != 2:
 		return false
@@ -24,13 +30,26 @@ func PurchaseVIP(accountID : int, tier : int) -> bool:
 	var currentUntil : int = Launcher.SQL.GetVIPUntil(accountID)
 	var base : int = maxi(now, currentUntil)		# stack time when already VIP
 	var until : int = base + EconomyCatalog.VIPDays * 86400
-	if not _eco.AddGems(accountID, -cost, "vip%d_purchase" % tier):
-		return false
-	if not Launcher.SQL.SetVIPUntil(accountID, until):
-		return false
-	if tier > Launcher.SQL.GetVIPTier(accountID) or currentUntil <= now:
-		Launcher.SQL.SetVIPTier(accountID, tier)
-	return true
+	var ok : bool = false
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var balance : int = sql.GetGemsRaw(accountID)
+		if balance < cost:
+			return false
+		if not sql.SetGemsRaw(accountID, balance - cost):
+			return false
+		if not _eco._LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -cost, balance - cost, "vip%d_purchase" % tier):
+			return false
+		if not sql.SetVIPUntil(accountID, until):
+			return false
+		if tier > sql.GetVIPTier(accountID) or currentUntil <= now:
+			if not sql.SetVIPTier(accountID, tier):
+				return false
+		return true):
+		ok = true
+	_eco.settleMutex.unlock()
+	return ok
 
 # ------------------------------------------------------------------ starter offer / pending grants / checkout intent
 
@@ -116,13 +135,23 @@ func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 # Fase B: tier carregado por grants vip_days (payload sku). Trial/companion
 # entram como tier 1; só vip.3mo sobe a 2. Nunca rebaixa tier ativo.
 
-# Enfileira um grant (idempotente pela chave: duplicada = já na fila, sem erro).
+# Enfileira um grant (idempotente pela chave: duplicada NA MESMA CONTA = já na
+# fila, sem erro). A idempotência é a única coisa que torna a reentrega do webhook
+# inofensiva, e ela só vale para a conta que recebeu o payment: a UNIQUE de
+# `idempotency_key` é global, então conferir só a chave devolvia `true` — "está na
+# fila" — para uma linha de OUTRA conta, e o INSERT nunca acontecia. O dinheiro
+# sumia com resposta de sucesso, que é a pior combinação possível nesta fronteira.
 func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey : String, payload : String = "{}", pricePaid : int = 0, currency : String = "") -> bool:
 	if idempotencyKey.is_empty() or amount <= 0 or not EconomyCatalog.GrantKinds.has(kind):
 		return false
 	var sql : SQLService = Launcher.SQL
-	if sql.QueryBindings("SELECT id FROM grant_queue WHERE idempotency_key = ?;", [idempotencyKey]).size() > 0:
-		return true
+	var keyed : Array = sql.QueryBindings("SELECT account_id FROM grant_queue WHERE idempotency_key = ?;", [idempotencyKey])
+	if not keyed.is_empty():
+		# Mesmo dono = reentrega do mesmo payment: é onde a idempotência protege, e ela
+		# devolve true sem inserir de novo. Dono DIFERENTE = colisão de chave (payment
+		# reusado por engano por quem opera a fila, ou external_reference forjado);
+		# recusar é o único veredito honesto, e deixa a fila intacta para correção.
+		return int((keyed[0] as Dictionary).get("account_id", -1)) == accountID
 	if sql.QueryBindings("SELECT account_id FROM account WHERE account_id = ?;", [accountID]).is_empty():
 		return false
 	# B (auditoria 2026-09-24): `pricePaid` é o que o provedor cobrou (centavos),
@@ -142,11 +171,66 @@ func ProcessPendingGrants(limit : int = 50) -> Dictionary:
 		if Launcher.SQL.Transaction(_GrantApplyAndMark.bind(row, grantID)):
 			done["processed"] = int(done["processed"]) + 1
 			_RecordPurchase(row)
+			# O rombo do clawback é medido DEPOIS do commit e relendo o ledger:
+			# dentro do lambda seria lock recursivo num queryMutex não-recursivo
+			# (mesma regra documentada em _RecordPurchase) e um veredito guardado em
+			# local não sobreviveria ao closure — GDScript captura por valor. Reler o
+			# que de fato commitou é a única fonte honesta do "quanto foi tomado".
+			if str(row.get("kind", "")) == "chargeback":
+				_FlagChargebackShortfall(row)
 		else:
 			Launcher.SQL.ExecuteBindings("UPDATE grant_queue SET status = 'failed', error = 'apply_failed', processed_at = ? WHERE id = ? AND status = 'pending';", [SQLCommons.Timestamp(), grantID])
 			done["failed"] = int(done["failed"]) + 1
 	_eco.settleMutex.unlock()
 	return done
+
+# ------------------------------------------------------------------ P1-6b: rombo do clawback
+# O provedor toma o DINHEIRO e não diz quanto ainda existe de gem paga no jogo:
+# `amount` do chargeback vem do CATÁLOGO (companion), nunca do saldo. Então a
+# dívida pode ser maior do que o tomável, e um débito parcial silencioso é
+# prejuízo que ninguém vê. Duas saídas, as duas lidas por gente:
+#   1. a coluna `error` da PRÓPRIA linha da fila, com o token de motivo (o
+#      operador acha por `grant_queue`, ao lado do payment que originou);
+#   2. uma flag na fila de revisão antifraude, pela API do detector
+#      (FraudeReview.ChargebackShortfall) — nunca INSERT daqui, o guard
+#      tests/fraud_test.gd S-G prende quem escreve em fraud_flag por fora.
+# O valor que faltou fica no `detail`/`evidence` da flag junto do payment, do
+# pedido e do tomado: sem isso a conta fecha no buraco e ninguém sabe o buraco.
+func _FlagChargebackShortfall(grant : Dictionary) -> void:
+	var sql : SQLService = Launcher.SQL
+	var accountID : int = int(grant["account_id"])
+	var paymentID : String = _PaymentIDOf(grant)
+	if paymentID.is_empty():
+		return
+	# Relê o próprio commit (não o closure): o que importa é o débito que virou
+	# linha de ledger, inclusive quando a pré-checagem de idempotência devolveu
+	# 'true' sem debitar nada — aí a linha lida é a da primeira entrega.
+	var clawRows : Array[Dictionary] = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = ? ORDER BY id DESC LIMIT 1;", [accountID, "clawback:" + paymentID])
+	if clawRows.is_empty():
+		return
+	var taken : int = maxi(0, -int(clawRows[0]["amount"]))
+	var owed : int = maxi(0, int(grant["amount"]))
+	if taken >= owed:
+		return
+	var sku : String = ""
+	var parsed : Variant = JSON.parse_string(str(grant.get("payload", "")))
+	if parsed is Dictionary:
+		sku = str((parsed as Dictionary).get("sku", ""))
+	# Token de motivo legal para ReasonCodes (minúsculas + underscore): é o que o
+	# toast/fila mostram quando alguém traduzir; sem tradução ele volta cru de
+	# propósito (ver o cabeçalho de sources/ops/ReasonCodes.gd — a tabela de texto
+	# mora em data/i18n/ui.csv e não neste arquivo).
+	var reason : String = ReasonCodes.ChargebackShortfall
+	# `error` é coluna de diagnóstico da fila (o único outro escritor hoje é
+	# 'apply_failed'), e o status continua 'processed': a linha foi aplicada, o
+	# que não coube nela é dívida visível, não falha de aplicação.
+	if not sql.ExecuteBindings("UPDATE grant_queue SET error = ? WHERE id = ? AND status = 'processed';", [reason, int(grant["id"])]):
+		return
+	# O rombo já está visível na fila de grants; a flag de revisão é o que põe a
+	# conta na fila onde o operador entra todo dia. Comunidade nula (boot parcial)
+	# não pode derrubar o flush da fila — o UPDATE acima já é o registro mínimo.
+	if _eco.communityService != null:
+		_eco.communityService.ChargebackShortfall(accountID, paymentID, owed, taken, sku, int(grant["id"]))
 
 # SOM-IDLE E3: o crédito e a marcação da fila são o MESMO commit. Marcar
 # 'processed' depois do Transaction() fechar deixava uma janela: derrubar o
@@ -183,9 +267,28 @@ func _RecordPurchase(grant : Dictionary) -> void:
 	var parsed : Variant = JSON.parse_string(str(grant.get("payload", "")))
 	if parsed is Dictionary:
 		sku = str((parsed as Dictionary).get("sku", "?"))
-	Launcher.Telemetry.RecordMoney("purchase", int(grant["account_id"]), 0, JSON.stringify({
+	# O clawback tem price_paid do payment original no payload (foi assim que o
+	# provedor cobrou). Registrar a linha como "purchase" faria a receita somar
+	# justamente na linha que a tirou.
+	var eventKind : String = "chargeback" if str(grant["kind"]) == "chargeback" else "purchase"
+	Launcher.Telemetry.RecordMoney(eventKind, int(grant["account_id"]), 0, JSON.stringify({
 		"sku" = sku, "kind" = str(grant["kind"]), "amount" = int(grant["amount"]),
 		"price_paid" = int(grant.get("price_paid", 0)), "currency" = str(grant.get("currency", ""))}))
+
+# payment_id é o que sobrevive entre a linha original e o clawback: o companion usa
+# o id do payment como chave do grant e '<id>:chargeback' como chave do clawback, e
+# grava o id no payload. O recorte da chave é o fallback de um grant criado à mão
+# pelo operador, que pode trazer a chave sem o payload completo.
+func _PaymentIDOf(grant : Dictionary) -> String:
+	var parsed : Variant = JSON.parse_string(str(grant.get("payload", "")))
+	if parsed is Dictionary:
+		var pid : String = str((parsed as Dictionary).get("payment_id", ""))
+		if not pid.is_empty():
+			return pid
+	var key : String = str(grant.get("idempotency_key", ""))
+	if key.ends_with(":chargeback"):
+		return key.substr(0, key.length() - len(":chargeback"))
+	return key
 
 # Aplica um grant DENTRO de Transaction() — só ops raw (db direto, sem mutex).
 func _ApplyGrantRaw(grant : Dictionary) -> bool:
@@ -197,6 +300,59 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 	var now : int = SQLCommons.Timestamp()
 	if dbNode.select_rows("account", "account_id = %d" % accountID, ["account_id"]).is_empty():
 		return false
+	# P1-6 (auditoria 2026-09-27): chargeback não é grant, é o reverso. O companion
+	# enfileira kind='chargeback' quando o webhook chega 'charged_back' — evento
+	# que nenhum webhook nosso precede, então sem consumo o jogador ficava com as
+	# gems e o prejuízo morava só no provedor.
+	#
+	# Idempotência em duas camadas: a UNIQUE do companion ('<payment>:chargeback')
+	# e a pré-checagem de ledger abaixo, que é o que vale se o operador
+	# re-enfileirar o mesmo payment sob outra chave.
+	if kind == "chargeback":
+		var paymentID : String = _PaymentIDOf(grant)
+		if paymentID.is_empty():
+			return false
+		if not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "clawback:" + paymentID]).is_empty():
+			return true
+		var clawBal : int = sql.GetGemsRaw(accountID)
+		# P1-6b: o teto do débito é a parte PAGA do saldo (`gems_paid`), nunca o
+		# saldo inteiro. O débito antigo era `min(gems, amount)` e isso punia a
+		# pessoa errada: gasto as 550 gems compradas, o faucet F2P me dá 200 de
+		# anúncio, chega o chargeback e o jogo toma 200 gems que eu NUNCA paguei —
+		# gem grátis queimada por um débito de gem paga. É o inverso exato do portão
+		# do art.49, que exige `gems_paid >= amount` (gate `not_paid` em
+		# RequestGemRefund) precisamente porque saldo total não prova ORIGEM. O
+		# mesmo raciocínio vale na reversão: só se toma o que ainda é dinheiro.
+		#
+		# `clampi(..., 0, clawBal)` não é superstição: `gems_paid <= gems` é
+		# invariante do SetGemsRaw, e um wallet acima disso (escrita fora do caminho
+		# único) não pode autorizar débito maior do que existe — nunca negativo.
+		#
+		# Débito parcial/zero NÃO é falha: 'failed' entupiria a fila para sempre e
+		# gem negativa atravessada no portão de origem seria o mesmo dano de antes.
+		# O que muda é que o rombo deixa de morar só na cabeça de quem escreveu o
+		# código: _FlagChargebackShortfall(), chamado depois do commit, grava o
+		# motivo na própria linha da fila e abre a fila de revisão.
+		# LIMITAÇÃO assumida — é por isso que o rombo vira fila e não asserção:
+		# `gems_paid` é por CONTA, não por compra. Se o provedor abrir chargeback de
+		# um payment que nunca foi entregue nesta conta (external_reference errado,
+		# payment re-usado, fraude), o teto acima ainda pode tomar gem paga de OUTRA
+		# compra do mesmo jogador. Fechar isso de vez passaria por exigir o
+		# `grant:<payment>` no ledger antes de debitar — mas aí o chargeback que
+		# chega ANTES do grant original ser processado (aprovado→contestado entre
+		# dois ticks, e o grant continua 'pending' na fila) seria jogado fora e o
+		# prejuízo voltaria a morar só no provedor. Escolha: tomar até o teto pago e
+		# DENUNCIAR a diferença (payment, pedido, tomado e faltando na flag), que é
+		# o que um operador consegue conferir; gem grátis continua intocável.
+		var owed : int = maxi(0, amount)
+		var debit : int = mini(owed, clampi(sql.GetGemsPaidRaw(accountID), 0, clawBal))
+		if debit > 0 and not sql.SetGemsRaw(accountID, clawBal - debit):
+			return false
+		# A linha de ledger nasce mesmo com débito 0, e isso é deliberado: é ela que
+		# fecha a porta do art.49 para este payment (RequestGemRefund consulta
+		# `clawback:<payment>` antes de devolver de novo) e é ela que torna a
+		# redelivery idempotente por payment, não por tentativa de débito.
+		return _eco._LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -debit, clawBal - debit, "clawback:" + paymentID)
 	if kind == "gems":
 		var balance : int = sql.GetGemsRaw(accountID)
 		if not sql.SetGemsRaw(accountID, balance + amount):
@@ -333,7 +489,8 @@ func _ApplyGrantRaw(grant : Dictionary) -> bool:
 # saldo que ainda é dinheiro entregue, e é ela que tem de cobrir o montante
 # comprado. Saldo total não prova nada — com faucet F2P o número se repõe de
 # graça e o bem já foi gasto. Regras (na ordem):
-#   não_found / window_expired / already_refunded / gems_consumed / not_paid.
+#   not_found / window_expired / already_refunded / charged_back /
+#   gems_consumed / not_paid.
 # O estorno do DINHEIRO cabe ao companion/provedor (onboarding pendente — handoff);
 # aqui o jogo reverte as gems + grava no ledger (prova de auditoria, append-only).
 
@@ -357,6 +514,12 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 	# (3) já reembolsada? (linha refund:<key>)
 	if not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "refund:" + idempotencyKey]).is_empty():
 		return {"ok" = false, "reason" = "already_refunded"}
+	# (3b) P1-6: este payment já sofreu clawback de chargeback — o dinheiro foi
+	# tomado pelo provedor e o débito já saiu do saldo. Deixar o art.49 rodar por
+	# cima pagaria o jogador duas vezes pela mesma compra (as gems de OUTRA
+	# transação cobrem `gems_paid`, que é por conta, não por compra).
+	if not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "clawback:" + idempotencyKey]).is_empty():
+		return {"ok" = false, "reason" = "charged_back"}
 	# (4) gems não consumidas: saldo atual >= montante comprado
 	if sql.GetGems(accountID) < amount:
 		return {"ok" = false, "reason" = "gems_consumed"}
@@ -369,6 +532,12 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 	if sql.GetGemsPaid(accountID) < amount:
 		return {"ok" = false, "reason" = "not_paid"}
 	# aplica o estorno de forma atômica (re-verifica o saldo sob o lock)
+	# K1: o valor em centavos mora na fila, não no ledger. Sem lê-lo aqui o evento
+	# de reverso não abate receita nenhuma e o ARPU continua contando a venda que
+	# foi devolvida.
+	var paidRows : Array[Dictionary] = sql.QueryBindings("SELECT price_paid, currency FROM grant_queue WHERE idempotency_key = ? AND account_id = ?;", [idempotencyKey, accountID])
+	var pricePaid : int = int(paidRows[0].get("price_paid", 0)) if not paidRows.is_empty() else 0
+	var currency : String = str(paidRows[0].get("currency", "")) if not paidRows.is_empty() else ""
 	var applied : bool = false
 	_eco.settleMutex.lock()
 	if sql.Transaction(func() -> bool:
@@ -385,4 +554,8 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 	_eco.settleMutex.unlock()
 	if not applied:
 		return {"ok" = false, "reason" = "gems_consumed"}
+	if Launcher.Telemetry != null:
+		Launcher.Telemetry.RecordMoney("refund", accountID, 0, JSON.stringify({
+			"key" = idempotencyKey, "amount" = amount,
+			"price_paid" = pricePaid, "currency" = currency}))
 	return {"ok" = true, "reason" = "refunded", "amount" = amount}

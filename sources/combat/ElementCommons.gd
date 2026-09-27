@@ -118,6 +118,99 @@ static func _AlterationFor(statusType : StatusType) -> ActorCommons.Alteration:
 			return ActorCommons.Alteration.BURN
 	return ActorCommons.Alteration.UNKNOWN
 
+# ------------------------------------------------------------------ afinidade (leitura de feedback)
+# SOM-GAMEPLAY G2 (AUDITORIA §"Core Gameplay"): a mitigação elemental já existia,
+# mas era invisível — o dano chegava no número e o jogador nunca sabia se doeu
+# mais porque o alvo É FRACO àquele elemento. Estas funções não calculam dano
+# nenhum: são uma LEITURA da curva que EffectiveResist/_MitigatedElement já usam,
+# para a tela poder decorar o número. Por isso moram aqui e não no GUI: servidor
+# e cliente compartilham o mesmo arquivo, e o cliente tem as stats do alvo no
+# mesmo preset (EntitiesDB) — nenhum byte novo de protocolo.
+enum Affinity {
+	UNKNOWN = -1,	# nenhum elemento em jogo: mostrar selo seria mentira
+	WEAK = 0,		# o alvo absorve pouco, leva >= 75% do dano daquele elemento
+	NEUTRAL = 1,
+	RESISTED = 2,	# o alvo absorve >= 50%
+}
+
+# Limiares DERIVADOS da curva de mitigação (dano final = raw * (1 - resist)),
+# não números de balance novos: 0.25 => 75% do dano passa; 0.5 => metade passa.
+# ResistCap (0.75) é o teto do motor, então RESISTED cobre de 50% a 75% absorvidos.
+const WeakResistMax : float				= 0.25
+const ResistedResistMin : float			= 0.5
+
+enum Element {
+	NoElement = -1,
+	Fire = 0,
+	Ice = 1,
+	Lightning = 2,
+}
+
+static func AffinityFromResist(resist : float) -> int:
+	if resist <= WeakResistMax:
+		return Affinity.WEAK
+	if resist >= ResistedResistMin:
+		return Affinity.RESISTED
+	return Affinity.NEUTRAL
+
+static func IsWeak(affinity : int) -> bool:
+	return affinity == Affinity.WEAK
+
+static func IsResisted(affinity : int) -> bool:
+	return affinity == Affinity.RESISTED
+
+# Resistência do elemento — os MESMOS campos que GetElementalDamage mitiga.
+static func ElementResist(target : BaseStats, element : int) -> float:
+	if target == null:
+		return 0.0
+	match element:
+		Element.Fire:
+			return target.fireResist
+		Element.Ice:
+			return target.iceResist
+		Element.Lightning:
+			return target.lightningResist
+	return 0.0
+
+# Elemento dominante do atacante — o que a tela trata como "o" elemento do
+# golpe. Empate resolve na ordem Fire > Ice > Lightning (estável, sem rand).
+static func DominantElement(attacker : BaseStats) -> int:
+	if attacker == null:
+		return Element.NoElement
+	var best : int = Element.NoElement
+	var bestValue : int = 0
+	if attacker.fireDamage > bestValue:
+		bestValue = attacker.fireDamage
+		best = Element.Fire
+	if attacker.iceDamage > bestValue:
+		bestValue = attacker.iceDamage
+		best = Element.Ice
+	if attacker.lightningDamage > bestValue:
+		bestValue = attacker.lightningDamage
+		best = Element.Lightning
+	return best
+
+# Afinidade exibida para uma alteração. Regra de honestidade: UNKNOWN quando não
+# há elemento em jogo — um golpe puramente físico (atacante sem dano elemental)
+# NÃO ganha selo, porque badge mentiroso ensina o jogador errado, que é pior que
+# nenhum badge. BURN lê FireResist de propósito (não existe BurnResist no motor).
+static func AffinityForAlteration(attacker : BaseStats, target : BaseStats, alteration : ActorCommons.Alteration) -> int:
+	if target == null:
+		return Affinity.UNKNOWN
+	match alteration:
+		ActorCommons.Alteration.POISON:
+			return AffinityFromResist(target.poisonResist)
+		ActorCommons.Alteration.BLEED:
+			return AffinityFromResist(target.bleedResist)
+		ActorCommons.Alteration.BURN:
+			return AffinityFromResist(target.fireResist)
+		ActorCommons.Alteration.HIT, ActorCommons.Alteration.CRIT, ActorCommons.Alteration.DEADLY:
+			var element : int = DominantElement(attacker)
+			if element == Element.NoElement:
+				return Affinity.UNKNOWN
+			return AffinityFromResist(ElementResist(target, element))
+	return Affinity.UNKNOWN
+
 # Called on death/revive/despawn — bumping the generation for every type is
 # enough to invalidate any in-flight ticks without needing to hunt down and
 # free their Timer nodes individually (they self-check and no-op, then

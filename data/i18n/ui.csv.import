@@ -15,5 +15,5 @@ dest_files=["res://data/i18n/ui.en.translation", "res://data/i18n/ui.pt_BR.trans
 
 compress=1
 delimiter=0
-unescape_keys=false
+unescape_keys=true
 unescape_translations=true

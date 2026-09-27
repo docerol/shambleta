@@ -121,16 +121,28 @@ static func RemovePeer(peerID : int):
 		peers.erase(peerID)
 		Network.peer_update.emit()
 
+# Rate-limit de pegada. `actionDelta` está em MILISSEGUNDOS (comparado contra
+# Time.get_ticks_msec()): o chamador passa NetworkCommons.FootprintGateMs (60 s),
+# DelayMinute etc. — nunca segundos soltos (P1-5). No máximo uma ação por
+# `actionDelta` por peer por método; a segunda dentro da janela devolve false.
 static func Footprint(peerID : int, methodName : StringName, actionDelta : int) -> bool:
 	var peer : Peers.Peer = GetPeer(peerID)
 	if peer:
-		var oldTick : int = 0
-		if methodName in peers[peerID].rpcDeltas:
-			oldTick = peers[peerID].rpcDeltas[methodName]
-
 		var currentTick : int = Time.get_ticks_msec()
-		if oldTick + actionDelta <= currentTick:
-			peers[peerID].rpcDeltas[methodName] = currentTick
+		# Primeira vez que este peer toca este método: SEMPRE permite e carimba o
+		# now. O sentinel antigo (`oldTick = 0`) tratava "nunca visto" como "última
+		# ação no instante 0", então `0 + actionDelta <= currentTick` negava a primeira
+		# ação legítima até o motor completar `actionDelta` ms de vida — com a janela
+		# corrigida para 60 s isso barrava o primeiro settle/baú de cada peer durante
+		# o primeiro minuto de boot (e já afetava os callers DelayMinute de
+		# Network.CallServer, p.ex. GetAFKReport). Ter "carimbo ausente" é um estado
+		# distinto de "carimbo = 0".
+		if not peer.rpcDeltas.has(methodName):
+			peer.rpcDeltas[methodName] = currentTick
+			return true
+
+		if peer.rpcDeltas[methodName] + actionDelta <= currentTick:
+			peer.rpcDeltas[methodName] = currentTick
 			return true
 
 	return false
@@ -199,6 +211,17 @@ static func GetPeer(peerID : int) -> Peers.Peer:
 static func GetAccount(peerID : int) -> int:
 	var peer : Peers.Peer = GetPeer(peerID)
 	return peer.accountID if peer else NetworkCommons.PeerUnknownID
+
+# Presença O(1) por conta. `accounts` já é o dicionário accountID → peerID que
+# SetAccount/RemovePeer mantêm, então "está online?" e "qual sessão?" são lookup
+# direto, sem varrer a lista de peers (padrão do repo; ver Server.ArenaAttack,
+# que já resolvia o peer do defensor assim). GetAccountPeer devolve PeerUnknownID
+# para conta desconectada ou para o vínculo fantasma ainda não varrido.
+static func GetAccountPeer(accountID : int) -> int:
+	return accounts.get(accountID, NetworkCommons.PeerUnknownID)
+
+static func IsAccountOnline(accountID : int) -> bool:
+	return GetAccountPeer(accountID) != NetworkCommons.PeerUnknownID
 
 static func GetCharacter(peerID : int) -> int:
 	var peer : Peers.Peer = GetPeer(peerID)

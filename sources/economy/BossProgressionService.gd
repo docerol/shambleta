@@ -166,6 +166,7 @@ func GetBossState(charID : int, playerLevel : int) -> Dictionary:
 	var bosses : Array = []
 	for i in BossService.GetBossCount():
 		var bl : int = BossService.GetBossLevel(playerLevel, i)
+		var window : Dictionary = BossService.GetInterruptWindow(i)
 		bosses.append({
 			"index" = i,
 			"name" = BossService.GetBossName(i),
@@ -173,6 +174,13 @@ func GetBossState(charID : int, playerLevel : int) -> Dictionary:
 			"hp" = BossService.GetBossMaxHealth(bl),
 			"beaten" = i < beaten,
 			"next" = i == beaten,
+			# conteúdo da perna nova: sala real da arena, custo de chave declarado
+			# e a meia-largura da janela de interrupt daquele boss (aperta com o
+			# índice — é o que o /boss comunica e o que a sim aplica).
+			"arena" = BossService.GetBossArena(i),
+			"keyCost" = BossService.GetBossKeyCost(i),
+			"interruptPerfect" = float(window.get("perfect", 0.1)),
+			"interruptGood" = float(window.get("good", 0.25)),
 		})
 	return {
 		"keys" = Launcher.SQL.GetCharacterBossKeys(charID),
@@ -195,11 +203,14 @@ func ChallengeBoss(charID : int, player) -> Dictionary:
 	if index >= BossService.GetBossCount():
 		return {"ok" = false, "reason" = "ladder_complete"}
 
-	# A escada é sequencial: o índice é fixo (próximo não-vencido).
-	if Launcher.SQL.GetCharacterBossKeys(charID) < 1:
+	# A escada é sequencial: o índice é fixo (próximo não-vencido). O custo é o
+	# que o boss DECLARA (BossService.GetBossKeyCost — hoje 1 em toda a escada,
+	# incluída a perna nova: o sink não infla, quem aperta é nível/janela).
+	var keyCost : int = BossService.GetBossKeyCost(index)
+	if Launcher.SQL.GetCharacterBossKeys(charID) < keyCost:
 		return {"ok" = false, "reason" = "no_key"}
 
-	if not SpendBossKey(charID, 1, "boss_challenge"):
+	if not SpendBossKey(charID, keyCost, "boss_challenge"):
 		return {"ok" = false, "reason" = "spend_failed"}
 
 	var bossLevel : int = BossService.GetBossLevel(player.stat.level, index)
@@ -256,9 +267,14 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 			if Launcher.SQL.AddChestInstance(charID, FarmZoneData.DefaultDropItemHash, "boss"):
 				chestsGranted += 1
 		var prevBeaten : int = Launcher.SQL.GetCharacterBossesBeaten(charID)
-		Launcher.SQL.SetCharacterBossesBeaten(charID, index + 1)
-		# Tormento: zerar a escada (4 bosses) libera T1; vencer no teto atual
-		# sobe o teto (+1, cap). Fronteira nova tem 30% de dropar +1 key.
+		# P1-9 (AUDITORIA_2026-09-27): escrita absoluta `index + 1` REGREDIA quem
+		# tinha frontier maior — no rush de tier alto com vitória parcial
+		# (índice baixo reaberto por chave) beaten ia de 4 para 2 e fechava a
+		# guarda de tormento. Frontier é monotônica: maxi(prev, index+1).
+		Launcher.SQL.SetCharacterBossesBeaten(charID, maxi(prevBeaten, index + 1))
+		# Tormento: zerar a escada inteira (BossService.GetBossCount() bosses) libera
+		# T1; vencer no teto atual sobe o teto (+1, cap). Fronteira nova tem 30% de
+		# dropar +1 key.
 		var tmax : int = Launcher.SQL.GetTormentMax(charID)
 		if maxi(prevBeaten, index + 1) >= BossService.GetBossCount() and tmax < 1:
 			Launcher.SQL.SetTormentMax(charID, 1)
@@ -291,7 +307,8 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 
 # ------------------------------------------------------------------ tormento + boss rush (D2)
 # Tormento: opt-in 0..max (desbloqueio por progressão na escada). Boss rush:
-# 1 key = até 4 duelos simulados em sequência, níveis escalados (+2/luta +
+# 1 key = até GetBossCount() duelos simulados em sequência (a escada inteira),
+# níveis escalados (+2/luta +
 # tormento), para na primeira derrota; recompensas somadas via SettleBossResult
 # (tormento, unlock e bônus de fronteira valem por vitória, igual ao ao vivo).
 

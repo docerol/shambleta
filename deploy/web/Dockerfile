@@ -34,6 +34,15 @@ COPY deploy/web/landing/ /usr/share/nginx/html/landing/
 # companion apontam p/ <base>/checkout_return.html — o grant chega pelo
 # webhook, esta página é só UX para não prender o jogador).
 COPY deploy/web/checkout_return.html /usr/share/nginx/html/checkout_return.html
+# SOM-W5/A: ponte de rewarded ads servida de verdade (nginx: no-cache). Carregada
+# pelo index só com o SDK do portal; sem ela o client cai no stub local. O
+# simulador dela é off por default — ligável só com ?adstest=1 na URL.
+COPY deploy/web/ads_bridge.js /usr/share/nginx/html/ads_bridge.js
+# SOM-W5/B: worker fino de push. ESTAR servido não é ser registrado: o registro
+# em "/" continua atrás de WebPush.CanDeliver() (false até o sender VAPID
+# existir), porque registrar por cima deslocaria o worker do engine
+# (index.service.worker.js — COOP/COEP + cache de assets).
+COPY deploy/web/sw.js /usr/share/nginx/html/sw.js
 # SOM-IDLE P1: música servida separadamente para não pesar no primeiro load.
 # Os arquivos .ogg ficam em /usr/share/nginx/music/ e são servidos por /music/.
 COPY data/music/ /usr/share/nginx/music/

@@ -2,6 +2,12 @@
 # Aplicado POR CIMA do deploy/docker-compose.yml (`-f docker-compose.yml -f
 # docker-compose.staging.yml`). Mesma imagem, mesmo Dockerfile da produção.
 #
+# NÃO é um arquivo standalone: só declara os três campos que mudam. `restart`,
+# healthchecks, limites de recurso, `stop_grace_period` e os `depends_on` vêm do
+# base — usados sozinho, estes services não têm imagem nem rebuild. Por isso o
+# gate (`scripts/check_compose.sh`) confere os dois juntos, e o comando
+# canônico de conferir está em deploy/STAGING.md:72.
+#
 # Não existe "modo staging" no código: `LauncherCommons.IsTesting` só conhece
 # production vs testing. O que torna esta pilha staging é o volume próprio e o
 # webhook sandbox. Um `SHAMBLETA_ENV=staging` aqui seria um knob que ninguém lê —
@@ -37,7 +43,14 @@ services:
       # consumido do MESMO SQLite (WAL) que o servidor abre. Redirecionar só um
       # deles deixa o companion escrevendo grants num banco que o jogo nunca
       # abre — receita perdida em silêncio, o defeito que D1 corrigiu na produção.
+      #
+      # E cada alvo tem de ser reescrito AQUI: o compose faz merge de `volumes`
+      # por caminho de destino, então um `/data-backups` que só existisse no base
+      # herderia o `game-backups` da produção — staging escrevendo o histórico de
+      # backup ao lado do backup de dinheiro real. Mesma família de defeito do
+      # parágrafo acima, um nível abaixo.
       - game-data-staging:/data
+      - game-backups-staging:/data-backups
   companion:
     volumes:
       - game-data-staging:/data
@@ -47,3 +60,4 @@ services:
       - SHAMBLETA_WEBHOOK_SECRET=${STAGING_WEBHOOK_SECRET:-}
 volumes:
   game-data-staging:
+  game-backups-staging:

@@ -13,7 +13,15 @@ const AdProvider = preload("res://sources/ads/AdProvider.gd")
 @onready var adHintLabel : Label = $Layout/AdHint
 @onready var offlineAdButton : Button = $Layout/OfflineAd
 
+# P2-retenção: o streak de login mora na janela do RETORNO porque é exatamente
+# ali que o jogador acabou de voltar. O conteúdo é montado em runtime (a cena é
+# compartilhada com outro dono) e quem formata as linhas é `StreakRows`, um
+# módulo puro — esta janela só recebe o estado que o SERVIDOR produziu.
+var _streakLabels : Array = []
+
 func _ready():
+	_streakLabels = StreakRows.Build($Layout)
+	ShowStreak(NetClient.LastStreak)
 	if Network and Network.has_method("GetAFKReport"):
 		if NetClient.LastAFKReport.is_empty():
 			hoursLabel.text = tr("Loading...")
@@ -23,6 +31,13 @@ func _ready():
 			Network.GetAFKReport()
 		else:
 			ShowReport(NetClient.LastAFKReport)
+	if Network and Network.has_method("GetStreak") and NetClient.LastStreak.is_empty():
+		Network.GetStreak()
+
+# Estado do streak (RPC `StreakState`, empurrado no login). Cache vazio ainda
+# desenha: as linhas dizem que o servidor não respondeu, nunca somem.
+func ShowStreak(state : Dictionary):
+	StreakRows.Refresh(_streakLabels, state)
 
 func ShowReport(report : Dictionary):
 	if report.is_empty():

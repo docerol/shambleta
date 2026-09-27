@@ -50,10 +50,20 @@ func CheckEq(value : int, expected : int, label : String) -> bool:
 
 # ------------------------------------------------------------------ fixture
 
-# Newbie ×5 (OfflineSettle): goldens must include it — same rule as the code.
-static func ExpectedNewbieMult(sql : SQLService, charID : int) -> float:
-	var level : int = int(sql.GetCharacter(charID).get("level", 1))
+# Newbie ×5 (OfflineSettle): os goldens precisam compor o boost — mesma regra do código.
+# A régua recebe o NÍVEL e não o charID, de propósito: `SettlePending` SOBE o nível, e uma
+# régua que consulta `stat` depois da liquidação cobra um boost que o produto nunca viu.
+# Medido nesta passada: `xp golden` 10969920 vs 2193984 e `settle applies guild buff`
+# 561600 vs 112320, os dois exatamente 5×, porque a fixture começa no nível 1 e a própria
+# liquidação dela a empurra para cima de `NewbieBoostMaxLevel`. Quem chama captura antes.
+static func NewbieMultForLevel(level : int) -> float:
+	# Level mora em `stat`, não em `character` (P1-3-bis). Ler a tabela errada fazia
+	# esta régua devolver ×5 para QUALQUAR char — ela passava nos fixtures L1 por
+	# acidente e acusou o settle de sonegar XP justamente no teste do char no cap.
 	return float(FarmZoneData.NewbieBoostFactor) if level < FarmZoneData.NewbieBoostMaxLevel else 1.0
+
+static func LevelOf(sql : SQLService, charID : int) -> int:
+	return int(sql.GetStat(charID).get("level", 1))
 
 # Creates a fully wired fixture row set (account + character with Melee skill).
 # Returns charID or 0 on failure.
@@ -151,7 +161,7 @@ func SuiteXpCurve() -> void:
 
 func SuiteZoneCatalog() -> void:
 	print("[suite] zone catalog")
-	CheckEq(FarmZoneData.GetZoneCount(), 24, "Catalog has 24 farm zones (bosses excluded)")
+	CheckEq(FarmZoneData.GetZoneCount(), 27, "Catalog has 27 farm zones (bosses excluded)")
 	var zone1 : FarmZoneData = FarmZoneData.GetZone(1)
 	Check(zone1 != null, "Zone 1 exists")
 	if zone1:
@@ -204,12 +214,11 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	var zone5 : FarmZoneData = FarmZoneData.GetZone(5)
 	Check(zone5 != null, "Zone 5 exists")
 
-	# Arm: farm zone 5, anchor 12h atrás, eficiência 0.8. O cap F2P é 1h desde a
-	# regra de 2026-09-25, então 12h liquidáveis têm de ser COMPRADAS: 11 views de
-	# afkhoras + 1h de base. O golden continua medindo os mesmos números de sempre
-	# (xp/ouro/tax/drops/chaves/baús) e passa a exercitar o caminho do anúncio.
-	# 11 é também o que cabe no cap de views do placement (12/dia, C2) — o `break`
-	# abaixo é a prova visível de que a cota não estourou no meio do run.
+	# Arm: farm zone 5, anchor 12h atrás, eficiência 0.8. O que passa do piso da
+	# conta tem de ser COMPRADO: com a base F2P em `BaseCapHours` (8h desde
+	# P1-retenção), liquidar as 12h da janela custa 12 - base views de afkhoras. O
+	# golden continua medindo os mesmos números de sempre (xp/ouro/tax/drops/chaves/
+	# baús) e passa a exercitar o caminho do anúncio.
 	# dayStartOverride = 1 prende a janela no anchor, não no relógio real — sem
 	# isso a suíte quebraria sozinha ao cruzar a meia-noite UTC-3 no meio do run.
 	var now : int = SQLCommons.Timestamp()
@@ -217,14 +226,17 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	sql.UpdateSettleAnchor(charID, now - 12 * 3600, 0.8)
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	AdsCosmeticsService.dayStartOverride = 1
+	var wantedViews : int = maxi(0, 12 - int(OfflineSettle.BaseCapHours))
 	var armedViews : int = 0
-	for _adView in 11:
+	for _adView in wantedViews:
 		if not bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS,
 			AdToken(accountID, EconomyCatalog.AD_AFKHOURS)).get("ok", false)):
 			break
 		armedViews += 1
-	CheckEq(armedViews, 11, "golden: as 11 horas compradas passaram no cap de views")
+	CheckEq(armedViews, wantedViews, "golden: as %d horas compradas passaram no cap de views" % wantedViews)
 
+	# Capturado ANTES da liquidação: é o nível que o settle vê (a fixture é L1).
+	var nb : float = NewbieMultForLevel(LevelOf(sql, charID))
 	var report : Dictionary = OfflineSettle.SettlePending(charID)
 	OS.set_environment("SHAMBLETA_AD_STUB", "")
 	AdsCosmeticsService.dayStartOverride = 0
@@ -234,9 +246,15 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 
 	var h : float = float(report["hours"])
 	var eff : float = 0.8
-	var nb : float = ExpectedNewbieMult(sql, charID)
 	var expectedXp : int = roundi(float(zone5.xpPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor * nb)
-	var expectedGold : int = roundi(float(zone5.goldPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor * nb)
+	# P1-3 (AUDITORIA_2026-09-27): o boost de newbie é de XP, não de ouro. A régua é
+	# a regra online — `Formula.gd:212` multiplica `zoneXp` e nunca o gold. O
+	# offline carregava o ×5 nos dois eixos, i.e. sair do jogo pagava 5× o ouro de
+	# quem ficava acordado, exatamente na coorte mais sensível ao faucet. O golden
+	# trava os dois lados; sem o check abaixo a trava de gold passaria trivialmente
+	# para um fixture que não é newbie.
+	Check(nb > 1.0, "golden: fixture é newbie (×%s) — a trava de gold sem boost é significativa" % str(nb))
+	var expectedGold : int = roundi(float(zone5.goldPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor)
 	var expectedTax : int = roundi(float(expectedGold) * 0.05)	# 5% — eff < 1.0
 	var expectedDrop : int = floori(float(zone5.dropRatePPM) * h * 3600.0 * eff * OfflineSettle.OfflineFactor / 1000000.0)
 
@@ -1100,7 +1118,10 @@ func SuiteGuiPanels() -> void:
 	# atrasado não entrega nada a ninguém — foi assim que `Checkout.gd` viveu com `_BuildUI`
 	# abortando antes de criar o botão de pagar. A lista mexe quando alguém nasce um painel
 	# novo em runtime, e a resposta certa quando ela mexe é montar o painel numa suíte, não
-	# emendá-la.
+	# emendá-la. "Painel" é o predicado, não a pasta: `_RuntimeBuiltGuiPanels()` só aceita
+	# quem herda de um nó, porque o risco inventariado é o `_ready`/`_BuildUI` que não roda
+	# fora do scene — um `RefCounted` de `sources/gui/` (contadora, formatadora, linha de
+	# tabela) tem o mesmo ciclo de vida dentro e fora da cena e não tem janela a montar.
 	var builtPanels : Dictionary = _RuntimeBuiltGuiPanels()
 	var measuredPanels : Array[String] = []
 	var measuredText : String = ""
@@ -1109,6 +1130,84 @@ func SuiteGuiPanels() -> void:
 		measuredText += String(builtKey) + " "
 	measuredPanels.sort()
 	Check(measuredPanels == runtimeBuiltGuiPanels, "painéis de runtime: o inventário é exatamente o registrado (%s)" % measuredText)
+	# A resposta quando a régua acima mexe é montar o painel, não emendar a lista —
+	# foi assim que `Checkout.gd` viveu com `_BuildUI` abortando antes do botão de
+	# pagar. Os dois novos são as janelas que movem dinheiro e elo, e o contrato que
+	# as duas juram (nada sai para a rede sem confirmação) não estava escrito em
+	# lugar nenhum além da palavra do autor. Cada `_send` é interceptado por
+	# `SendHook`, então "emitiu" é medido, não lido do código.
+	var ahPanel : AuctionHousePanel = Launcher.GUI.EnsureAuctionHouse()
+	if Check(ahPanel != null, "leilão: EnsureAuctionHouse devolve a janela"):
+		var ahSends : Array = []
+		ahPanel.SendHook = func(methodName : String, args : Array) -> void: ahSends.append([methodName, args])
+		for ahField in ["_balanceLabel", "_statusLabel", "_detailLabel", "_confirmRow", "_confirmLabel", "_buyButton", "_sellOption"]:
+			Check(ahPanel.get(ahField) != null, "leilão: _ready montou %s (fora do scene não há _ready de graça)" % ahField)
+		var ahState : Dictionary = {
+			"ok" = true, "gold" = 1000, "gems" = 400, "open" = 1, "cap" = 3,
+			"creator_fee_pct" = CraftCatalog.CREATOR_FEE_PCT, "list_fee_gems" = 20,
+			"highlight_fee_gems" = 50, "slot_cost_gems" = 100,
+			"listings" = [{"id" = 7, "item_id" = FarmZoneData.DefaultDropItemHash, "price_gold" = 500, "count" = 2, "seller_char" = 999999}]}
+		ahPanel.ShowState(ahState)
+		Check(str((ahPanel.get("_balanceLabel") as Label).text).contains("1000"), "leilão: o saldo do jogador entra na tela")
+		Check(ahPanel.RequestBuy(7), "leilão: compra de anúncio alheio e cabível arma")
+		CheckEq(ahSends.size(), 0, "leilão: armar NÃO fala com a rede")
+		CheckEq(ahPanel.PendingCount(), 1, "leilão: há exatamente uma ação armada")
+		Check(str(ahPanel.PendingLine()).contains("500"), "leilão: a linha armada mostra o preço que sai")
+		CheckEq(int(ahPanel.PendingArgs()[0]), 7, "leilão: a pendência carrega o anúncio certo")
+		ahPanel.ConfirmPending()
+		CheckEq(ahSends.size(), 1, "leilão: confirmar é o único caminho que emite")
+		Check(str(ahSends[0][0]) == "AuctionBuy" and int((ahSends[0][1] as Array)[0]) == 7, "leilão: o rpc emitido é AuctionBuy(7) (%s)" % str(ahSends[0]))
+		CheckEq(ahPanel.PendingCount(), 0, "leilão: confirmar desenrosca a pendência")
+		ahPanel.ConfirmPending()
+		CheckEq(ahSends.size(), 1, "leilão: confirmar duas vezes não emite duas vezes")
+		var ahPoor : Dictionary = ahState.duplicate(true)
+		ahPoor["gold"] = 100
+		ahPanel.ShowState(ahPoor)
+		Check(not ahPanel.RequestBuy(7), "leilão: sem ouro não se arma a compra")
+		CheckEq(ahPanel.PendingCount(), 0, "leilão: a recusa não deixa nada armado")
+		Check(not ahPanel.RequestBuy(4242), "leilão: anúncio que não está na janela não arma")
+		ahPanel.ShowState(ahState)
+		Check(ahPanel.RequestBuy(7), "leilão: o ouro de volta rearma a mesma compra")
+		ahPanel.CancelPending()
+		CheckEq(ahPanel.PendingCount(), 0, "leilão: cancelar desarma")
+		CheckEq(ahSends.size(), 1, "leilão: cancelar não emite nada")
+		ahPanel.SendHook = Callable()
+	var arenaPanel : ArenaPanel = Launcher.GUI.EnsureArena()
+	if Check(arenaPanel != null, "arena: EnsureArena devolve a janela"):
+		var arSends : Array = []
+		arenaPanel.SendHook = func(methodName : String, args : Array) -> void: arSends.append([methodName, args])
+		for arField in ["_myLabel", "_boardBox", "_statusLabel", "_confirmRow", "_confirmLabel", "_eventsLabel"]:
+			Check(arenaPanel.get(arField) != null, "arena: _ready montou %s" % arField)
+		arenaPanel.OpenArena()
+		CheckEq(arSends.size(), 2, "arena: abrir pede board e eventos ao vivo")
+		Check(str(arSends[0][0]) == "ArenaBoard" and str(arSends[1][0]) == "GetActiveEvents", "arena: os dois rpcs de abertura são os dois (%s)" % str(arSends))
+		arenaPanel.ShowBoard({"ok" = true, "my" = {"elo" = 1200, "wins" = 3, "losses" = 1},
+			"top" = [{"account_id" = 42, "name" = "Alvo", "elo" = 1210, "wins" = 5, "losses" = 2, "level" = 30}]})
+		var boardBox : VBoxContainer = arenaPanel.get("_boardBox") as VBoxContainer
+		CheckEq(boardBox.get_child_count(), 1, "arena: uma linha do board vira um botão de ataque")
+		Check(str((arenaPanel.get("_myLabel") as Label).text).contains("1200"), "arena: o próprio elo aparece na tela")
+		Check(not arenaPanel.RequestAttack(0), "arena: sem alvo não se arma ataque")
+		Check(arenaPanel.RequestAttack(42), "arena: atacar um alvo do board arma")
+		CheckEq(arSends.size(), 2, "arena: armar o ataque NÃO emite")
+		CheckEq(arenaPanel.PendingCount(), 1, "arena: o ataque está armado")
+		arenaPanel.ConfirmPending()
+		CheckEq(arSends.size(), 3, "arena: confirmar emite o ataque")
+		Check(str(arSends[2][0]) == "ArenaAttack" and int((arSends[2][1] as Array)[0]) == 42, "arena: o rpc emitido é ArenaAttack(42) (%s)" % str(arSends[2]))
+		CheckEq(arenaPanel.PendingCount(), 0, "arena: confirmar desenrosca")
+		Check(arenaPanel.RequestAttack(44), "arena: rearme")
+		arenaPanel.ShowAttack({"ok" = true, "win" = true, "elo_delta" = 12})
+		CheckEq(arenaPanel.PendingCount(), 0, "arena: o veredito do servidor fecha a pendência armada")
+		Check(arenaPanel.RequestAttack(45), "arena: arma de novo depois do veredito")
+		arenaPanel.CancelPending()
+		CheckEq(arenaPanel.PendingCount(), 0, "arena: cancelar desarma")
+		CheckEq(arSends.size(), 3, "arena: cancelar não emite")
+		arenaPanel.RequestDefense()
+		CheckEq(arSends.size(), 4, "arena: salvar defesa vai direto (não gasta ticket)")
+		Check(str(arSends[3][0]) == "ArenaSetDefense", "arena: o rpc de defesa é ArenaSetDefense")
+		arenaPanel.ShowBoard({"ok" = false, "reason" = "unavailable"})
+		CheckEq(boardBox.get_child_count(), 1, "arena: board recusado não re-renderiza a lista")
+		Check(str((arenaPanel.get("_statusLabel") as Label).text) != "", "arena: a recusa diz o motivo na tela")
+		arenaPanel.SendHook = Callable()
 	# Nenhuma string de interface em inglês na tela de um jogador BR. A varredura é
 	# medida, não lembrada: todo `tr("literal")` de todo `.gd` de `sources/` (só código;
 	# comentário não é chamada) tem que resolver para mensagem não vazia no `pt_BR`
@@ -1134,10 +1233,131 @@ func SuiteGuiPanels() -> void:
 			var trSrc : String = _StripCommentLines(_RepoFile(String(trFile)))
 			for trM in trRx.search_all(trSrc):
 				chavesTr += 1
-				var trKey : String = trM.get_string(1)
+				var trKey : String = _UnescapeKey(String(trM.get_string(1)))
 				if trPt.get_message(trKey) == "":
 					semTraducao.append(String(trFile) + " :: " + trKey)
 		CheckEq(semTraducao.size(), 0, "i18n: %d chaves tr() literais varridas, nenhuma sem linha em pt_BR (%s)" % [chavesTr, " | ".join(semTraducao)])
+	# Query parametrizada que chega ao SQLite com `%d` dentro é erro de sintaxe, e
+	# o erro é silencioso para a suíte: o `ExecuteBindings` devolve false, a limpeza
+	# não roda e o estado vaza para a próxima suíte (testing.db persiste entre
+	# execuções — ver os janitors de `SuiteGuilds` e `SuiteReferral`). Achado em
+	# 2026-09-27 medido no log do run: `DELETE FROM season WHERE season_id IN (%d,
+	# %d)` passou por três ondas sem que ninguém lesse o `ERROR: near "%"` que ele
+	# cuspiu no rodapé do `SuiteSeasonPayout`. A régua varre `sources/` e `tests/`:
+	# todo literal de `*Bindings("…")` que contém especificador de formato tem que
+	# ter o operador `%` aplicado na mesma linha (é o que converte `%s` em `?,?,?`).
+	# Limitação honesta: chamada quebrada em várias linhas não tem o `%` depois do
+	# literal e seria apontada — os 4 sítios hoje são de linha única, e o falso
+	# positivo aparece como vermelho na cara de quem quebrou a linha.
+	var fmtRx : RegEx = RegEx.new()
+	fmtRx.compile("[A-Za-z_]Bindings\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+	var specRx : RegEx = RegEx.new()
+	specRx.compile("%[diufgxs]")
+	var cruas : Array[String] = []
+	var varridas : int = 0
+	for queryPath in _GdFilesUnder("res://sources") + _GdFilesUnder("res://tests"):
+		var queryLines : PackedStringArray = _StripCommentLines(_RepoFile(String(queryPath))).split("\n")
+		for lineIdx in queryLines.size():
+			var qLine : String = String(queryLines[lineIdx])
+			for qM in fmtRx.search_all(qLine):
+				varridas += 1
+				if specRx.search(String(qM.get_string(1))) == null:
+					continue
+				if not qLine.substr(qM.get_end(0)).contains(" % "):
+					cruas.append("%s:%d" % [String(queryPath).replace("res://", ""), lineIdx + 1])
+	CheckEq(cruas.size(), 0, "queries: %d literais de *Bindings varridos, nenhum especificador de formato solto no SQL (%s)" % [varridas, " | ".join(cruas)])
+	# Captura por valor em lambda de transação. Medido em 2026-09-27: `BuyListing`
+	# escrevia `bought = true` DENTRO de `Transaction(func() -> bool: …)`, e o
+	# GDScript copia locais por valor — a compra dava commit no banco, movia ouro e
+	# item, e o RPC respondia falso; de quebra `ApplyGoldMoves` nunca rodava, que é
+	# exatamente o que o snapshot de 600 s revertia. A régua abre cada lambda de
+	# `Transaction(func()` por contagem de parênteses (strings e comentários fora)
+	# e proíbe reatribuir a um escalar local da função dona dentro do corpo — valendo
+	# qualquer lado direito, porque a cópia por valor não distingue `= true` de
+	# `+= 1`.
+	# Dicionário/array podem: lá a cópia é da referência, e é assim que `goldMoves`
+	# e os out-params do leilão funcionam hoje.
+	var txOpenRx : RegEx = RegEx.new()
+	txOpenRx.compile("Transaction\\(\\s*func\\s*\\(")
+	var writeRx : RegEx = RegEx.new()
+	writeRx.compile("^\\t+([a-z][A-Za-z0-9_]*)\\s*(=|\\+=|-=|\\*=|/=|%=)\\s*[^=]")
+	# Qualquer reatribuição de escalar, não só literal booleano: `tentativas += 1`
+	# e `nome = "x"` dentro do lambda somem do mesmo jeito que `bought = true`, e a
+	# cópia por valor não distingue os três. O `[^=]` no fim é o que separa
+	# `x = …` de `x == …`.
+	var innerDeclRx : RegEx = RegEx.new()
+	innerDeclRx.compile("^\\s*(var|const)\\s+([a-z][A-Za-z0-9_]*)")
+	var paramRx : RegEx = RegEx.new()
+	paramRx.compile("([a-z][A-Za-z0-9_]*)")
+	var strRx : RegEx = RegEx.new()
+	strRx.compile("\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'")
+	var declRx : RegEx = RegEx.new()
+	declRx.compile("^var ([a-z][A-Za-z0-9_]*)\\s*:")
+	var funcRx : RegEx = RegEx.new()
+	funcRx.compile("^(static )?func ")
+	var swallows : Array[String] = []
+	var txBodies : int = 0
+	for capPath in _GdFilesUnder("res://sources"):
+		var capRaw : PackedStringArray = _RepoFile(String(capPath)).split("\n")
+		var capIdx : int = 0
+		while capIdx < capRaw.size():
+			var oLine : String = String(capRaw[capIdx])
+			if oLine.strip_edges().begins_with("#") or txOpenRx.search(oLine) == null:
+				capIdx += 1
+				continue
+			var oIndent : int = oLine.length() - oLine.lstrip("\t").length()
+			# Locais da função dona: só o que é declarado na indentação do `if`
+			# e depois do cabeçalho da função, para não confundir com membro.
+			var fnStart : int = 0
+			for fIdx in capIdx:
+				if funcRx.search(String(capRaw[fIdx])) != null:
+					fnStart = fIdx
+			var locals : Dictionary = {}
+			for dIdx in range(fnStart, capIdx):
+				var dLine : String = String(capRaw[dIdx])
+				if dLine.length() - dLine.lstrip("\t").length() != oIndent:
+					continue
+				var dM : RegExMatch = declRx.search(dLine.lstrip("\t"))
+				if dM != null:
+					locals[String(dM.get_string(1))] = true
+			var balance : int = 0
+			var closeIdx : int = -1
+			var k : int = capIdx
+			while k < capRaw.size():
+				var bLine : String = String(capRaw[k])
+				if not bLine.strip_edges().begins_with("#"):
+					var bare : String = strRx.sub(bLine, "", true)
+					balance += bare.count("(") - bare.count(")")
+					if balance <= 0:
+						closeIdx = k
+						break
+				k += 1
+			if closeIdx < 0:
+				capIdx += 1
+				continue
+			txBodies += 1
+			# Nome declarado dentro do lambda (ou parâmetro dele) não é captura:
+			# escrever nele é escrever no próprio lambda, como sempre foi.
+			var inner : Dictionary = {}
+			var head : String = String(oLine.substr(oLine.find("func") + 4))
+			if head.contains("("):
+				head = head.substr(0, head.find(")"))
+			for pM in paramRx.search_all(head):
+				inner[String(pM.get_string(1))] = true
+			for bIdx in range(capIdx + 1, closeIdx):
+				var iM : RegExMatch = innerDeclRx.search(String(capRaw[bIdx]))
+				if iM != null:
+					inner[String(iM.get_string(2))] = true
+			for wIdx in range(capIdx + 1, closeIdx):
+				var wLine : String = String(capRaw[wIdx])
+				if wLine.strip_edges().begins_with("#"):
+					continue
+				var wM : RegExMatch = writeRx.search(wLine)
+				if wM != null and locals.has(String(wM.get_string(1))) and not inner.has(String(wM.get_string(1))):
+					swallows.append("%s:%d (`%s` escrito no lambda de Transaction aberto na linha %d)" % [
+						String(capPath).replace("res://", ""), wIdx + 1, wM.get_string(1), capIdx + 1])
+			capIdx = closeIdx + 1
+	CheckEq(swallows.size(), 0, "captura: %d corpos de Transaction(func()) varridos, nenhum escalar local escrito dentro do lambda (%s)" % [txBodies, " | ".join(swallows)])
 	# Chave repetida na primeira coluna não é cosmético: o importador de CSV sobrescreve a
 	# anterior pela mesma chave, então uma das duas traduções morre no catálogo compilado e o
 	# sweep de cima continua verde (a chave sobrevive, só não se sabe com qual texto). Medido
@@ -1160,6 +1380,10 @@ func SuiteGuiPanels() -> void:
 	# a varredura inteira por cima de um csv que não foi lido.
 	Check(csvKeys.size() >= 900, "i18n: o censo do ui.csv olhou um catálogo inteiro (%d chaves)" % csvKeys.size())
 	Check(csvDups.is_empty(), "i18n: nenhuma chave repetida no ui.csv (%s)" % csvDups)
+	# A outra metade da régua mora em `tests/i18n_catalog_test.gd`: ali o ui.csv é
+	# comparado com o CATÁLOGO COMPILADO (`ui.pt_BR.translation`), não com ele
+	# mesmo. Este harness lê só a tabela; sem aquele arquivo, uma linha traduzida
+	# que nunca chegou ao importador passava verde aqui.
 	# Hub de personagem: absorve status/skills/progresso/formação num TabContainer
 	# e é para onde os botões do menu apontam depois. Reorganiza o GUI ao vivo,
 	# então roda por último — nada depois dela depende dos painéis originais.
@@ -1193,6 +1417,8 @@ class FeedbackSpy extends Control:
 # `WindowPanel` fica fora de propósito: é a base de quase todo o HUD.
 const runtimeBuiltGuiPanels : Array[String] = [
 	"res://sources/gui/Activities.gd",
+	"res://sources/gui/ArenaPanel.gd",
+	"res://sources/gui/AuctionHousePanel.gd",
 	"res://sources/gui/BossInterruptOverlay.gd",
 	"res://sources/gui/Checkout.gd",
 	"res://sources/gui/Localizer.gd",
@@ -1234,10 +1460,66 @@ func _RuntimeBuiltGuiPanels() -> Dictionary:
 			var target : String = String(consts.get(ident, byClass.get(ident, "")))
 			if not target.begins_with("res://sources/gui/") or target.ends_with("WindowPanel.gd"):
 				continue
+			# Discriminador de painel, estrutural e não por nome de arquivo: só entra no
+			# censo quem HERDA DE UM NÓ. É exatamente a assimetria que a suíte cobra — fora
+			# do scene ninguém liga o `_ready` nem mete o objeto na árvore, e um `_BuildUI`
+			# que aborta morre silencioso (`Checkout.gd` viveu isso). Um `RefCounted` de
+			# `sources/gui/` não tem `_ready` nem ciclo de vida de cena: construí-lo no
+			# scene ou em runtime é a mesma coisa, então não há nada para "montar numa
+			# suíte de painéis". Foi o que estourou a régua em 2026-09-27:
+			# `GuildPanel.gd:74` faz `GuildWithdrawGate.new()` — aritmética de janela
+			# portada para fora do painel na split dos helpers de guild — e o censo, que até
+			# ali só tinha encontrado nós, passou a medir um contador sem UI. Registrar esse
+			# arquivo na lista seria exigir um `_ready` que ele não tem; a outra alternativa,
+			# isentar por nome, deixaria o próximo helper da mesma família entrar pela mesma
+			# porta. A cadeia de bases é atravessada (não apenas o primeiro `extends`)
+			# porque painel herda de painel: `AuctionHousePanel` → `AuctionHouseWindow` →
+			# `WindowPanel` → `PanelContainer`.
+			if _GdIsRefCountedModule(target, texts, byClass):
+				continue
 			if not built.has(target):
 				built[target] = []
 			(built[target] as Array).append(filePath)
 	return built
+
+# Primeira declaração `extends <Base>` do arquivo, varrida por caractere e não por RegEx:
+# `RegExMatch.get_string()` devolve fatia truncada em fonte com acento (medido e
+# documentado em `_MemberAccesses`), e uma base lida torta mudaria o censo abaixo.
+func _GdExtendsBase(text : String) -> String:
+	var code : String = _StripCommentLines(text)
+	var at : int = code.find("extends")
+	while at >= 0:
+		var prevCh : String = code[at - 1] if at > 0 else "\n"
+		var nextCh : String = code[at + 7] if at + 7 < code.length() else " "
+		if (prevCh == " " or prevCh == "\n" or prevCh == "\t") and (nextCh == " " or nextCh == "\t"):
+			var i : int = at + 7
+			while i < code.length() and (code[i] == " " or code[i] == "\t"):
+				i += 1
+			var j : int = i
+			while j < code.length() and _IsIdentChar(code[j], true):
+				j += 1
+			if j > i:
+				return code.substr(i, j - i)
+		at = code.find("extends", at + 7)
+	return ""
+
+# Percorre a cadeia de `extends` do arquivo até uma classe do motor. Verdade só quando a
+# cadeia dá em `RefCounted`: objeto puro, sem `_ready` e sem árvore, portanto não é painel
+# nem janela — é um módulo de lógica que mora em `sources/gui/`. Cadeia sem `extends`
+# reconhecível (incluindo `.tscn`, que não é fonte GDScript) conta como nó, como sempre
+# contou: o conservador aqui é o lado que ainda reclama, não o que silencia.
+func _GdIsRefCountedModule(filePath : String, texts : Dictionary, byClass : Dictionary) -> bool:
+	var file : String = filePath
+	for hop in 16:
+		var base : String = _GdExtendsBase(String(texts.get(file, "")))
+		if base.is_empty():
+			return false
+		if base == "RefCounted":
+			return true
+		if not byClass.has(base):
+			return false
+		file = String(byClass[base])
+	return false
 
 # ------------------------------------------------------------- hotkeys de input
 
@@ -1655,12 +1937,20 @@ func SuiteFaucetHarness(sql : SQLService) -> void:
 	var ledger0 : int = int(sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction;", [])[0]["n"])
 	var xp4 : Dictionary = {}
 	var xp8 : Dictionary = {}
-	# O cap F2P é 1h desde a regra de 2026-09-25, então a segunda hora do par
-	# 1h/2h tem de ser COMPRADA: uma view de afkhoras por hora acima da base.
-	# As views se acumulam entre iterações (o re-anchor para trás as traz de
-	# volta), mas isso só adds folga — `min(elapsed, cap)` continua valendo 1 e 2.
+	# O par é 1h/2h de JANELA, não de teto: com o baseline F2P em 8h (P1-retenção)
+	# as duas horas cabem no cap e a segunda ainda precisa de uma view para o
+	# harness continuar exercitando o caminho comprado. O que exige o pin abaixo é
+	# a LINERARIDADE: o boost de newbie ×5 é regime, e uma das liquidações do par
+	# não pode cair de um lado e a outra do outro.
 	var harnessAcct : int = sql.GetAccountIDForCharacter(charID)
 	var harnessEconomy : EconomyService = Launcher.Economy
+	# Não preserva o que a linha traz: `experience` e `gp` são colunas NULLABLE
+	# (o DDL vem de `data/conf/templates/sqlite.template.db`) e
+	# `Dictionary.get(k, 0)` só usa o default quando a CHAVE falta — com a chave
+	# presente e valor NULL o round-trip chamava um construtor `int` que não
+	# existe e derrubava o harness com SCRIPT ERROR no log. Nível e XP conhecidos
+	# de saída, mesma régua dos outros pins da suíte (`UpdateStatDirect(charB, 10, 0, 5000)`).
+	sql.UpdateStatDirect(charID, FarmZoneData.NewbieBoostMaxLevel, 0, 0)
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
 	for zoneID in [1, 10, 20, 30, 40]:
 		var zone : FarmZoneData = FarmZoneData.GetZone(zoneID)
@@ -2089,7 +2379,7 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 	_SetInventory(sql, charID, FarmZoneData.DefaultDropItemHash, 0)  # clean slate
 	_GrantGold(sql, charID, accountID, 2000, "fixture_craft_seed")
 	sql.SetEmailVerified(accountID, true)
-	var feeT1 : int = EconomyCatalog.CraftSubmitFee(1)  # 500 * 1 * 1 = 500
+	var feeT1 : int = CraftCatalog.SubmitFee(1)  # 500 * 1 * 1 = 500
 	var bad : Dictionary = economy.SubmitCraft(charID, accountID, -1, shortSwordHash, "Blade", {})
 	Check(not bool(bad["ok"]), "rejected: invalid slot")
 	Check(str(bad["reason"]) == "invalid_slot", "invalid_slot reason")
@@ -2162,7 +2452,7 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 		Check(int(subRows[0]["budget_used"]) == 10, "budget_used persisted (Attack 10 * weight 1.0)")
 		Check(str(subRows[0]["rarity"]).length() > 0, "rarity persisted")
 
-	# --- Daily cap: submit 3 times total (CRAFT_MAX_PER_DAY = 3) ---
+	# --- Daily cap: submit 3 times total (CraftCatalog.MAX_PER_DAY = 3) ---
 	# #27: `smith_week` era um kind com `fee_mod` no parâmetro e nenhuma leitura do
 	# valor no caminho da taxa — o evento era inerte. A janela entra já tickada 2 h
 	# no passado, que é o intervalo real entre o job diário que a ativa e a
@@ -2520,7 +2810,21 @@ func SuiteSeasonPass(sql : SQLService) -> void:
 	Check(bool(st0.get("ok", false)) and int(st0.get("pt", -1)) == 0, "fresh pass 0 PT")
 	CheckEq((st0.get("dailies", []) as Array).size(), 3, "3 dailies")
 	CheckEq((st0.get("weeklies", []) as Array).size(), 3, "3 weeklies")
-	CheckEq((st0.get("milestones", []) as Array).size(), 4, "4 milestones")
+	# Marcos NÃO são contagem fixa: o producer (PassService._SeasonMissions, laço
+	# `for i in BossService.BossNames.size()`) atravessa a escada de bosses e emite exatamente
+	# um `m_boss<i>` por boss, na ordem da escada. A régua lê a escada VIVA — a mesma fonte do
+	# laço — então ela cobra a relação (um marco por boss, ids casados com o índice) e sobrevive
+	# a qualquer crescimento da ladder (4→10→N) sem apodrecer.
+	var msList : Array = st0.get("milestones", []) as Array
+	CheckEq(msList.size(), BossService.GetBossCount(),
+		"marcos: um por boss da escada viva (%d bosses na ladder)" % BossService.GetBossCount())
+	var msIDs : Array = []
+	for m in msList:
+		msIDs.append(str((m as Dictionary).get("id", "")))
+	var msWant : Array = []
+	for i in BossService.GetBossCount():
+		msWant.append("m_boss%d" % i)
+	Check(msIDs == msWant, "marcos: ids são m_boss0..m_boss%d, na ordem da escada" % (BossService.GetBossCount() - 1))
 	Check(not bool(st0.get("double_xp", true)), "no double XP at start")
 	var da1 : Array = []
 	for m in st0.get("dailies", []):
@@ -2894,33 +3198,38 @@ func SuiteAds(sql : SQLService) -> void:
 		sql.db.delete_rows("character", "nickname = 'IdleAdsCap'")
 		sql.db.delete_rows("account", "username = 'idle_ads_cap'")
 
-	# O prêmio do anúncio é HORA, não multiplicador: F2P líquida 1h de teto e cada
-	# view soma 1h a esse teto; `doubled` continua falso em qualquer liquidação
-	# sem o perk do tier 2.
-	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 4 * 3600, 1.0)
+	# O prêmio do anúncio é HORA, não multiplicador: sem assistir nada se liquida a
+	# base da conta e cada view soma 1h a esse teto; `doubled` continua falso em
+	# qualquer liquidação sem o perk do tier 2. As janelas abaixo são SEMPRE maior
+	# que o teto — é o truncamento que prova a hora, e ele só existe acima da base.
+	var baseHours : int = int(OfflineSettle.BaseCapHours)
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - (baseHours + 4) * 3600, 1.0)
 	var base : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
 	if Check(not base.is_empty(), "baseline settle ok"):
-		CheckNear(float(base.get("hours", 0.0)), 1.0, 0.001, "F2P líquida 1h sem anúncio")
+		CheckNear(float(base.get("hours", 0.0)), OfflineSettle.BaseCapHours, 0.001, "F2P líquida truncada no teto base")
 		Check(not bool(base.get("doubled", true)), "baseline settle not doubled")
 	for i in 3:
 		Check(bool(economy.WatchAd(accountID, charID, EconomyCatalog.AD_AFKHOURS, AdToken(accountID, EconomyCatalog.AD_AFKHOURS)).get("ok", false)), "afkhoras view %d" % (i + 1))
-	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 4 * 3600, 1.0)
+	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - (baseHours + 4) * 3600, 1.0)
 	var dbl : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
 	if Check(not dbl.is_empty(), "settle com horas compradas ok"):
-		CheckNear(float(dbl.get("cap_hours", 0.0)), 4.0, 0.001, "cap = 1h base + 3h compradas")
-		CheckNear(float(dbl.get("hours", 0.0)), 4.0, 0.001, "3 anúncios pagam 4h")
+		CheckNear(float(dbl.get("cap_hours", 0.0)), OfflineSettle.BaseCapHours + 3.0, 0.001, "cap = base + 3h compradas")
+		CheckNear(float(dbl.get("hours", 0.0)), OfflineSettle.BaseCapHours + 3.0, 0.001, "3 anúncios pagam 3h a mais")
 		Check(not bool(dbl.get("doubled", true)), "hora comprada não dobra o loot")
 	# Consumo = o anchor avança além da view: nenhuma hora comprada é paga duas
 	# vezes (em tempo real o anchor só anda p/ frente; re-ancorar p/ trás no teste
 	# re-compraria por construção — por isso o avanço aqui é pelo settle real).
+	# Com o teto em 8h a janela de 2h nem encosta no cap, então o que prova o
+	# consumo é o `cap_hours` do relatório seguinte: voltou exatamente à base.
 	OfflineSettle.nowOverride = int(dbl.get("last_settled_at", 0)) + 7200
 	var after : Dictionary = OfflineSettle.SettlePending(charID)
 	tele.Flush()
 	OfflineSettle.nowOverride = 0
-	if Check(not after.is_empty(), "next settle normal (1h de teto)"):
-		CheckNear(float(after.get("hours", 0.0)), 1.0, 0.001, "hora comprada não se reusa")
+	if Check(not after.is_empty(), "next settle normal (teto de volta à base)"):
+		CheckNear(float(after.get("cap_hours", 0.0)), OfflineSettle.BaseCapHours, 0.001, "hora comprada não se reusa")
+		CheckNear(float(after.get("hours", 0.0)), 2.0, 0.001, "o settle seguinte paga só a janela real")
 		Check(int(after.get("xp_earned", 0)) > 0, "next settle productive")
 
 	# VIP: o ×2 do loot é perk do TIER 2 e não vem de anúncio nenhum; tier 1 só
@@ -3372,10 +3681,20 @@ func SuiteReferral(sql : SQLService) -> void:
 	# Marcos: sem nível/sem e-mail não paga
 	sql.SetGems(accountA, 0)
 	sql.SetGems(accountB, 0)
+	# Idade de qualificação (`FraudeReview.ReferralGuard`: o bônus espera a indicada
+	# ter 5 dias). Envelhecer a fixture é o que separa as três travas que devolvem
+	# 0 — sem isto, "nível baixo" passaria pela idade e nada na suíte distinguiria
+	# qual delas pagou.
+	var refAge : Callable = func(acct : int, secs : int) -> void:
+		sql.ExecuteBindings("UPDATE account SET created_timestamp = ? WHERE account_id = ?;", [SQLCommons.Timestamp() - secs, acct])
 	CheckEq(economy.GrantReferralBonuses(), 0, "no milestone → no payout")
 	sql.SetEmailVerified(accountB, true)
+	refAge.call(accountB, FraudeReview.ReferralQualifySec + 3600)
 	CheckEq(economy.GrantReferralBonuses(), 0, "verified but low level → no payout")
 	sql.UpdateStatDirect(charB, 10, 0, 5000)
+	refAge.call(accountB, 3600)
+	CheckEq(economy.GrantReferralBonuses(), 0, "indicada com menos de 5 dias segura o bônus")
+	refAge.call(accountB, FraudeReview.ReferralQualifySec + 3600)
 	Check(economy.GrantReferralBonuses() >= 1, "milestone pays")
 	CheckEq(economy.GetGems(accountA), 200, "inviter +200")
 	CheckEq(economy.GetGems(accountB), 200, "invitee +200")
@@ -3387,6 +3706,10 @@ func SuiteReferral(sql : SQLService) -> void:
 	Check(bool(economy.SetReferralCode(accountC, str(stA["code"])).get("ok", false)), "second invitee linked")
 	sql.SetEmailVerified(accountC, true)
 	sql.UpdateStatDirect(charC, 10, 0, 5000)
+	# Sem envelhecer a segunda indicada, o 11º bônus seria bloqueado pela trava de
+	# idade e o check passaria pela razão errada: aqui o que tem de segurar o
+	# pagamento é exclusivamente o teto semanal.
+	refAge.call(accountC, FraudeReview.ReferralQualifySec + 3600)
 	for i in 10:
 		sql.ExecuteBindings("INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, 'gems', 200, 200, ?, ?);", [accountA, "referral_bonus:%d:9%03d" % [accountA, i], SQLCommons.Timestamp()])
 	CheckEq(economy.GrantReferralBonuses(), 0, "weekly cap blocks 11th payout")
@@ -3438,18 +3761,21 @@ func SuiteVendor(sql : SQLService) -> void:
 	sql.db.delete_rows("character", "nickname = 'IdleVendor'")
 	sql.db.delete_rows("account", "username = 'idle_vendor'")
 
-# Fase B: cap offline por tier (1h F2P / 24h VIP1 / 24h VIP2, expirado volta).
+# Fase B: cap offline por tier (base F2P / 24h VIP1 / 24h VIP2, expirado volta).
+# O número da base é regra de produto e mora em `OfflineSettle.BaseCapHours`
+# (8h desde P1-retenção); o que esta suíte fixa é a RELAÇÃO — sem VIP você liquida
+# a base, VIP dobra para as 24h, e expirar devolve a base.
 func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] VIP cap hours (Fase B)")
 	var now : int = SQLCommons.Timestamp()
 	sql.SetCharacterFarmZone(charID, 1)
 	sql.UpdateSettleAnchor(charID, now - 48 * 3600, 1.0)
 	OfflineSettle.nowOverride = now
-	CheckEq(OfflineSettle.CapHoursForAccount(0, now), 1.0, "no account → 1h")
-	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 1.0, "no VIP → 1h")
+	CheckEq(OfflineSettle.CapHoursForAccount(0, now), OfflineSettle.BaseCapHours, "no account → base F2P")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), OfflineSettle.BaseCapHours, "no VIP → base F2P")
 	var r0 : OfflineSettle.SettleReport = OfflineSettle.BuildReport(charID, now)
-	CheckEq(r0.hours, 1.0, "report capped at 1h F2P")
-	CheckEq(r0.capHours, 1.0, "cap_hours F2P sem anúncio")
+	CheckEq(r0.hours, OfflineSettle.BaseCapHours, "report capped at the F2P base")
+	CheckEq(r0.capHours, OfflineSettle.BaseCapHours, "cap_hours F2P sem anúncio")
 	Check(sql.SetVIPUntil(accountID, now + 30 * 86400), "vip window on")
 	Check(sql.SetVIPTier(accountID, 1), "tier 1 set")
 	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 24.0, "VIP1 → 24h")
@@ -3458,7 +3784,7 @@ func SuiteVIPCap(sql : SQLService, charID : int, accountID : int) -> void:
 	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 24.0, "VIP2 → 24h (não mais 36h)")
 	CheckEq(OfflineSettle.BuildReport(charID, now).hours, 24.0, "report capped at 24h VIP2")
 	sql.SetVIPUntil(accountID, now - 10)
-	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), 1.0, "expired → 1h")
+	CheckEq(OfflineSettle.CapHoursForAccount(accountID, now), OfflineSettle.BaseCapHours, "expired → volta à base")
 	# PurchaseVIP registra o tier (upgrade nunca rebaixa janela ativa)
 	sql.SetGems(accountID, 5000)
 	var economy : EconomyService = Launcher.Economy
@@ -4026,6 +4352,25 @@ func SuiteMoneyFunnel(sql : SQLService) -> void:
 	sql.db.delete_rows("account", "username = 'idle_k1_buyer'")
 
 # Fraud v1 (SOM-IDLE D3): gates, velocity flags, CS reads.
+
+# O scan abre UMA flag por conta por passada e o `kind` gravado é só o de maior
+# peso (`FraudeReview.DominantKind`); a lista completa de sinais vai no `detail`
+# ("score=6/2 trade_burst+ledger_divergent | trades_24h=20"). Filtrar por `kind`
+# é o falso negativo clássico: a conta do farmer tem o trade_burst, mas foi flagada
+# sob um sinal mais forte. Flag manual (`FlagMultiAccount`) tem o contrário — o
+# `kind` é o sinal e o `detail` é o texto do operador — então o predicado casa os
+# dois campos. O lookup devolve 0 quando não há flag: `ReviewFraudFlag(0, …)` sai
+# como check vermelho em vez de estourar o índice e abortar o resto da suíte (era
+# assim que um único assert perdido derrubava D3 inteira).
+func _CarriesSignal(flag : Dictionary, signalKind : String) -> bool:
+	return str(flag.get("kind", "")) == signalKind or str(flag.get("detail", "")).contains(signalKind)
+
+func _FlagOfSignal(flags : Array, accountID : int, signalKind : String) -> int:
+	for flag in flags:
+		if int(flag.get("account_id", -1)) == accountID and _CarriesSignal(flag, signalKind):
+			return int(flag["id"])
+	return 0
+
 func SuiteFraud(sql : SQLService) -> void:
 	print("[suite] Fraud v1 (D3)")
 	var economy : EconomyService = Launcher.Economy
@@ -4062,34 +4407,32 @@ func SuiteFraud(sql : SQLService) -> void:
 
 	# Burst scan flags the farmer; review closes it
 	Check(economy.RunFraudScan() >= 1, "burst scan opened flags")
-	var burst : Array = sql.ListFraudFlags("open").filter(func(f : Dictionary) -> bool: return str(f["kind"]) == "trade_burst" and int(f["account_id"]) == accountA)
-	Check(not burst.is_empty(), "trade_burst flag for farmer")
-	var flagID : int = int(burst[0]["id"])
-	Check(sql.ReviewFraudFlag(flagID, "reviewed"), "flag reviewed")
-	Check(not sql.ReviewFraudFlag(flagID, "dismissed"), "closed flag immutable")
-	Check(not sql.ReviewFraudFlag(flagID, "bogus"), "bad status rejected")
-	var stillOpen : Array = sql.ListFraudFlags("open").filter(func(f : Dictionary) -> bool: return str(f["kind"]) == "trade_burst" and int(f["account_id"]) == accountA)
-	Check(stillOpen.is_empty(), "reviewed flag leaves open queue")
+	var burstID : int = _FlagOfSignal(sql.ListFraudFlags("open"), accountA, "trade_burst")
+	Check(burstID != 0, "trade_burst flag for farmer")
+	Check(sql.ReviewFraudFlag(burstID, "reviewed"), "flag reviewed")
+	Check(not sql.ReviewFraudFlag(burstID, "dismissed"), "closed flag immutable")
+	Check(not sql.ReviewFraudFlag(burstID, "bogus"), "bad status rejected")
+	Check(_FlagOfSignal(sql.ListFraudFlags("open"), accountA, "trade_burst") == 0, "reviewed flag leaves open queue")
 
 	# Level velocity: impossible jump is flagged once (dedup)
 	sql.ExecuteBindings("INSERT INTO telemetry_event (created_at, account_id, char_id, kind, value, meta) VALUES (?, ?, ?, 'levelup', 30, ?);", [SQLCommons.Timestamp(), accountA, charA, '{"zone": 1, "from": 1, "to": 31, "hours": 1.0}'])
 	Check(economy.RunFraudScan() >= 1, "velocity scan flags jump")
 	CheckEq(economy.RunFraudScan(), 0, "scan idempotent (no dup flags)")
-	var velo : Array = sql.ListFraudFlags("open").filter(func(f : Dictionary) -> bool: return str(f["kind"]) == "level_velocity" and int(f["account_id"]) == accountA)
-	Check(not velo.is_empty(), "level_velocity flag present")
-	Check(sql.ReviewFraudFlag(int(velo[0]["id"]), "dismissed"), "velocity flag dismissed")
+	var veloID : int = _FlagOfSignal(sql.ListFraudFlags("open"), accountA, "level_velocity")
+	Check(veloID != 0, "level_velocity flag present")
+	Check(sql.ReviewFraudFlag(veloID, "dismissed"), "velocity flag dismissed")
 
 	# S5: heurística multi-conta abre flag na MESMA fila (revisão manual, sem
 	# ban automático); duplicata do mesmo detalhe não reabre.
 	Check(economy.FlagMultiAccount(accountA, "shared_fp:testhash"), "multi_account flag opened")
 	Check(not economy.FlagMultiAccount(accountA, "shared_fp:testhash"), "multi_account flag deduped")
 	Check(economy.FlagMultiAccount(accountB, "shared_fp:testhash"), "multi_account flag per account")
-	var multi : Array = sql.ListFraudFlags("open").filter(func(f : Dictionary) -> bool: return str(f["kind"]) == "multi_account")
-	CheckEq(multi.size(), 2, "two multi_account flags open")
+	var multiFlags : Array = sql.ListFraudFlags("open").filter(func(f : Dictionary) -> bool: return _CarriesSignal(f, "multi_account"))
+	CheckEq(multiFlags.size(), 2, "two multi_account flags open")
 	Check(not economy.FlagMultiAccount(0, "shared_fp:testhash"), "multi_account rejects bad account")
 	Check(not economy.FlagMultiAccount(accountA, ""), "multi_account rejects empty detail")
-	Check(sql.ReviewFraudFlag(int(multi[0]["id"]), "dismissed"), "multi_account flag dismissed")
-	Check(sql.ReviewFraudFlag(int(multi[1]["id"]), "dismissed"), "multi_account second dismissed")
+	Check(sql.ReviewFraudFlag(_FlagOfSignal(multiFlags, accountA, "multi_account"), "dismissed"), "multi_account flag dismissed")
+	Check(sql.ReviewFraudFlag(_FlagOfSignal(multiFlags, accountB, "multi_account"), "dismissed"), "multi_account second dismissed")
 
 	# S5 (2026-09-24): o detector que alimentava esses flags coletava a impressão
 	# digital dentro do processo do SERVIDOR — uma única impressão digital para todas
@@ -4172,6 +4515,16 @@ func SuiteGuilds(sql : SQLService) -> void:
 	Check(not economy.WithdrawFromVault(accountD, charD, apple, 1), "member withdraw rejected")
 	Check(economy.WithdrawFromVault(accountB, charB, apple, 1), "officer withdraws 1")
 	CheckEq(_CountItem(sql, charB, apple), 1, "officer credited")
+	# §14: o rastro sai pelo ESTADO, junto com o vault — é o único caminho que o
+	# painel tem (nenhum SELECT do cliente), então "o oficial mexeu" precisa ser
+	# legível na resposta do serviço antes de ser legível na tela.
+	var trail : Array = (economy.GetGuildState(accountA).get("my_guild", {}) as Dictionary).get("vault_log", [])
+	CheckEq(trail.size(), 2, "o estado carrega as duas movimentações do vault (depósito + saque)")
+	if trail.size() >= 1:
+		var newest : Dictionary = trail[0] as Dictionary
+		Check(str(newest.get("kind", "")) == "withdraw" and int(newest.get("count", 0)) == 1,
+			"o registro mais recente é o saque do oficial, com a quantidade")
+		Check(int(newest.get("account_id", 0)) == accountB, "o registro diz QUEM sacou (responsabilidade, não só o quê)")
 	sql.SetGems(accountA, 1000)
 	sql.SetGems(accountB, 1000)
 	_GrantGold(sql, charA, accountA, 100000, "fixture_faucet")
@@ -4190,11 +4543,12 @@ func SuiteGuilds(sql : SQLService) -> void:
 	# Settle sees the buff (fresh anchor, zone 1, eff 1.0)
 	sql.SetCharacterFarmZone(charA, 1)
 	sql.UpdateSettleAnchor(charA, SQLCommons.Timestamp() - 3600, 1.0)
+	var nbA : float = NewbieMultForLevel(LevelOf(sql, charA))
 	var rep : Dictionary = OfflineSettle.SettlePending(charA)
 	Check(not rep.is_empty(), "buffed settle applied")
 	if not rep.is_empty():
 		var zone1 : FarmZoneData = FarmZoneData.GetZone(1)
-		var expected : int = roundi(float(zone1.xpPerKill) * float(zone1.parKillsPerHour) * 1.0 * 1.0 * OfflineSettle.OfflineFactor * 1.04 * ExpectedNewbieMult(sql, charA))
+		var expected : int = roundi(float(zone1.xpPerKill) * float(zone1.parKillsPerHour) * 1.0 * 1.0 * OfflineSettle.OfflineFactor * 1.04 * nbA)
 		CheckEq(int(rep["xp_earned"]), expected, "settle applies guild buff")
 
 	# Leave: member out, leader promotes oldest, disband blocked w/ vault
@@ -4345,7 +4699,7 @@ func SuiteSeasonPayout(sql : SQLService) -> void:
 	# limpeza
 	sql.db.delete_rows("season_score", "season_id = %d" % seasonID)
 	sql.db.delete_rows("season_score", "season_id = %d" % s2)
-	sql.ExecuteBindings("DELETE FROM season WHERE season_id IN (%d, %d);", [seasonID, s2])
+	sql.ExecuteBindings("DELETE FROM season WHERE season_id IN (?, ?);", [seasonID, s2])
 	sql.db.delete_rows("character", "nickname = 'IdlePayA%d'" % tag)
 	sql.db.delete_rows("character", "nickname = 'IdlePayB%d'" % tag)
 	sql.db.delete_rows("account", "username = 'idle_payout_a_%d'" % tag)
@@ -4919,9 +5273,19 @@ func SuiteTwoFactorSetup(sql : SQLService) -> void:
 	# tabela nem existe. Varredura permanente: GUI e NetClient não tocam o SQL.
 	var direct : Array = []
 	for filePath in _GdFilesUnder("res://sources/gui") + _GdFilesUnder("res://sources/network/client"):
-		if _RepoFile(filePath).contains("Launcher.SQL"):
+		# Comentário não é acesso. `sources/gui/GuildVaultTrail.gd` documenta que o ramo
+		# que ia direto à `Launcher.SQL` FOI REMOVIDO de propósito, e a varredura de
+		# texto cru acusava exatamente essa linha — régua que pune o arquivo mais
+		# honesto da fronteira é régua que se desliga sozinha na próxima vez.
+		if _StripCommentLines(_RepoFile(filePath)).contains("Launcher.SQL"):
 			direct.append(filePath)
 	Check(direct.is_empty(), "2fa m1: nenhum acesso do client ao SQLite (%s)" % ", ".join(PackedStringArray(direct)))
+	# Controle da predicação, nos dois sentidos: sem ele, o `#` de cima poderia ser uma
+	# forma elegante de a varredura não olhar mais para nada.
+	Check(not _StripCommentLines("var x = 1\n# Launcher.SQL.QueryBindings(...)\n").contains("Launcher.SQL"),
+		"2fa m1: o predicado ignora a proibição citada em comentário")
+	Check(_StripCommentLines("var q = Launcher.SQL.QueryBindings(\"\")\n").contains("Launcher.SQL"),
+		"2fa m1: o predicado ainda pega o acesso escrito em código")
 
 # V2: TOTP contra os vetores oficiais do RFC 6238 (anexo B, HMAC-SHA1, 6 dígitos)
 # e contra a JANELA de tolerância. O bug que este suite caça é de reloginho:
@@ -5304,35 +5668,72 @@ func SuiteOpsA2(sql : SQLService) -> void:
 	# na mesma passada saíram oito `Gate §24-8 OK` verdes nesta máquina e uma CI
 	# vermelha no mesmo commit (`sources/gui/Gui.gd` em 815 linhas contra o teto
 	# de 800). Gate que só a CI conhece não é gate de lançamento, é surpresa de
-	# diff. A régua é medida nos dois arquivos, não lembrada: varre o yaml atrás
-	# de `scripts/*.sh`, descarta os dois que não são gate (o avaliador do
-	# quádruplo e o próprio `test.sh`, que a CI chama para o companion) e exige
-	# que o resto apareça no runner. Discrimina nos dois lados: com o gate fora
-	# do `all` ele falha hoje, e se alguém adicionar (ou tirar) um gate da CI o
-	# `CheckEq` do número de gates reclama junto.
+	# diff. A forma da régua mudou em 2026-09-27 porque a CI mudou: o laço de
+	# preflight que existia copiado no yaml ficou olhando seis arquivos enquanto
+	# o gate local descobria harness por nome, e os dois divergiram — cópia de
+	# gate no workflow é exatamente o modo como um gate vira enfeite. Hoje a CI
+	# só conhece `scripts/test.sh`. Então as três cobranças, todas medidas nos
+	# arquivos, não lembradas: (1) nenhum `check_*.sh` é chamado direto pelo
+	# yaml; (2) todo `check_*.sh` que EXISTE em `scripts/` é chamado pelo runner;
+	# (3) o runner é chamado pela CI. Com (2) na lista do disco, escrever um gate
+	# novo e não ligá-lo no `all` falha aqui, não numa revisão.
 	var ciWorkflow : String = _RepoFile("res://.github/workflows/godot-ci.yml")
 	var runnerScript : String = _RepoFile("res://scripts/test.sh")
 	if Check(not ciWorkflow.is_empty() and not runnerScript.is_empty(), "portão: o workflow da CI e o scripts/test.sh são legíveis do harness"):
-		var notGates : Array = ["scripts/ci_gate_log.sh", "scripts/test.sh"]
-		var gateScripts : Array = []
+		var directGates : String = ""
 		for rawLine in ciWorkflow.split("\n"):
 			var line : String = String(rawLine)
-			var at : int = line.find("scripts/")
-			while at >= 0:
-				var token : String = String(String(line.substr(at)).split(" ")[0])
-				if token.ends_with(".sh") and not gateScripts.has(token):
-					gateScripts.append(token)
-				at = line.find("scripts/", at + 8)
-		var mirrored : int = 0
-		var missing : String = ""
-		for scriptPath in gateScripts:
-			if notGates.has(scriptPath):
-				continue
-			mirrored += 1
-			if not runnerScript.contains(String(scriptPath).get_file()):
-				missing += String(scriptPath) + " "
-		CheckEq(mirrored, 1, "portão: a CI roda exatamente um gate de script próprio")
-		Check(missing.is_empty(), "portão: todo gate de script da CI também roda no scripts/test.sh (%s)" % missing)
+			# Linha de `run:` de verdade: comentário do yaml também menciona
+			# `scripts/test.sh`, e uma régua que lê prosa aprova o que quer.
+			if not line.strip_edges().begins_with("#"):
+				var at : int = line.find("scripts/check_")
+				while at >= 0:
+					directGates += String(String(line.substr(at)).split(" ")[0]) + " "
+					at = line.find("scripts/check_", at + 8)
+		Check(directGates.is_empty(), "portão: a CI não chama gate de script direto, só pelo scripts/test.sh (%s)" % directGates)
+		var gateNames : Array[String] = []
+		var scriptsDir : DirAccess = DirAccess.open("res://scripts")
+		if Check(scriptsDir != null, "portão: scripts/ abre para o harness"):
+			for entry in scriptsDir.get_files():
+				var base : String = String(entry)
+				if base.begins_with("check_") and base.ends_with(".sh"):
+					gateNames.append(base)
+			gateNames.sort()
+		# A régua era "três gates de script vivem em scripts/" e mediu 4 quando
+		# `check_secrets.sh` entrou no runner (scripts/test.sh:256). O tamanho nunca foi o
+		# contrato — era só o sintoma móvel de um conjunto que precisa ser conhecido e
+		# prestado contas, e é isso que continua cobrado nas duas pontas: (a) cada
+		# `check_*.sh` no disco é chamado pelo runner, que é o laço `orphanGates` logo
+		# abaixo, cobrando em nome do disco; (b) cada `check_*.sh` que o runner chama
+		# existe no disco, ponta que ninguém cobrava e que é a que apodrece quando um gate
+		# é renomeado ou apagado deixando o chamador vivo. Por isso a lista esperada é
+		# DERIVADA do mesmo arquivo que a vizinha lê (`res://scripts/test.sh`) e não
+		# lembrada: varre o runner sem linhas de comentário e tira de lá cada token
+		# `check_*\.sh`. Comentário não conta — as linhas 154/242/246 citam gates em prosa
+		# e uma régua que lê prosa aprova o que quer, mesmo critério do laço `directGates`
+		# acima. Varrido por caractere, não RegEx: `RegExMatch.get_string()` devolve fatia
+		# deslocada (documentado em `_MemberAccesses`).
+		var calledGates : Array[String] = []
+		var runnerGateCode : String = _StripCommentLines(runnerScript)
+		var gateAt : int = runnerGateCode.find("check_")
+		while gateAt >= 0:
+			var gateEnd : int = gateAt + 6
+			while gateEnd < runnerGateCode.length() and _IsIdentChar(runnerGateCode[gateEnd], true):
+				gateEnd += 1
+			if String(runnerGateCode.substr(gateEnd, 3)) == ".sh":
+				var calledGate : String = runnerGateCode.substr(gateAt, gateEnd - gateAt + 3)
+				if not calledGates.has(calledGate):
+					calledGates.append(calledGate)
+				gateEnd += 3
+			gateAt = runnerGateCode.find("check_", gateEnd)
+		calledGates.sort()
+		Check(gateNames == calledGates, "portão: os gates de script de scripts/ são exatamente os que scripts/test.sh chama (disco: %s | chamado: %s)" % [", ".join(gateNames), ", ".join(calledGates)])
+		var orphanGates : String = ""
+		for gateName in gateNames:
+			if not runnerScript.contains(gateName):
+				orphanGates += gateName + " "
+		Check(orphanGates.is_empty(), "portão: todo gate de script do disco é chamado por scripts/test.sh (%s)" % orphanGates)
+		Check(ciWorkflow.contains("scripts/test.sh"), "portão: a CI chama scripts/test.sh, que é o que roda os gates")
 
 	# ---------------------------------------------------- web: boot limpo no navegador
 	# Medido em 2026-09-25 com `scripts/qa_web.mjs` (boot real do export no Chromium):
@@ -5397,6 +5798,148 @@ func _StripCommentLines(text : String) -> String:
 			continue
 		kept += line + "\n"
 	return kept
+
+# Cada `location` do nginx como {header, body}, varrida do texto com as chaves
+# balanceadas. O harness não é o servidor nginx: isto é a menor leitura que permite
+# cobrar a DECISÃO de roteamento — qual bloco ganha a URI e o que ele faz — em vez de
+# "alguma string aparece no arquivo", forma que já deixou checks passarem vazios.
+# Comentários são aparados por quem chama: a linha 122 de deploy/web/nginx.conf tem um
+# `/checkout/{intents,...}` dentro de comentário, e uma chave de bloco lida da prosa
+# inventaria um location que não existe.
+func _NginxLocations(text : String) -> Array:
+	var out : Array = []
+	var at : int = text.find("location ")
+	while at >= 0:
+		var prevCh : String = text[at - 1] if at > 0 else "\n"
+		var braceAt : int = text.find("{", at)
+		if (prevCh != " " and prevCh != "\n" and prevCh != "\t") or braceAt < 0:
+			at = text.find("location ", at + 9)
+			continue
+		var depth : int = 0
+		var scan : int = braceAt
+		while scan < text.length():
+			if text[scan] == "{":
+				depth += 1
+			elif text[scan] == "}":
+				depth -= 1
+				if depth == 0:
+					break
+			scan += 1
+		out.append({"header": text.substr(at + 9, braceAt - at - 9).replace("\n", " ").strip_edges(),
+			"body": text.substr(braceAt + 1, scan - braceAt - 1)})
+		at = text.find("location ", scan)
+	return out
+
+# Corpo do bloco cujo header é exatamente `header` (sem o "location " inicial). Vazio
+# significa "não existe", e as asserções tratam vazio como falha, nunca como
+# "nada a conferir".
+func _NginxLocationBody(locs : Array, header : String) -> String:
+	for entry in locs:
+		var loc : Dictionary = entry as Dictionary
+		if String(loc.get("header", "")) == header:
+			return String(loc.get("body", ""))
+	return ""
+
+# Qual bloco `location` vence uma URI, pela precedência documentada do nginx: `=` exato
+# → `^~` prefixo mais longo (que ENCERRA a disputa, regex nem é consultado) → regex na
+# ordem do arquivo → prefixo simples mais longo. {} quando nada casa.
+# No andar dos regex a URI é testada com e sem a barra inicial de propósito: o único uso
+# daqui é "esta página estática não pode cair num proxy", e o sentido que reclama por
+# conservadorismo (casar onde o nginx não casaria) é aceitável; o sentido contrário é que
+# silenciaria o defeito cobrado.
+func _NginxLocationWins(locs : Array, uri : String) -> Dictionary:
+	var exact : Dictionary = {}
+	var tethered : Dictionary = {}
+	var tetherLen : int = -1
+	var plain : Dictionary = {}
+	var plainLen : int = -1
+	var firstRegex : Dictionary = {}
+	for entry in locs:
+		var loc : Dictionary = entry as Dictionary
+		var header : String = String(loc.get("header", ""))
+		var modifier : String = ""
+		var pattern : String = header
+		if header.begins_with("= "):
+			modifier = "="
+			pattern = String(header.substr(2).strip_edges())
+		elif header.begins_with("^~ "):
+			modifier = "^~"
+			pattern = String(header.substr(3).strip_edges())
+		elif header.begins_with("~* "):
+			modifier = "~*"
+			pattern = String(header.substr(3).strip_edges())
+		elif header.begins_with("~ "):
+			modifier = "~"
+			pattern = String(header.substr(2).strip_edges())
+		if modifier == "=" and pattern == uri:
+			exact = loc
+		elif modifier == "^~" and not pattern.is_empty() and uri.begins_with(pattern) and pattern.length() > tetherLen:
+			tethered = loc
+			tetherLen = pattern.length()
+		elif (modifier == "~" or modifier == "~*") and firstRegex.is_empty() and not pattern.is_empty():
+			var rx : RegEx = RegEx.new()
+			if rx.compile(pattern) == OK and (rx.search(uri) != null or rx.search(String(uri.substr(1))) != null):
+				firstRegex = loc
+		elif modifier.is_empty() and not pattern.is_empty() and uri.begins_with(pattern) and pattern.length() > plainLen:
+			plain = loc
+			plainLen = pattern.length()
+	if not exact.is_empty():
+		return exact
+	if not tethered.is_empty():
+		return tethered
+	if not firstRegex.is_empty():
+		return firstRegex
+	return plain
+
+# Alvo REAL de um `proxy_pass` de bloco: o literal, ou a variável que o próprio bloco
+# declarou em `set $var http://host:porta;` — o resolver exige a forma variável, senão o
+# container do web não sobe sem o companion na rede. Passar por aqui é o que separa
+# "o bloco tem proxy_pass" de "o bloco manda no companion da porta do contrato".
+func _NginxProxyUpstream(body : String) -> String:
+	var ppAt : int = body.find("proxy_pass")
+	if ppAt < 0:
+		return ""
+	var target : String = String(body.substr(ppAt + 10).split(";")[0].strip_edges())
+	if target.is_empty():
+		return ""
+	if not target.begins_with("$"):
+		return target
+	var setAt : int = body.find("set " + target)
+	if setAt < 0:
+		return ""
+	return String(body.substr(setAt + 4 + target.length()).split(";")[0].strip_edges())
+
+# Devolve a string que o COMPILADOR produz para o corpo de um literal GDScript: o
+# varredor de texto vê `"...a\n\nb..."` com barra-e-ene de verdade, mas quem chega no
+# `tr()` em runtime é "a<newline><newline>b", e é essa forma que o catálogo indexa.
+# Comparar as duas formas era o que deixava a régua de i18n verde sobre um catálogo
+# vivo e cego ao mesmo tempo (chaves multilinha do onboarding: compiladas cruas com
+# `unescape_keys=false`, nunca resolvidas no jogo, e ainda assim "cobertas" aqui).
+# Escape desconhecido passa como veio — a varredura é literal por design.
+func _UnescapeKey(literal : String) -> String:
+	var out : String = ""
+	var i : int = 0
+	while i < literal.length():
+		var c : String = literal[i]
+		if c != "\\" or i + 1 >= literal.length():
+			out += c
+			i += 1
+			continue
+		var nxt : String = literal[i + 1]
+		match nxt:
+			"n": out += "\n"
+			"t": out += "\t"
+			"r": out += "\r"
+			"a": out += "\a"
+			"b": out += "\b"
+			"f": out += "\f"
+			"v": out += "\v"
+			"\\": out += "\\"
+			"\"": out += "\""
+			"'": out += "'"
+			_: out += c + nxt
+		i += 2
+	return out
 
 # Corpo de uma função do topo do arquivo (da assinatura até o próximo `\nfunc `),
 # sem as linhas de comentário. Os guards de fiação abaixo procuram por chamadas
@@ -5597,18 +6140,28 @@ func SuiteDeployMode() -> void:
 	# condition: service_healthy`, então a stack inteira do beta está pendurada num
 	# healthcheck que antes sondava uma porta onde nada escutava (e com "||" dentro
 	# da forma lista, que o curl recebia como argumento). Estes checks amarram o
-	# probe ao listener real.
-	var hcAt : int = compose.find("healthcheck:")
-	Check(hcAt > compose.find("\n  game:"), "game declara healthcheck")
-	var testAt : int = compose.find("test:", hcAt)
-	var testEol : int = compose.find("\n", testAt)
-	var testLine : String = compose.substr(testAt, testEol - testAt) if testAt >= 0 and testEol > testAt else ""
-	Check(testLine.contains("\"CMD\""), "healthcheck usa a forma lista (CMD)")
+	# probe ao listener real — e ao bloco certo: o arquivo tem três `healthcheck:`
+	# (web, game, companion) e varrer a partir da posição 0 amarrava o probe do game
+	# ao do web, que sonda outra coisa e não diz nada do processo que segura a stack.
+	var gameAt : int = compose.find("\n  game:")
+	var gameBlockEnd : int = compose.find("\n  companion:")
+	Check(gameAt >= 0 and gameBlockEnd > gameAt, "compose tem o bloco game delimitado")
+	var gameBlock : String = compose.substr(gameAt, gameBlockEnd - gameAt) if gameAt >= 0 and gameBlockEnd > gameAt else ""
+	Check(gameBlock.contains("healthcheck:"), "game declara healthcheck")
+	var hcAt : int = gameBlock.find("healthcheck:")
+	var testAt : int = gameBlock.find("test:", hcAt)
+	var testEol : int = gameBlock.find("\n", testAt)
+	var testLine : String = gameBlock.substr(testAt, testEol - testAt) if testAt >= 0 and testEol > testAt else ""
+	Check(testLine.contains("\"CMD\""), "healthcheck do game usa a forma lista (CMD)")
 	Check(not testLine.contains("||") and not testLine.contains("&&"), "healthcheck sem operador de shell (CMD não passa por shell)")
-	var urlAt : int = compose.find("http://localhost:", hcAt)
-	var urlEnd : int = compose.find("\"", urlAt)
-	var probeURL : String = compose.substr(urlAt, urlEnd - urlAt) if urlAt >= 0 and urlEnd > urlAt else ""
+	var urlAt : int = gameBlock.find("http://", testAt)
+	var urlEnd : int = gameBlock.find("\"", urlAt)
+	var probeURL : String = gameBlock.substr(urlAt, urlEnd - urlAt) if urlAt >= 0 and urlEnd > urlAt else ""
 	Check(probeURL.ends_with("/healthz"), "probe sonda /healthz")
+	# Host também, não só a porta: o MetricsServer binda SOMENTE IPv4 em 127.0.0.1
+	# e `localhost` neste container resolve ::1 no primeiro try — connection refused
+	# e o serviço fica unhealthy para sempre, derrubando web e companion.
+	Check(probeURL.contains("://" + MetricsServer.BindAddress + ":"), "probe sonda o endereço que o servidor binda (127.0.0.1, não localhost)")
 	CheckEq(int(probeURL.get_slice(":", 2).get_slice("/", 0)), MetricsServer.DefaultPort, "porta sondada == porta que o servidor binda")
 	Check(serverDF.contains("curl"), "imagem do server instala curl (sem ele o healthcheck nunca passa)")
 
@@ -5647,20 +6200,71 @@ func SuiteDeployMode() -> void:
 	Check(nginx.contains("companion:%d" % NetworkCommons.CompanionPort), "nginx faz proxy para o companion na porta do contrato")
 	Check(nginx.contains("proxy_pass"), "nginx encaminha (sem isto /checkout e /webhooks são 404 do shell estático)")
 	Check(nginx.contains("resolver "), "nginx resolve o upstream a cada request (boot do web não morre sem companion)")
-	# O padrão é LIDO DO ARQUIVO e executado aqui: testar a regex real é o que pega
-	# o erro de digitação que deixaria a página estática de retorno presa atrás do
-	# proxy (ou o webhook caindo no try_files do shell).
-	var locAt : int = nginx.find("location ~ ")
-	var locEnd : int = nginx.find(" {", locAt) if locAt >= 0 else -1
-	var locPattern : String = nginx.substr(locAt + 11, locEnd - locAt - 11) if locAt >= 0 and locEnd > locAt else ""
-	Check(locPattern.contains("checkout") and locPattern.contains("webhooks"), "nginx: location cobre checkout e webhooks (%s)" % locPattern)
-	var routeRX : RegEx = RegEx.new()
-	CheckEq(routeRX.compile(locPattern), OK, "nginx: padrão da location compila como regex")
-	var apiPaths : Array[String] = ["/checkout/intents", "/checkout/preference", "/checkout/simulate", "/webhooks/payments"]
-	for apiPath : String in apiPaths:
-		Check(routeRX.search(apiPath) != null, "nginx: %s cai no proxy do companion" % apiPath)
-	Check(routeRX.search("/checkout_return.html") == null, "nginx: a página de retorno fica no web (não é proxied)")
-	Check(routeRX.search("/index.html") == null, "nginx: o shell do jogo não é proxied")
+	# O que a régua antiga procurava era `location ~ `, e esse regex SAIU do arquivo: a
+	# rota do dinheiro hoje é um par de prefixos, `location ^~ /webhooks/`
+	# (deploy/web/nginx.conf:148) e `location ^~ /checkout/` (deploy/web/nginx.conf:170),
+	# separados porque os dois tráfegos têm tetos diferentes. Não achando o header,
+	# `locPattern` vinha vazio e o estrago era assimétrico: os três checks de conteúdo
+	# caíam, mas os quatro "cai no proxy do companion" passavam VAZIOS, porque regex
+	# vazio casa com qualquer URI — guarda que aprova tudo é pior que guarda rompida.
+	# O que se cobra agora é a DECISÃO de roteamento, lida do arquivo: para cada URI,
+	# `_NginxLocationWins` reproduz a precedência do nginx (`=` exato → `^~` prefixo mais
+	# longo → regex na ordem do arquivo → prefixo simples mais longo) e a asserção é
+	# sobre o bloco VENCEDOR. Daí as duas pontas, que são o intento original:
+	#   (a) /checkout/{intents,preference,simulate} e /webhooks/payments caem num bloco
+	#       que faz proxy_pass ao companion na porta do contrato;
+	#   (b) /checkout_return.html e /index.html NÃO caem nesses blocos — o prefixo do
+	#       proxy tem barra final (`/checkout/`) e o nome da página tem underscore no
+	#       lugar dela, e `/index.html` é capturado por `location =`, que vence qualquer
+	#       prefixo. Os dois ficam no shell estático.
+	var nginxCode : String = _StripCommentLines(nginx)
+	var nginxLocs : Array = _NginxLocations(nginxCode)
+	if Check(not nginxLocs.is_empty(), "nginx: as locations do arquivo são legíveis pelo harness (%d blocos)" % nginxLocs.size()):
+		var compTarget : String = "companion:%d" % NetworkCommons.CompanionPort
+		# Os dois blocos de prefixo do dinheiro, extraídos pelo header REAL do arquivo:
+		# é neles que mora o `proxy_pass`, então conferir o alvo do proxy (e não a string
+		# "companion:8901" em qualquer lugar do texto) é o que liga a régua ao caminho.
+		for moneyHeader : String in ["^~ /checkout/", "^~ /webhooks/"]:
+			var moneyBody : String = _NginxLocationBody(nginxLocs, moneyHeader)
+			Check(not moneyBody.is_empty() and moneyBody.contains("proxy_pass") \
+				and _NginxProxyUpstream(moneyBody).contains(compTarget), \
+				"nginx: o bloco `location %s` existe e faz proxy_pass ao companion (%s)" % [moneyHeader, compTarget])
+		# (a) Cada caminho do dinheiro no bloco que de fato ganha a URI.
+		for apiPath : String in ["/checkout/intents", "/checkout/preference", "/checkout/simulate", "/webhooks/payments"]:
+			var winAPI : Dictionary = _NginxLocationWins(nginxLocs, apiPath)
+			var upAPI : String = _NginxProxyUpstream(String(winAPI.get("body", "")))
+			Check(not winAPI.is_empty() and winAPI.has("body") and upAPI.contains(compTarget), \
+				"nginx: %s cai no proxy do companion (ganha `%s` → %s)" % [apiPath, String(winAPI.get("header", "<nenhuma location>")), upAPI if not upAPI.is_empty() else "sem proxy_pass"] )
+		# (b) As duas páginas que ficam no web. `has("body")` importa: sem bloco vencedor
+		# não há proxy, mas também não há resposta — deixar passar seria a tautologia de
+		# sempre, "nada casa, logo nada erra".
+		var winReturn : Dictionary = _NginxLocationWins(nginxLocs, "/checkout_return.html")
+		Check(winReturn.has("body") and not String(winReturn.get("body", "")).contains("proxy_pass"), \
+			"nginx: a página de retorno fica no web, não é proxied (ganha `%s`)" % String(winReturn.get("header", "<nenhuma location>")))
+		var winIndex : Dictionary = _NginxLocationWins(nginxLocs, "/index.html")
+		Check(String(winIndex.get("header", "")) == "= /index.html" and not String(winIndex.get("body", "")).contains("proxy_pass"), \
+			"nginx: o shell do jogo não é proxied (`=` vence os prefixos; ganhou `%s`)" % String(winIndex.get("header", "<nenhuma location>")))
+		# O braço estático tem que existir de verdade, senão "não é proxied" só quer dizer
+		# 404: quem serve os .html é `location /` com try_files, sem proxy_pass.
+		var shellBody : String = _NginxLocationBody(nginxLocs, "/")
+		Check(not shellBody.is_empty() and shellBody.contains("try_files") and not shellBody.contains("proxy_pass"), \
+			"nginx: existe bloco estático que serve os .html do shell (location / → try_files, sem proxy_pass)")
+		# Os regex que ficaram no arquivo (workers) continuam regex: um padrão que não
+		# compila não é "nada casa", é nginx que não sobe. Cobrança herdada da régua
+		# antiga, agora sobre todos os blocos `~`/`~*` do arquivo, não sobre um lembrado.
+		var badRegex : String = ""
+		for locEntry in nginxLocs:
+			var locHeader : String = String((locEntry as Dictionary).get("header", ""))
+			var locPattern : String = ""
+			if locHeader.begins_with("~* "):
+				locPattern = String(locHeader.substr(3).strip_edges())
+			elif locHeader.begins_with("~ "):
+				locPattern = String(locHeader.substr(2).strip_edges())
+			if not locPattern.is_empty():
+				var locRX : RegEx = RegEx.new()
+				if locRX.compile(locPattern) != OK:
+					badRegex += locPattern + " "
+		Check(badRegex.is_empty(), "nginx: todo padrão regex de location compila (%s)" % (badRegex if not badRegex.is_empty() else "ok"))
 
 	# A resolução é uma função só, e pura — o harness cobre o ramo web sem browser.
 	Check(NetworkCommons.ResolveCompanionURL("https://env.example", "https://conf.example", "https://page.example") \
@@ -6469,16 +7073,17 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 	var essenceBefore : int = sql.GetCharacterEssence(charID)
 	var goldBefore : int = int(sql.GetStat(charID).get("gp", 0))
 	sql.UpdateSettleAnchor(charID, SQLCommons.Timestamp() - 12 * 3600, 1.0)
+	var nbCap : float = NewbieMultForLevel(LevelOf(sql, charID))
 	var capped : Dictionary = OfflineSettle.SettlePending(charID)
 	if Check(not capped.is_empty(), "capped settle produced a report"):
 		var z1 : FarmZoneData = FarmZoneData.GetZone(1)
 		var xp : int = int(capped["xp_earned"])
 		# favor_xp = 1 comprado acima compõe o faucet offline (×1,05). A hora é a do
-		# relatório: 12h de janela batem no cap F2P de 1h, e a window continua
-		# truncada no mesmo `h` que gerou xp/gold/chaves — re-derivar, não chumbar.
-		CheckNear(float(capped["hours"]), 1.0, 0.001, "12h de janela líquidas no cap F2P de 1h")
+		# relatório: a janela de 12h bate no cap F2P (BaseCapHours) e a window
+		# continua truncada no mesmo `h` que gerou xp/gold/chaves — re-derivar, não chumbar.
+		CheckNear(float(capped["hours"]), OfflineSettle.BaseCapHours, 0.001, "12h de janela líquidas no cap F2P")
 		var expectedXp : int = roundi(float(z1.xpPerKill) * float(z1.parKillsPerHour) * float(capped["hours"]) * float(capped["efficiency"]) \
-			* OfflineSettle.OfflineFactor * float(capped["mods"]) * RebirthData.XpMult(1) * ExpectedNewbieMult(sql, charID))
+			* OfflineSettle.OfflineFactor * float(capped["mods"]) * RebirthData.XpMult(1) * nbCap)
 		CheckEq(xp, expectedXp, "offline income carries the bought favor_xp (x1.05)")
 		var gain : int = int(capped.get("essence_earned", -1))
 		CheckEq(gain, xp / RebirthData.EssenceDivisor, "capped offline XP converts 1:100 into essence")
@@ -6731,6 +7336,11 @@ func SuiteRefund(sql : SQLService) -> void:
 	CheckEq(sql.GetGems(accountID), 0, "refund: gems reversed")
 	CheckEq(sql.GetGemsPaid(accountID), 0, "refund: o pago saiu junto")
 	Check(not sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "refund:" + key]).is_empty(), "refund: ledger row appended")
+	# P1-6: o estorno é reverso de receita e tinha de aparecer como tal — sem o
+	# evento, a venda devolvida continuava somando no ARPU.
+	CheckEq(_FunnelCount(sql, "refund", accountID, tag), 1, "refund: emitido como evento de dinheiro")
+	var refundPaid : Array = sql.QueryBindings("SELECT json_extract(meta, '$.currency') AS cur FROM telemetry_event WHERE kind = 'refund' AND account_id = ? AND CAST(json_extract(meta, '$.price_paid') AS INTEGER) = 4990;", [accountID])
+	Check(not refundPaid.is_empty() and str(refundPaid[0]["cur"]) == "BRL", "refund: o evento carrega os centavos devolvidos")
 	var gst : Array = sql.QueryBindings("SELECT status FROM grant_queue WHERE idempotency_key = ?;", [key])
 	Check(not gst.is_empty() and str(gst[0]["status"]) == "refunded", "refund: grant_queue marked refunded")
 	Check(str(economy.RequestGemRefund(accountID, key).get("reason", "")) == "already_refunded", "refund: double refund denied")
@@ -6770,6 +7380,77 @@ func SuiteRefund(sql : SQLService) -> void:
 	var oldkey : String = "r-old-%d" % tag
 	sql.ExecuteBindings("INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, 'gems', 550, 550, ?, ?);", [accountID, "grant:" + oldkey, SQLCommons.Timestamp() - 8 * 86400])
 	Check(str(economy.RequestGemRefund(accountID, oldkey).get("reason", "")) == "window_expired", "refund: older than 7d -> window_expired")
+
+# P1-6 (auditoria 2026-09-27): chargeback do provedor. O webhook 'charged_back'
+# não tem webhook nosso o precede, então o dinheiro voltou para o jogador e o
+# prejuízo ficou com a operação — até aqui. Cada assert dispara o caminho real
+# (fila → ProcessPendingGrants → ledger), não uma leitura de fonte.
+func SuiteChargeback(sql : SQLService) -> void:
+	print("[suite] chargeback clawback (P1-6)")
+	var economy : EconomyService = Launcher.Economy
+	if not Check(economy != null, "chargeback: economy viva"):
+		return
+	var tag : int = SQLCommons.Timestamp()
+	var charID : int = CreateFixture(sql, "idle_cb_%d" % tag, "IdleCb%d" % tag)
+	if not Check(charID != 0, "chargeback fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var t0 : int = SQLCommons.Timestamp()
+
+	# (1) a compra, como o companion escreve: gems + centavos.
+	var payment : String = "100%d" % tag
+	Check(economy.EnqueueGrant(accountID, "gems", 550, payment, '{"sku": "gems.550"}', 4990, "BRL"), "chargeback: compra enfileirada")
+	economy.ProcessPendingGrants(50)
+	CheckEq(sql.GetGems(accountID), 550, "chargeback: gems entregues")
+
+	# (2) o provedor toma o dinheiro de volta: kind='chargeback' é o reverso.
+	Check(economy.EnqueueGrant(accountID, "chargeback", 550, payment + ":chargeback", '{"sku": "gems.550", "payment_id": "' + payment + '"}', 4990, "BRL"), "chargeback: clawback enfileirado")
+	Check(int(economy.ProcessPendingGrants(50).get("processed", 0)) >= 1, "chargeback: fila processada")
+	CheckEq(sql.GetGems(accountID), 0, "chargeback: o clawback saiu do saldo")
+	CheckEq(sql.GetGemsPaid(accountID), 0, "chargeback: e levou a parte paga primeiro")
+	var claw : Array = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "clawback:" + payment])
+	CheckEq(claw.size(), 1, "chargeback: exatamente uma linha de ledger")
+	Check(not claw.is_empty() and int(claw[0]["amount"]) == -550, "chargeback: o ledger grava o reverso (-550)")
+
+	# (3) a dupla cobrança que o buraco deixava: com o clawback pago, o art.49
+	# ainda responderia pela mesma chave e devolveria as gems de novo.
+	Check(str(economy.RequestGemRefund(accountID, payment).get("reason", "")) == "charged_back", "chargeback: art.49 negado depois do clawback")
+
+	# (4) reprocessar não cobra duas vezes — a pré-checagem é por payment_id, então
+	# segura mesmo se o operador re-enfileirar sob outra chave.
+	Check(economy.EnqueueGrant(accountID, "chargeback", 550, payment + ":cb2", '{"payment_id": "' + payment + '"}'), "chargeback: re-queue sob outra chave")
+	economy.AddGems(accountID, 200, "faucet:teste")
+	economy.ProcessPendingGrants(50)
+	CheckEq(sql.GetGems(accountID), 200, "chargeback: segundo clawback do mesmo payment não debita")
+	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "clawback:" + payment])[0]["n"]), 1, "chargeback: ledger não duplica o clawback")
+
+	# (5) P1-6b: o teto do débito é a PARTE PAGA do saldo, nunca o saldo inteiro.
+	# Aqui a conta tem 200 gems de faucet e `gems_paid` 0 (as 550 pagadas já
+	# voltaram no bloco 2), então o clawback de 5000 toma zero: queimar gem grátis
+	# para pagar dívida de gem paga é o inverso exato do gate `not_paid` do art.49.
+	# O rombo não desaparece — vira `grant_queue.error` + flag de revisão, lido por
+	# gente. E a linha continua 'processed': 'failed' entupiria a fila para sempre.
+	var payment2 : String = "200%d" % tag
+	Check(economy.EnqueueGrant(accountID, "chargeback", 5000, payment2 + ":chargeback", '{"payment_id": "' + payment2 + '"}'), "chargeback: clawback maior que o saldo pago")
+	economy.ProcessPendingGrants(50)
+	CheckEq(sql.GetGems(accountID), 200, "chargeback: gem grátis intacta — débito tem teto em gems_paid")
+	CheckEq(sql.GetGemsPaid(accountID), 0, "chargeback: gems_paid não desce abaixo de zero")
+	var zeroClaw : Array = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "clawback:" + payment2])
+	Check(not zeroClaw.is_empty() and int(zeroClaw[0]["amount"]) == 0, "chargeback: o clawback sem tomável é gravado como débito 0")
+	var st : Array = sql.QueryBindings("SELECT status, error FROM grant_queue WHERE idempotency_key = ?;", [payment2 + ":chargeback"])
+	Check(not st.is_empty() and str(st[0]["status"]) == "processed", "chargeback: linha parcial é processed, não failed")
+	Check(not st.is_empty() and str(st[0]["error"]) == ReasonCodes.ChargebackShortfall, "chargeback: o rombo fica escrito na própria linha da fila")
+	var shortFlag : Array = sql.QueryBindings("SELECT evidence FROM fraud_flag WHERE account_id = ? AND kind = ?;", [accountID, ReasonCodes.ChargebackShortfall])
+	Check(shortFlag.size() == 1, "chargeback: rombo abre uma única flag de revisão")
+	var shortWhy : Variant = JSON.parse_string(str(shortFlag[0].get("evidence", ""))) if not shortFlag.is_empty() else null
+	Check(shortWhy is Dictionary and int((shortWhy as Dictionary).get("missing", 0)) == 5000 \
+		and int((shortWhy as Dictionary).get("debited", -1)) == 0, "chargeback: a flag diz quanto foi tomado e quanto faltou")
+
+	# (6) receita: a linha que devolve dinheiro não pode ser contada como venda.
+	CheckEq(_FunnelCount(sql, "purchase", accountID, t0), 1, "chargeback: 'purchase' não infla com o clawback")
+	CheckEq(_FunnelCount(sql, "chargeback", accountID, t0), 3, "chargeback: cada linha de clawback tem evento próprio")
+	var clawPaid : Array = sql.QueryBindings("SELECT json_extract(meta, '$.currency') AS cur FROM telemetry_event WHERE kind = 'chargeback' AND account_id = ? AND CAST(json_extract(meta, '$.price_paid') AS INTEGER) = 4990;", [accountID])
+	Check(not clawPaid.is_empty() and str(clawPaid[0]["cur"]) == "BRL", "chargeback: o evento carrega os centavos que o provedor tomou")
 
 # SOM-IDLE beta (T11/T12): concorrência econômica intercalada (engine
 # single-thread: duas tentativas "simultâneas" = segunda chamada antes de
@@ -7470,6 +8151,40 @@ static func _PtrResolve(cited : String) -> String:
 		return String(arr[0])
 	return ""
 
+# Toda `*.md` que o projeto mantém, com o mesmo critério de exclusão do walk de
+# código: diretório escondido (`.godot`, `.git`, `.test-home`), vendor em `addons/` e o
+# depósito de registros mortos em `archive/`. `graphify-out/` sai também, e por outro
+# motivo: é saída de ferramenta, regravada por outro processo, `gitignore`ada e já
+# excluída do pacote (`export_presets.cfg`, `exclude_filter`). Não é documentação que
+# alguém mantenha, e um número de linha dela vem do snapshot do dia em que o gráfico foi
+# gerado — a régua puniria o run por algo que nenhum autor escreveu.
+# Derivar da árvore é o ponto — uma lista escrita à mão aqui é exatamente a doc que
+# grava número: `README.md` e as quatro `docs/adding-*.md` (o primeiro arquivo que um
+# contribuidor novo abre) ficaram de fora da régua de ponteiros enquanto ela existiu, e
+# nada avisou.
+static func _MdFilesAll() -> Array[String]:
+	var skipped : Array[String] = ["addons", "archive", "graphify-out"]
+	var found : Array[String] = []
+	var stack : Array[String] = ["res://"]
+	while not stack.is_empty():
+		var current : String = stack.pop_back()
+		var dir : DirAccess = DirAccess.open(current)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var fname : String = dir.get_next()
+		while fname != "":
+			var full : String = current.path_join(fname)
+			if dir.current_is_dir():
+				if not fname.begins_with(".") and not skipped.has(fname):
+					stack.append(full)
+			elif fname.ends_with(".md"):
+				found.append(full)
+			fname = dir.get_next()
+		dir.list_dir_end()
+	found.sort()
+	return found
+
 # Ponteiros de evidência da documentação do beta. O §24, o handoff de lançamento e o roadmap citam
 # `arquivo:linha` como prova de cada item — e linha derrapa sozinha quando o código muda de
 # tamanho. Medido nesta passada: nove ponteiros do próprio documento de auditoria já apontavam para
@@ -7491,11 +8206,17 @@ func SuiteEvidencePointers() -> void:
 	# `CheckBox.new(` não é check de teste: a âncora exige chamada `Check…(`.
 	var checkRx : RegEx = RegEx.new()
 	checkRx.compile("\\bCheck[A-Za-z]*\\(")
-	var docs : Array[String] = [
-		"res://AUDITORIA_INDEPENDENTE_2026-09-24.md",
-		"res://ROADMAP_COMERCIAL.md",
-		"res://deploy/LAUNCH_HANDOFF.md",
-	]
+	# A lista é derivada da árvore (`_MdFilesAll`), não escrita aqui. O que ficou de
+	# fora é só o que a própria suíte de código já exclui: vendor e o depósito de
+	# registros mortos. Uma lista à mão foi o formato até 2026-09-27 e ela envelheceu
+	# mais rápido que a documentação — as `docs/adding-*.md`, que são exatamente o
+	# caminho de entrada de quem chega novo, nunca foram conferidas.
+	var docs : Array[String] = _MdFilesAll()
+	if not Check(docs.size() >= 30 and docs.has("res://README.md")
+			and docs.has("res://docs/development/testing.md")
+			and docs.has("res://deploy/ROLLBACK.md"),
+			"varredura acha a doc que a régua tem que ler: %d arquivos .md, com README, testing.md e ROLLBACK.md" % docs.size()):
+		return
 	var lineCache : Dictionary = {}
 	var quebrados : Array[String] = []
 	var derrapados : Array[String] = []
@@ -7558,16 +8279,18 @@ func SuiteEvidencePointers() -> void:
 	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])
 	# (3) Nome de suíte. A prosa do beta afirma "coberto por `SuiteX`", e nome que não é `func`
 	# na árvore é exatamente a classe de defeito que já foi achado nesta auditoria (documentação
-	# descrevendo teste inexistente). Diferente de número de linha, nome não drifta com edição:
-	# medido, os 89 `func Suite*` do repositório vivem todos em `tests/IdleTests.gd`, e os 29
-	# nomes citados nos três docs resolvem contra eles.
+	# descrevendo teste inexistente). Diferente de número de linha, nome não drifta com edição.
+	# A coleta varre `tests/` inteiro, não só este arquivo: as suítes que vivem em harness
+	# próprio (`*_test.gd` descoberto por `scripts/test.sh`) são tão reais quanto as daqui, e
+	# chamá-las de fantasma seria a régua inventando falha.
 	var nameRx : RegEx = RegEx.new()
 	nameRx.compile("\\b(Suite[A-Za-z0-9_]+)\\b")
 	var defRx : RegEx = RegEx.new()
-	defRx.compile("(?m)^func (Suite[A-Za-z0-9_]+)\\(")
+	defRx.compile("(?m)^(static )?func (Suite[A-Za-z0-9_]+)\\(")
 	var definidas : Dictionary = {}
-	for d in defRx.search_all(_RepoFile("res://tests/IdleTests.gd")):
-		definidas[String(d.get_string(1))] = true
+	for testFile in _GdFilesUnder("res://tests"):
+		for d in defRx.search_all(_RepoFile(String(testFile))):
+			definidas[String(d.get_string(2))] = true
 	var citadas : Dictionary = {}
 	var fantasmas : Array[String] = []
 	for docPath in docs:
@@ -7578,7 +8301,7 @@ func SuiteEvidencePointers() -> void:
 			citadas[nome] = true
 			if not definidas.has(nome):
 				fantasmas.append(nome)
-	CheckEq(fantasmas.size(), 0, "ponteiros: %d nomes de suíte citados na documentação existem como func em tests/IdleTests.gd (%s)" % [citadas.size(), " | ".join(fantasmas)])
+	CheckEq(fantasmas.size(), 0, "ponteiros: %d nomes de suíte citados na documentação existem como `func` em algum arquivo de tests/ (%s)" % [citadas.size(), " | ".join(fantasmas)])
 	# Cobertura no log: "0 falhas" sozinho não diz o quanto foi olhado, que é exatamente a
 	# classe de problema que este guard veio fechar.
 	print("  [info] ponteiros: %d referências arquivo:linha, %d com mensagem de check na prosa, %d nomes de suíte" % [conferidos, comMensagem, citadas.size()])
@@ -7629,9 +8352,11 @@ func SuiteExternalLinksWebBranch() -> void:
 	CheckEq(nus.size(), 0, "navegação externa: todo OS.shell_open de sources/ tem ramo Web com JavaScriptBridge (%d sítios; sem ramo: %s)" % [sitios, " | ".join(nus)])
 	print("  [info] navegação externa: %d sítios de OS.shell_open em sources/, todos com ramo Web" % sitios)
 
-# Offline comprado com anúncio (plano 2026-09-25). A regra do dono: "F2P coleta
-# 1h; cada anúncio soma +1h; o divisor de 24h reinicia; VIP faz 24h sem assistir
-# nada". Esta suíte cobre o mecanismo por trás do número — placement, horas
+# Offline comprado com anúncio (plano 2026-09-25). A regra do dono: "cada anúncio
+# soma +1h; o divisor de 24h reinicia; VIP faz 24h sem assistir nada". O piso F2P
+# que era 1h saiu da zona hostil da retenção e hoje é `OfflineSettle.BaseCapHours`
+# (8h, P1-retenção) — o que o anúncio compra continua sendo HORA por cima dele, e
+# é isso que esta suíte mede. Esta suíte cobre o mecanismo — placement, horas
 # ganhas por PERSONAGEM, as duas metades da janela (divisor e coleta) e o teto de
 # baú. O C2 ligou o settle nela (CapHoursForCharacter em BuildReport e em
 # SettlePending), então os asserts de liquidação no fim são a prova de que a
@@ -7691,24 +8416,25 @@ func SuiteOfflineAdHours(sql : SQLService) -> void:
 	CheckNear(OfflineSettle.CapHoursForAccount(acctB), 24.0, 0.01, "VIP compra 24h sem assistir nada")
 	CheckNear(OfflineSettle.CapHoursForCharacter(charB, acctB, old), 25.0, 0.01, "VIP + anúncio compõem sem teto")
 
-	# O settle LÊ o cap composto: 14h de janela, 1h de base + as 3h assistidas =
-	# 4h pagas. Com o cap antigo de 12h isto liquidaria 12h; o que não coube no
-	# teto não é pago e não se acumula.
+	# O settle LÊ o cap composto: comprado pela conta + assistido pelo personagem.
+	# Com a base em 8h e três views, uma janela de 14h paga 11h — o que não coube
+	# no teto não é pago e não se acumula.
 	sql.UpdateSettleAnchor(charA, now - 14 * 3600, 1.0)
 	var report : Dictionary = OfflineSettle.SettlePending(charA)
 	tele.Flush()
 	if Check(not report.is_empty(), "settle lê o cap do personagem"):
-		CheckNear(float(report.get("hours", 0.0)), 4.0, 0.01, "14h de janela pagam 4h (1h base + 3h de anúncio)")
-		CheckNear(float(report.get("cap_hours", 0.0)), 4.0, 0.01, "cap_hours vai no relatório")
+		CheckNear(float(report.get("hours", 0.0)), OfflineSettle.BaseCapHours + 3.0, 0.01, "14h de janela pagam a base + 3h de anúncio")
+		CheckNear(float(report.get("cap_hours", 0.0)), OfflineSettle.BaseCapHours + 3.0, 0.01, "cap_hours vai no relatório")
 		Check(not bool(report.get("doubled", true)), "F2P nunca líquida dobrado")
-		CheckEq(int(report.get("chests", 0)), 1, "4h → 1 baú")
+		CheckEq(int(report.get("chests", 0)), 2, "11h no floor(h/4) com teto de 3 pagam 2 baús")
 	# Hora não liquidada não fica pendurada: o anchor avançou além das views.
 	OfflineSettle.nowOverride = int(report.get("last_settled_at", 0)) + 3600
 	var next : Dictionary = OfflineSettle.SettlePending(charA)
 	tele.Flush()
 	OfflineSettle.nowOverride = 0
 	if Check(not next.is_empty(), "settle seguinte produz"):
-		CheckNear(float(next.get("hours", 0.0)), 1.0, 0.01, "sem view nova, o teto volta à base")
+		CheckNear(float(next.get("hours", 0.0)), 1.0, 0.01, "sem view nova, a janela de 1h é paga por inteiro")
+		CheckNear(float(next.get("cap_hours", 0.0)), OfflineSettle.BaseCapHours, 0.01, "sem view nova, o teto volta à base")
 
 	# Piso e teto de baú (risco 1 do plano). A 1h o floor(h/4) pagaria 0 baú, e a
 	# janela AFK é justamente o produto do F2P; na outra ponta, o gate de pegada
@@ -7771,6 +8497,38 @@ func SuiteStorefrontHonesty(sql : SQLService) -> void:
 		offSkus.append(str((e as Dictionary).get("sku", "")))
 	for passSku in Storefront.PassSkus:
 		Check(not offSkus.has(String(passSku)), "%s some da vitrine sem temporada" % String(passSku))
+
+	# Terceira família de mentira de vitrine: o NÚMERO impresso no letreiro. A loja
+	# anunciava "offline cap 1h + 1h per ad" e o VIP "(24h offline)" como texto
+	# corrido; quando a base F2P subiu para 8h (P1-retenção) a tela continuou
+	# vendendo a regra velha — que é exatamente o tipo de divergência que nenhuma
+	# asserção de comportamento pega, porque o comportamento estava certo. A régua
+	# é de fonte: os rótulos são montados em `ShowState`, e hora de offline só pode
+	# chegar lá por constante (`OfflineSettle` / `EconomyCatalog`), nunca por dígito.
+	# Varrido por String e não RegEx pelo mesmo motivo de `_MemberAccesses`.
+	var shopSrc : String = _FnBody(_RepoFile("res://sources/gui/Shop.gd"), "func ShowState(")
+	if Check(shopSrc.contains("vipLabel.text") and shopSrc.contains("buyVip1.text"),
+			"loja: os dois letreiros de VIP são montados em ShowState"):
+		var hoursChumbadas : String = ""
+		for rawLine in shopSrc.split("\n"):
+			var line : String = String(rawLine)
+			if not line.contains("vipLabel.text") and not line.contains("buyVip"):
+				continue
+			var k : int = 0
+			while k < line.length():
+				if line[k] < "0" or line[k] > "9":
+					k += 1
+					continue
+				var e : int = k
+				while e < line.length() and line[e] >= "0" and line[e] <= "9":
+					e += 1
+				while e < line.length() and line[e] == " ":
+					e += 1
+				if e < line.length() and line[e] == "h" \
+						and not _IsIdentChar(line[e + 1] if e + 1 < line.length() else " ", false):
+					hoursChumbadas += line.substr(k, e - k + 1) + " "
+				k = e
+		Check(hoursChumbadas.is_empty(), "nenhuma hora de offline chumbada no letreiro da loja (%s)" % hoursChumbadas)
 
 	# `Storefront.PassSkus` é uma lista de SKUs; a verdade sobre o que É passe
 	# mora no kind do catálogo canônico. Sem este amarrio a lista vira quarta

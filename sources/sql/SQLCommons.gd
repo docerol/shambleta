@@ -8,7 +8,7 @@ const DBName : String					= "live.db"
 const BackupPath : String				= "sql-backups/"
 const BackupPathTesting : String		= "sql-testing-backups/"
 const BackupCheckIntervalSec : int		= 2
-const BackupPlayersSec : int			= 10 * 60 # Every minute
+const BackupPlayersSec : int			= 10 * 60 # A cada 10 minutos (600 s): cadência do passe de persistência iniciado pelo worker.
 
 const DailyBackupIntervalSec : int		= 60 * 60 * 24
 const WeeklyBackupIntervalSec : int		= 60 * 60 * 24 * 7
@@ -29,6 +29,17 @@ const MetaJobIntervalSec : int			= 60 * 60 * 24
 # fração do ciclo de jogo; o custo por passada é um `SELECT` por status.
 const SeasonClockIntervalSec : int		= 60 * 5
 
+# §12 (AUDITORIA_2026-09-27): cadência da poda de ledger no mesmo worker. Seis horas
+# porque a janela de retenção é de dias: rodar mais vezes que isso só multiplica o
+# scan de fronteira sem retirar mais uma linha. `SHAMBLETA_LEDGER_RETENTION=0`
+# desliga na hora, sem recompilar — é o botão do ops para "a poda está competindo
+# com o writer numa janela ruim".
+const LedgerRetentionIntervalSec : int	= 60 * 60 * 6
+const LedgerRetentionEnv : String		= "SHAMBLETA_LEDGER_RETENTION"
+# Rodadas por gatilho: cada rodada poda BatchRows linhas; o teto limita o tamanho do
+# passe (e portanto o quanto de writer um único disparo pode consumir).
+const LedgerRetentionMaxRounds : int	= 20
+
 enum BackupFrequency {DAILY, WEEKLY, MONTHLY}
 
 const BackupLimits : Dictionary[BackupFrequency, int] = {
@@ -38,6 +49,36 @@ const BackupLimits : Dictionary[BackupFrequency, int] = {
 }
 
 const Verbosity : SQLite.VerbosityLevel	= SQLite.NORMAL
+
+# Nome de slot de cosmético em `cosmetic_equip`. Entra como PARÂMETRO nas queries
+# quentes: um literal `'title'` no texto da statement tira a leitura do caminho
+# rápido de certificação (`SQLReadRules._FastCertify` não tem como separar código
+# de conteúdo sem aspas, então abstém — ver tests/read_pool_test.gd).
+const CosmeticSlotTitle : String		= "title"
+
+# Read pool (WAL): conexões read-only concorrentes com o handle de escrita.
+# O leitor fala com o mesmo arquivo, mas com `PRAGMA query_only=1`, e só é usado
+# para leitura pura fora de transação de escrita — ver `SQLReadRules` (a regra) e
+# `SQLReadPool` (as conexões).
+#  - `ReadPoolDefaultEnabled` é o padrão do processo; `SHAMBLETA_SQL_READ_POOL=0`
+#    desliga (e `=1` liga) sem recompilar, porque mexer no caminho de leitura do
+#    dinheiro exige poder de desligar na hora.
+#  - 2 slots, não 8: com o writer numa thread e o worker de backup na outra, dois
+#    leitores já removem a espera do `queryMutex`; mais handle é mais -shm e mais
+#    página em cache duplicada. Medido em tests/read_pool_test.gd.
+const ReadPoolDefaultEnabled : bool		= true
+const ReadPoolEnableEnv : String		= "SHAMBLETA_SQL_READ_POOL"
+const ReadPoolSizeEnv : String			= "SHAMBLETA_SQL_READ_POOL_SIZE"
+const ReadPoolSize : int				= 2
+const MaxReadPoolSize : int				= 4
+# Mesmo prazo do writer: um leitor em WAL não espera lock de escrita, mas se
+# esperar (checkpoint, -shm recuperando) ele espera com prazo e devolve falha —
+# nunca trava o loop do servidor.
+const ReadPoolBusyTimeoutMs : int		= 5000
+# QUIET de propósito: o erro de um leitor é tratado (fallback para o writer), não
+# gritado. No worker thread, cada `push_error` de PRAGMA custodiado viraria ruído
+# no log que o gate §24-8 lê.
+const ReadPoolVerbosity : SQLite.VerbosityLevel	= SQLite.QUIET
 
 # Utils
 static func HasValue(data : Dictionary, key : String) -> bool:

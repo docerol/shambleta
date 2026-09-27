@@ -4,9 +4,19 @@ extends WindowPanel
 # possuído por tipo com Equip, a vitrine comprável em gems (com trava de
 # marco) e o estado do renascimento. Visuais (sprites/partículas) são
 # follow-up de arte — aqui viaja identidade (rótulos), nunca poder.
+#
+# SOM-IDLE auditoria 2026-09-27: cosmético é venda final em gems — o lambda que
+# mandava `Network.BuyCosmetic` direto no `pressed` virou handler nomeado no
+# idiom da casa (arm + ConfirmPending, espelho de AuctionHousePanel): o botão
+# APENAS arma a pendência citando nome e preço; `ConfirmPending()` é o único
+# caminho de rede. Nada de closure aqui — primitivos via `bind` (lambda captura
+# por valor e já mordeu este repo duas vezes).
 @onready var rebirthLabel : Label = $Layout/RebirthInfo
 @onready var ownedBox : VBoxContainer = $Layout/OwnedScroll/OwnedList
 @onready var shopBox : VBoxContainer = $Layout/ShopScroll/ShopList
+
+var SendHook : Callable
+var _pending : Dictionary = {}
 
 func _ready():
 	visibility_changed.connect(_on_visibility_changed)
@@ -72,5 +82,65 @@ func ShowCosmetics(data : Dictionary):
 			sb.disabled = true
 		else:
 			sb.text = "%s — %d gems" % [str(e.get("label", cid)), price]
-			sb.pressed.connect(func() -> void: Network.BuyCosmetic(cid))
+			sb.pressed.connect(_on_buy_cosmetic_pressed.bind(cid, str(e.get("label", cid)), price))
 		shopBox.add_child(sb)
+
+# ------------------------------------------------------------------ gasto com freio
+# Mesmo bloco do leilão/arena: Request* arma, `ConfirmPending()` é o ÚNICO
+# caminho que fala com a rede, modal da casa é a superfície de confirmação.
+func _on_buy_cosmetic_pressed(cosmeticID : String, label : String = "", price : int = 0):
+	RequestBuyCosmetic(cosmeticID, label, price)
+
+func RequestBuyCosmetic(cosmeticID : String, label : String, price : int) -> bool:
+	if cosmeticID.is_empty():
+		return false
+	_pending = {
+		"method" = "BuyCosmetic",
+		"args" = [cosmeticID],
+		"line" = "Buy %s for %d gems? Cosmetics are final sales — the gems never come back." % [
+			("\"%s\"" % label) if not label.is_empty() else "this cosmetic", price],
+	}
+	_Ask(str(_pending["line"]))
+	return true
+
+func _Ask(text : String) -> void:
+	# O rótulo de coleção é o único texto neutro desta janela nascida de .tscn;
+	# fora do modal ele segura a pergunta armada (nunca envia sozinho).
+	if rebirthLabel:
+		rebirthLabel.text = text
+	var modal : bool = Launcher.GUI != null and Launcher.GUI.messageBox != null
+	if modal:
+		UICommons.MessageBox(text, Callable(self, "ConfirmPending"), "Confirm")
+
+func ConfirmPending() -> void:
+	if _pending.is_empty():
+		return
+	var methodName : String = str(_pending.get("method", ""))
+	var args : Array = _pending.get("args", []) as Array
+	_pending = {}
+	_send(methodName, args)
+	if is_node_ready():
+		ShowCosmetics(NetClient.LastCosmetics)
+
+func CancelPending() -> void:
+	_pending = {}
+
+# Estado observável pelo jogador e pelo harness: o que está armado agora.
+func PendingCount() -> int:
+	return 0 if _pending.is_empty() else 1
+
+func PendingLine() -> String:
+	return str(_pending.get("line", ""))
+
+func PendingArgs() -> Array:
+	return (_pending.get("args", []) as Array).duplicate()
+
+func _send(methodName : String, args : Array) -> void:
+	if SendHook.is_valid():
+		SendHook.call(methodName, args)
+		return
+	match methodName:
+		"BuyCosmetic":
+			Network.BuyCosmetic(str(args[0]))
+		_:
+			push_error("Cosmetics: unknown send target " + methodName)

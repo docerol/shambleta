@@ -1,0 +1,23 @@
+{
+	"_note": "Botões base da economia, em dados (JUIZ ECONOMIA 2026-09-27). Eram consts: preço/cap do baú (EconomyCatalog.gd:64,67) e a fricção da troca direta (EconomyService.gd:208-212). Fonte validada fail-closed no boot por EconomyCatalog.ValidateBaseCatalog: chave desconhecida, número não-positivo, SKU fora do catálogo cobrável e QUALQUER divergência contra a referência congelada do código (EconomyCatalog.BASE_KNOBS_REF / ShopCatalogRef) são erros de boot. Isto é mudança de REPRESENTAÇÃO, não de equilíbrio: os números abaixo são, um a um, os mesmos de antes do corte, e trocá-los aqui sem trocar o código não muda o jogo — derruba a carga (o arquivo inválido não entra). O companheiro de moeda paga é data/conf/paid_catalog.json.",
+	"_source": "EconomyCatalog.ShopCatalogRef + EconomyCatalog.BASE_KNOBS_REF",
+	"knobs": {
+		"chest_cost_gems": 120,
+		"max_chests_per_purchase": 10,
+		"trade_cooldown_sec": 60,
+		"trade_daily_cap": 20,
+		"trade_daily_cap_vip": 40
+	},
+	"shop": [
+		{"sku": "gems.550", "label": "550 gems", "price": 19.90},
+		{"sku": "gems.1200", "label": "1200 gems", "price": 39.90},
+		{"sku": "gems.3000", "label": "3000 gems", "price": 79.90},
+		{"sku": "vip.1mo", "label": "VIP 30 days", "price": 24.90},
+		{"sku": "vip.3mo", "label": "VIP 90 days", "price": 59.90},
+		{"sku": "starter.pack", "label": "Starter: VIP 7d + 220 gems (D0–D3, one-time)", "price": 9.90},
+		{"sku": "founder.pack", "label": "Founder: 1200 gems + VIP 30d + title", "price": 39.90},
+		{"sku": "donate.support", "label": "Support: Apoiador title", "price": 4.90},
+		{"sku": "pass.s1", "label": "Pass S1 Premium: trilha premium da temporada", "price": 24.90},
+		{"sku": "pass.s1.deluxe", "label": "Pass S1 Deluxe: premium + 10 levels + gems", "price": 44.90}
+	]
+}

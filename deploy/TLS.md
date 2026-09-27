@@ -20,9 +20,13 @@ environment:
   SHAMBLETA_PROXY_TLS: "1"
 ```
 
-The server will log:
+The server will log (group `Server`, not `TLS` — the line is emitted by
+`Util.PrintLog("Server", ...)` at `sources/network/server/Server.gd:1764` and the
+`[msec][Grupo]` prefix comes from `sources/util/Util.gd:5-6`; `grep '\[TLS\]'` returns
+nothing and reads as "proxy mode did not engage" when it did):
+
 ```
-[TLS] TLS terminated upstream (reverse proxy) — binding plain WebSocket
+[Server] TLS terminated upstream (reverse proxy) — binding plain WebSocket
 ```
 
 ## Mode 2: Direct TLS

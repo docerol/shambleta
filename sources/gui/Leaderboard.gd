@@ -3,11 +3,20 @@ extends WindowPanel
 # SOM-IDLE beta GUI: Leaderboard — top power score global (RPC GetLeaderboard)
 # + boards da temporada ativa (RPC GetSeasonBoards: power e spend com nomes
 # resolvidos no servidor). Read-only; os dados chegam por push da NetClient.
+#
+# SOM-IDLE auditoria 2026-09-27: a inscrição no torneio paga entry_gold e a
+# taxa NÃO volta seja qual for o resultado — era lambda mandando RPC direto.
+# Idiom da casa: handler nomeado arma a pendência citando ouro e torneio,
+# `ConfirmPending()` é o ÚNICO caminho de rede (primitivos via `bind`, não
+# closure: lambda captura por valor e este repo já foi mordido duas vezes).
 @onready var topList : VBoxContainer		= $Layout/TopScroll/TopList
 @onready var seasonLabel : Label			= $Layout/SeasonLabel
 @onready var seasonList : VBoxContainer		= $Layout/SeasonScroll/SeasonList
 @onready var tournamentLabel : Label		= $Layout/TournamentLabel
 @onready var tournamentList : VBoxContainer	= $Layout/TournamentScroll/TournamentList
+
+var SendHook : Callable
+var _pending : Dictionary = {}
 
 #
 func _ready():
@@ -82,12 +91,77 @@ func ShowTournaments(data : Dictionary):
 	if (data.get("my_entry", {}) as Dictionary).is_empty():
 		var enter := Button.new()
 		enter.text = "Enter — %d gold (prizes in gems + Champion title)" % int(active.get("entry_gold", 0))
-		enter.pressed.connect(func() -> void: Network.EnterTournament(int(active.get("id", 0))))
+		# Primitivos no bind (idom da casa pós-auditoria): nada de lambda fechando
+		# sobre `active` — a confirmação cita o torneio e a taxa que ela cobra.
+		enter.pressed.connect(_on_enter_tournament_pressed.bind(int(active.get("id", 0)), str(active.get("name", "?")), int(active.get("entry_gold", 0))))
 		tournamentList.add_child(enter)
 	else:
 		var mine := Label.new()
 		mine.text = "Entered — power start %s. Gain power to climb!" % Util.FormatNumber(int((data.get("my_entry", {}) as Dictionary).get("power_start", 0)))
 		tournamentList.add_child(mine)
+
+# ------------------------------------------------------------------ gasto com freio
+# Mesmo bloco do leilão/arena: `Request*` arma, `ConfirmPending()` é o ÚNICO
+# caminho que fala com a rede, modal da casa é a superfície de confirmação.
+func _on_enter_tournament_pressed(tournamentID : int, tournamentName : String = "", entryGold : int = 0):
+	RequestEnterTournament(tournamentID, tournamentName, entryGold)
+
+func RequestEnterTournament(tournamentID : int, tournamentName : String, entryGold : int) -> bool:
+	if tournamentID <= 0:
+		return false
+	_pending = {
+		"method" = "EnterTournament",
+		"args" = [tournamentID],
+		"line" = "Enter %s for %d gold? The entry fee is spent the moment the server accepts and is NEVER refunded, last place or first." % [
+			("\"%s\"" % tournamentName) if not tournamentName.is_empty() and tournamentName != "?" else "the tournament", entryGold],
+	}
+	_Ask(str(_pending["line"]))
+	return true
+
+func _Ask(text : String) -> void:
+	# O rótulo do torneio é o texto natural desta janela para segurar a pergunta
+	# armada quando não há modal (client em boot ou harness headless).
+	if tournamentLabel:
+		tournamentLabel.text = text
+	var modal : bool = Launcher.GUI != null and Launcher.GUI.messageBox != null
+	if modal:
+		UICommons.MessageBox(text, Callable(self, "ConfirmPending"), "Confirm")
+
+func ConfirmPending() -> void:
+	if _pending.is_empty():
+		return
+	var methodName : String = str(_pending.get("method", ""))
+	var args : Array = _pending.get("args", []) as Array
+	_pending = {}
+	_send(methodName, args)
+	if is_node_ready():
+		ShowTournaments(NetClient.LastTournaments)
+
+func CancelPending() -> void:
+	_pending = {}
+
+# Estado observável pelo jogador e pelo harness: o que está armado agora.
+func PendingCount() -> int:
+	return 0 if _pending.is_empty() else 1
+
+func PendingLine() -> String:
+	return str(_pending.get("line", ""))
+
+func PendingArgs() -> Array:
+	return (_pending.get("args", []) as Array).duplicate()
+
+# Costura de produção: `Network.<rpc>` sempre em nome literal. As leituras da
+# janela (GetLeaderboard/GetSeasonBoards/GetTournaments) não gastam nada e
+# continuam direto em `Network.*`.
+func _send(methodName : String, args : Array) -> void:
+	if SendHook.is_valid():
+		SendHook.call(methodName, args)
+		return
+	match methodName:
+		"EnterTournament":
+			Network.EnterTournament(int(args[0]))
+		_:
+			push_error("Leaderboard: unknown send target " + methodName)
 
 func _FillBoard(parent : Container, title : String, rows : Array):
 	var header : Label = Label.new()

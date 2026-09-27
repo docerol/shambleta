@@ -7,10 +7,18 @@ class_name FarmZoneData
 # rodízio de farm e viram conteúdo de boss-key. Restam 24 zonas de farm reais,
 # reordenadas por dificuldade monotônica. O antigo catálogo de 40 zonas tinha 12
 # placeholders sem mapa e ordem não-monotônica.
+# SOM-IDLE 2026-09-27 (juiz: "o fim de jogo é fundo num eixo só"): a escada passou
+# a 27 zonas. As 3 novas (25-27, tier 9) são mapas REAIS que existiam sem mobs no
+# cliente — Desert Deep Level, Ship Hold e Tulimshar Castle — e ganharam roster
+# próprio em presets/maps/server/** com espécies que nunca entraram em farm
+# (Lynx, Goblin, Bandit, Bird, Xakelbael, além de Snake/Skeleton). A ruler de
+# content hygiene (tests/content_hygiene_test.gd) exige que toda zona tenha mapa
+# resolvido e roster íntegro; a de curvas (tests/balance_test.gd) preço a curva
+# das novas zonas pelo settle real, não por hipótese.
 
-const ZONE_COUNT : int = 24
-const ZonesPerTier : int = 3				# 8 tiers × 3 zonas = 24
-const MAX_TIER : int = 8
+const ZONE_COUNT : int = 27
+const ZonesPerTier : int = 3				# 9 tiers × 3 zonas = 27
+const MAX_TIER : int = 9
 
 # XP_PROGRESSION.md §4.1.2
 const XpBasePerKill : int = 1200
@@ -42,11 +50,17 @@ const FarmRespawnBaseSeconds : float = 18.0
 const FarmRespawnStepSeconds : float = 2.0
 const FarmRespawnMinSeconds : float = 4.0
 
-# SOM-IDLE: F3 — item tier bands (ItemCell.tier 1..8). A zone drops items from
-# its own tier band [tier, min(tier+1, 8)]; empty pools fall back to the Apple.
+# SOM-IDLE: F3 — item tier bands (ItemCell.tier 1..MAX_TIER). A zone drops items
+# from its own tier band [tier, min(tier+1, MAX_TIER)]. Desde 2026-09-27 toda
+# faixa da escada tem item de verdade em presets/cells/items/**: o fallback de
+# "desce uma faixa / cai no Apple" foi DELETADO (era código morto que mascava
+# conteúdo ralo — 9 das 24 zonas viviam dele). A réguas que garantem isso são
+# tests/content_hygiene_test.gd (pool == candidatos da faixa, zona a zona) e
+# tests/balance_test.gd (todo roll das faixas novas cai na própria faixa).
 const DropTierBandSize : int = 2
 
-# Spike drop catalog: zone 1 loots Apple (health potion) at 150 ppm ≈ 540/h
+# Spike drop catalog: Apple (health potion) é o item tier 1 de referência e o
+# único caminho de "sem zona" (id de zona inválido no registro do char).
 const DefaultDropItemHash : int = 215387671		# Apple
 const DefaultDropRatePPM : int = 150
 
@@ -91,15 +105,26 @@ const MapBackedNames : Array[String] = [
 	"Manayir", "Drazil", "Tulimshar Beach",
 	"Manayir Beach", "Tulimshar Southern Hills", "Desert Pit", "Snake Pit",
 	"Desert Mountain Cave", "Desert Mountains",
+	# SOM-IDLE 2026-09-27: tier 9 — os três mapas que existiam sem mob nenhum e
+	# ganharam roster endgame (presets/maps/server/{tonori,ship,tonori/tulimshar}).
+	"Desert Deep Level", "Ship Hold", "Tulimshar Castle",
 ]
 
 # SOM-IDLE: salas de boss (mob único nomeado, sprite próprio) — fora do rodízio
 # de farm, viram conteúdo de boss-key (chave dropada pelos mobs de farm abre a
 # luta contra o boss; boss escala com o nível do char, recompensa com xp/drop
 # turbinados). Índice i → level do boss para escalar.
+# POSIÇÃO i == posição de BossService.BossNames i (réguas em
+# tests/content_hygiene_test.gd: mesmo comprimento, sala real carregada, mob da
+# sala existindo no EntitiesDB). As 6 salas novas são mapas reais do cliente.
 const BossMapNames : Array[String] = [
 	"Splatyna's Dorian Dead End", "Splatyna's Gabriel Pit",
 	"Splatyna's Marvin Hole", "Splatyna's Chamber",
+	# 5-10: nova perna da escada (fim de jogo) — cada uma com arena própria e o
+	# boss de verdade spawneado na sala. MESMA ordem de BossService.BossArenas.
+	"Tulimshar West Chamber", "Splatyna Cave Entrance",
+	"Tulimshar Castle Corridors", "Candor Arena",
+	"Ship First Deck", "Ship Nard's Room",
 ]
 const BossBaseLevel : int = 5
 
@@ -240,18 +265,12 @@ static func GetDropPool(zoneID : int) -> Array:
 			candidates.append(cellHash)
 	candidates.sort()
 
-	if candidates.is_empty():
-		# Band empty (early tiers have few items): fall one tier down, then Apple
-		for fallbackTier in range(zone.tier - 1, 0, -1):
-			for cellHash in DB.ItemsDB:
-				var item : ItemCell = DB.ItemsDB[cellHash]
-				if item != null and item.tier == fallbackTier:
-					candidates.append(cellHash)
-			if not candidates.is_empty():
-				candidates.sort()
-				break
-		if candidates.is_empty():
-			candidates = [DefaultDropItemHash]
+	# SOM-IDLE 2026-09-27: aqui morava o fallback "faixa vazia → desce um tier →
+	# senão Apple". Ele disparava em 9 das 24 zonas (tiers 6/7/8 não tinham item
+	# nenhum) e entregava loot de tier errado. As faixas foram CHEIAS com conteúdo
+	# real (18 cells novos em presets/cells/items/**) e o fallback foi deletado:
+	# faixa vazia agora é falha de conteúdo, não degradação silenciosa — quem
+	# garante isso são tests/content_hygiene_test.gd e tests/balance_test.gd.
 
 	# SOM-IDLE Fase H §6: approved craft templates enter the shared drop pool.
 	# The template_hash is the ItemsDB cell hash (visual base); rarity from the

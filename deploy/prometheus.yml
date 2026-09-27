@@ -1,0 +1,77 @@
+# Config do Prometheus da stack — o leitor de `deploy/alerts.rules.yml`.
+#
+# Por que este arquivo existe: `deploy/alerts.rules.yml` foi escrito para que
+# `grant_queue_pending > 0` por 10 min pagine às 3h (`:severity: page`), mas nada
+# no repositório carregava o arquivo. `grep -nE "prometheus|rule_files|grafana|
+# alertmanager" deploy/docker-compose*.yml` não achava um serviço só que fosse:
+# regra de alerta sem evaluator é texto morto — dispara nunca, e ausência de
+# incêndio é indistinguível de ausência de fogo. Este arquivo é o pedaço que
+# faltava declarar; as regras em si continuam no arquivo que já era conferido por
+# `tests/deploy_ops_test.gd:129-154` (toda métrica citada tem de existir no corpo
+# que o server emite).
+#
+# Embarque: `deploy/monitoring/prometheus.Dockerfile` copia ESTE arquivo e o
+# `deploy/alerts.rules.yml` para dentro da imagem. É de propósito: regra que só
+# existe em bind-mount pode sumir no host e o alerta continuar "ligado"; aqui, se
+# não está no release, não está avaliando. O gate (`scripts/check_compose.sh`)
+# confere os dois lados: a referência a `alerts.rules.yml` e a existência do
+# arquivo copiado.
+#
+# Scrape do `game`: o `/metrics` do jogo binda SOMENTE 127.0.0.1:9400
+# (`sources/system/MetricsServer.gd:21-22`), sem auth e sem TLS. De outro
+# container aquilo é inalcançável — não existe "firewall para liberar". O serviço
+# `prometheus` no compose por isso roda com `network_mode: "service:game"`: o
+# mesmo namespace de rede do processo do jogo, onde `127.0.0.1:9400` É o jogo.
+# Consequência honesta: o scraper herda o ciclo de vida do `game` (game morto →
+# scrape cai junto, que é justamente o que `ServerSemMetrica` abaixo mede) e não
+# publica porta própria — a UI do Prometheus só é alcançável por dentro do host
+# (`docker compose exec game wget -qO- http://127.0.0.1:9090/-/ready`).
+
+global:
+  # Cadência do scrape. 30 s é o `interval` do healthcheck do compose
+  # (deploy/docker-compose.yml, bloco `game:`), então o painel e o probe andam no
+  # mesmo relógio e um pico de 30 s não aparece como "defeito do alerta".
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    stack: shambleta
+
+# As regras que pagam. Caminho DENTRO da imagem (deploy/monitoring/prometheus.Dockerfile);
+# o conteúdo é byte-a-byte o `deploy/alerts.rules.yml` do repositório.
+rule_files:
+  - /etc/prometheus/alerts.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            # Nome de serviço do compose (`deploy/docker-compose.yml`, bloco
+            # `alertmanager:`); porta = o `--web.listen-address` do próprio
+            # command. O gate exige que este host exista como serviço.
+            - alertmanager:9093
+
+scrape_configs:
+  # O server de jogo: /healthz + /metrics em loopback, alcançado pelo
+  # network_mode compartilhado (ver cabeçalho).
+  - job_name: shambleta-game
+    static_configs:
+      - targets: ["127.0.0.1:9400"]
+        labels:
+          service: game
+
+  # A frente do dinheiro (companion) escuta 0.0.0.0:8901 e já publica /metrics —
+  # este é alcançável pela rede interna do compose sem truque nenhum
+  # (deploy/companion/Dockerfile:34, companion/server.py:1165-1209).
+  - job_name: shambleta-companion
+    static_configs:
+      - targets: ["companion:8901"]
+        labels:
+          service: companion
+
+  # O próprio evaluator. Sem isto, "o alerta não disparou" e "o Prometheus estava
+  # morto" são a mesma frase no dashboard — e é a frase que acorda alguém às 3h.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+        labels:
+          service: prometheus

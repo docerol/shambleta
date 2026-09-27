@@ -2,15 +2,20 @@
 
 Entregáveis de código da sequência de lançamento comercial já implementados e
 com a suíte verde em cada commit (`SOM-IDLE: …`, "== RESULT: N checks, 0
-failures =="):
+failures =="). Aviso de leitura: os números de check citados nos itens abaixo são
+os do commit de cada entrega, e não o total do portão de hoje — quem precisa do
+total de hoje roda `./scripts/test.sh` e lê a própria linha `== RESULT:`.
 
 - **1a** consentimento LGPD afirmativo no cadastro (versão/ts/IP persistidos).
 - **1b** exclusão/anonimização de conta (art. 18) preservando o ledger financeiro.
 - **1c** webhook com assinatura de provedor (Stripe, anti-replay) + catálogo
   autoritativo de SKUs (o valor concedido nunca vem do corpo).
 - **1d** reembolso CDC art. 49 (7 dias, só gems não gastas) no EconomyService.
-- **2** payload web: música morta removida do export Web — first-load medido
-  57,9 MB → 32,4 MB gzip (ver `WEB_SLIM.md`).
+- **2** payload web: música morta removida do export Web — primeiro load medido em
+  **35 MiB** (36.734.788 B gzip, 18 arquivos) por `scripts/export_web.sh`. A linha
+  dizia "57,9 MB → 32,4 MB" e o destino estava errado: a régua de 32,4 MB não contava
+  o splash que o shell baixa nem via `graphify-out/` dentro do `.pck`. A correção, a
+  re-mediação e as alavancas recusadas com número estão em `WEB_SLIM.md`.
 - **3b** premiação de temporada automática (fecha + liquida no job diário).
 - **3c** companion multi-thread + hook de alerta/uptime opt-in.
 - **3a** scaffold de i18n pt-BR (CSV + TranslationServer + `tr()` nas strings de
@@ -87,7 +92,8 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   conta (`account.consent_tos_version`, `consent_privacy_version`,
   `consent_age_version`).
 - **Idioma do corpo do aceite — entrega do dono, não ajuste de código.** O texto que o
-  jogador aceita (`data/db/agreement.json`: 8 categorias, 5.315 caracteres) está todo em
+  jogador aceita (`data/db/agreement.json`: 8 categorias de texto, mais de cinco mil
+  caracteres) <!-- DRIFT agreement_categories 8 --> está todo em
   **inglês**, e não existe segunda versão para escolher: `Scrollable.AddContent`
   (`sources/gui/Scrollable.gd:44-49`) concatena `entry["content"]` cru — o arquivo inteiro
   não tem uma chamada `tr(` —, então o painel do aceite renderiza o JSON como ele é enquanto
@@ -233,7 +239,7 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
 
 ## 3. Operação
 - **Schema dentro do container (única peça do boot não verificável neste host)**: o `game`
-  roda do binário com o `.pck` embutido (`deploy/server/Dockerfile`) e as 49 migrations vêm de
+  roda do binário com o `.pck` embutido (`deploy/server/Dockerfile`) e as migrations do diretório vêm de
   `res://data/conf/migrations/`, que só entra no pacote se o `include_filter` do preset
   `Linux/X11 Headless Server` (`export_presets.cfg`) alcançar o subdiretório. Medido aqui:
   `data/conf/*` alcança — `*` cruza `/` nos dois matchers do Godot 4.7.2. **Não medido:** a
@@ -412,7 +418,7 @@ Os 17 restantes são o que o boot e o portão exigem (cada linha conferida contr
 chamadores na árvore): `scripts/ci_gate_log.sh` (o quádruplo que `scripts/test.sh`
 chama), `scripts/export_web.sh` + `scripts/qa_web.mjs` (os produtores locais do
 pacote web — ver §CI abaixo), `data/conf/paid_catalog.json` (a fonte única que
-`EconomyService` valida no boot), `data/conf/migrations/043..046.sql` (chat moderação,
+`EconomyService` valida no boot), as migrations 043 a 046 (chat moderação,
 `price_paid`/`currency`, view de coorte, `consent_age_version`),
 `sources/system/MetricsServer.gd` (`/healthz`+`/metrics`; instanciado em `Launcher`),
 `sources/gui/ManualHudBar.gd` (a construção da barra de HUD que `Gui` monta),
@@ -582,6 +588,15 @@ Compra apenas na versão web (o sandbox do companion responde 403 no nativo).` c
 `+300 XP` sem o `2×`. Cosméticos: exatamente **1** botão comprável na vitrine,
 `Renascido III — locked (rebirths 3)`. Os três strings novos do `.tscn`/`AfkReport` têm paridade no
 `data/i18n/ui.csv` — linha 15 (a linha do teto), 969 (o hint do anúncio) e 974 (o rótulo do botão).
+
+**Leitura desta transcrição em 2026-09-27: os números de teto acima já valem só para o dia da sonda.**
+Ela registra o que a tela mostrava em 2026-09-25, quando o piso F2P era 1h. A regra mudou no mesmo dia
+para **8h** (`sources/idle/OfflineSettle.gd:22` — `BaseCapHours = 8.0`, com o porquê escrito logo
+acima), e o letreiro da loja passou a ser gerado do código em vez de ser texto chumbado: a régua
+`SuiteStorefrontHonesty` (`tests/IdleTests.gd:8142`) falha se qualquer hora de offline aparecer literal
+no `.tscn` (`tests/IdleTests.gd:8190`), então `VIP: inactive (offline cap 1h + 1h per ad)` e
+`Ausente: 1.0h (teto 1h)` não são mais o que a tela diz — são o que ela dizia. Não reescrevi a transcrição
+porque ela é evidência datada; o que ela não pode é virar especificação lida fora da data.
 
 **Um detalhe que a sonda achou, e que não é bug do produto.** Na primeira rodada passei
 `"drops": []` no `NetClient.LastAFKReport` e o `ShowReport` morreu em

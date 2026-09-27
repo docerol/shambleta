@@ -1185,8 +1185,8 @@ removeu o coletor, que ficou sem chamador. Amarrei a volta dele por fonte, em `S
 defeito era justamente uma chamada que *parecia* certa e nenhum comportamento desta suíte a distingue de
 uma coleta honesta. Dois checks, cada mensagem inteira na mesma linha do ponteiro — quebrada entre duas
 linhas a régua não acha na fonte e **pula a citação em silêncio**:
-`tests/IdleTests.gd:4103` "S5: o servidor não coleta hardware próprio como identidade do jogador"
-e `tests/IdleTests.gd:4105` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
+`tests/IdleTests.gd:4373-4375` "S5: o servidor não coleta hardware próprio como identidade do jogador"
+e `tests/IdleTests.gd:4373-4375` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
 `EconomyService.FlagMultiAccount` ficou (fila, dedupe e validação já cobertos por check), e o que falta
 agora é o produtor — o que não é fiação: exige entropia por instalação (um id persistido no cliente),
 coleta no cliente e base legal para levar esses campos. Decisão de dono, e pós-beta: sem detector, a fila
@@ -1239,7 +1239,7 @@ O buraco é o catálogo por dentro, e nenhum dos dois lados (nem o `tr()`, nem o
 Tirei as quatro linhas repetidas, regerei os dois `.translation` pelo mesmo passo da CI
 (`godot --headless --path . --import`) e bati no compilado: `Attack` → **Ataque**, zero `Atacar`.
 Amarrei por censo na mesma passada, com o tamanho ancorado de always-green que é a regra da casa:
-`tests/IdleTests.gd:1161` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `tests/IdleTests.gd:1162`
+`tests/IdleTests.gd:1378-1379` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `tests/IdleTests.gd:1379`
 "i18n: nenhuma chave repetida no ui.csv". Re-medido no fim: **971** chaves, **971** distintas.
 
 **(v) C1 — a chave do dicionário era SQL; só o valor era parâmetro.** `[CÓDIGO]` `[TESTE]` —
@@ -1288,7 +1288,7 @@ dá prêmio extra, e clicar sem assistir já ocupou a cota. `AD_PLACEMENT_CAPS`
 não afrouxa o faucet, só devolve a origem da hora), e placement sem cap no dicionário é recusa
 explícita (`uncapped_placement`) e não licença.
 
-As propriedades do credential em si são medidas em `SuiteAdNonce` (`tests/IdleTests.gd:2965-3024`):
+As propriedades do credential em si são medidas em `SuiteAdNonce` (`tests/IdleTests.gd:3173-3236`):
 "credential tem prefixo próprio, não o formato público" confere que o token que sai é `slot:` e não
 o derivável; "replay do mesmo nonce não credita" e "replay não fabrica view" medem o uso único;
 "nonce de outra conta não credita" vem acompanhado de "roubo tentado não queima o slot do dono",
@@ -1303,7 +1303,7 @@ O teto de abuso mudou de natureza, e a passada registrou o que isso **não** res
 houver verificação server-to-server do provedor, quem autoriza a mintagem é a declaração de exibição
 do próprio client. O que a env passou a ser é exatamente isso — `SHAMBLETA_AD_STUB` é autorização
 para mintar (`sources/economy/EconomyCatalog.gd:296-307`), default fechado, e o `AD_STUB` de antes
-era um `const true`. Medido e amarado em `SuiteDeployMode` (`tests/IdleTests.gd:5586-5594`):
+era um `const true`. Medido e amarado em `SuiteDeployMode` (`tests/IdleTests.gd:5924-5926`):
 "compose de produção não abre o credential auto-declarado" — a linha `SHAMBLETA_AD_STUB: "1"` **saiu**
 do `deploy/docker-compose.yml`, onde estava desde o M2, o que significava que o default de produção
 era ligado. A harness liga a env ela mesma (`run_idle_tests.gd`), e o runbook mantém a env como
@@ -1375,7 +1375,7 @@ re-checado dentro da transação, junto com o saldo total, para o reembolso não
 e a escrita. A ordem dos gates passou a ser
 `not_found / window_expired / already_refunded / gems_consumed / not_paid`.
 
-Amarado em `SuiteRefund` (`tests/IdleTests.gd:6710-6772`), que agora roda com preço em centavos
+Amarado em `SuiteRefund` (`tests/IdleTests.gd:7053-7125`), que agora roda com preço em centavos
 desde o primeiro grant: "refund: o preço creditou o saldo pago", "refund: o pago saiu junto",
 "gasto drena o saldo pago primeiro (não o de graça)" e o roteiro do exploit inteiro —
 "refund: gasta o saldo pago inteiro", "refund: faucet repõe o número", "refund: mas nada disso é

@@ -51,7 +51,8 @@ static func Build(gui : Node) -> Dictionary:
 	eventsBtn.mouse_filter = Control.MOUSE_FILTER_STOP
 	eventsBtn.pressed.connect(Callable(gui, "_on_activities_pressed"))
 	bar.add_child(eventsBtn)
-	# Botão Guilda — acesso rápido ao painel Social.gd (guildList, membros, vault, ações líder).
+	# Botão Guilda — abre o painel que gerencia a guilda (`GuildPanel.gd`, via
+	# `Gui.EnsureGuildPanel`): criar/buscar/entrar, vault, level-up e chat.
 	var guildBtn : Button = Button.new()
 	guildBtn.name = "GuildButton"
 	guildBtn.text = "Guilda"
@@ -59,15 +60,11 @@ static func Build(gui : Node) -> Dictionary:
 	guildBtn.mouse_filter = Control.MOUSE_FILTER_STOP
 	guildBtn.pressed.connect(Callable(gui, "_on_guild_pressed"))
 	bar.add_child(guildBtn)
-	# Botão AH — acesso à Auction House (UI gráfica P1 em desenvolvimento; comandos /ah funcionam via EconomyService).
-	var ahBtn : Button = Button.new()
-	ahBtn.name = "AHButton"
-	ahBtn.text = "AH"
-	ahBtn.custom_minimum_size = touchSize
-	ahBtn.mouse_filter = Control.MOUSE_FILTER_STOP
-	ahBtn.pressed.connect(Callable(gui, "_on_ah_pressed"))
-	bar.add_child(ahBtn)
-	# Botão de acesso rápido à Auction House Window (P1 Social — UI gráfica de leilão).
+	# Leilão — a Auction House tem UI própria (`AuctionHousePanel.gd`, aberta por
+	# `Gui.OpenAuctionHouse`). A barra chegou a ter DOIS botões para a mesma janela —
+	# "AH" e "Leilão", os dois ligados no mesmo handler. Num HUD de alvo 48 px o
+	# segundo era ruído, e a sigla não dizia nada ao público do beta (web/celular BR).
+	# `tests/hud_wiring_test.gd` passa a cobrar um botão por handler.
 	if not bar.has_node("AuctionHouseAccess"):
 		var ahAccessBtn : Button = Button.new()
 		ahAccessBtn.name = "AuctionHouseAccess"

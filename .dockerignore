@@ -1,0 +1,117 @@
+# Build context do Docker — o oposto do .gitignore: aqui entra o que o DAEMON não
+# precisa para produzir a imagem. Os dois Dockerfiles que fazem `COPY . .`
+# (deploy/server/Dockerfile:17 e deploy/web/Dockerfile:17) mandavam a árvore inteira
+# para o daemon antes deste arquivo existir: 444 MB de contexto por build, dos quais
+# ~250 MB são cache de importação e areia de teste, e nada disso entra no `.pck`.
+#
+# Só o `.dockerignore` da RAIZ DO CONTEXTO vale. Como `deploy/server/.dockerignore`
+# e `deploy/web/.dockerignore` nunca foram lidos (o contexto é a raiz do repositório
+# — deploy/docker-compose.yml, `build.context: .`), eles foram MOVADOS para cá,
+# corrigidos: aquele par excluía `presets/**/*.png|ttf|ogg|wav`, que é exatamente o
+# que `sources/db/Instantiate.gd:4-5` precisa (`preload("res://presets/entities/Entity.tscn")`
+# → as cenas referenciam as texturas), e `docs/**`, que tem `.import` de imagem.
+#
+# Semântica (a do Docker, não a do gitignore): padrão sem `/` interno casa só no
+# nível raiz (`*.md` pega README.md, NÃO pega docs/x.md); `**` cruza `/`; casar um
+# diretório casca a subtrees inteira. Medido por `bash scripts/check_compose.sh`,
+# que reimplementa essas três regras e confere contra os COPY dos Dockerfiles — não
+# adicione aqui nada que um `COPY` precise.
+#
+# NÃO excluir (o portão pega): `addons/` (138 MB, empacotado no export —
+# export_presets.cfg:16-17 só tira `addons/webrtc_native/*`), `data/` (64 MB com
+# 794 sidecars `.import`; o build roda `godot --headless --editor --import` —
+# deploy/server/Dockerfile:18), `presets/`, `sources/`, `project.godot`,
+# `export_presets.cfg`, `docs/` (3 `.import`), `companion/`, `deploy/`.
+
+# ------------------------------------------------------------------- VCS, CI, metadados
+.git
+.gitignore
+.gitattributes
+.github
+.editorconfig
+.qoder
+.dockerignore
+
+# ------------------------------------------------------- gerado: cache de import e saída
+.godot
+build
+binary
+
+# ------------------------------------------------------------ areia de teste e temporários
+.test-home
+.test-home2
+.test-k8
+.test-g1
+.test-*
+testing.db
+testing.db-wal
+testing.db-shm
+logs
+tmp
+.tmp
+*.log
+*.db-journal
+*.db-wal
+*.db-shm
+*.build
+.env
+*.pem
+*.crt
+*.key
+
+# ------------------------------------------- código de verificação: não é código de runtime
+tests
+test_*.gd
+test_*.gd.uid
+scripts/*.gd
+*.autotest-cell
+*.autotest-entity
+
+# ------------------------------------------------- árvores de trabalho derivado / scratch
+graphify-out
+snap
+landing_new
+archive
+designs
+publishing
+
+# -------------------------------------------------------------- ruído de linguagem/markdown
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.venv
+node_modules
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea
+.vscode
+.history
+.fleet
+.kilocode
+.windsurf
+*.tmp
+*.bak
+*.backup
+*.md
+docs/contracts
+docs/deployment
+docs/quality
+docs/rework
+docs/agents
+
+# `data/conf/*.cfg` continua no contexto: as configurações são lidas em runtime
+# (`Conf.Init()` em sources/launcher/Launcher.gd:181; [Network] lido em
+# sources/launcher/Launcher.gd:185-190) e não têm segredo nenhum.
+# `data/conf/migrations/*.sql` idem — sem elas o boot não migra nada e aborta com
+# "nenhum patch visível" (sources/sql/SQL.gd:65).
+
+# -------------------------------------------------------------------------- Python/cellular
+companion/__pycache__
+companion/*.pyc
+companion/venv
+companion/.venv
+companion/cover
+companion/htmlcov
+companion/.coverage

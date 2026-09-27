@@ -574,6 +574,79 @@ func ArenaBoard(peerID : int = NetworkCommons.PeerAuthorityID):
 func ArenaBoardResult(board : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("ArenaBoardResult", [board], peerID)
 
+# SOM-IDLE P1-1: Auction House com janela própria. Até aqui o leilão só existia
+# como texto no chat (`/ah` em WorldCommands.CommandAH) — a economia central do
+# jogo era inalcançável para quem não digita comando. Estes rpcs são a mesma
+# porta de entrada, agora com payload estruturado; identidade (conta/personagem)
+# continua vindo do transporte (AuthPeerID), nunca do corpo do pacote.
+# Continua sendo a porta de leitura barata (página 0, sem filtro). A paginação com
+# OFFSET e o filtro de preço/item no SQL vivem em `GetAuctionPage` logo abaixo; o
+# painel escolhe entre os dois canais conforme o pedido, e o recorte de página é
+# só de DESENHO sobre o bloco que chegou (059b).
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetAuctionListings(limit : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetAuctionListings", [limit], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func AuctionListings(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("AuctionListings", [state], peerID)
+
+# As quatro ações que gastam algo (comprar, anunciar, destacar, comprar slot) e o
+# cancelamento têm um resultado único e um `reason` estável — é o servidor que
+# decide preço/taxa/saldo; a UI apenas ecoa o que ele devolve.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionBuy(listingID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionBuy", [listingID], AuthPeerID(peerID), 1500)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionCancel(listingID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionCancel", [listingID], AuthPeerID(peerID), 1500)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionList(itemID : int, count : int, priceGold : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionList", [itemID, count, priceGold], AuthPeerID(peerID), 1500)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionHighlight(listingID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionHighlight", [listingID], AuthPeerID(peerID), 1500)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionBuySlot(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionBuySlot", [], AuthPeerID(peerID), 1500)
+
+# 059 (JUIZ MARKETPLACE 2026-09-27): profundidade de mercado. `GetAuctionPage` é
+# a janela de 40 linhas do leilão agora como PÁGINA — offset e filtro (teto de
+# preço, item) aplicados no SQL do servidor — e responde no payload que já
+# existe (`AuctionListings`), que acresce de `total/offset/page_size/max_page`,
+# do preço realizado (`sold`, `sold_recent`) e das ordens da conta (`orders`).
+# Bid e cancelamento de bid têm RPC dedicado: cada um tranca ouro, e escrow não
+# divide canal com leitura de vitrine.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetAuctionPage(offset : int, maxPrice : int, itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetAuctionPage", [offset, maxPrice, itemID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionBid(itemID : int, count : int, unitPrice : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionBid", [itemID, count, unitPrice], AuthPeerID(peerID), 1500)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func AuctionBidCancel(orderID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("AuctionBidCancel", [orderID], AuthPeerID(peerID), 1500)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func AuctionTradeResult(result : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("AuctionTradeResult", [result], peerID)
+
+# ROADMAP_COMERCIAL S1 / P1-7: funil `onboarding_done` no build web. O emit de
+# hoje (`Onboarding.Stop()` → `Launcher.Telemetry`) só funciona quando o mesmo
+# processo é servidor: `Telemetry` é alocada em `Launcher.Server()`, então no
+# cliente puro do navegador ele é null e a última etapa do funil comercial nunca
+# era gravada. O rpc leva a conclusão a quem tem o serviço — e o personagem/conta
+# saem da sessão, não do pacote.
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func OnboardingDone(peerID : int = NetworkCommons.PeerAuthorityID) -> bool:
+	return CallServer("OnboardingDone", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func RerollDailyShop(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("RerollDailyShop", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
@@ -670,6 +743,17 @@ func CubeUpcycle(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SalvageItem(itemID : int, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("SalvageItem", [itemID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+# SOM-IDLE retenção: superfície do streak de login. O cliente só PEDE; o payload
+# sai de `StreakService.View`, que lê o que o SERVIDOR gravou no login (mesma
+# escada que paga). Nenhum número da tela vem do cliente.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func GetStreak(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("GetStreak", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("authority", "call_remote", "reliable", EChannel.ACTION)
+func StreakState(state : Dictionary, peerID : int = NetworkCommons.PeerOfflineID):
+	CallClient("StreakState", [state], peerID)
 
 # Fase E (rewarded ads, MONETIZATION §2.5): 4 placements opt-in. O token não é
 # mais construído no client — `RequestAdSlot` reserva a cota no servidor, que

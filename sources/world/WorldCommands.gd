@@ -64,8 +64,10 @@ func RegisterCommands():
 	# SOM-IDLE: D3 — CS panel (procurar transação/item, fila de revisão)
 	CommandManager.Register("cs_trans", CommandCsTrans, ActorCommons.Permission.GM, "cs_trans <account> [limit]" )
 	CommandManager.Register("cs_item", CommandCsItem, ActorCommons.Permission.GM, "cs_item <uid>" )
-	CommandManager.Register("cs_flags", CommandCsFlags, ActorCommons.Permission.GM, "cs_flags" )
-	CommandManager.Register("cs_flag", CommandCsFlag, ActorCommons.Permission.GM, "cs_flag <id> <reviewed|dismissed>" )
+	CommandManager.Register("cs_flags", CommandCsFlags, ActorCommons.Permission.GM, "cs_flags [pagina]" )
+	CommandManager.Register("cs_flag", CommandCsFlag, ActorCommons.Permission.GM, "cs_flag <id> <reviewed|dismissed> [nota]" )
+	CommandManager.Register("cs_flag_info", CommandCsFlagInfo, ActorCommons.Permission.GM, "cs_flag_info <id>" )
+	CommandManager.Register("cs_fraud_stats", CommandCsFraudStats, ActorCommons.Permission.GM, "cs_fraud_stats" )
 	# SOM-IDLE: E1/E2 — guilds, auction house, seasons
 	CommandManager.Register("guild", CommandGuild, ActorCommons.Permission.NONE, "guild create|join|leave|info|deposit|withdraw|levelup|top ..." )
 	CommandManager.Register("ah", CommandAH, ActorCommons.Permission.NONE, "ah list|buy|cancel|browse ..." )
@@ -81,6 +83,12 @@ func RegisterCommands():
 	# Tormento (D2): dificuldade opt-in com mais recompensa; boss rush com key.
 	CommandManager.Register("torment", CommandTorment, ActorCommons.Permission.NONE, "torment [0..max]" )
 	CommandManager.Register("rush", CommandRush, ActorCommons.Permission.NONE, "rush info|start|key" )
+	# SOM-GAMEPLAY G1/G3: prioridade de cast do auto-combat e requisito real do
+	# próximo boss da escada. Permission.NONE porque são os dois instrumentos de
+	# decisão que faltavam para o farmer comum (sem eles o auto-combat é fixo e
+	# a escada é caixa-preta).
+	CommandManager.Register("priority", CommandPriority, ActorCommons.Permission.NONE, "priority [set <skill> ...|clear]" )
+	CommandManager.Register("boss", CommandBoss, ActorCommons.Permission.NONE, "boss [next]" )
 	# SOM-IDLE Fase H: GM review of player-crafted item submissions
 	CommandManager.Register("cs_craft", CommandCsCraft, ActorCommons.Permission.GM, "cs_craft <list|approve <id>|reject <id> [reason]>" )
 
@@ -148,6 +156,8 @@ static func UnregisterCommands():
 	CommandManager.Unregister("cs_item")
 	CommandManager.Unregister("cs_flags")
 	CommandManager.Unregister("cs_flag")
+	CommandManager.Unregister("cs_flag_info")
+	CommandManager.Unregister("cs_fraud_stats")
 	# SOM-IDLE: E1/E2
 	CommandManager.Unregister("guild")
 	CommandManager.Unregister("ah")
@@ -159,6 +169,9 @@ static func UnregisterCommands():
 	CommandManager.Unregister("ach")
 	CommandManager.Unregister("torment")
 	CommandManager.Unregister("rush")
+	# SOM-GAMEPLAY G1/G3
+	CommandManager.Unregister("priority")
+	CommandManager.Unregister("boss")
 	# SOM-IDLE Fase H
 	CommandManager.Unregister("cs_craft")
 
@@ -323,31 +336,124 @@ func CommandCsItem(caller : PlayerAgent, arg : String = "") -> bool:
 	Network.CommandFeedback("\n".join(lines), caller.peerID)
 	return true
 
-func CommandCsFlags(caller : PlayerAgent) -> bool:
+func CommandCsFlags(caller : PlayerAgent, arg : String = "") -> bool:
 	if not caller:
 		return false
-	var rows : Array = Launcher.SQL.ListFraudFlags("open")
+	var cs : CommunityService = Launcher.Economy.communityService if Launcher.Economy != null else null
+	if cs == null:
+		Network.CommandFeedback("Economy não montada", caller.peerID)
+		return false
+	var page : int = maxi(1, arg.strip_edges().to_int())
+	var queue : Dictionary = cs.ListFlagsPaged("open", page, 10)
+	var rows : Array = queue.get("rows", [])
+	var total : int = int(queue.get("total", 0))
 	if rows.is_empty():
 		Network.CommandFeedback("No open fraud flags", caller.peerID)
 		return true
 	var lines : PackedStringArray = PackedStringArray()
 	for row in rows:
-		lines.append("#%d %s acct %d char %d: %s" % [int(row["id"]), str(row["kind"]), int(row["account_id"]), int(row["char_id"]), str(row["detail"])])
+		lines.append("#%d [%s %d/%d] %s acct %d char %d: %s" % [int(row["id"]), str(row["severity"]), int(row["score"]), int(queue.get("threshold", 2)), str(row["kind"]), int(row["account_id"]), int(row["char_id"]), str(row["detail"])])
+	lines.append("page %d/%d (%d flags) — /cs_flag_info <id> · /cs_flag <id> <reviewed|dismissed> [nota] · /cs_fraud_stats" % [int(queue.get("page", 1)), int(queue.get("pages", 1)), total])
 	Network.CommandFeedback("\n".join(lines), caller.peerID)
 	return true
 
+# Revisão com trilha: quem revisou (a conta do chamador), quando e a nota.
+# Nenhuma das duas ações bane — reviewed mantém o hold e espera punição humana
+# explícita (/ban, /mute); dismissed registra falso-positivo e o detector para
+# de reabrir a mesma flag por 30 dias (FraudeReview.ReopenCooldownSec).
 func CommandCsFlag(caller : PlayerAgent, arg : String = "") -> bool:
 	if not caller:
 		return false
+	var cs : CommunityService = Launcher.Economy.communityService if Launcher.Economy != null else null
+	if cs == null:
+		Network.CommandFeedback("Economy não montada", caller.peerID)
+		return false
 	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
 	if parts.size() < 2:
-		Network.CommandFeedback("Usage: /cs_flag <id> <reviewed|dismissed>", caller.peerID)
+		Network.CommandFeedback("Usage: /cs_flag <id> <reviewed|dismissed> [nota]", caller.peerID)
 		return false
-	if Launcher.SQL.ReviewFraudFlag(parts[0].to_int(), parts[1]):
-		Network.CommandFeedback("Flag #%d -> %s" % [parts[0].to_int(), parts[1]], caller.peerID)
-		return true
-	Network.CommandFeedback("Flag not found, already closed, or bad status", caller.peerID)
-	return false
+	var reviewerID : int = Peers.GetAccount(caller.peerID)
+	if reviewerID <= 0:
+		Network.CommandFeedback("Not logged in", caller.peerID)
+		return false
+	var note : String = " ".join(PackedStringArray(parts.slice(2)))
+	var result : Dictionary = cs.ReviewFlag(parts[0].to_int(), parts[1], reviewerID, note)
+	if not bool(result.get("ok", false)):
+		match str(result.get("reason", "")):
+			"bad_status":
+				Network.CommandFeedback("Status must be reviewed or dismissed", caller.peerID)
+			"not_found":
+				Network.CommandFeedback("Flag not found", caller.peerID)
+			"already_closed":
+				Network.CommandFeedback("Flag already closed (revisões não são reescritas — abra outra se discorda)", caller.peerID)
+			_:
+				Network.CommandFeedback("Review failed: %s" % str(result.get("reason", "?")), caller.peerID)
+		return false
+	Network.CommandFeedback("Flag #%d -> %s por acct %d. %s" % [int(result.get("flag", 0)), str(result.get("status", "")), reviewerID, str(result.get("what_happened", ""))], caller.peerID)
+	return true
+
+# Contexto do acusado sem SQL manual: identidade resumida (LGPD: nunca o e-mail
+# cru), sinais que dispararam a flag com o porquê congelado no evidence, saldo e
+# últimas movimentaões, e o que cada ação faz de fato com a conta.
+func CommandCsFlagInfo(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var cs : CommunityService = Launcher.Economy.communityService if Launcher.Economy != null else null
+	if cs == null:
+		Network.CommandFeedback("Economy não montada", caller.peerID)
+		return false
+	var flagID : int = arg.strip_edges().to_int()
+	if flagID <= 0:
+		Network.CommandFeedback("Usage: /cs_flag_info <id>", caller.peerID)
+		return false
+	var ctx : Dictionary = cs.FlagContext(flagID)
+	if not bool(ctx.get("ok", false)):
+		Network.CommandFeedback("Flag not found", caller.peerID)
+		return false
+	var flag : Dictionary = ctx.get("flag", {})
+	var accused : Dictionary = ctx.get("accused", {})
+	var lines : PackedStringArray = PackedStringArray()
+	lines.append("#%d %s [%s score %d, limiar %d] status %s" % [flagID, str(flag.get("kind", "?")), str(flag.get("severity", "?")), int(flag.get("score", 0)), int(ctx.get("threshold", 2)), str(flag.get("status", "?"))])
+	lines.append("detail: %s" % str(flag.get("detail", "")))
+	if accused.is_empty():
+		lines.append("accused: <sem linha de account>")
+	else:
+		lines.append("accused: %s (acct %d, %d dias, e-mail %s, hold referral %d, aberto em %d outras flags)" % [
+			str(accused.get("username", "?")), int(flag.get("account_id", 0)), int(accused.get("age_days", 0)),
+			"verificado" if int(accused.get("email_verified", 0)) == 1 else "não verificado",
+			int(accused.get("referral_hold", 0)), (ctx.get("other_open_flags", []) as Array).size()])
+	if accused.has("wallet"):
+		lines.append("wallet: %d gems (%d pagos)" % [int((ctx.get("wallet", {}) as Dictionary).get("gems", 0)), int((ctx.get("wallet", {}) as Dictionary).get("gems_paid", 0))])
+	var evidence : Dictionary = ctx.get("signals", {})
+	if evidence is Dictionary and evidence.has("why"):
+		for signalKind in (evidence.get("why", {}) as Dictionary).keys():
+			lines.append("sinal %s (peso %d): %s" % [str(signalKind), int(FraudeReview.WeightOf(str(signalKind))), str((evidence.get("why", {}) as Dictionary)[signalKind])])
+	lines.append("ações: reviewed -> %s" % str((ctx.get("action_semantics", {}) as Dictionary).get("reviewed", "")))
+	lines.append("ações: dismissed -> %s" % str((ctx.get("action_semantics", {}) as Dictionary).get("dismissed", "")))
+	Network.CommandFeedback("\n".join(lines), caller.peerID)
+	return true
+
+# Métrica de revisão (o beta só sabe se o detector está calibrado com números):
+# flags por severidade, falsos positivos descartados/dia, tempo médio de revisão.
+# Os mesmos contadores saem em telemetry_event kind 'fraud_metrics' (via do
+# /metrics do companion) a cada passada do scan diário.
+func CommandCsFraudStats(caller : PlayerAgent) -> bool:
+	if not caller:
+		return false
+	var cs : CommunityService = Launcher.Economy.communityService if Launcher.Economy != null else null
+	if cs == null:
+		Network.CommandFeedback("Economy não montada", caller.peerID)
+		return false
+	var metrics : Dictionary = cs.FraudMetrics()
+	var lines : PackedStringArray = PackedStringArray()
+	for key in metrics.keys():
+		if key == "open_by_severity":
+			for sev in (metrics[key] as Dictionary).keys():
+				lines.append("open_%s=%d" % [str(sev), int((metrics[key] as Dictionary)[sev])])
+		else:
+			lines.append("%s=%s" % [str(key), str(metrics[key])])
+	Network.CommandFeedback("\n".join(lines), caller.peerID)
+	return true
 
 # SOM-IDLE Fase H: GM review of craft submissions (ITEM_CRAFTING.md §5).
 # /cs_craft list                         — lists pending submissions
@@ -624,6 +730,179 @@ func CommandAch(caller : PlayerAgent, arg : String = "") -> bool:
 	Network.CommandFeedback("Usage: /ach list | /ach claim <id>", caller.peerID)
 	return false
 
+# SOM-GAMEPLAY G1: /priority — o jogador DECIDE o auto-combat.
+# "/priority" lista a carga efetiva; "/priority [slot <n>] set <skill> [...]" grava a
+# ordem (nome da skill, hash ou ID numérico) no MESMO campo que a formação já
+# persiste (formation.skill_loadout, Array[int] ordenado via var_to_str — por isso
+# não houve migração nova) e aplica ao vivo na policy do farmer; "/priority clear"
+# volta para melee. O cast em si obedece a ordem em IdlePolicy._getSkill().
+#
+# Este comando é também o caminho do PAINEL: sources/gui/Formation.gd declara a
+# ordem mandando a mesma string por `Network.TriggerCommand` (o mesmo RPC do chat,
+# o mesmo despachante CommandManager.Handle, que resolve o agente pelo PEER). O
+# painel não tem caminho de escrita próprio — ver tests/formation_priority_ui_test.gd.
+func CommandPriority(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var accountID : int = Peers.GetAccount(caller.peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("No account bound", caller.peerID)
+		return false
+	var charID : int = caller.GetCharacterID()
+	var activeSlot : int = _FormationSlotOf(caller)
+	var slot : int = activeSlot
+
+	var parts : PackedStringArray = arg.strip_edges().to_lower().split(" ", false)
+	# SOM-GAMEPLAY (juiz cego 2026-09-27): o painel de formação declara a ordem de
+	# um slot específico, e um char pode ter carga em qualquer um dos
+	# MaxFormationSlots slots da SUA conta. `slot <n>` é só SELETOR DE LINHA: a
+	# conta continua vindo do PEER (nunca de um argumento do cliente) e o que entra
+	# na carga continua sendo decidido por SkillPriority.Trim abaixo. Sem o
+	# prefixo, comportamento idêntico ao de sempre (slot ativo do personagem).
+	if parts.size() >= 2 and parts[0] == "slot" and parts[1].is_valid_int():
+		slot = clampi(parts[1].to_int(), 0, IdlePolicyService.MaxFormationSlots - 1)
+		parts.remove_at(0)
+		parts.remove_at(0)
+	var stored : Array[int] = _StoredLoadout(accountID, slot)
+
+	if parts.is_empty() or parts[0] == "list":
+		var names : Dictionary = _SkillNames(stored)
+		var lines : PackedStringArray = PackedStringArray()
+		lines.append("Skill priority (slot %d%s): %s" % [slot, "" if slot == activeSlot else ", not this char's active slot", SkillPriority.FormatOrder(stored, names)])
+		lines.append("Set: /priority [slot <n>] set <skill> [skill...] (max %d) | /priority clear" % SkillPriority.MaxPrioritySkills)
+		lines.append("Learned: " + _LearnedSkillNames(caller))
+		Network.CommandFeedback("\n".join(lines), caller.peerID)
+		return true
+
+	if parts[0] == "clear":
+		return _SavePriority(caller, accountID, slot, charID, activeSlot, [], _PriorityClearedMessage(slot))
+
+	if parts[0] != "set" or parts.size() < 2:
+		Network.CommandFeedback("Usage: /priority | /priority [slot <n>] set <skill> [skill...] | /priority clear", caller.peerID)
+		return false
+
+	var picked : Array[int] = []
+	var unknown : PackedStringArray = PackedStringArray()
+	for token : String in parts.slice(1):
+		var skillID : int = _ResolveSkillID(token)
+		if skillID == DB.UnknownHash:
+			unknown.append(token)
+		elif not (skillID in picked):
+			picked.append(skillID)
+	if picked.is_empty():
+		Network.CommandFeedback("No valid skill in '%s' (use the skill name, see /priority)" % arg, caller.peerID)
+		return false
+	var owned : Array[int] = _LearnedSkillIDs(caller)
+	var trimmed : Dictionary = SkillPriority.Trim(picked, owned)
+	if (trimmed["order"] as Array[int]).is_empty():
+		Network.CommandFeedback("None of those skills is learned by this character", caller.peerID)
+		return false
+	var message : String = "Priority set (slot %d): " % slot + SkillPriority.FormatOrder(trimmed["order"], _SkillNames(trimmed["order"]))
+	if not unknown.is_empty() or (trimmed["rejected"] as Array[int]).size() > 0:
+		message += "\nSkipped: " + _RejectedLabels(trimmed["rejected"], unknown)
+	return _SavePriority(caller, accountID, slot, charID, activeSlot, trimmed["order"], message)
+
+# Persiste + aplica ao vivo. Sem SaveFormation não há por que mexer em Server.gd:
+# o RPC SetFormation já aceita um Array ordenado e é exatamente essa a
+# serialização usada aqui.
+#
+# `activeSlot` é o slot que o farmer ESTÁ usando (character.formation_slot). A
+# carga só entra na policy viva quando o jogador editou esse slot: mexer na
+# reserva (slot 3 de um char ativo no 0) não pode trocar o golpe do tick em
+# andamento — quem decide o cast é a carga do slot ativo, lida em
+# IdlePolicyService._Attach na próxima sessão.
+func _SavePriority(caller : PlayerAgent, accountID : int, slot : int, charID : int, activeSlot : int, order : Array[int], message : String) -> bool:
+	var formation : Dictionary = Launcher.SQL.GetFormationForSlot(accountID, slot)
+	var pct : float = float(formation.get("auto_potion_pct", caller.idlePolicy.autoPotionPct if caller.idlePolicy else 35.0))
+	if not Launcher.SQL.SaveFormation(accountID, slot, charID, order, pct):
+		Network.CommandFeedback("Could not save the priority (DB error)", caller.peerID)
+		return false
+	if caller.idlePolicy and slot == activeSlot:
+		caller.idlePolicy.skillLoadout = order.duplicate()
+	Network.CommandFeedback(message, caller.peerID)
+	return true
+
+func _PriorityClearedMessage(slot : int) -> String:
+	return "Priority cleared (slot %d) — auto-combat is back to plain melee." % slot
+
+# O slot que _Attach lê ao montar a policy (character.formation_slot, clampado).
+func _FormationSlotOf(caller : PlayerAgent) -> int:
+	var row : Dictionary = Launcher.SQL.GetCharacter(caller.GetCharacterID())
+	var raw : Variant = row.get("formation_slot", 0)
+	return clampi(int(raw) if raw != null else 0, 0, IdlePolicyService.MaxFormationSlots - 1)
+
+func _StoredLoadout(accountID : int, slot : int) -> Array[int]:
+	var loadout : Array[int] = []
+	var raw : String = str(Launcher.SQL.GetFormationForSlot(accountID, slot).get("skill_loadout", ""))
+	if raw.is_empty():
+		return loadout
+	var parsed : Variant = str_to_var(raw)
+	if parsed is Array:
+		for skillID : Variant in parsed:
+			loadout.append(int(skillID))
+	return loadout
+
+func _ResolveSkillID(token : String) -> int:
+	if token.is_empty():
+		return DB.UnknownHash
+	if token.is_valid_int() and DB.SkillsDB.has(token.to_int()):
+		return token.to_int()
+	var hash : int = token.hash()
+	if DB.SkillsDB.has(hash):
+		return hash
+	for skillID : int in DB.SkillsDB:
+		var cell : SkillCell = DB.SkillsDB[skillID]
+		if cell != null and str(cell.name).to_lower() == token:
+			return skillID
+	return DB.UnknownHash
+
+func _SkillNames(order : Array[int]) -> Dictionary:
+	var names : Dictionary = {}
+	for skillID : int in order:
+		var cell : SkillCell = DB.SkillsDB.get(skillID, null)
+		names[skillID] = cell.name if cell else "skill %d" % skillID
+	return names
+
+func _LearnedSkillIDs(caller : PlayerAgent) -> Array[int]:
+	var learned : Array[int] = []
+	for skillID : int in DB.SkillsDB:
+		var cell : SkillCell = DB.SkillsDB[skillID]
+		if cell != null and SkillCommons.HasSkill(caller, cell):
+			learned.append(skillID)
+	return learned
+
+func _LearnedSkillNames(caller : PlayerAgent) -> String:
+	var names : PackedStringArray = PackedStringArray()
+	for skillID : int in _LearnedSkillIDs(caller):
+		var cell : SkillCell = DB.SkillsDB[skillID]
+		names.append(str(cell.name))
+	return ", ".join(names) if not names.is_empty() else "(none)"
+
+func _RejectedLabels(rejected : Array[int], unknown : PackedStringArray) -> String:
+	var parts : PackedStringArray = PackedStringArray()
+	if not unknown.is_empty():
+		parts.append("unknown: " + ", ".join(unknown))
+	if not rejected.is_empty():
+		parts.append("not learned / over the cap: " + ", ".join(_SkillNames(rejected).values().map(func(v : Variant) -> String: return str(v))))
+	return "; ".join(parts)
+
+# SOM-GAMEPLAY G3: /boss — requisito REAL do próximo duelo, derivado da mesma
+# simulação que decide a luta (BossService.Resolve invertido em BossLadder).
+# Substitui o "gear decides" por um número que o jogador pode checar na própria
+# ficha. "/boss next" imprime só a linha do próximo.
+func CommandBoss(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var charID : int = caller.GetCharacterID()
+	var state : Dictionary = Launcher.Economy.GetBossState(charID, caller.stat.level)
+	var snapshot : Dictionary = BossService.PlayerFightSnapshot(caller)
+	if arg.strip_edges().to_lower() == "next":
+		var need : Dictionary = BossLadder.Requirement(state, snapshot)
+		Network.CommandFeedback("%s (Lv %d, %d HP): %s" % [str(need.get("name", "?")), int(need.get("level", 1)), int(need.get("hp", 0)), BossLadder.RequirementText(need)], caller.peerID)
+		return true
+	Network.CommandFeedback(BossLadder.RequirementLine(state, snapshot), caller.peerID)
+	return true
+
 # Tormento (D2): /torment mostra nível/teto/mult; /torment <n> troca (0..teto).
 # Desbloqueio: zerar a escada libera T1; vencer no teto sobe +1 (cap 10).
 func CommandTorment(caller : PlayerAgent, arg : String = "") -> bool:
@@ -681,6 +960,16 @@ func CommandTournament(caller : PlayerAgent, arg : String = "") -> bool:
 		Network.CommandFeedback("%s: %d players, entry %d gold, ends %s" % [str(active.get("name", "?")), int(active.get("players", 0)), int(active.get("entry_gold", 0)), Time.get_datetime_string_from_unix_time(int(active.get("ends_at", 0)))], caller.peerID)
 		return true
 	if parts[0] == "enter":
+		# OPS-2 (AUDITORIA_2026-09-27 §15): gate de runtime da inscrição. Aqui o
+		# ouro do jogador vira linha em `tournament_entry` e o prêmio sai em gems
+		# no settle — se a copa quebrar (settle errado, prêmio duplicado), o
+		# operator desliga SEM redeploy: `/flags set tournament_enter 0`. É o
+		# segundo gate server-side real desta passada (o primeiro é `ads_rewarded`,
+		# no client). `info` continua liberado de propósito: ver a copa e não
+		# poder entrar é o estado que o player precisa conseguir inspecionar.
+		if not FeatureFlags.Enabled(FeatureFlags.TOURNAMENT_ENTER):
+			Network.CommandFeedback("Tournament entry is closed (operator flag)", caller.peerID)
+			return false
 		var t2 : Dictionary = Launcher.Economy.GetTournaments(accountID)
 		var active2 : Dictionary = t2.get("active", {})
 		if active2.is_empty():

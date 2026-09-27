@@ -308,30 +308,12 @@ dry = server.refund_sweep(tmp3.name, "tok", dry_run=True)
 ok(dry == {"pending": 2, "notified": 0, "skipped": 1}, "dry-run lists MP pending, skips sandbox")
 
 import urllib.request as _urlreq
+import webhook_fakes as _fakes
 _calls = []
 _real_urlopen = _urlreq.urlopen
 
-
-class _Resp:
-    status = 201
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def read(self):
-        return b"{}"
-
-
-def _fake_ok(req, timeout=10):
-    _calls.append(getattr(req, "full_url", req))
-    return _Resp()
-
-
-def _fake_fail(req, timeout=10):
-    raise IOError("down")
+_fake_ok = _fakes.recorder(_calls)
+_fake_fail = _fakes.failure()
 
 
 _urlreq.urlopen = _fake_ok
@@ -399,31 +381,10 @@ for _name, _cat in (("paid_catalog.json", filecat), ("DEFAULT_CATALOG", cat)):
 import urllib.request as _urlreq2
 _real2 = _urlreq2.urlopen
 
-
-class _PrefResp:
-    status = 201
-
-    def __init__(self, body):
-        self._body = body
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def read(self):
-        return self._body
-
-
 _calls2 = []
-
-
-def _fake_pref(req, timeout=10):
-    _calls2.append({"url": getattr(req, "full_url", req),
-                    "auth": req.get_header("Authorization"),
-                    "body": __import__("json").loads(req.data.decode())})
-    return _PrefResp(b'{"id": "pref-1", "init_point": "https://mp/checkout/abc"}')
+_fake_pref = _fakes.recorder(
+    _calls2, body=b'{"id": "pref-1", "init_point": "https://mp/checkout/abc"}', full=True)
+_fake_pref_down = _fakes.failure()
 
 
 _urlreq2.urlopen = _fake_pref
@@ -436,11 +397,6 @@ ok(_calls2 and _calls2[0]["url"].endswith("/checkout/preferences")
 ok(_calls2[0]["body"]["external_reference"] == "42:gems.550"
    and _calls2[0]["body"]["items"][0]["unit_price"] == 19.90,
    "preference body uses catalog price + external_reference")
-
-
-def _fake_pref_down(req, timeout=10):
-    raise IOError("down")
-
 
 _urlreq2.urlopen = _fake_pref_down
 ok(server.mp_create_preference(payload, "TOKEN123") is None,
@@ -577,6 +533,225 @@ ok(m["multi_account_suspicions"] == [{"fingerprint": "maquina-compartilhada",
    "metrics: a suspeita de multi-conta roda na coluna real (não derruba /metrics)")
 con5.close()
 os.unlink(tmp5.name)
+
+# --- charged_back: clawback enfileirado, idempotente, amount do CATÁLOGO ---
+import sqlite3 as _sqli3
+tmp6 = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+tmp6.close()
+_c6 = _sqli3.connect(tmp6.name)
+_c6.execute("CREATE TABLE account (account_id INTEGER PRIMARY KEY, username TEXT);")
+_c6.execute("INSERT INTO account VALUES (42, 'Hero');")
+_c6.execute(
+    "CREATE TABLE grant_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "idempotency_key TEXT NOT NULL UNIQUE, account_id INTEGER NOT NULL, "
+    "kind TEXT NOT NULL, amount INTEGER NOT NULL, payload TEXT NOT NULL, "
+    "status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', "
+    "created_at INTEGER NOT NULL, processed_at INTEGER NOT NULL DEFAULT 0, "
+    "price_paid INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '');")
+_c6.commit()
+_c6.close()
+
+
+class _Sent:
+    def __init__(self):
+        self.code = None
+        self.obj = None
+
+
+class _Srv6:
+    provider = "mercadopago"
+    catalog = cat
+    store = server.Store(tmp6.name)
+
+
+_h6 = server.Handler.__new__(server.Handler)
+_h6.server = _Srv6()
+_h6._send = lambda code, obj: (setattr(_Sent, "code", code),
+                               setattr(_Sent, "obj", obj))
+_cb_pay = {"id": 777, "status": "charged_back", "transaction_amount": 29.90,
+           "currency_id": "BRL",
+           "external_reference": "42:gems.550", "metadata": {}}
+_h6._chargeback_clawback(_cb_pay)
+ok(_Sent.code == 200 and _Sent.obj.get("status") == "chargeback_queued",
+   "charged_back (verified) enqueueia clawback")
+ok(_Sent.obj.get("enqueue") == "queued", "primeira entrega da linha: queued")
+_r6 = _sqli3.connect(tmp6.name)
+_row = _r6.execute("SELECT kind, amount, status, price_paid, currency FROM grant_queue "
+                   "WHERE idempotency_key = '777:chargeback';").fetchone()
+ok(_row == ("chargeback", 550, "pending", 2990, "BRL"),
+   "clawback: kind chargeback, amount do catálogo (550), centavos cobrados (2990), pending")
+_h6._chargeback_clawback(_cb_pay)  # redelivery do mesmo payment
+ok(_Sent.obj.get("enqueue") == "duplicate",
+   "redelivery responde duplicate, e o provedor recebe 200 na mesma")
+ok(_r6.execute("SELECT COUNT(*) FROM grant_queue;").fetchone()[0] == 1,
+   "redelivery do charged_back não duplica o clawback")
+_h6._chargeback_clawback({"id": 778, "status": "charged_back",
+                          "external_reference": "404:gems.550", "metadata": {}})
+ok(_Sent.obj.get("status") == "ignored",
+   "charged_back de conta desconhecida: ignored, sem linha na fila")
+
+# --- P1-6b: quem é evento de REVERSÃO (a régua pura, sem servidor HTTP) ---
+# A tabela de verdade mora em `is_reversal_event`; o route só liga o status à
+# evidência de entrega (companion/server.py, ramo `norm is None` do mercadopago
+# verificado) e o que NÃO é reversão cai no `{"status": "ignored"}` de sempre.
+# Os dois casos que não podem se confundir:
+#   charged_back  -> sempre reverte (o MP só abre chargeback em payment capturado)
+#   refused       -> NUNCA reverte por conta própria: cartão negado é o caso
+#                    comum do dia, e debitaria gems de quem não recebeu nada.
+_rev_calls = []
+
+
+def _granted_tracer(value):
+    def _f():
+        _rev_calls.append(1)
+        return value
+    return _f
+
+
+ok(server.is_reversal_event("charged_back", _granted_tracer(False)),
+   "reversal: charged_back dispensa a evidência de entrega (capture é prova)")
+ok(len(_rev_calls) == 0,
+   "reversal: charged_back nem PERGUNTA da entrega (lazy — sem lookup boboca)")
+ok(server.is_reversal_event("refused", _granted_tracer(True)),
+   "reversal: refused COM grant nosso na fila reverte (autorização nunca capturada)")
+ok(not server.is_reversal_event("refused", _granted_tracer(False)),
+   "reversal: refused sem entrega = cartão negado, nada é debitado")
+for _st in ("approved", "pending", "refunded", "in_process", "", None, "CHARGED_BACK"):
+    ok(not server.is_reversal_event(_st, _granted_tracer(True)),
+       "reversal: status %r não é reversão" % (_st,))
+ok(not server.is_reversal_event("charged_backz", _granted_tracer(True)),
+   "reversal: prefixo/sufixo parecido não pega (igualdade, não substring)")
+
+# --- _payment_was_granted: a evidência vem da fila, não do payload ---
+ok(not _h6._payment_was_granted(""), "grant-lookup: id vazio = não concedido (fail-closed)")
+ok(not _h6._payment_was_granted("77%"),
+   "grant-lookup: id não-numérico NÃO vira wildcard de LIKE em consulta de dinheiro")
+ok(not _h6._payment_was_granted("777"),
+   "grant-lookup: a PRÓPRIA linha de clawback ('777:chargeback') não se auto-autoriza "
+   "(redelivery não gera segunda dívida)")
+_r6.execute("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount, payload,"
+            " status, created_at) VALUES ('777', 42, 'gems', 550, '{}', 'processed', 1);")
+_r6.commit()
+ok(_h6._payment_was_granted("777"),
+   "grant-lookup: grant original presente = o refused tem o que reverter")
+_r6.execute("INSERT INTO grant_queue (idempotency_key, account_id, kind, amount, payload,"
+            " status, created_at) VALUES ('780:1:cosmetic', 42, 'cosmetic', 1, '{}',"
+            " 'processed', 1);")
+_r6.commit()
+ok(_h6._payment_was_granted("780"),
+   "grant-lookup: bundle (perna '<payment>:<i>:<kind>') também é entrega daquele payment")
+
+# --- refused roteado: enfileira clawback UMA vez, e a redelivery não duplica ---
+_ref_pay = {"id": 777, "status": "refused", "transaction_amount": 29.90,
+            "currency_id": "BRL", "external_reference": "42:gems.550", "metadata": {}}
+ok(server.is_reversal_event(_ref_pay["status"],
+                            lambda: _h6._payment_was_granted("777")),
+   "refused do payment 777 entregue é tratado como reversão")
+_before = _r6.execute("SELECT COUNT(*) FROM grant_queue WHERE kind = 'chargeback';").fetchone()[0]
+_h6._chargeback_clawback(_cb_pay)      # redelivery do MESMO charged_back
+ok(_Sent.obj.get("enqueue") == "duplicate"
+   and _r6.execute("SELECT COUNT(*) FROM grant_queue WHERE kind = 'chargeback';").fetchone()[0] == _before,
+   "no-double-debit: redelivery do mesmo payment não cria segunda linha de clawback")
+ok(not server.is_reversal_event("refused", lambda: _h6._payment_was_granted("781")),
+   "refused SEM entrega (payment 781): o portão fecha — o route cai no ignored de sempre")
+ok(_r6.execute("SELECT COUNT(*) FROM grant_queue WHERE idempotency_key LIKE '781%';").fetchone()[0] == 0,
+   "refused de cartão negado não endivida conta que não recebeu nada (nenhuma linha)")
+
+# --- insuficiência: o companion NÃO trunca o débito nem toca no saldo ---
+# O payload do provedor não carrega saldo, gems consumidas nem "parte paga": não
+# existe campo a ler, então nada aqui finge um. A linha sai com a DÍVIDA pedida
+# (550, do catálogo) e os centavos; quem sabe quanto ainda é gem paga é o jogo
+# (CheckoutService._ApplyGrantRaw), que debita até lá e grava o rombo em
+# grant_queue.error + fila de revisão. Provas do lado do companion:
+_c6b = _sqli3.connect(tmp6.name)
+_c6b.execute("CREATE TABLE IF NOT EXISTS wallet (account_id INTEGER PRIMARY KEY,"
+             " gems INTEGER NOT NULL DEFAULT 0, gems_paid INTEGER NOT NULL DEFAULT 0);")
+_c6b.execute("INSERT OR REPLACE INTO wallet VALUES (42, 0, 0);")   # conta quebrada: nada pago sobrou
+_c6b.commit()
+_h6._chargeback_clawback({"id": 790, "status": "charged_back", "transaction_amount": 29.90,
+                          "currency_id": "BRL", "external_reference": "42:gems.550",
+                          "metadata": {}})
+_row790 = _c6b.execute("SELECT kind, amount, price_paid, status, error FROM grant_queue "
+                       "WHERE idempotency_key = '790:chargeback';").fetchone()
+ok(_row790 == ("chargeback", 550, 2990, "pending", ""),
+   "insuficiência: a linha chega com o PEDIDO inteiro (550) e os centavos — o companion "
+   "não trunca para o que a conta tem, senão o rombo fica invisível")
+ok(_c6b.execute("SELECT gems, gems_paid FROM wallet WHERE account_id = 42;").fetchone() == (0, 0),
+   "insuficiência: o companion não escreve em wallet (um único writer de saldo: o jogo)")
+ok(_Sent.obj.get("status") == "chargeback_queued",
+   "insuficiência: mesmo sem saldo a linha não é descartada (200, e o jogo decide o resto)")
+_c6b.close()
+_r6.close()
+os.unlink(tmp6.name)
+
+# --- SOM-W5: web push (migration 052 + sender plugável) — mecânica de fila
+# testada na função; CLI e2e no harness Godot (tests/web_delivery_test.gd).
+import glob as _glob
+
+_w5_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "data", "conf", "migrations")
+_w5_migs = sorted(_glob.glob(os.path.join(_w5_dir, "*_web_push.sql")))
+ok(len(_w5_migs) == 1, "W5 exatamente uma migration *_web_push.sql")
+_tmpw5 = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_tmpw5.close()
+_wc = sqlite3.connect(_tmpw5.name)
+_wc.execute("CREATE TABLE account (account_id INTEGER PRIMARY KEY, username TEXT,"
+            " last_timestamp INTEGER DEFAULT 0)")
+_noww = int(time.time())
+_wc.execute("INSERT INTO account VALUES (1,'offline',?)", (_noww - 200000,))
+_wc.execute("INSERT INTO account VALUES (2,'recente',?)", (_noww,))
+_wc.execute("INSERT INTO account VALUES (3,'nunca-online',0)")
+_wc.executescript(open(_w5_migs[0]).read())
+_wc.commit()
+_w5 = server.Store(_tmpw5.name)
+ok(_w5.push_register(_wc, 1, "https://p/1", "K1", "A1", now=_noww) is True,
+   "W5 push_register grava subscription de conta existente")
+ok(_w5.push_register(_wc, 99, "https://p/99", "K", "A", now=_noww) is False,
+   "W5 push_register recusa conta inexistente (sem linha fantasma)")
+ok(_wc.execute("SELECT COUNT(*) FROM push_subscription").fetchone()[0] == 1,
+   "W5 uma linha de subscription por conta")
+_w5.push_register(_wc, 1, "https://p/1b", "K2", "A2", now=_noww + 1)
+ok(_wc.execute("SELECT endpoint FROM push_subscription WHERE account_id = 1")
+   .fetchone()[0] == "https://p/1b", "W5 re-register é upsert (troca de navegador)")
+ok(_wc.execute("SELECT COUNT(*) FROM push_subscription").fetchone()[0] == 1,
+   "W5 upsert não duplica a linha")
+_w5.push_register(_wc, 2, "https://p/2", "K2", "A2", now=_noww)
+_q = _w5.push_sweep(_wc, offline_seconds=86400, quiet_seconds=72 * 3600, now=_noww)
+ok(_q == 1, "W5 sweep enfileira só a offline assinante (recente e sem-sub fora)")
+ok(_wc.execute("SELECT account_id, status, title FROM push_outbox").fetchall()
+   == [(1, "pending", server.Store.PUSH_DEFAULT_TITLE)],
+   "W5 fila entra pending com título default (nunca enviado inline)")
+ok(_w5.push_sweep(_wc, offline_seconds=86400, quiet_seconds=72 * 3600,
+                  now=_noww + 60) == 0,
+   "W5 janela de silêncio não repete notificação da mesma conta")
+os.environ.pop("SHAMBLETA_PUSH_SENDER", None)
+_s1 = _w5.push_drain(_wc, now=_noww)
+ok(_s1["failed"] == 1 and _s1["sent"] == 0,
+   "W5 sender default NÃO finge entrega (failed, não sent)")
+_err = _wc.execute("SELECT last_error FROM push_outbox ORDER BY id LIMIT 1") \
+        .fetchone()[0]
+ok(str(_err).startswith("vapid_sender"),
+   "W5 fila confessa o motivo técnico: vapid_sender_unimplemented")
+_w5.push_enqueue(_wc, 1, title="t", body="b", now=_noww + 1)
+_s2 = _w5.push_drain(_wc, sender=server.stdout_webpush_send, now=_noww + 2)
+ok(_s2["sent"] == 1, "W5 sender de teste (stdout) drena o pendente novo")
+_w5.push_enqueue(_wc, 7, now=_noww + 3)  # conta sem subscription
+_s3 = _w5.push_drain(_wc, sender=server.stdout_webpush_send, now=_noww + 4)
+ok(_s3["failed"] == 1 and _s3["sent"] == 0,
+   "W5 notificação sem subscription vira failed (fila não prende)")
+raises(NotImplementedError,
+       lambda: server.vapid_webpush_send(
+           {"account_id": 1, "endpoint": "https://x", "p256dh": "k", "auth": "a"},
+           "t", "b"),
+       "W5 vapid_webpush_send levanta NotImplementedError (ECDSA ausente da stdlib)")
+ok(server.push_sender() is server.vapid_webpush_send,
+   "W5 sem env, o sender ativo é o honesto (vapid)")
+os.environ["SHAMBLETA_PUSH_SENDER"] = "nome-que-nao-existe"
+ok(server.push_sender() is server.vapid_webpush_send,
+   "W5 env desconhecido cai no honesto, nunca no stdout (default fechado)")
+os.environ.pop("SHAMBLETA_PUSH_SENDER", None)
+_wc.close()
+os.unlink(_tmpw5.name)
 
 # resumo
 if FAILS:

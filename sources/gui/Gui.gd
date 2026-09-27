@@ -91,6 +91,48 @@ func RefreshActivitiesTab(tab : int) -> void:
 	if activitiesWindow and is_instance_valid(activitiesWindow) and activitiesWindow.is_visible():
 		activitiesWindow.RefreshTab(tab, false)
 
+# SOM-IDLE P1-1/P1-7: janelas de leilão, arena e guilda montadas em runtime
+# (roteiro de `EnsureActivities`). A porta do HUD era só um toast.
+var auctionHouseWindow : AuctionHousePanel = null
+var arenaWindow : ArenaPanel = null
+var guildWindow : GuildPanel = null
+const GuildPanelScene : PackedScene = preload("res://presets/gui/GuildPanel.tscn")
+
+func EnsureAuctionHouse() -> AuctionHousePanel:
+	if auctionHouseWindow == null or not is_instance_valid(auctionHouseWindow):
+		auctionHouseWindow = _FloatingWindow(HudWindows.NewAuctionHouse(), "AuctionHouse") as AuctionHousePanel
+	return auctionHouseWindow
+
+func EnsureArena() -> ArenaPanel:
+	if arenaWindow == null or not is_instance_valid(arenaWindow):
+		arenaWindow = _FloatingWindow(HudWindows.NewArena(), "Arena") as ArenaPanel
+	return arenaWindow
+
+# Guilda abre pela CENA, não `.new()`: o TitleBar dela é o botão de fechar da janela.
+# Uma instância só, como leilão e arena — dois painéis seriam duas guildas.
+func EnsureGuildPanel() -> GuildPanel:
+	if guildWindow == null or not is_instance_valid(guildWindow):
+		guildWindow = _FloatingWindow(GuildPanelScene.instantiate() as GuildPanel, "Guild") as GuildPanel
+	return guildWindow
+
+func _FloatingWindow(win : WindowPanel, windowName : String) -> WindowPanel:
+	win.name = windowName
+	windows.add_child(win)
+	win.set_visible(false)
+	return win
+
+func OpenAuctionHouse() -> void:
+	var w : AuctionHousePanel = EnsureAuctionHouse()
+	if not w.is_visible():
+		ToggleControl(w)
+	w.OpenAuction()
+
+func OpenArena() -> void:
+	var w : ArenaPanel = EnsureArena()
+	if not w.is_visible():
+		ToggleControl(w)
+	w.OpenArena()
+
 var idleMode : bool = false
 var idleModeWindows : Array[WindowPanel] = []
 var fullModeWindows : Array[WindowPanel] = []
@@ -280,6 +322,10 @@ Shambleta is an idle auto battler: build your fighter, pick a farm zone and your
 		onboarding.name = "Onboarding"
 		add_child(onboarding)
 		onboarding.Start()
+		# P1-7: `Onboarding.Stop()` grava o funil em `Launcher.Telemetry`, que só
+		# existe no processo servidor — no build web a etapa nunca era registrada.
+		# A ponte observa o fim do tour e avisa o servidor pelo rpc próprio.
+		OnboardingDoneBridge.Attach(onboarding)
 
 #
 func EnterLoginMenu():
@@ -397,8 +443,8 @@ func ApplyUIScale(factor : float) -> void:
 	if _baseUIFontSize < 0:
 		_baseUIFontSize = ThemeDB.fallback_font_size
 	ThemeDB.fallback_font_size = int(float(_baseUIFontSize) * uiScaleFactor)
-	# Janelas principais acompanham (toque no mobile, leitura no Desktop HiDPI).
-	for win in [statWindow, chatWindow, shopWindow]:
+	# Janelas principais acompanham (toque no mobile, leitura no Desktop HiDPI) — §13: antes só 3.
+	for win in [statWindow, chatWindow, shopWindow, chestsWindow, leaderboardWindow, seasonPassWindow, afkWindow, zoneWindow, auctionHouseWindow, arenaWindow, guildWindow]:
 		if win and win is WindowPanel:
 			(win as WindowPanel).scale = Vector2(uiScaleFactor, uiScaleFactor)
 
@@ -621,6 +667,20 @@ func AddManualSkillButtons():
 		return
 	manualSkillButtons = built["skillButtons"]
 	idleHudButton = built["idleButton"] as Button
+	_AddArenaHudButton()
+
+# O botão de arena é anexado pelo `Gui`, não pelo `ManualHudBar`: quem decide o que
+# cada botão da barra faz continua sendo este arquivo (ver o cabeçalho do módulo).
+func _AddArenaHudButton() -> void:
+	if manualSkillBar == null or not is_instance_valid(manualSkillBar) or manualSkillBar.has_node("ArenaAccess"):
+		return
+	var arenaBtn : Button = Button.new()
+	arenaBtn.name = "ArenaAccess"
+	arenaBtn.text = "Arena"
+	arenaBtn.custom_minimum_size = Vector2(60, 30)
+	arenaBtn.mouse_filter = Control.MOUSE_FILTER_STOP
+	arenaBtn.pressed.connect(_on_arena_pressed)
+	manualSkillBar.add_child(arenaBtn)
 
 func _on_activities_pressed() -> void:
 	OpenActivities(0)
@@ -630,18 +690,23 @@ func _on_activities_pressed() -> void:
 func _on_idle_hud_pressed() -> void:
 	ToggleIdleMode()
 
-# P1 Social: acesso rápido à guilda via HUD (Social.gd já existe com guildList, membros, vault, level-up).
+# P1 Social: "Guilda" abre o painel que AGE (`GuildPanel.gd`: criar, buscar, entrar,
+# vault, chat). A janela `Social` legacy fica com a lista de online e o push.
 func _on_guild_pressed() -> void:
-	if socialWindow:
-		ToggleControl(socialWindow)
-	else:
-		if notificationLabel:
-			notificationLabel.AddNotification("Guild: social window not loaded", 2.0)
+	var guild : GuildPanel = EnsureGuildPanel()
+	if not guild.is_visible():
+		ToggleControl(guild)
+	guild.Refresh()
 
-# P1 Social/AH: botão para Auction House (economia). A UI gráfica ainda está em desenvolvimento; este é o acesso rápido.
+# P1 Social/AH: botão do leilão no HUD. Antes era um toast dizendo "UI gráfica em
+# desenvolvimento"; agora abre a janela real (lista, detalhe, compra confirmada,
+# cancelamento da própria oferta) — `AuctionHousePanel.gd`.
 func _on_ah_pressed() -> void:
-	if notificationLabel:
-		notificationLabel.AddNotification("Auction House: use /ah list, /ah buy, /ah cancel (UI gráfica em desenvolvimento — P1 Social)", 4.0)
+	OpenAuctionHouse()
+
+# P1: arena assíncrona (defesa, board, ataque) — janela própria, `ArenaPanel.gd`.
+func _on_arena_pressed() -> void:
+	OpenArena()
 
 func HideManualSkillButtons():
 	if manualSkillBar and is_instance_valid(manualSkillBar):

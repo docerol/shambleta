@@ -128,21 +128,108 @@ func ArenaBoard(accountID : int, limit : int = 10) -> Dictionary:
 # Copas assíncronas de poder: inscrição em GOLD (sink), ranking por ganho de
 # power na janela, prêmios em gems + título de Campeão. Entrada NUNCA em
 # dinheiro (risco loteria/azar no BR). Rotação semanal automática no job diário.
+#
+# OPS-4 (Live Ops): o `tournament` do calendário declarativo é o único kind que
+# mexe num POOL DE PRÊMIOS, e o pool existe de verdade no servidor —
+# `EconomyCatalog.TOURNAMENT_PRIZES` (gems), congelado em `tournament.prizes_json`
+# na criação da copa e liquidado em gems no `SettleTournament`. Ligar o kind a
+# esse pool é honesto porque há o que multiplicar; o que não é honesto é
+# multiplicar na hora de pagar, então valem duas regras:
+#   1. o multiplicador é ancorado no `ends_at` da copa (a campanha que cobriu a
+#      competição), nunca no instante do job que liquida — um job atrasado não
+#      reescreve o prêmio, e um operador não estende a campanha para pagar mais;
+#   2. o pool anunciado é o pool pago: `prizes_json` carrega a lista CONGELADA já
+#      turbinada (`FormatPrizes`) e a liquidação paga exactly essa lista. Reler o
+#      multiplicador no `SettleTournament` e aplicar de novo seria ×2 sobre ×2 —
+#      o único papel do catálogo na liquidação é o PISO por posição (nunca pagar
+#      menos que o prêmio base da régua se a linha veio zerada/estragada).
+
+# As chaves aceitas dentro de `tournament.prizes_json`. Não é cosmético: uma
+# lista no formato errado precisa ser REJEITADA na leitura, e uma lista de
+# "nada" (lista vazia) não pode ser lida como "prêmio zero" — o pool de gems da
+# temporada não desaparece porque um operador digitou `[]`.
+const PrizeKeys : Array[String] = ["gems", "gold"]
+
+# Multiplicador de pool que a agenda autoriza para uma copa que encerra em
+# `endsAt`. Pura (timestamp entra, float sai) pelos mesmos motivos dos seams de
+# `OfflineSettle`: resolve sem Launcher e sem banco, então é conferível número a
+# número num harness `-s`. Fora da banda 1.0..4.0 o `LiveOpsCalendar.SanitizePoolMod`
+# devolve o neutro e reclama uma vez — `value` de pool não é cheque no arquivo.
+static func PrizePoolMod(endsAt : int) -> float:
+	return LiveOpsCalendar.BonusMod(LiveOpsCalendar.KindTournament, endsAt)
+
+# A lista de prêmios congelável, como vai no `prizes_json`: mesma ordem e
+# mesmo comprimento da régua do catálogo, com o multiplicador aplicado item a
+# item (`roundi`, determinístico — sem RNG no caminho do prêmio).
+static func FormatPrizes(base : Array[int], mod : float) -> Array:
+	var out : Array = []
+	for prize in base:
+		out.append({"gems": roundi(float(int(prize)) * mod)})
+	return out
+
+# Lê o `prizes_json` de uma copa. `null` = campo ausente/ilegível (o chamador cai
+# no catálogo). Aceita os dois formatos que já existem no repo: lista de inteiros
+# (o `JSON.stringify(TOURNAMENT_PRIZES)` de hoje) e lista de objetos com chave de
+# moeda conhecida. Um item de formato desconhecido é REJEIÇÃO, não "prêmio zero":
+# pool ilegível não pode virar copa sem prêmio.
+static func ParsePrizePool(raw : Variant) -> Variant:
+	if raw == null or str(raw).strip_edges().is_empty():
+		return null
+	var parsed : Variant = JSON.parse_string(str(raw))
+	if typeof(parsed) != TYPE_ARRAY:
+		return null
+	var out : Array = []
+	for item in (parsed as Array):
+		if item is int or item is float:
+			out.append({"gems": int(item)})
+			continue
+		if typeof(item) != TYPE_DICTIONARY:
+			return null
+		var entry : Dictionary = item
+		for key in entry.keys():
+			if not PrizeKeys.has(str(key)):
+				return null
+		out.append({"gems": int(entry.get("gems", 0))})
+	# "[]" não é "sem prêmio": é lista ilegível para o pagamento. Cai no catálogo.
+	if out.is_empty():
+		return null
+	return out
+
+# O pool de uma linha `tournament` (usado pelo preview e pela liquidação).
+static func PrizePoolOfRow(row : Dictionary) -> Array:
+	var pool : Array = []
+	if row.has("prizes_json"):
+		var parsed : Variant = ParsePrizePool(row.get("prizes_json", null))
+		if parsed != null:
+			return parsed as Array
+	for prize in EconomyCatalog.TOURNAMENT_PRIZES:
+		pool.append({"gems": int(prize)})
+	return pool
+
 
 func ActiveTournament() -> Dictionary:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT tournament_id, name, entry_gold, starts_at, ends_at, status FROM tournament WHERE status = 'active' ORDER BY tournament_id DESC LIMIT 1;", [])
+	# `prizes_json` está aqui porque este SELECT é a fonte do ANUNCIADO: sem a
+	# coluna, `PrizePoolOfRow` caía no catálogo e o `/tournament` mostrava o prêmio
+	# base enquanto a liquidação pagava o pool turbinado congelado na linha.
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT tournament_id, name, entry_gold, starts_at, ends_at, status, prizes_json FROM tournament WHERE status = 'active' ORDER BY tournament_id DESC LIMIT 1;", [])
 	return {} if rows.is_empty() else rows[0]
 
 func EnsureWeeklyTournament() -> int:
 	if not ActiveTournament().is_empty():
 		return int(ActiveTournament()["tournament_id"])
 	var now : int = SQLCommons.Timestamp()
+	# OPS-4: o pool CONGELADO na linha já carrega o multiplicador da campanha que
+	# cobre o fim da copa — é o valor que o jogador vê em `/tournament` ao entrar,
+	# e é o que a liquidação paga. Congelar em `ends_at` (não em `now`) é o que
+	# impede a agenda de ser reescrita por um job que roda depois do fim.
+	var endsAt : int = now + EconomyCatalog.TOURNAMENT_DAYS * 86400
+	var frozenPrizes : Array = FormatPrizes(EconomyCatalog.TOURNAMENT_PRIZES, PrizePoolMod(endsAt))
 	var out : Dictionary = {"id" = 0}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		if not ActiveTournament().is_empty():
 			return false
-		if not Launcher.SQL.ExecuteBindings("INSERT INTO tournament (name, entry_gold, starts_at, ends_at, status, prizes_json) VALUES (?, ?, ?, ?, 'active', ?);", ["Copa Semanal", EconomyCatalog.TOURNAMENT_ENTRY_GOLD, now, now + EconomyCatalog.TOURNAMENT_DAYS * 86400, JSON.stringify(EconomyCatalog.TOURNAMENT_PRIZES)]):
+		if not Launcher.SQL.ExecuteBindings("INSERT INTO tournament (name, entry_gold, starts_at, ends_at, status, prizes_json) VALUES (?, ?, ?, ?, 'active', ?);", ["Copa Semanal", EconomyCatalog.TOURNAMENT_ENTRY_GOLD, now, endsAt, JSON.stringify(frozenPrizes)]):
 			return false
 		out["id"] = Launcher.SQL.LastInsertRowIDRaw()
 		return int(out["id"]) > 0):
@@ -157,9 +244,24 @@ func GetTournaments(accountID : int) -> Dictionary:
 	var tid : int = int(t.get("tournament_id", 0))
 	var mine : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT char_id, power_start, power_end FROM tournament_entry WHERE tournament_id = ? AND account_id = ?;", [tid, accountID])
 	var entries : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM tournament_entry WHERE tournament_id = ?;", [tid])
+	# O anunciado é o congelado na linha (mesma fonte da liquidação), não o
+	# catálogo em código: se a campanha multiplicou o pool na criação, é o valor
+	# turbinado que o jogador lê antes de pagar a entrada.
+	var pool : Array = PrizePoolOfRow(t)
+	# A mesma âncora da criação: `ends_at` da copa, lido aqui só para o painel
+	# dizer com que campanha o jogador está competindo. O `prize_mod` do preview
+	# NÃO se multiplica no `pool` acima (que já vem turbinado da criação) — reler
+	# e aplicar seria o ×2 sobre ×2 que a regra 2 do cabeçalho desta seção veta.
+	var endsAt : int = int(t.get("ends_at", 0))
+	var prizeGems : Array[int] = []
+	for item in pool:
+		prizeGems.append(int((item as Dictionary).get("gems", 0)))
 	return {"ok": true, "active": {"id": tid, "name": str(t.get("name", "?")), "entry_gold": int(t.get("entry_gold", 0)),
-		"ends_at": int(t.get("ends_at", 0)), "players": int(entries[0]["n"]) if not entries.is_empty() else 0,
-		"prizes": EconomyCatalog.TOURNAMENT_PRIZES}, "my_entry": mine[0] if not mine.is_empty() else {}}
+		"ends_at": endsAt, "players": int(entries[0]["n"]) if not entries.is_empty() else 0,
+		"prizes": prizeGems, "prize_pool": pool,
+		"prize_mod": PrizePoolMod(endsAt),
+		"campaign": LiveOpsCalendar.ActiveKeyAt(LiveOpsCalendar.KindTournament, endsAt)},
+		"my_entry": mine[0] if not mine.is_empty() else {}}
 
 func EnterTournament(accountID : int, charID : int, tournamentID : int) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
@@ -203,15 +305,19 @@ func SettleTournament(tournamentID : int) -> Dictionary:
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
-		var rows : Array = sql.db.select_rows("tournament", "tournament_id = %d" % tournamentID, ["status"])
+		var rows : Array = sql.db.select_rows("tournament", "tournament_id = %d" % tournamentID, ["status", "ends_at", "prizes_json"])
 		if rows.is_empty() or str(rows[0].get("status", "")) != "active":
 			out["reason"] = "not_active"
 			return false
 		var now : int = SQLCommons.Timestamp()
-		var ends : Array = sql.db.select_rows("tournament", "tournament_id = %d" % tournamentID, ["ends_at"])
-		if int(ends[0].get("ends_at", now + 1)) > now:
+		# A linha congelada é o pool; o `ends_at` é o instante que a agenda
+		# consulta. Ler os dois na MESMA linha é o que impede o prêmio pago de
+		# divergir do prêmio anunciado em `/tournament`.
+		var endsAt : int = int(rows[0].get("ends_at", now + 1))
+		if endsAt > now:
 			out["reason"] = "not_ended"
 			return false
+		var frozenPool : Array = PrizePoolOfRow(rows[0])
 		var entries : Array[Dictionary] = sql.QueryBindings("SELECT account_id, char_id, power_start FROM tournament_entry WHERE tournament_id = ?;", [tournamentID])
 		var ranked : Array = []
 		for e in entries:
@@ -224,8 +330,18 @@ func SettleTournament(tournamentID : int) -> Dictionary:
 				return int(a["gain"]) > int(b["gain"])
 			return int(a["char_id"]) < int(b["char_id"]))
 		var awarded : int = 0
-		for rank in mini(ranked.size(), EconomyCatalog.TOURNAMENT_PRIZES.size()):
-			var prize : int = EconomyCatalog.TOURNAMENT_PRIZES[rank]
+		for rank in mini(ranked.size(), frozenPool.size()):
+			var frozen : Dictionary = frozenPool[rank]
+			var frozenGems : int = int(frozen.get("gems", 0))
+			# OPS-4: o que foi ANUNCIADO é o que é pago. O multiplicador da agenda
+			# já entrou na criação da copa (`EnsureWeeklyTournament` congela o pool
+			# turbinado em `prizes_json`, ancorado no `ends_at`), então relê-lo aqui
+			# e multiplicar de novo seria ×2 sobre ×2 = ×2,25 de gems — faucet
+			# inventado por um job. O único papel do instante aqui é o piso: nunca
+			# pagar MENOS do que o catálogo base da_rank, mesmo se a linha foi
+			# congelada com um pool zerado/estragado por edição manual.
+			var floorGems : int = int(EconomyCatalog.TOURNAMENT_PRIZES[rank]) if rank < EconomyCatalog.TOURNAMENT_PRIZES.size() else 0
+			var prize : int = maxi(frozenGems, floorGems)
 			var acct : int = int(ranked[rank]["account_id"])
 			var balance : int = sql.GetGemsRaw(acct)
 			if not sql.SetGemsRaw(acct, balance + prize):

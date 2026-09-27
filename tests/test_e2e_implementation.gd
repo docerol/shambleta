@@ -56,7 +56,7 @@ func _initialize():
 		# Gui.DisplayFirstLogin chamava settingsWindow.get_sessionfirstlogin(),
 		# método que nunca existiu em nenhuma revisão — a chamada abortava o
 		# primeiro login e o tour de onboarding não abria para ninguém.
-		["res://sources/gui/Settings.gd", "get_sessionfirstlogin", "Primeiro login — getter que Gui.gd:286 chama"],
+		["res://sources/gui/Settings.gd", "get_sessionfirstlogin", "Primeiro login — getter que Gui.DisplayFirstLogin chama"],
 		# E a linha de web push em Settings só existe se o gate responder.
 		["res://sources/web/WebPush.gd", "CanDeliver", "Web push — gate que Settings.gd consulta para montar a linha"],
 	]
@@ -66,5 +66,9 @@ func _initialize():
 		else:
 			print("FAIL: " + str(c[2]))
 			failures += 1
-	print("== RESULT: %d failures ==" % failures)
+	# A contagem de checks vai para a linha de resultado de propósito:
+	# `scripts/ci_gate_log.sh` lê o nº de falhas DA LINHA, e uma linha que só diz
+	# "0 failures" não prova que o loop acima iterou alguma coisa — um `checks` que
+	# encolhe ou um `return` precoce ficariam verdes.
+	print("== RESULT: %d checks, %d failures ==" % [checks.size(), failures])
 	quit(failures)

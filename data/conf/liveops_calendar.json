@@ -1,0 +1,34 @@
+{
+  "_note": "OPS-3 (AUDITORIA_2026-09-27 §15, Live Ops 5/10): agenda DECLARATIVA de eventos, resolvida por timestamp em sources/ops/LiveOpsCalendar.gd — sem job, sem escrita no banco, sem código. `data/conf/` vem no pacote do servidor (mesma vinda de paid_catalog.json/seasons.json) e o módulo relê com TTL de 60 s: editar este arquivo muda o estado no ar na próxima consulta. Onde o .pck é só leitura, aponte o arquivo editado com SHAMBLETA_LIVEOPS_FILE=/caminho/liveops_calendar.json.",
+  "_formato": "uma linha por evento: {kind, key, start_unix, end_unix, value, label?}. kind ∈ double_xp | chest_bonus | tournament. key é o identificador da campanha, única no arquivo ([a-z][a-z0-9_]*). A janela é[start_unix, end_unix) — o fim é exclusivo, então duas janelas encadeadas nunca se sobrepõem e não há segundo perdido. value dos kinds de bônus é MULTIPLICADOR e tem que estar em 1.0..4.0: abaixo de 1.0 um 'bônus' é nerf disfarçado, acima do teto é dedo no teclado pagando faucet. Sobreposição do MESMO kind não compõe: vence a que começa depois (empate: a que termina depois, empate: a última do arquivo) — duas janelas de double_xp cruzadas pagam ×2, nunca ×4. Arquivo ausente ou inválido = nenhum evento no ar (neutro 1.0) + push_error no log: fail-closed no sentido seguro de um multiplicador de faucet.",
+  "_o_que_consome": "os TRÊS kinds têm consumidor de verdade, cada um num eixo diferente, e um kind declarado sem consumidor faz o arquivo INTEIRO ser recusado na validação (`ImplementedKinds`): (1) `double_xp` → OfflineSettle.LiveOpsXpMods → GetModsForAccount — o MESMO eixo do VIP 1.2×, do buff de guild e do drops_mod do motor de live_event: multiplica XP, ouro e as chaves de boss da liquidação; NÃO dobra baús nem o ×2 do tier 2 (é adMult, eixo separado); (2) `chest_bonus` → OfflineSettle.LiveOpsChestMods, na linha do `chestWanted` de _ApplyFormula, ABAIXO do teto diário (`EconomyCatalog.ChestsPerDayFromSettle` em _ChestBudgetToday): a campanha enche o dia de baús mais cedo, nunca mintar mais baús por dia; (3) `tournament` → TournamentArenaService.PrizePoolMod, aplicado ao pool de gems CONGELADO em tournament.prizes_json na criação da copa e liquidado no SettleTournament. A âncora do (3) é o ends_at da copa, não o instante do job: a campanha que cobriu a competição é a que paga, e um job atrasado não reescreve prêmio nenhum.",
+  "_cuidado_com_a_suite": "Nenhuma janela deste arquivo pode cobrir o instante em que tests/run_idle_tests.gd roda: SuiteSettleGolden calcula a expectativa com mods = 1.0 (IdleTests.gd:238), então um double_xp ativo na hora do run deixava a suíte vermelha por agenda, não por bug. As duas campanhas abaixo abrem em novembro de 2026 — o harness tests/ops_fix_test.gd as confere POR TIMESTAMP (janela no futuro), nunca ligando bônus no presente.",
+  "_exemplo_de_campanha_futura": "{\"kind\": \"double_xp\", \"key\": \"xp_double_abertura_s2\", \"start_unix\": 1793664000, \"end_unix\": 1794268800, \"value\": 2.0, \"label\": \"Abertura da S2: XP em dobro\"}",
+  "_estado_atual": "Uma campanha encerrada (fim de semana de 19–20/09/2026, preservada como histórico) e DUAS janelas futuras reais: a Semana do Cofre Cheio (chest_bonus ×2, 04–10/11/2026) e a Copa de Novembro com prêmio turbinado (tournament ×1.5 na mesma semana, que é onde a copa que encerra em 10/11 é liquidada). Data de bônus é decisão do dono: o que este arquivo prova é que o motor alcança os três kinds e que o servidor RECUSA prometer o que não alcança.",
+  "events": [
+    {
+      "kind": "double_xp",
+      "key": "xp_double_fim_de_semana_set2026",
+      "start_unix": 1789776000,
+      "end_unix": 1789948800,
+      "value": 2.0,
+      "label": "Fim de semana ×2 XP (20–21/09/2026, encerrado)"
+    },
+    {
+      "kind": "chest_bonus",
+      "key": "baus_cofre_cheio_nov2026",
+      "start_unix": 1793750400,
+      "end_unix": 1794355200,
+      "value": 2.0,
+      "label": "Semana do Cofre Cheio: baús da liquidação em dobro (04–10/11/2026)"
+    },
+    {
+      "kind": "tournament",
+      "key": "copa_novembro_premio_maior",
+      "start_unix": 1793750400,
+      "end_unix": 1794355200,
+      "value": 1.5,
+      "label": "Copa de Novembro: pool de gems ×1,5 para quem competir na semana"
+    }
+  ]
+}

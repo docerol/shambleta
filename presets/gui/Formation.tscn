@@ -5,9 +5,9 @@
 [ext_resource type="PackedScene" path="res://presets/gui/TitleBar.tscn" id="3"]
 
 [node name="Formation" type="PanelContainer"]
-custom_minimum_size = Vector2(320, 260)
+custom_minimum_size = Vector2(320, 430)
 offset_right = 320.0
-offset_bottom = 260.0
+offset_bottom = 430.0
 theme = ExtResource("1")
 theme_type_variation = &"WindowPanel"
 script = ExtResource("2")
@@ -70,6 +70,40 @@ text = "Skill"
 layout_mode = 2
 size_flags_horizontal = 3
 
+[node name="AddSkill" type="Button" parent="Layout/SkillRow"]
+layout_mode = 2
+text = "Add"
+
+[node name="PriorityTitle" type="Label" parent="Layout"]
+layout_mode = 2
+text = "Cast order"
+
+[node name="PriorityList" type="VBoxContainer" parent="Layout"]
+layout_mode = 2
+
+[node name="PriorityControls" type="HBoxContainer" parent="Layout"]
+layout_mode = 2
+
+[node name="Up" type="Button" parent="Layout/PriorityControls"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Up"
+
+[node name="Down" type="Button" parent="Layout/PriorityControls"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Down"
+
+[node name="Remove" type="Button" parent="Layout/PriorityControls"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Remove"
+
+[node name="Clear" type="Button" parent="Layout/PriorityControls"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Clear"
+
 [node name="PotionRow" type="HBoxContainer" parent="Layout"]
 layout_mode = 2
 
@@ -93,3 +127,8 @@ layout_mode = 2
 text = "Save Loadout"
 
 [connection signal="pressed" from="Layout/Save" to="." method="_on_save_pressed"]
+[connection signal="pressed" from="Layout/SkillRow/AddSkill" to="." method="_on_add_slot_pressed"]
+[connection signal="pressed" from="Layout/PriorityControls/Up" to="." method="_on_priority_up_pressed"]
+[connection signal="pressed" from="Layout/PriorityControls/Down" to="." method="_on_priority_down_pressed"]
+[connection signal="pressed" from="Layout/PriorityControls/Remove" to="." method="_on_priority_remove_pressed"]
+[connection signal="pressed" from="Layout/PriorityControls/Clear" to="." method="_on_priority_clear_pressed"]

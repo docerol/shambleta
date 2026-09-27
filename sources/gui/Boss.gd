@@ -52,11 +52,17 @@ func ShowState(state : Dictionary):
 			btn.pressed.connect(_on_challenge_pressed)
 		bossList.add_child(btn)
 	if count > 0 and beaten >= count:
-		hintLabel.text = tr("Ladder complete — you defeated every boss!")
+		hintLabel.text = tr("Ladder complete — Torment tier 1 unlocked (type /torment 1 in chat).")
 	elif keys < 1:
 		hintLabel.text = tr("No boss keys. Farm mobs drop them (~%d%% per kill).") % int(round(float(BossService.KeyDropPPM) / 10000.0))
 	else:
-		hintLabel.text = "Challenge the highlighted boss. It matches your level — gear decides."
+		# SOM-GAMEPLAY G3 (AUDITORIA §"Game Design"): "gear decides" era caixa-preta.
+		# BossLadder lê as MESMAS constantes da simulação que decide o duelo no
+		# servidor (BossService.Resolve) com as stats locais do char, então o número
+		# na tela é o número que a luta usa — não um palpite de UI.
+		var snapshot : Dictionary = BossService.PlayerFightSnapshot(Launcher.Player)
+		var need : Dictionary = BossLadder.Requirement(state, snapshot) if not snapshot.is_empty() else {}
+		hintLabel.text = "%s (Lv %d): %s" % [str(need.get("name", "?")), int(need.get("level", 1)), BossLadder.RequirementText(need)] if not need.is_empty() else tr("Challenge the highlighted boss.")
 
 func ShowResult(result : Dictionary):
 	if result.is_empty():

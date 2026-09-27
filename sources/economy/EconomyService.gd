@@ -12,32 +12,26 @@ class_name EconomyService
 # Agora: dicionário de mutexes derivado por hash(accountID), com fallback para mutex global.
 var settleMutex : Mutex = Mutex.new()
 var settleMutexes : Dictionary[int, Mutex] = {}
-# SOM-IDLE Fatia 2: domínio de guild extraído (composição com back-reference;
-# usa este mesmo settleMutex + helpers raw — locking idêntico ao pré-fatiamento).
+# FATIA 13: os 13 domínios extraídos (Fatia 2..12) + a projeção que a janela de
+# economia lê (EconomyStateView) são montados em `EconomyDomainBinding.Bind`, que
+# roda no boot abaixo. Os campos ficam aqui porque é por eles que o hub delega:
+# os 11 serviços leem `_eco.<campo>` (settleMutex e helpers raw continuam sendo
+# os deste objeto) e cada wrapper do fachada resolve o seu. O que cada domínio é
+# está escrito no módulo que o implementa.
 var guildService : GuildService = null
-# SOM-IDLE Fatia 2: domínios de checkout (grant queue/VIP/refund) e seasons
-# extraídos — mesma composição, callers públicos ficam nos wrappers abaixo.
 var checkoutService : CheckoutService = null
 var seasonService : SeasonService = null
 var passService : PassService = null
-# SOM-IDLE Fatia 4: domínio de auction house (listings + bot seed) extraído.
 var ahService : AuctionHouseService = null
-# SOM-IDLE Fatia 5: domínio de loja (baús por gems, daily shop, vendor) extraído.
 var shopService : ShopService = null
-# SOM-IDLE Fatia 6: domínio de forja (sinks de item + crafting Fase H) extraído.
 var itemForgeService : ItemForgeService = null
-# SOM-IDLE Fatia 7: domínio de progressão de boss (rebirth + escada + tormento/rush) extraído.
 var bossProgressionService : BossProgressionService = null
-# SOM-IDLE Fatia 8: domínio de monetização de janela (rewarded ads + cosméticos/entitlements) extraído.
 var adsCosmeticsService : AdsCosmeticsService = null
-# SOM-IDLE Fatia 9: dominio de competicao (Fase F torneios + R4 arena assimetrica) extraido.
 var tournamentArenaService : TournamentArenaService = null
-# SOM-IDLE Fatia 10: dominio de comunidade (R3 live events + boards, conquistas, R1 referral/anti-fraude) extraido.
 var communityService : CommunityService = null
-# SOM-IDLE Fatia 11: dominio de troca + baus extraido (ultimo do god-node).
 var tradeChestService : TradeChestService = null
-# SOM-IDLE Fatia 12: kernel compartilhado (carteira, ledger, ops de item raw, baús de chave) extraido.
 var kernel : EconomyKernel = null
+var stateView : EconomyStateView = null
 var _shardInitMutex : Mutex = Mutex.new()
 
 func _get_settle_mutex(accountID : int) -> Mutex:
@@ -65,51 +59,19 @@ func _process(delta : float) -> void:
 
 #
 func _post_launch():
-	if guildService == null:
-		guildService = GuildService.new()
-		guildService._eco = self
-	if checkoutService == null:
-		checkoutService = CheckoutService.new()
-		checkoutService._eco = self
-	if seasonService == null:
-		seasonService = SeasonService.new()
-		seasonService._eco = self
-	if passService == null:
-		passService = PassService.new()
-		passService._eco = self
-	if ahService == null:
-		ahService = AuctionHouseService.new()
-		ahService._eco = self
-	if shopService == null:
-		shopService = ShopService.new()
-		shopService._eco = self
-	if itemForgeService == null:
-		itemForgeService = ItemForgeService.new()
-		itemForgeService._eco = self
-	if bossProgressionService == null:
-		bossProgressionService = BossProgressionService.new()
-		bossProgressionService._eco = self
-	if adsCosmeticsService == null:
-		adsCosmeticsService = AdsCosmeticsService.new()
-		adsCosmeticsService._eco = self
-	if tournamentArenaService == null:
-		tournamentArenaService = TournamentArenaService.new()
-		tournamentArenaService._eco = self
-	if communityService == null:
-		communityService = CommunityService.new()
-		communityService._eco = self
-	if tradeChestService == null:
-		tradeChestService = TradeChestService.new()
-		tradeChestService._eco = self
-	if kernel == null:
-		kernel = EconomyKernel.new()
-		kernel._eco = self
-	# §10 (Bloco 1): o catálogo pago é validado no boot do servidor. A CI amarra as
-	# três pontas (anúncio / JSON / fallback do companion); isto pega o JSON editado
-	# na máquina do operator — um `kind` novo ou preço trocado de um lado só é
-	# dinheiro aceito e mercadoria nunca entregue dias depois, com a fila de grant
-	# parada em `pending`. Não derruba o server de propósito: o erro é do catálogo,
-	# o resto do jogo continua e a divergência fica no log com o SKU.
+	# FATIA 13: a montagem dos 13 domínios (ordem, null-check e back-reference) está
+	# em `EconomyDomainBinding.Bind`; o lock continua neste objeto, então os filhos
+	# continuam compartilhando o settleMutex do fachada.
+	EconomyDomainBinding.Bind(self)
+	# §10 (Bloco 1) + JUIZ ECONOMIA 2026-09-27: os dois catálogos de dados são
+	# validados no boot, fail-closed, e nenhum dos dois derruba o server de
+	# propósito — o erro é do arquivo, o resto do jogo continua e a divergência
+	# fica no log com a chave/SKU. O regime de cada um está escrito onde ele é
+	# conferido: `EconomyBaseCatalog` (anúncio × JSON × companion no pago; os
+	# números dos botões base × `data/conf/economy_base_catalog.json` no base).
+	for baseDrift : String in EconomyCatalog.LoadBaseCatalog():
+		push_error("catálogo base divergente: %s" % baseDrift)
+	ApplyVelocityKnobs()
 	if "--server" in OS.get_cmdline_args():
 		for drift : String in EconomyCatalog.ValidatePaidCatalogFile():
 			push_error("catálogo pago divergente: %s" % drift)
@@ -204,12 +166,24 @@ func _GrantStackRaw(charID : int, accountID : int, itemID : int, count : int, le
 # (invariant 3), fee burned from the initiating account's gems (ECONOMY_STUDY
 # §6: trade fee é o sink primário; gems não-cashable). Items are stack rows
 # {item_id, count} validated against the FROM character's inventory.
-# SOM-IDLE D3: velocity knobs (static var = sintonizável sem rebuild).
+# SOM-IDLE D3: velocity knobs (static var = sintonizável sem rebuild). O default de
+# cada um vem de dados e é conferido onde os dados entram: `EconomyBaseCatalog`
+# contra `data/conf/economy_base_catalog.json`, `LoadBaseCatalog` no boot. O ASSENTO
+# fica nestas três linhas porque `TradeChestService` lê e `tests/IdleTests.gd`
+# escreve estes nomes pela classe — mover o assento moveria a superfície de tuning.
 static var TradeCooldownSec : int = 60
 static var TradeDailyCap : int = 20
 # ROADMAP_COMERCIAL S2: VIP = QoL — cap diário maior, mesma taxa e cooldown.
 # Nunca power direto; F2P mantém 20/dia.
 static var TradeDailyCapVIP : int = 40
+
+# Passa os knobs do catálogo base para os assentos em runtime. Só roda com o
+# arquivo validado (`ApplyBaseCatalog` não aplica nada com erro): JSON quebrado não
+# afrouxa fricção nenhuma, o que fica de pé é o default do código.
+static func ApplyVelocityKnobs() -> void:
+	TradeCooldownSec = EconomyCatalog.BaseKnob("trade_cooldown_sec", EconomyCatalog.TradeCooldownSecRef)
+	TradeDailyCap = EconomyCatalog.BaseKnob("trade_daily_cap", EconomyCatalog.TradeDailyCapRef)
+	TradeDailyCapVIP = EconomyCatalog.BaseKnob("trade_daily_cap_vip", EconomyCatalog.TradeDailyCapVIPRef)
 
 # ------------------------------------------------------------------ F4: troca + baus (Fatia 11 -> TradeChestService.gd)
 func GetTradeFeeState(accountID : int) -> Dictionary:
@@ -256,19 +230,10 @@ func PurchaseVIP(accountID : int, tier : int) -> bool:
 func BuyChests(accountID : int, charID : int, count : int) -> Dictionary:
 	return shopService.BuyChests(accountID, charID, count)
 
-# Estado consolidado das janelas de economia (Shop/Chests): wallet, baús
-# fechados, odds públicas (texto pré-formatado, compliance loot box) e preços.
-# Uma RPC única — as janelas pedem ao abrir e as ações devolvem o estado novo.
-#
-# Fase A (checkout sandbox): inclui `catalog` (espelho DISPLAY-ONLY do catálogo
-# pago — `EconomyCatalog.SHOP_CATALOG`, amarrado a data/conf/paid_catalog.json por
-# `ValidatePaidCatalog`; o grant autoritativo vive no companion; preço aqui nunca
-# vira crédito), `starter_offer` (elegibilidade one-time D0–D3, sem
-# migração: idade via account.created_timestamp + compra prévia via
-# grant_queue payload) e `pending_grants` (fila do companion p/ esta conta).
-#
-# Espelho do catálogo: validado contra data/conf/paid_catalog.json no boot do
-# servidor e em SuiteCatalogConsistency — não é mais "manter sincronizado à mão".
+# Estado consolidado das janelas de economia (Shop/Chests) numa RPC única — o
+# payload está documentado onde é montado (`EconomyStateView.Build`), que é também
+# por onde os números do catálogo base validado chegam ao jogador. Wrapper de
+# delegação: callers (Server RPC, Gui, suítes) não mudam.
 
 # Fatia 2 → CheckoutService.gd (wrappers de delegação; locking no serviço).
 
@@ -305,39 +270,7 @@ func BuyDailyOffer(accountID : int, charID : int, offerID : String) -> Dictionar
 	return shopService.BuyDailyOffer(accountID, charID, offerID)
 
 func GetEconomyState(accountID : int, charID : int) -> Dictionary:
-	var chestIDs : Array = []
-	for chest in Launcher.SQL.GetClosedChests(charID):
-		chestIDs.append(int(chest["id"]))
-	var until : int = Launcher.SQL.GetVIPUntil(accountID)
-	var now : int = SQLCommons.Timestamp()
-	var vipActive : bool = until > now
-	var odds : Dictionary = GetChestOddsForCharacter(charID)
-	# O cap exibido na Loja é o do PERSONAGEM que pediu o estado: 1h de base +
-	# hora comprada em anúncio + perk de VIP. O anchor (last_settled_at) é o que
-	# separa hora ganha de hora já liquidada — sem ele a vitrine ofereceria de
-	# novo o que o jogador já coletou.
-	var anchor : int = int(Launcher.SQL.GetCharacter(charID).get("last_settled_at", 0))
-	# A vitrine segue a temporada: sem linha `active` na tabela, o companion recusa
-	# intent/preferência/sandbox do passe, então a Loja não oferece o botão.
-	var seasonActive : bool = not ActiveSeason().is_empty()
-	return {
-		"gems" = GetGems(accountID),
-		"chests" = chestIDs,
-		"odds" = odds,
-		"odds_text" = FormatChestOdds(odds),
-		"pity" = GetChestPityStatus(charID),
-		"chest_cost" = EconomyCatalog.ChestCostGems,
-		"vip" = {"active" = vipActive, "until" = until, "mods" = OfflineSettle.VIPModFactor if vipActive else 1.0,
-			"tier" = Launcher.SQL.GetVIPTier(accountID) if vipActive else 0,
-			"cap_hours" = OfflineSettle.CapHoursForCharacter(charID, accountID, anchor, now)},
-		"vip1_cost" = EconomyCatalog.VIP1CostGems,
-		"vip2_cost" = EconomyCatalog.VIP2CostGems,
-		"catalog" = Storefront.ShopCatalog(seasonActive),
-		"season_active" = seasonActive,
-		"starter_offer" = GetStarterOfferState(accountID),
-		"pending_grants" = GetPendingGrants(accountID),
-		"vendor" = GetVendorState(accountID),
-	}
+	return stateView.Build(accountID, charID)
 
 # ------------------------------------------------------------------ R2: vendor gold (Fatia 5 → ShopService.gd)
 # Consumíveis por gold, estoque diário por oferta, sem poder permanente.
@@ -444,6 +377,12 @@ func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
 func _CharGoldRaw(charID : int) -> int:
 	return kernel._CharGoldRaw(charID)
 
+# Gold: caminho único do kernel (stat.gp + ledger + espelho no agente carregado).
+func MoveGold(charID : int, amount : int, reason : String) -> bool:
+	return kernel.MoveGold(charID, amount, reason)
+
+func ReconcileWalletDaily(nowSec : int = 0) -> Dictionary:
+	return kernel.ReconcileWalletDaily(nowSec)
 
 func GetGuildForAccount(accountID : int) -> int:
 	return guildService.GetGuildForAccount(accountID)
@@ -543,15 +482,15 @@ static func IsValidGuildTag(tag : String) -> bool:
 static func AchievementByID(achievementID : String) -> Dictionary:
 	return EconomyCatalog.AchievementByID(achievementID)
 static func CraftBudgetCap(tier : int, slot : int) -> int:
-	return EconomyCatalog.CraftBudgetCap(tier, slot)
+	return CraftCatalog.BudgetCap(tier, slot)
 static func CraftRarityForUsage(pct : float) -> String:
-	return EconomyCatalog.CraftRarityForUsage(pct)
+	return CraftCatalog.RarityForUsage(pct)
 static func CraftSubmitFee(tier : int) -> int:
-	return EconomyCatalog.CraftSubmitFee(tier)
+	return CraftCatalog.SubmitFee(tier)
 static func CraftNormName(name : String) -> String:
-	return EconomyCatalog.CraftNormName(name)
+	return CraftCatalog.NormName(name)
 static func CraftEditDistance(a : String, b : String) -> int:
-	return EconomyCatalog.CraftEditDistance(a, b)
+	return CraftCatalog.EditDistance(a, b)
 
 func EnsureSeasonS1() -> int:
 	return seasonService.EnsureSeasonS1()
@@ -698,6 +637,32 @@ func HighlightListing(accountID : int, listingID : int) -> Dictionary:
 func BrowseListings(limit : int = 20) -> Array[Dictionary]:
 	return ahService.BrowseListings(limit)
 
+# JUIZ MARKETPLACE 2026-09-27 (b): página de verdade — OFFSET do servidor e
+# filtro (teto de preço, item) aplicados no SQL, com o total para a régua de
+# páginas. A janela de 40 linhas de antes sobrevive como tamanho de página.
+func BrowseListingsPage(limit : int, offset : int, maxPrice : int, itemID : int) -> Dictionary:
+	return ahService.BrowseListingsPage(limit, offset, maxPrice, itemID)
+
+# (a) preço realizado no servidor — o painel lê daqui, não da memória da sessão.
+func RecentSoldPrices(itemID : int, limit : int) -> Array[Dictionary]:
+	return ahService.RecentSoldPrices(itemID, limit)
+
+func RecentSoldSummary(itemID : int, limit : int) -> Dictionary:
+	return ahService.RecentSoldSummary(itemID, limit)
+
+# (c) ordem de compra com gold em escrow, cancelamento e lista da própria conta.
+func PlaceBuyOrder(buyerChar : int, itemID : int, count : int, unitPrice : int) -> int:
+	return ahService.PlaceBuyOrder(buyerChar, itemID, count, unitPrice)
+
+func CancelBuyOrder(charID : int, orderID : int) -> bool:
+	return ahService.CancelBuyOrder(charID, orderID)
+
+func BuyOrdersFor(charID : int, limit : int) -> Array[Dictionary]:
+	return ahService.BuyOrdersFor(charID, limit)
+
+func BuyOrderCount(accountID : int) -> int:
+	return ahService.BuyOrderCount(accountID)
+
 func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : int) -> int:
 	return ahService.ListItemForSale(sellerChar, itemID, count, priceGold)
 
@@ -727,10 +692,17 @@ func TickTournaments() -> Dictionary:
 	return tournamentArenaService.TickTournaments()
 
 func ReconcileDaily() -> int:
-	return tournamentArenaService.ReconcileDaily()
+	return tournamentArenaService.ReconcileDaily() + int(kernel.ReconcileWalletDaily().get("total", 0))
 
+# O job diário (SQLBackups → Launcher.Economy.RunReconcileJob). A perna de
+# carteira entra na MESMA linha de `reconcile_run` que a arena abriu hoje — o
+# painel lê `divergences`, e duas corridas no mesmo dia inventariam um reconciliar que não houve.
 func RunReconcileJob() -> int:
-	return tournamentArenaService.RunReconcileJob()
+	var arenaDivergences : int = tournamentArenaService.RunReconcileJob()
+	var walletDivergences : int = int(kernel.ReconcileWalletDaily().get("total", 0))
+	if walletDivergences > 0:
+		Launcher.SQL.ExecuteBindings("UPDATE reconcile_run SET divergences = divergences + ? WHERE id = (SELECT MAX(id) FROM reconcile_run);", [walletDivergences])
+	return arenaDivergences + walletDivergences
 
 # ------------------------------------------------------------------ conquistas + R1 referral (Fatia 10 -> CommunityService.gd)
 func AchievementProgress(accountID : int, entry : Dictionary) -> int:

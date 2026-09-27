@@ -22,7 +22,13 @@ func AddNotification(notif : String, delay : float = 5.0):
 		if not timer.is_stopped():
 			timer.stop()
 		show()
-		label.text = "[center]%s[/center]" % notif
+		# OPS-5 (AUDITORIA_2026-09-27 §UX) + contrato §13 deste round: o toast é o
+		# último lugar onde um código cru pode aparecer. `PlayerReasons.ToToast`
+		# traduz pelo catálogo (`reason/<token>`) e, sem linha no catálogo, degrada
+		# para a genérica localizada registrando o código bruto no log do operador
+		# — nunca cospe o token na tela. O `Localizer` não resolve isto: ele traduz
+		# `Control.text` por igualdade exata, e o toast é sempre uma string formatada.
+		label.text = "[center]%s[/center]" % PlayerReasons.ToToast(notif)
 		update_minimum_size()
 		timer.start(delay)
 		Animate(1.0, openSpeed)

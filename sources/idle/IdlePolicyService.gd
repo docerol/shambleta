@@ -38,6 +38,21 @@ static func AutoFarmOnLogin(charID : int, player : PlayerAgent) -> bool:
 	var char : Dictionary = sql.GetCharacter(charID)
 	if char.is_empty():
 		return false
+	# P2-retenção (AUDITORIA_2026-09-27 §6 — "sem streaks em lugar nenhum"):
+	# este é o único funil de login server-side do char vivo (chamado por
+	# Server.ConnectCharacter depois do settle), então é aqui — e só aqui —
+	# que o dia do streak carimba. O dia é ShopDay do relógio do servidor;
+	# nada vem do cliente. Recusar o registro nunca segura o login.
+	var accountID : int = int(char.get("account_id", 0))
+	var streak : Dictionary = StreakService.RecordLogin(charID, accountID, player.stat)
+	# O pagamento tem que ser VISTO no mesmo evento em que o servidor o concede:
+	# a linha do ouro sai do resultado REAL do `RecordLogin` e o estado da
+	# superfície é RELIDO do banco (`View`, transação já fechada) — nunca um
+	# número que o cliente invente. `PeerUnknownID` é agente de sim/headless.
+	if player.peerID != NetworkCommons.PeerUnknownID:
+		if int(streak.get("reward", 0)) > 0:
+			Network.CommandFeedback(StreakService.RewardLine(int(streak.get("streak", 0)), int(streak.get("reward", 0)), int(streak.get("best", 0))), player.peerID)
+		Network.StreakState(StreakService.View(charID), player.peerID)
 	var zone : int = int(char.get("farm_zone", 0) if char.get("farm_zone", 0) != null else 0)
 	if zone <= 0:
 		sql.SetCharacterFarmZone(charID, 1)
@@ -165,22 +180,22 @@ static func _Attach(player : PlayerAgent, map : WorldMap, instID : int, zoneID :
 	if currentInst == null or not (currentInst is WorldInstance) or (currentInst as WorldInstance).id != instID:
 		Launcher.World.Warp(player, map, pos, ActorCommons.Direction.UNKNOWN, instID)
 
-	# P3 — escalabilidade: farm zones usam ZonePolicy para batching (O(1) por
-	# zona em vez de O(N) por player). ZonePolicy herda IdlePolicy, então a
-	# configuração de formação (loadout/potion) é copiada do policy base.
-	if instID >= ZoneInstanceBase:
-		var zonePolicy : ZonePolicy = ZonePolicy.new()
-		zonePolicy.Setup(player, zoneID)
-		zonePolicy.skillLoadout = policy.skillLoadout.duplicate()
-		zonePolicy.autoPotionPct = policy.autoPotionPct
-		zonePolicy.autoPotionItemHash = policy.autoPotionItemHash
-		player.idlePolicy = zonePolicy
-		inst.AttachIdlePolicy(zonePolicy)
-	else:
-		player.idlePolicy = policy
-		inst.AttachIdlePolicy(policy)
+	# P3 — escalabilidade (reescrita por medida, 2026-09-27): aqui existia um ramo
+	# que aloca uma `ZonePolicy` "para batching O(1) por zona". Medido em
+	# `tests/perf_baseline.gd`, o batching não existia: `AttachPolicy`/
+	# `DetachPolicy`/`policies` não tinham UM chamador em sources/ nem tests/, o
+	# Tick extra só varria um array permanentemente vazio (+0,112 a +0,124 µs por
+	# passo de física por jogador farmanco — 7,4 µs/s de CPU a 60 Hz, ~1,4 ms/s com
+	# 200 farmers) e o attach pagava uma segunda política por cima da `policy` base
+	# que este próprio `_Attach` tinha acabado de criar: 10,09 µs e 2 objetos por
+	# attach contra 3,36 µs e 1 objeto na forma direta. O batching real sempre
+	# esteve um nível acima: `WorldInstance.idlePolicies` É a lista da zona, e
+	# `WorldInstance._physics_process` dá um Tick por política ali. Uma política por
+	# jogador, anexada à zona, é o que a arquitetura descreve agora.
+	player.idlePolicy = policy
+	inst.AttachIdlePolicy(policy)
 
-	Util.PrintLog("Idle", "Player %s is now farming zone %d on instance %d (ZonePolicy=%s)" % [player.nick, zoneID, instID, str(instID >= ZoneInstanceBase)])
+	Util.PrintLog("Idle", "Player %s is now farming zone %d on instance %d" % [player.nick, zoneID, instID])
 	return true
 
 static func StopIdleSession(player : PlayerAgent):

@@ -20,6 +20,85 @@ const ReportWindowSec : int = 600
 const ReasonMax : int		= 200
 const ExcerptMax : int		= 240
 
+# SOM-IDLE social (auditoria 2026-09-27 §SOCIAL "chat sem canal de guild"): o
+# canal de guild é um namespace no MESMO canal por string que LOCAL/GLOBAL/whisper
+# já usam no cliente (Chat.gd cria aba para qualquer nome além dos fixos). Um canal
+# de guild é "guild:<nome-da-guild>". Aqui vive a decisão de roteamento (reconhecer
+# o prefixo, extrair o nome, enumerar e FANAR); `Server.TriggerChat` tem a linha que
+# chama FanoutGuildChat, porque Server é o único chamador do primitivo de envio.
+# Antes dessa linha o ramo não existia: a mensagem caía no `else` de whisper, não
+# reach ninguém e o painel ainda dizia "Sent to guild channel." — um canal mentiroso.
+const GuildChannelPrefix : String	= "guild:"
+
+# É canal de guild? O roteador do Server usa isto antes de tratar o nome como
+# LOCAL/GLOBAL/whisper.
+static func IsGuildChannel(channel : String) -> bool:
+	return channel.begins_with(GuildChannelPrefix)
+
+# Nome da guild embutido no canal ("guild:Foo" → "Foo"); vazio se não for guild.
+static func GuildNameOf(channel : String) -> String:
+	if not IsGuildChannel(channel):
+		return ""
+	return channel.substr(GuildChannelPrefix.length())
+
+# Monta o canal a partir do nome da guild (lado do painel/botão).
+static func GuildChannelName(guildName : String) -> String:
+	return GuildChannelPrefix + guildName.strip_edges()
+
+# Destinatários de um chat de guild: os peers conectados dos membros da guild de
+# quem fala, INCLUINDO o próprio falante — quem escreve precisa ver a própria linha
+# no canal (é o comportamento do ramo de whisper, que ecoa para os dois lados).
+# `Server.TriggerChat` chama FanoutGuildChat abaixo, que consome esta lista.
+# Devolve [] se o falante não tem guild, se a Economy não montou ou se nenhuma
+# sessão dos membros está viva.
+static func ResolveGuildPeers(senderAccount : int) -> Array:
+	var peers : Array = []
+	if senderAccount <= 0:
+		return peers
+	var economy : EconomyService = Launcher.Economy if Launcher != null else null
+	if economy == null:
+		return peers
+	var guildID : int = economy.GetGuildForAccount(senderAccount)
+	if guildID == 0:
+		return peers
+	for memberAccount in economy.guildService.GetMemberAccounts(guildID):
+		var accID : int = int(memberAccount)
+		var peerID : int = int(Peers.accounts.get(accID, NetworkCommons.PeerUnknownID))
+		if peerID != NetworkCommons.PeerUnknownID and Peers.peers.has(peerID):
+			peers.append(peerID)
+	return peers
+
+# Nome REAL da guild do account (estado autoritativo — nunca o que veio no pacote).
+static func GuildNameForAccount(accountID : int) -> String:
+	if accountID <= 0:
+		return ""
+	var economy : EconomyService = Launcher.Economy if Launcher != null else null
+	if economy == null:
+		return ""
+	var guildID : int = economy.GetGuildForAccount(accountID)
+	if guildID == 0:
+		return ""
+	return str(economy.GetGuild(guildID).get("name", ""))
+
+# Difusão do chat de guild: UMA chamada `ChatPlayer` por sessão resolvida — o mesmo
+# primitivo do ramo de whisper, com o mesmo `channel` para todos, para que a aba do
+# canal seja a mesma em cada cliente. O teto de tamanho (ClipChat) e o mute são
+# cobrados ANTES, no roteador do Server, e valem daqui: quem passa por aqui já é uma
+# linha autorizada. Devolve quantas sessões receberam; 0 é falha real de entrega
+# (ninguém da guild online), não sucesso silencioso. O canal entregue é sempre o
+# canônico da guild de quem fala: um cliente que escreve "guild:Rival" não fabrica
+# aba de outra guild na tela dos outros — o namespace vem do estado autoritativo.
+static func FanoutGuildChat(senderAccount : int, senderNick : String, channel : String, senderRID : int, text : String) -> int:
+	var guildName : String = GuildNameForAccount(senderAccount)
+	if guildName.is_empty():
+		return 0
+	var canonical : String = GuildChannelName(guildName)
+	var delivered : int = 0
+	for entry in ResolveGuildPeers(senderAccount):
+		Network.ChatPlayer(canonical, senderNick, text, senderRID, int(entry))
+		delivered += 1
+	return delivered
+
 static var muted : Dictionary[int, int] = {}
 static var log : Array[Dictionary] = []
 

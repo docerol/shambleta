@@ -29,13 +29,39 @@ services:
         SHAMBLETA_SERVER_ADDRESS: ${SHAMBLETA_SERVER_ADDRESS:-}
         SHAMBLETA_SERVER_PORT: ${SHAMBLETA_SERVER_PORT:-0}
     restart: unless-stopped
+    # PORQUÊ só reserva, sem teto: este é o serviço que serve o primeiro load de
+    # ~35 MiB (deploy/WEB_SLIM.md:69) e não medimos nginx aqui (a máquina do
+    # gate não tem docker). Teto sem medida vira causa de indisponibilidade — o
+    # OOM-kill cairia em cima da única porta de entrada do jogo. Pendência de
+    # lançamento: rodar `docker stats` numa semana de beta e transformar a
+    # reserva em limite com o número medido (deploy/OPS_RUNBOOK.md §4).
+    mem_reservation: 64M
+    healthcheck:
+      # O probe anterior (o HEALTHCHECK da imagem, deploy/web/Dockerfile:50) era
+      # `wget -qO- http://127.0.0.1/` — e `location /` termina em
+      # `try_files $uri $uri/ /index.html` (deploy/web/nginx.conf:194), então
+      # QUALQUER caminho devolve 200: o check não conseguia falhar, nem com o
+      # html/ vazio de build, nem com a landing page no lugar do jogo. Aqui o
+      # probe exige o marcador do export no corpo realmente servido:
+      # `src="index.js"` existe em build/Web/index.html (o shell do Godot) e não
+      # existe em deploy/web/landing/index.html. Continua sem tocar no upstream:
+      # o `web` não pode ficar unhealthy por culpa do companion (ver
+      # depends_on abaixo). A porta é a que o nginx binda (`listen 80;` em
+      # deploy/web/nginx.conf:31) e 127.0.0.1 porque `listen 80;` é IPv4.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/index.html | grep -q 'index\\.js'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       game:
         condition: service_healthy
       # O nginx deste serviço é o único caminho de entrada do companion (checkout
       # do browser + webhook do provedor). service_started basta: o nginx resolve
       # o upstream por resolver/variável a cada request, então um companion ainda
-      # esquentando responde 502 em vez de derrubar o `web` no boot.
+      # esquentando responde 502 em vez de derrubar o `web` no boot. Com o
+      # healthcheck próprio do companion (abaixo), a saúde dele é alertável sem
+      # amarrar o site estático ao destino do dinheiro.
       companion:
         condition: service_started
 
@@ -44,6 +70,31 @@ services:
       context: .
       dockerfile: deploy/server/Dockerfile
     restart: unless-stopped
+    # O teto de memória existe para proteger o HOST, não o jogo: SIGKILL num
+    # processo que é o único writer do SQLite custa até `BackupPlayersSec` = 600 s
+    # de ouro que só existe em memória (sources/sql/SQLCommons.gd:11; o efeito é o
+    # §7.1 da AUDITORIA_2026-09-27) e deixa `-wal` órfão (medido: 1.8 MiB de
+    # testing.db-wal com zero jogadores). Por isso o limite é ~3x o piso medido,
+    # não um número apertado:
+    #   piso medido nesta máquina: 460 MiB RSS, server headless, 0 jogadores, 30 s
+    #   (ver deploy/OPS_RUNBOOK.md §4 pelo comando de reprodução).
+    mem_limit: 1536M
+    mem_reservation: 640M
+    # O loop principal é um só e anda a 30 FPS (sources/launcher/LauncherCommons.gd:19
+    # ServerMaxFPS), ou seja, ~1 core em runtime; o segundo core cobre o boot
+    # (migrations + mundo, que tem de caber no start_period de 40 s abaixo) e a
+    # thread do worker de backup (sources/sql/SQLBackups.gd:183).
+    cpus: "2"
+    # 75 s = 30 s + 15 s dos avisos de drain (sources/world/ShutdownCanary.gd:10-13)
+    # + até 2 s do join do worker (`BackupCheckIntervalSec`, sources/sql/SQLCommons.gd:10
+    # lido em sources/sql/SQLBackups.gd:172-176) + folga de fsync no `db.close_db()`
+    # (sources/sql/SQL.gd:1562-1569). HONESTO: o grace NÃO fecha o banco por
+    # conta própria — nada no código trata SIGTERM e foi medido: `kill -TERM` no
+    # server headless sai com 143 sem nenhum teardown. Quem fecha o SQLite
+    # direito é o caminho do canary (tocar `user://canary` =
+    # /data/.local/share/Shambleta/canary), que derruba os jogadores e chama
+    # Launcher.Quit(). Procedimento em deploy/OPS_RUNBOOK.md §3.
+    stop_grace_period: 75s
     healthcheck:
       # P1 Deploy / Performance: healthcheck de produção confirma estabilidade da sessão.
       # SOM-IDLE L1: forma CMD (lista) não interpreta "||" nem "exit" — isso era
@@ -51,7 +102,12 @@ services:
       # MetricsServer (127.0.0.1:9400, servido pelo próprio processo do game).
       # start_period cobre o boot (migrations + mundo), que é quando o probe
       # deliberadamente responde 503.
-      test: ["CMD", "curl", "-fsS", "http://localhost:9400/healthz"]
+      # 127.0.0.1 literal, não `localhost`: o MetricsServer binda SOMENTE IPv4 em
+      # 127.0.0.1 (sources/system/MetricsServer.gd:22 BindAddress, porta em :21
+      # DefaultPort) — com `localhost` e `::1` em /etc/hosts o primeiro try é
+      # connection refused. A porta 9400 é conferida contra o código por
+      # `scripts/check_compose.sh`, junto com as demais.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9400/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -82,25 +138,65 @@ services:
       # ledger. Sem a env, o relógio continua rodando e não faz nada.
       SHAMBLETA_ENABLE_SEASONS: "1"
       # Diretório offsite de backups (best-effort, verificado com restore probe).
-      # Aponte para uma montagem persistente separada (ex.: volume offsite).
-      SHAMBLETA_OFFSITE_BACKUPS: ${SHAMBLETA_OFFSITE_BACKUPS:-}
+      # Default LIGADO apontando no volume dedicado abaixo: antes era `${...:-}`
+      # vazio, e vazio desliga o push inteiro (`GetOffsiteBackupPath` devolve ""
+      # → `PushOffsite` sai na primeira linha, sources/sql/SQLCommons.gd:99-100 e
+      # sources/sql/SQLBackups.gd:37-38). Sobrescreva com um mount NFS/S3-fuse
+      # real para sair do mesmo host — aqui o ganho é sobreviver ao container e a
+      # um `docker compose down -v` acidental não levar as duas cópias juntas.
+      SHAMBLETA_OFFSITE_BACKUPS: ${SHAMBLETA_OFFSITE_BACKUPS:-/data-backups}
     volumes:
-      # live.db + sql-backups ficam aqui (user:// com HOME=/data).
+      # live.db + sql-backups ficam aqui (user:// com HOME=/data →
+      # /data/.local/share/Shambleta/, layout conferido por
+      # tests/deploy_ops_test.gd). ATENÇÃO: é por isto que o backup nasce
+      # DENTRO do volume do banco — `GetBackupPath()` é `user://sql-backups/`
+      # (sources/sql/SQLCommons.gd:8 + sources/system/Path.gd:55).
       - game-data:/data
-      # Offsite: segunda montagem só se SHAMBLETA_OFFSITE_BACKUPS for setado.
-      # - game-offsite:/data-offsite
+      # Segunda cópia em volume próprio: `docker compose down -v`, um rebuild com
+      # `-v` ou um rm -rf no /data não podem apagar o histórico e o banco no mesmo
+      # golpe. O worker copia para cá e ancora com `VerifyBackupRestorable` antes
+      # de reportar sucesso (sources/sql/SQLBackups.gd:43-50).
+      - game-backups:/data-backups
 
   companion:
     build:
       context: .
       dockerfile: deploy/companion/Dockerfile
     restart: unless-stopped
+    healthcheck:
+      # Não existia: o `/health` do companion (companion/server.py:1167-1171) já
+      # respondia 200 `{"ok": true, "pending": N}` e ninguém probeava — ou seja,
+      # a frente do dinheiro podia estar em crash-loop e o único sintoma era
+      # webhook 502 no nginx. É um probe honesto: a rota abre a MESMA conexão
+      # SQLite do grant, então 200 quer dizer "banco certo e alcançável", não
+      # apenas "processo vivo". Porta 8901 = `EXPOSE 8901` + `--port 8901` do CMD
+      # (deploy/companion/Dockerfile:26,41), bind 0.0.0.0 (mesmo arquivo:34), e
+      # busybox wget sai !=0 em 4xx/5xx. O timeout é 6 s, acima do
+      # `PRAGMA busy_timeout=5000` (companion/server.py:841): um lock de WAL tem
+      # de esperar, não ficar unhealthy.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8901/health"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 15s
+    # Piso medido nesta máquina: 31 MiB RSS, ocioso, sem carga (comando em
+    # deploy/OPS_RUNBOOK.md §4). É stateless entre requests (cada request abre a
+    # própria conexão), então OOM aqui não perde dinheiro: o provedor re-tenta o
+    # webhook e a idempotência do grant decide o resto. 256 M = ~8x o piso, que é
+    # a conta do ThreadingHTTPServer (1 thread por request) com corpo de webhook
+    # em memória. cpus 0.5: o único CPU-bound é o HMAC + re-fetch por request.
+    mem_limit: 256M
+    mem_reservation: 64M
+    cpus: "0.5"
     depends_on:
       # O companion abre o SQLite do game no boot e sai com exit 2 se o arquivo
       # não existe. Num volume novo isso aconteceria antes do game criar live.db
       # — crash-loop exatamente na fronteira do dinheiro. service_healthy garante
       # que o banco já está de pé (e na porta do healthcheck real) antes de escutar
       # webhook.
+      # (exit 2 conferido nesta máquina: `python3 companion/server.py --db
+      # /tmp/nao-existe.db --port 8940 ...` → "database not found", exit=2 — o
+      # `companion/server.py:2032-2034` que este comentário afirma.)
       game:
         condition: service_healthy
     environment:
@@ -127,14 +223,102 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    # Reserva sem teto, de propósito: é binário de terceiro, não medimos aqui e a
+    # falha dele (túnel derrubado) é justamente o que um OOM-kill causaria. Só o
+    # `depends_on` curto (service_started): o túnel não tem nada que probear — a
+    # imagem não traz shell nem wget, então healthcheck aqui seria um check que
+    # falha por falta de ferramenta, não por defeito (verificação em
+    # deploy/OPS_RUNBOOK.md §2, que mede o túnel por fora).
+    mem_reservation: 32M
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN:-}
     depends_on:
       - game
     command: tunnel run
 
+  # ------------------------------------------------------------------ observação
+  # O `deploy/alerts.rules.yml` existe desde a AUDITORIA §18 para que
+  # `grant_queue_pending > 0` por 10 min pagine (`:severity: page`) — mas NINGUÉM
+  # carregava o arquivo: `grep -nE "prometheus|rule_files|alertmanager"` nos
+  # compose desta pasta não achava um serviço só que fosse. Regra de alerta sem
+  # evaluator é texto morto: não é alerta quebrado, é alerta absurdo — dispara
+  # nunca e ausência de incêndio é indistinguível de ausência de fogo. Os dois
+  # serviços abaixo são o leitor faltante; o gate (`scripts/check_compose.sh`)
+  # agora exige que a referência exista E que todo serviço nomeado por ela exista.
+  prometheus:
+    build:
+      context: .
+      dockerfile: deploy/monitoring/prometheus.Dockerfile
+    # O /metrics do jogo binda SÓ 127.0.0.1:9400, sem auth e sem TLS
+    # (sources/system/MetricsServer.gd:21-22). De outro container isso é
+    # inalcançável — não há firewall a liberar. Compartilhar o namespace do `game` é
+    # o que torna o loopback do jogo o loopback do scraper, sem mexer no bind
+    # (que é escolha de segurança do arquivo de outro dono). Consequências, todas
+    # deliberadas: o scraper herda o ciclo de vida do jogo (game morto ⇒ scrape cai
+    # junto ⇒ `ServerSemMetrica` dispara, que é o certo), a porta 9090 é
+    # alcançável só por dentro do host, e `network_mode` proíbe `networks`/`ports`
+    # neste bloco — por isso nenhum dos dois aparece aqui.
+    network_mode: service:game
+    restart: unless-stopped
+    # Binário com `/bin/sh`+`wget` (variante -busybox do Dockerfile): o probe pode
+    # existir de verdade. A porta 9090 é conferida contra o `--web.listen-address`
+    # da própria linha abaixo.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.listen-address=:9090
+      # 15 dias cobrem o `for: 6h` das regras e uma semana de beta com folga, e é o
+      # bastante para responder "desde quando isso está doendo?" sem disco infinito.
+      # O tamanho real não foi medido aqui — [NÃO MEDIDO]; ver OPS_RUNBOOK §4.2.
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      # TSDB em volume nomeado: restart do container não apaga o histórico que as
+      # regras de `for:`/`avg_over_time` precisam para decidir.
+      - prometheus-data:/prometheus
+    # Só `service_started`: com `network_mode: service:game` o namespace já é o do
+    # game, e `service_healthy` criaria um ciclo de espera inútil (o probe de 9090
+    # depende deste container, não do contrário).
+    depends_on:
+      game:
+        condition: service_started
+    mem_reservation: 128M
+
+  alertmanager:
+    build:
+      context: .
+      dockerfile: deploy/monitoring/alertmanager.Dockerfile
+    restart: unless-stopped
+    # Sem healthcheck: a imagem oficial do Alertmanager não traz shell nem wget
+    # (conferido: não existe variante -busybox do `prom/alertmanager`), então um
+    # probe aqui seria o ruído que o `cloudflared` acima evita de propósito. Vive
+    # verificável por fora: `docker compose exec game curl -s
+    # http://alertmanager:9093/api/v2/alerts` (comando em OPS_RUNBOOK §2).
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.listen-address=:9093
+      - --storage.path=/alertmanager
+    volumes:
+      - alertmanager-data:/alertmanager
+    depends_on:
+      - prometheus
+    mem_reservation: 32M
+
 volumes:
   game-data:
+  # Backup em volume próprio: é a única coisa que sobrevive ao ciclo de vida do
+  # container do jogo. O gate `scripts/check_compose.sh` exige que ele exista e
+  # que não seja o mesmo volume do banco.
+  game-backups:
+  # Série temporal das métricas (rules + alertas): sem isto, um rebuild do
+  # container apaga o histórico que responde "desde quando".
+  prometheus-data:
+  alertmanager-data:
 
   # Cloudflared tunnel — expõe o jogo via WSS sem abrir portas no firewall da VPS.
   # Requer token do Cloudflare Zero Trust (CLOUDFLARED_TOKEN).

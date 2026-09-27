@@ -1,8 +1,14 @@
 # Runbook de deploy — Coolify (beta fechado web)
 
-Stack: 3 serviços em `deploy/docker-compose.yml` — `web` (client Godot Web +
+Stack: 6 serviços em `deploy/docker-compose.yml` — `web` (client Godot Web +
 nginx), `game` (server headless Godot, WebSocket plain :6108), `companion`
-(webhooks de pagamento → `grant_queue`).
+(webhooks de pagamento → `grant_queue`), `cloudflared` (túnel opcional; ele é um
+serviço declarado, então um `docker compose up -d` sem removê-lo pede o token do
+túnel), `prometheus` (scrapeia o `/metrics` do jogo — compartilha o namespace de
+rede do `game` para alcançar o loopback 127.0.0.1:9400 — e avalia as regras de
+alerta) e `alertmanager` (roteia esses alertas por severidade: page e ticket). A
+contagem é conferida por `scripts/check_doc_drift.sh` contra o `services:`
+do compose — não é número copiado de doc antiga.
 
 ```
 Browser ──wss 443──▶ Coolify proxy (TLS) ──ws──▶ game:6108
@@ -27,9 +33,12 @@ plain em `:6108` — **não precisa de `server.crt`/`server.key`** no container.
 No ambiente do compose, defina:
 - `SHAMBLETA_PROXY_TLS=1`
 
-O server loga:
+O server loga (o grupo é `Server`, porque a linha sai de `Util.PrintLog("Server", ...)`
+em `sources/network/server/Server.gd:1764` — o formato `[msec][Grupo]` é de
+`sources/util/Util.gd:5-6`; um `grep '\[TLS\]'` no log volta vazio e você conclui
+que o modo proxy não pegou, quando pegou):
 ```
-[TLS] TLS terminated upstream (reverse proxy) — binding plain WebSocket
+[Server] TLS terminated upstream (reverse proxy) — binding plain WebSocket
 ```
 
 ### Modo alternativo: TLS direto
@@ -104,7 +113,15 @@ public bind`. Veja `deploy/TLS.md` para o guia completo.
      (`sources/network/client/Client.gd`), e o nginx do `web` não faz upgrade — no
      outro caso o handshake recebe o `index.html`. A suíte amarra isto nos dois
      arquivos de deploy (`SuiteDeployMode`).
-   - `SHAMBLETA_OFFSITE_BACKUPS` = vazio (ou caminho de montagem offsite).
+   - `SHAMBLETA_OFFSITE_BACKUPS` = **deixe como o compose já define: `/data-backups`**
+     (`deploy/docker-compose.yml`, `SHAMBLETA_OFFSITE_BACKUPS: ${...:-/data-backups}`).
+     **Não** se põe vazio: vazio desliga o push inteiro — `GetOffsiteBackupPath()`
+     devolve `""` e `PushOffsite()` sai na primeira linha
+     (`sources/sql/SQLCommons.gd:88`, `sources/sql/SQLBackups.gd:36-38`) — e o gate
+     `scripts/check_compose.sh` recusa compose com este valor diferente de
+     `/data-backups`, porque o `/data-backups` do default é justamente o mount do
+     volume `game-backups`. Só troque quando houver montagem offsite real (NFS /
+     S3-fuse) no serviço `game`, e aponte a env para ela.
    - `SHAMBLETA_AD_STUB` = **não vai no compose** (C2, auditoria 2026-09-24). É o
      interruptor do servidor para "acredito na afirmação de exibição do client":
      ligado, `MintAdSlot` passa a reservar a cota do placement e devolver o nonce
@@ -170,7 +187,9 @@ reset de senha não envia e-mail.
 4. Antes do corpo assinado, prove que a rota de entrada existe — o companion não
    tem porta publicada, então quem responde é o proxy do `web`. Um `POST` em
    `/checkout/intents` sem token deve devolver **JSON** do companion (`401`,
-   `missing auth_token`); se vier o 404 em HTML do nginx, o proxy não está no ar e
+   `{"error": "missing_token"}` — é a string que o companion devolve, não uma
+   frase legível; ver `_resolve_checkout_account` em `companion/server.py:1508`);
+   se vier o 404 em HTML do nginx, o proxy não está no ar e
    nenhuma compra começa:
    ```bash
    curl -i -X POST https://seudominio.com/checkout/intents \
@@ -193,26 +212,28 @@ reset de senha não envia e-mail.
 
 | Tarefa | Como |
 |---|---|
-| Backup | Automático: diário local em `/data/.../sql-backups/daily/` + offsite (se configurado) com **restore probe** embutido. |
-| Reconciliação | Diária pós-backup (`RunReconcileJob`); divergências aparecem em `/metrics` → `reconcile.divergences`. |
+| Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLCommons.gd:32` + `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
+| Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:21`), disparado em `sources/sql/SQLBackups.gd:121-125` (o porquê do desacoplamento está no comentário `:111-120`) — saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
 | Wipe de progresso (pré-beta) | migration `014_reset_progress_idle` ou reset do volume `game-data` antes dos convites. |
 | Logs do server | Logs do container `game` (Util.PrintLog vai ao stdout). |
 | Atualizar jogo | Push no branch → rebuild (client web é imutável por build; o server ignora clientes com protocol version diferente — força refresh). |
 
 ## 6. Limitações conhecidas (beta)
 
-- **Peso do primeiro load**: **36 MiB gzip** medidos no export local de
-  2026-09-25 (`scripts/export_web.sh`, Godot 4.7.2, template dlink): engine
-  12 MiB (`index.side.wasm` 10,0 + `index.wasm` 0,6 + `libgdsqlite` 0,7 +
-  `libsentry` 0,4 + `index.js` 0,4 + `sentry-bundle.js` 0,03), `.pck` 21 MiB,
-  shell 2,7 MiB (o splash `index.png` sozinho é 2,4). A **meta de <25 MB perdeu a
-  causa**: ela nasceu com um culpado nomeado — `data/music` (26 MB embutidos no
-  pck) — e esse corte já foi executado (`deploy/WEB_SLIM.md`, −44%; a música saiu
-  do preset Web). Não existe limite técnico de tamanho para instalar/abrir o
-  build no navegador, então 25 MB passa a ser meta de pipeline de arte pós-beta
-  (re-compressão de texturas, exige QA visual — WEB_SLIM §"Para chegar a <25 MB"),
-  não portão de lançamento. O que vale para o beta é o aviso: **~36 MiB** de
-  download na primeira visita, avise os testers.
+- **Peso do primeiro load**: **35 MiB gzip** (`36.734.788 B`, 18 arquivos) medidos
+  no export local de 2026-09-26 (`scripts/export_web.sh`, template 4.7 dlink;
+  `deploy/WEB_SLIM.md` §"Corte 2026-09-26") — engine 12 MiB + `.pck` 20 MiB + shell
+  3 MiB, sendo o splash `index.png` sozinho ~2,4 MiB do shell. A janela anterior,
+  2026-09-25, media **36 MiB** (`37.723.399 B`) e é a que aparece nas tabelas de
+  "antes/depois" do WEB_SLIM — não são duas verdades: é o mesmo número uma
+  medição depois do corte de `tests/` e dos logos de imprensa. A **meta de <25 MB
+  perdeu a causa**: ela nasceu com um culpado nomeado — `data/music` (26 MB
+  embutidos no pck) — e esse corte já foi executado (`deploy/WEB_SLIM.md`, −44%; a
+  música saiu do preset Web). Não existe limite técnico de tamanho para
+  instalar/abrir o build no navegador, então 25 MB passa a ser meta de pipeline de
+  arte pós-beta (re-compressão de texturas, exige QA visual — WEB_SLIM §"Para
+  chegar a <25 MB"), não portão de lançamento. O que vale para o beta é o aviso:
+  **~35 MiB** de download na primeira visita, avise os testers.
 - **SQLite compartilhado game+companion** só é válido em single-node (é o
   desenho do companion v0). Multi-node/CCU alto → Postgres (ARCHITECTURE §15).
 - `ws.seudominio.com` publica o WebSocket do jogo **atrás do proxy**; nunca

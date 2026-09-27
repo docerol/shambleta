@@ -1,0 +1,54 @@
+# Alertmanager — para onde o `deploy/prometheus.yml` manda o que as regras de
+# `deploy/alerts.rules.yml` avaliaram. Embarcado por `deploy/monitoring/alertmanager.Dockerfile`.
+#
+# Estado honesto: a ROTEAMENTO por severidade está ligado e é conferido por
+# `scripts/check_compose.sh` (toda severidade usada numa regra tem uma rota, e toda
+# rota aponta para um receiver declarado). O DESTINO HUMANO não está: `webhook_configs`
+# abaixo é lista vazia porque preencher é segredo/URL de terceiro (Slack, PagerDuty,
+# webhook do on-call), e o repositório não tem um para apontar — inventar um host
+# deixaria o `page` falando sozinho. Ligar é um passo de deploy, não de código:
+# coloque a URL no arquivo (ou monte um config próprio) e o `severity: page` passa a
+# sair do Prometheus. Enquanto estiver vazio, o que se lê é
+# `docker compose exec game curl -s http://alertmanager:9093/api/v2/alerts` — a alerta
+# dispara, fica visível aqui, e só não chega a um humano (comando em
+# deploy/OPS_RUNBOOK.md §2).
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # `page` e `ticket` são as duas severidades usadas em deploy/alerts.rules.yml;
+  # um alerta sem label de severidade cai no default_receiver e não se perde.
+  group_by: ["alertname", "severity"]
+  group_wait: 1m
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: shambleta-ticket
+  routes:
+    - match:
+        severity: page
+      receiver: shambleta-page
+      # 4h de repeat_interval é pouco para um page não lido: repagina em 30 min.
+      repeat_interval: 30m
+    - match:
+        severity: ticket
+      receiver: shambleta-ticket
+      # Mesmo destino do default abaixo — explícito de propósito para o gate poder
+      # provar totalidade (toda severidade usada em alerts.rules.yml tem rota
+      # própria), em vez de confiar que "o default pega o resto".
+
+inhibit_rules:
+    # Server sem serving já é o sintoma mãe: as regras de fila/reconcile que só
+    # existem porque o processo está de pé não devem pagear junto com ele.
+  - source_match:
+      alertname: ServerSemServing
+    target_match_re:
+      alertname: "GrantQueue.*|Reconcile.*|FilaAntiFraudeAcumulada"
+    equal: ["instance"]
+
+receivers:
+  - name: shambleta-page
+    webhook_configs: []    # ver cabeçalho: sem destino configurado no repositório
+
+  - name: shambleta-ticket
+    webhook_configs: []

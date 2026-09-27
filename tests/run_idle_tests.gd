@@ -223,6 +223,7 @@ func _run_tests():
 		suites.SuiteChatModeration(sql)
 		suites.SuiteLGPD(sql)
 		suites.SuiteRefund(sql)
+		suites.SuiteChargeback(sql)
 		suites.SuiteConcurrency(sql)
 		suites.SuiteOpsA2(sql)
 

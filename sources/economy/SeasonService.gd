@@ -8,6 +8,17 @@ class_name SeasonService
 # helpers raw de EconomyService, então a semântica de locking é 100% idêntica
 # à de antes da extração. Os wrappers públicos ficam em EconomyService
 # (callers não mudam).
+#
+# OPS-2 (2026-09-27): o catálogo de temporadas saiu do código e foi para
+# `data/conf/seasons.json`, lido por `SeasonConfig` (validação + resolução pura
+# por timestamp). Abrir temporada é decisão de arquivo, não de GDScript: o
+# relógio de produção abre a vigente e fecha a de rotação quando uma sucessora
+# agendada assume o ar. `season.rules_frozen` guarda o `config_id` da entrada, e
+# linhas antigas (sem `config_id`) continuam válidas — continuam resolvendo para
+# os defaults do catálogo. Com o arquivo ausente/corrompido a abertura é
+# fail-closed (`EnsureSeason` → -1 + `push_error`); fechar e liquidar o que já
+# está no banco segue funcionando, porque dívida com jogador não se nega por typo
+# de agenda. Testes: `tests/season_liveops_test.gd`.
 
 var _eco : EconomyService = null
 
@@ -16,6 +27,32 @@ var _eco : EconomyService = null
 func ActiveSeason() -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT season_id, starts_at, ends_at, rules_frozen, status FROM season WHERE status = 'active' ORDER BY season_id DESC LIMIT 1;", [])
 	return {} if rows.is_empty() else rows[0]
+
+# A linha ativa resolvida na entrada do arquivo (OPS-2). `{}` = "o banco tem uma
+# temporada, o calendário não declara nenhuma para ela" — que é o estado de toda
+# linha anterior ao OPS-2, e significa "usa os defaults do catálogo", não
+# "temporada inexistente".
+func ActiveSeasonEntry() -> Dictionary:
+	return SeasonConfig.EntryForSeasonRow(SeasonConfig.Entries(), ActiveSeason())
+
+# Leitura de agenda (sem escrita): o que está no ar, quando fecha, o que vem
+# depois e o que está travando a abertura. É o que um `/season agenda` ou o
+# painel do operador precisa responder sem SQL na mão.
+func SeasonAgenda() -> Dictionary:
+	var now : int = SQLCommons.Timestamp()
+	var entries : Array = SeasonConfig.Entries()
+	var errors : PackedStringArray = SeasonConfig.Errors()
+	var active : Dictionary = ActiveSeason()
+	return {
+		"ok" = errors.is_empty(),
+		"errors" = errors,
+		"now" = now,
+		"active" = active,
+		"config_id" = SeasonConfig.ConfigIDOfRow(active),
+		"scheduled" = SeasonConfig.ResolveAt(entries, now),
+		"next_start" = SeasonConfig.NextScheduledStart(entries, now),
+		"preempts_active" = SeasonConfig.ShouldPreempt(entries, active, now),
+	}
 
 # SOM-IDLE beta fechado (T5): Seasons é pós-lançamento — criação e ciclo de
 # vida ficam TRAVADOS por padrão (qualquer chamada normal, GM ou job, vira
@@ -39,12 +76,23 @@ func CreateSeason(days : int, rules : String = "{}") -> int:
 		return -1
 	if days <= 0 or not ActiveSeason().is_empty():
 		return 0
+	var now : int = SQLCommons.Timestamp()
+	return _CreateSeasonWindow(now, now + days * 86400, rules)
+
+# Meia pública da abertura com janela explícita: `starts_at` é o instante em que
+# o relógio abre (nunca o `start_unix` do calendário — uma linha nascida no
+# passado faria `SnapshotSeasonSpend` puxar gasto de antes da temporada para
+# dentro da apuração) e `ends_at` é o do calendário quando a temporada tem janela
+# nominal. É o que `EnsureSeason()` usa; `CreateSeason(days)` continua a rota do
+# `/season create <dias>` e das suítes, com a mesma régua de antes.
+func _CreateSeasonWindow(startsAt : int, endsAt : int, rules : String) -> int:
+	if endsAt <= startsAt:
+		return 0
 	var out : Dictionary = {"id" = 0}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
-		var now : int = SQLCommons.Timestamp()
-		if not sql.db.query_with_bindings("INSERT INTO season (starts_at, ends_at, rules_frozen, status) VALUES (?, ?, ?, 'active');", [now, now + days * 86400, rules]):
+		if not sql.db.query_with_bindings("INSERT INTO season (starts_at, ends_at, rules_frozen, status) VALUES (?, ?, ?, 'active');", [startsAt, endsAt, rules]):
 			return false
 		out["id"] = sql.LastInsertRowIDRaw()
 		return int(out["id"]) > 0):
@@ -78,19 +126,50 @@ func CloseSeason(seasonID : int) -> bool:
 	_eco.settleMutex.unlock()
 	return flipped and not changed.is_empty() and int(changed[0]["c"]) > 0
 
-# ROADMAP_COMERCIAL S2: temporada S1 — regras congeladas desde o dia 1.
-# Respeita a trava do beta (T5): retorna -1 enquanto SeasonsEnabled() for false.
-# Quando habilitada, cria 30 dias com rules_frozen (4 corridas, premiação
-# não-cashable). Idempotente: se já houver temporada ativa, retorna 0.
-# Chamada de produção: o relógio de temporada em `SQLBackups`, logo depois de
-# `TickSeasonLifecycle` fechar/liquidar a vencida — por isso a rotação reusa o
-# MESMO ruleset congelado: o beta promete uma regra só, e ela não muda entre
-# períodos. `rules_frozen` é gravado como prova auditável, não como input de
-# parsing.
+# ROADMAP_COMERCIAL S2 → OPS-2: esta função é a metade "abre" do relógio de
+# produção (`SQLBackups`, logo depois de `TickSeasonLifecycle` fechar/liquidar a
+# vencida) e o nome está amarrado em `SuiteSeasonBootstrap`, então fica. O que
+# ela abre deixou de ser uma S1 hardcoded: desde OPS-2 ela delega a
+# `EnsureSeason()`, que lê a temporada VIGENTE de `data/conf/seasons.json`
+# (janela, duração, tema, trilha do passe, SKU cobrável). Lançar a S2 é anexar
+# uma linha no arquivo — nenhum GDScript, nenhuma migration.
+# Mantém as três regras de antes: -1 com a trava do beta (T5) desligada, 0 se já
+# existe temporada ativa, season_id >0 quando abre.
+# Congelado histórico: a S1 do beta continua descrita em
+# `EconomyCatalog.SeasonS1Rules()` para quem lê a string congelada em linhas
+# antigas. Quem abre temporada gera o equivalente direto da entrada do arquivo
+# (`SeasonConfig.RulesJSONForEntry`), com `config_id` junto.
 func EnsureSeasonS1() -> int:
+	return EnsureSeason()
+
+# Abre a temporada vigente do calendário. Fail-closed por construção: com
+# `seasons.json` ausente/corrompido nada abre (-1 + push_error), porque abrir uma
+# temporada sem regras nem pass validados é prometer premiação que o servidor não
+# sabe entregar. Fechar e liquidar o que já está no banco NÃO passa por aqui —
+# dívida com jogador não se nega por typo de agenda.
+func EnsureSeason() -> int:
+	if not SeasonsEnabled():
+		push_warning("SOM-IDLE Seasons: criação bloqueada no beta (T5)")
+		return -1
 	if not ActiveSeason().is_empty():
 		return 0
-	return CreateSeason(30, EconomyCatalog.SeasonS1Rules())
+	var errors : PackedStringArray = SeasonConfig.Errors()
+	if not errors.is_empty():
+		push_error("Seasons: nenhuma temporada abre com seasons.json inválido (%s)" % "; ".join(errors))
+		return -1
+	var now : int = SQLCommons.Timestamp()
+	var entry : Dictionary = SeasonConfig.EntryToOpen(SeasonConfig.Entries(), now)
+	if entry.is_empty():
+		push_error("Seasons: seasons.json sem entrada vigente para %d — nenhuma temporada abre" % now)
+		return -1
+	var window : Dictionary = SeasonConfig.WindowForEntry(entry, now)
+	if window.is_empty():
+		push_error("Seasons: a janela nominal de %s já venceu — nada a abrir" % SeasonConfig.ConfigID(entry))
+		return -1
+	var created : int = _CreateSeasonWindow(int(window["starts_at"]), int(window["ends_at"]), SeasonConfig.RulesJSONForEntry(entry))
+	if created > 0:
+		Util.PrintLog("Economy", "Season %d (%s) opened from seasons.json: %d dias" % [created, SeasonConfig.ConfigID(entry), (int(window["ends_at"]) - int(window["starts_at"])) / 86400])
+	return created
 
 func SnapshotSeasonPower(seasonID : int, limit : int = 100) -> int:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT char_id, power_score FROM character WHERE power_score > 0 ORDER BY power_score DESC LIMIT ?;", [limit])
@@ -141,7 +220,8 @@ func GetSeasonBoard(seasonID : int, kind : String, limit : int = 20) -> Array[Di
 # Tabela de prêmios em gems por colocação (top-N) para cada corrida (power/spend).
 
 # Relógio de temporada (G1), parte 1 de 2: fecha as vencidas congelando o placar
-# e liquida as fechadas. Quem abre a temporada é `EnsureSeasonS1`, chamado logo
+# (incluindo as adiantadas por preempção do calendário, OPS-2) e liquida as
+# fechadas. Quem abre a temporada é `EnsureSeasonS1`, chamado logo
 # depois pelo mesmo relógio em `SQLBackups` — a separação é de propósito: fechar o
 # que venceu e abrir a sucessora são decisões diferentes, e as suítes que só
 # querem o fechamento (payout, races) não podem ganhar uma temporada ativa como
@@ -159,6 +239,22 @@ func TickSeasonLifecycle() -> Dictionary:
 	var now : int = SQLCommons.Timestamp()
 	for row : Dictionary in Launcher.SQL.QueryBindings("SELECT season_id FROM season WHERE status = 'active' AND ends_at <= ?;", [now]):
 		if CloseSeason(int(row["season_id"])):
+			closed += 1
+	# OPS-2: uma temporada de rotação também sai do ar por preempção — se o
+	# calendário pôs uma sucessora AGENDADA no ar antes do `ends_at` derivado
+	# (duração em dias), a linha em produção é fechada no ponto de troca. Sem
+	# isto a sucessora estrearia atrasada pela sobra do ciclo antigo e as duas
+	# ficariam simultâneas, o que o placar e o passe não modelam.
+	var active : Dictionary = ActiveSeason()
+	if not active.is_empty() and SeasonConfig.ShouldPreempt(SeasonConfig.Entries(), active, now):
+		Util.PrintLog("Economy", "Season %d preemptada pelo calendário de seasons.json em %d" % [int(active["season_id"]), now])
+		CloseSeason(int(active["season_id"]))
+		# Confirma pelo estado observável, não pelo booleano de `CloseSeason`: a
+		# prova de idempotência dele é um `SELECT changes()` que hoje cai numa
+		# conexão de leitura do pool (SQL.gd) e devolve 0 mesmo com o flip
+		# aplicado — contaria `closed = 0` para um fechamento que aconteceu. O
+		# contrato do contador é "não sobrou temporada no ar", e é isso que se lê.
+		if ActiveSeason().is_empty():
 			closed += 1
 	for row : Dictionary in Launcher.SQL.QueryBindings("SELECT season_id FROM season WHERE status = 'closed';", []):
 		var res : Dictionary = SettleSeasonPrizes(int(row["season_id"]))

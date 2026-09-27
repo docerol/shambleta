@@ -6,7 +6,51 @@ extends SceneTree
 
 const BudgetSettleMs: int = 500
 const BudgetZoneCatalogMs: int = 200
-const BudgetSettleP99Ms: int = 200
+# ---------------------------------------------------------------------------
+# Réguas de REGRESSÃO — não cercas de sanidade.
+#
+# A régua anterior era `BudgetSettleP99Ms = 200` contra um p99 medido de 0,52 ms:
+# 332× de folga, e um settle 200× mais lento fechava verde. Trocada por baseline
+# gravado + fator de folga, com os dois impressos no run para o próximo leitor
+# poder conferir sem acreditar em comentário.
+#
+# Baseline gravado (2026-09-27, 09:13): 13 runs consecutivos de
+# `godot --headless --path . -s tests/benchmarks.gd` numa máquina ociosa (12
+# núcleos, load average 0,31 no início da série), **o mais quieto deles** — p50
+# 465 µs, p99 519 µs. A faixa das 13 passadas foi p50 465–475 µs e p99 519–645 µs
+# (1,24× de run a run, e 645 µs é a primeira passada, com cache frio). Recalcule
+# com `godot --headless --path . -s tests/perf_baseline.gd`, que mede, imprime a
+# comparação e audita o fator.
+const BaselineSettleP50Us: int = 465
+const BaselineSettleP99Us: int = 519
+# Folga de 4×: pega um regresso de 5× (p50 2325 µs, p99 2595 µs estouram os tetos
+# de 1860 µs e 2076 µs) e continua abaixo do ruído real da máquina depois de
+# normalizada — ver WorstP99NormalizadoSobCargaUs abaixo.
+const RegressionHeadroom: int = 4
+# O p99 bruto é a cauda, e a cauda é onde a contenção de escalonador aparece: sob
+# 24 processos CPU-bound numa máquina de 12 núcleos o settle p99 medido saltou de
+# 519 µs para 2366 µs sem que uma linha do caminho mudasse. Para não trocar uma
+# régua frouxa por uma régua que flakeia, o gate divide pelo ruído da máquina,
+# medido no mesmo processo por um laço puro de CPU (sem SQL, sem I/O): se o
+# controle inflate, a leitura é corrigida; se só o settle inflate, é o código.
+# 42033 µs é o controle mais quieto já medido nesta máquina: um run ocioso lê
+# 42545–46762 µs, ou 1,00×–1,11× — o crédito de ruído só existe ACIMA do piso
+# ocioso, nunca como desconto sobre ele.
+const BaselineControlUs: int = 42033
+const ControlWork: int = 2000000
+const ControlReps: int = 3
+# Pior p99 NORMALIZADO já medido sob carga hostil nesta máquina (2026-09-27
+# 09:32, 14 processos CPU-bound + um harness godot concorrente, load 6,5): bruto
+# 3098 µs (5,97× o baseline!) com o controle a 1,93× → 1601 µs normalizado. Este
+# número é o que mostra por que a régua divide pelo controle: um teto de 4× batido
+# no p99 bruto teria flakeado aqui (3098 > 2076) sem que o caminho do settle tivesse
+# mudado uma linha. A auto-auditoria abaixo recusa qualquer folga que fique abaixo
+# dele.
+const WorstP99NormalizadoSobCargaUs: int = 1601
+# Cercas de sanidade que ficam, e por quê: o one-shot de 500 ms e as duas leituras
+# ordenadas (50 ms) medem um round trip com cache frio, onde a amostra única é
+# dominada por aquecimento — não há baseline estável para regressar. O que nelas é
+# estrutural (número de queries, transações, tamanho do catálogo) continua exato.
 # Fração tolerada de settles acima de 50 ms. O auto-checkpoint do WAL é caro por
 # natureza (é um fsync do arquivo) e não existe código de jogo que o barateie — o
 # que se pode exigir é a *taxa* do hitch. 2% de 800 iterações são 16; o default do
@@ -29,7 +73,7 @@ const BudgetResourceGrowth: int = 200
 # estaria medindo o cache, não o servidor. 800 crosses a fronteira e devolve o
 # custo real no `max`.
 const LoadProbeIters: int = 800
-const ExpectedZoneCount: int = 24
+const ExpectedZoneCount: int = 27
 # Massa das duas leituras ordenadas: 60 personagens para um LIMIT 50 (a página
 # tem que nascer cheia e disputada) e 200 listings para um LIMIT 20.
 const LbSeedChars: int = 60
@@ -40,6 +84,21 @@ func _initialize():
 
 func _getAutoload(nodeName: String) -> Node:
     return root.get_node_or_null(NodePath(nodeName))
+
+# Laço puro de CPU: mesmo interpretador, nenhum syscall, nenhum SQL. Só serve para
+# dizer "quão ocupada estava esta máquina neste instante".
+var _controlSink: int = 0
+
+func _measureControl() -> int:
+    var best: int = 1 << 60
+    for rep in range(ControlReps):
+        var controlStart: int = Time.get_ticks_usec()
+        var acc: int = 0
+        for i in range(ControlWork):
+            acc = (acc * 31 + 7) & 0x7FFFFFFF
+        _controlSink = acc
+        best = mini(best, Time.get_ticks_usec() - controlStart)
+    return best
 
 func _run_benchmarks():
     print("== Performance Benchmarks ==")
@@ -242,8 +301,9 @@ func _run_benchmarks():
         print("FAIL: save não está numa transação única")
         failures += 1
 
-    # ROADMAP_COMERCIAL S3: load probe real — 200 settles sequenciais no mesmo
-    # char (rewind de 1h no anchor por iteração), P99 medido, gate < 200ms.
+    # ROADMAP_COMERCIAL S3: load probe real — 800 settles sequenciais no mesmo
+    # char (rewind de 1h no anchor por iteração), P50/P99 medidos em µs e julgados
+    # contra o baseline gravado no topo do arquivo (não contra um número redondo).
     # Substitui o print-only anterior; mede latência de transação real.
     sql.AddAccount("bench_load", "testpass", "bench_load@test.local")
     var loadAcct: int = sql.GetAccountID("bench_load")
@@ -260,6 +320,7 @@ func _run_benchmarks():
     var probeQueries: int = 0
     var slowCount: int = 0
     var slowIdx: String = ""
+    var controlBefore: int = _measureControl()
     sql.ResetCounters()
     for i in range(LoadProbeIters):
         sql.UpdateSettleAnchor(loadChar, int(Time.get_unix_time_from_system()) - 3600, 1.0)
@@ -275,6 +336,7 @@ func _run_benchmarks():
     # Contador lido ainda dentro do probe: os `delete_rows` abaixo não passam pelo
     # chokepoint contado, mas ler aqui deixa o número inequívoco.
     probeQueries = sql.QueryCount()
+    var controlAfter: int = _measureControl()
     var probeTx: int = sql.TransactionCount()
     var memAfter: int = int(Performance.get_monitor(Performance.OBJECT_COUNT))
     var resAfter: int = int(Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
@@ -284,16 +346,40 @@ func _run_benchmarks():
     var p50Us: int = probeUs[LoadProbeIters / 2]
     var p99Us: int = probeUs[LoadProbeIters * 99 / 100]
     var maxUs: int = probeUs[LoadProbeIters - 1]
-    print("Load probe: %d settles — p50 %d µs, p99 %d µs, max %d µs (budget p99: %d µs), erros: %d, %d queries, %d tx" % [LoadProbeIters, p50Us, p99Us, maxUs, BudgetSettleP99Ms * 1000, probeErrors, probeQueries, probeTx])
+    # O fator de ruído é o MELHOR controle medido ao redor do probe: crédito só é
+    # dado pela máquina mais quieta adjacente ao probe, nunca pela mais ocupada —
+    # senão "estava tudo rodando" vira licença para ignorar a régua.
+    var loadFactor: float = maxf(1.0, float(mini(controlBefore, controlAfter)) / float(BaselineControlUs))
+    var p50AdjUs: int = int(float(p50Us) / loadFactor)
+    var p99AdjUs: int = int(float(p99Us) / loadFactor)
+    print("Load probe: %d settles — p50 %d µs, p99 %d µs, max %d µs (budget p99: %d µs), erros: %d, %d queries, %d tx" % [LoadProbeIters, p50Us, p99Us, maxUs, BaselineSettleP99Us * RegressionHeadroom, probeErrors, probeQueries, probeTx])
+    print("Régua de regressão do settle: baseline gravado p50 %d µs / p99 %d µs (run mais quieto de 13, máquina ociosa, load 0,31, 12 núcleos, 2026-09-27) × folga %d× → tetos p50 %d µs / p99 %d µs" % [BaselineSettleP50Us, BaselineSettleP99Us, RegressionHeadroom, BaselineSettleP50Us * RegressionHeadroom, BaselineSettleP99Us * RegressionHeadroom])
+    print("   neste run: controle %d/%d µs vs %d µs gravados → máquina a %.2f×; normalizado p50 %d µs (%.2f× o baseline), p99 %d µs (%.2f× o baseline)" % [controlBefore, controlAfter, BaselineControlUs, loadFactor, p50AdjUs, float(p50AdjUs) / float(BaselineSettleP50Us), p99AdjUs, float(p99AdjUs) / float(BaselineSettleP99Us)])
+    print("   rode `godot --headless --path . -s tests/perf_baseline.gd` para recalcular o baseline e auditar o fator")
     print("Load probe hitches: %d de %d settles acima de 50 ms (budget: %d)" % [slowCount, LoadProbeIters, BudgetSlowIterPct * LoadProbeIters / 100])
     if slowIdx != "":
         print("Load probe iterações lentas: %s%s" % [slowIdx, "(truncado em 24) " if slowCount > 24 else ""])
     print("Load probe memória: %d objetos (+%d), %d recursos (+%d) no probe (budget: +%d / +%d)" % [memAfter, memAfter - memBefore, resAfter, resAfter - resBefore, BudgetObjectGrowth, BudgetResourceGrowth])
+    # Auto-auditoria da régua: a cercinha de baixo é o que impede o próximo
+    # leitor de afrouxar o fator de volta a uma cerca de sanidade, ou de apertá-lo
+    # a ponto de o gate virar flake.
+    if RegressionHeadroom > 4:
+        print("FAIL: folga de %d× não é mais régua — um regresso de 5× no settle passaria verde" % RegressionHeadroom)
+        failures += 1
+    if RegressionHeadroom < 2:
+        print("FAIL: folga de %d× é menor que o ruído medido do próprio run ocioso (1,24×) — o gate flakeia" % RegressionHeadroom)
+        failures += 1
+    if BaselineSettleP99Us * RegressionHeadroom <= WorstP99NormalizadoSobCargaUs:
+        print("FAIL: teto de %d µs não fica acima do pior p99 normalizado já medido sob carga (%d µs)" % [BaselineSettleP99Us * RegressionHeadroom, WorstP99NormalizadoSobCargaUs])
+        failures += 1
     if probeErrors > 0:
         print("FAIL: settle devolveu vazio em %d iterações" % probeErrors)
         failures += 1
-    if p99Us > BudgetSettleP99Ms * 1000:
-        print("FAIL: p99 do settle estourou o orçamento (%d µs > %d µs)" % [p99Us, BudgetSettleP99Ms * 1000])
+    if p50AdjUs > BaselineSettleP50Us * RegressionHeadroom:
+        print("FAIL: p50 do settle estourou a régua de regressão (%d µs normalizado vs teto %d µs; baseline %d µs × %d)" % [p50AdjUs, BaselineSettleP50Us * RegressionHeadroom, BaselineSettleP50Us, RegressionHeadroom])
+        failures += 1
+    if p99AdjUs > BaselineSettleP99Us * RegressionHeadroom:
+        print("FAIL: p99 do settle estourou a régua de regressão (%d µs normalizado vs teto %d µs; baseline %d µs × %d)" % [p99AdjUs, BaselineSettleP99Us * RegressionHeadroom, BaselineSettleP99Us, RegressionHeadroom])
         failures += 1
     # O p99 sozinho absolve um checkpoint que só aparece uma vez a cada cem
     # iterações: com 800 amostras, 1% de hitch cai exatamente no furo do p99. Esta

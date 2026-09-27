@@ -7,6 +7,14 @@ static var defaultSpawnLocation : SpawnObject		= SpawnObject.new()
 # P2 — escalabilidade: raio de visibilidade para limitar notificações de rede.
 const VISIBLE_RADIUS_SQUARED : float = 200.0
 
+# P1 — escalabilidade: teto de shards por família de instância. Com
+# WorldInstance.MAX_PLAYERS_PER_INSTANCE = 20 isso são 640 players num mesmo mapa
+# público antes de `ResolvePlayerInstance` devolver null (e o chamador recusar o
+# spawn em vez de estourar a lotação). É escolha de projeto, não medida: o que foi
+# medido é o teto de tick do processo, que chega muito antes disto — número, método
+# e motivo em `deploy/SCALING.md`.
+const MAX_SHARDS_PER_FAMILY : int = 32
+
 # From Agent getters
 static func GetInstanceFromAgent(agent : BaseAgent) -> SubViewport:
 	return agent.get_parent()
@@ -131,6 +139,55 @@ static func _DeferredPush(agent : BaseAgent, inst : WorldInstance):
 		parent.remove_child(agent)
 	inst.add_child(agent)
 
+# Uma instância é dividida em shards só na numeração "pública" do mapa. Acima de
+# `IdlePolicyService.ZoneInstanceBase` o id é CONTRATO de outro subsistema: a zona
+# de farm é procurada por `ZoneInstanceBase + zoneID`
+# (sources/idle/IdlePolicyService.gd:12-24) e a arena de boss é privada por char
+# (`BossInstanceBase + charID`, sources/idle/IdlePolicyService.gd:13) — mover o
+# jogador para outro id sem mover a policy dele é o que quebraria a sessão idle,
+# não a lotação. O cap que vale nesses ids é o do tick, medido em
+# `deploy/SCALING.md` / `tests/tick_capacity_test.gd`.
+static func IsShardableInstance(instanceID : int) -> bool:
+	return instanceID >= 0 and instanceID < IdlePolicyService.ZoneInstanceBase
+
+# Devolve a instância da família de `baseID` que ainda comporta MAIS UM player, ou
+# null quando a família está cheia. Percorre `base`, `base+1`, ... `base +
+# MAX_SHARDS_PER_FAMILY - 1`; onde não existe instância, cria ali (reaproveitando
+# buraco deixado por `DestroyEmptyInstanceIfUnchanged`, sources/world/WorldMap.gd:55)
+# e para. Nunca cria uma segunda quando a primeira tem vaga, nem entrega uma cheia.
+static func ResolvePlayerInstance(map : WorldMap, baseID : int) -> WorldInstance:
+	if map == null:
+		return null
+	if not IsShardableInstance(baseID):
+		return map.instances.get(baseID, null)
+	for shard in range(MAX_SHARDS_PER_FAMILY):
+		var instID : int = baseID + shard
+		if not IsShardableInstance(instID):
+			return null
+		var inst : WorldInstance = map.instances.get(instID, null)
+		if inst == null:
+			return map.CreateInstance(instID)
+		if inst.players.size() < WorldInstance.MAX_PLAYERS_PER_INSTANCE:
+			return inst
+	return null
+
+# Quantos players ainda cabem na família de `baseID` — usado pelo harness de
+# medição e por qualquer diagnóstico de lotação; não tem efeito no caminho quente.
+static func FamilyFreeSlots(map : WorldMap, baseID : int) -> int:
+	if map == null or not IsShardableInstance(baseID):
+		return 0
+	var free : int = 0
+	for shard in range(MAX_SHARDS_PER_FAMILY):
+		var instID : int = baseID + shard
+		if not IsShardableInstance(instID):
+			break
+		var inst : WorldInstance = map.instances.get(instID, null)
+		if inst == null:
+			free += WorldInstance.MAX_PLAYERS_PER_INSTANCE
+			continue
+		free += maxi(WorldInstance.MAX_PLAYERS_PER_INSTANCE - inst.players.size(), 0)
+	return free
+
 static func CreateAgent(spawn : SpawnObject, instanceID : int = 0, nickname : String = "") -> BaseAgent:
 	if not spawn or not spawn.map:
 		return null
@@ -144,20 +201,26 @@ static func CreateAgent(spawn : SpawnObject, instanceID : int = 0, nickname : St
 	if not inst:
 		return null
 
-	# P1 — escalabilidade: se a instância atingiu o cap de players, cria sub-instância automaticamente.
-	if inst and inst.players.size() >= WorldInstance.MAX_PLAYERS_PER_INSTANCE:
-		var subInstanceID : int = instanceID + 1
-		# Se já existe sub-instância para este batch, tenta usá-la; senão cria nova.
-		var subInst : WorldInstance = spawn.map.instances.get(subInstanceID, null)
-		if not subInst:
-			subInst = WorldInstance.Create(spawn.map, subInstanceID)
-			if subInst:
-				spawn.map.instances[subInstanceID] = subInst
-		if subInst:
-			inst = subInst
-			instanceID = subInstanceID
-		else:
+	# P1 — escalabilidade: cap de players por instância, com BUSCA LIMITADA de
+	# shard. A versão anterior dava UM passo (`instanceID + 1`) e nunca re-conferia
+	# a lotação do destino: o 21º, o 22º e todos os seguintes entravam em `base+1`,
+	# que virava balde e não segunda instância. A invariante agora é "nenhuma
+	# instância da família passa de MAX_PLAYERS_PER_INSTANCE, e a próxima só nasce
+	# quando todas as existentes estão cheias" — provada com 41/61 players em
+	# `tests/shard_capacity_test.gd`.
+	#
+	# Só player é shardado. Mob/NPC pertencem à instância de quem os chamou:
+	# `WorldInstance._map_loaded` (sources/world/WorldInstance.gd:57-78) e o respawn
+	# de farm criam os mobs com o id da própria zona, e empurrá-los para `id+1`
+	# fabricava uma instância órfã de mobs que ninguém vê, com o timer de respawn
+	# preso nela.
+	if spawn.type == ActorCommons.Type.PLAYER:
+		var target : WorldInstance = ResolvePlayerInstance(spawn.map, instanceID)
+		if target == null:
+			push_error("WorldAgent: sem instância com vaga para player (mapa %s, base %d)" % [spawn.map.id, instanceID])
 			return null
+		inst = target
+		instanceID = target.id
 
 	var position : Vector2i = WorldNavigation.GetSpawnPosition(inst, spawn)
 	if position == Vector2i.ZERO:

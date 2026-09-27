@@ -46,6 +46,25 @@ Uso:
     # POST /checkout/preference {username|account_id, sku} → {payment_url}
     # (Checkout Pro, valor do catálogo) + grant pelo webhook do provedor.
 
+SOM-IDLE W5 — web push (banco de chegada da entrega; ver seção "web push" no
+corpo do arquivo). Tables da migration 052 (push_subscription / push_outbox):
+    python3 companion/server.py --db live.db --push-register --account 7 \
+        --endpoint 'https://push.example/s/abc' --p256dh <KEY> --auth <VA>
+    python3 companion/server.py --db live.db --push-sweep          # enfileira
+    python3 companion/server.py --db live.db --push-drain          # drena
+    python3 companion/server.py --db live.db --push-notify --account 7 \
+        --title T --body B                                          # enfileira+drena
+POST /push/test (interno: exige SHAMBLETA_PUSH_ADMIN_TOKEN; o nginx NÃO
+proxya /push/) drena a fila com o sender plugável SHAMBLETA_PUSH_SENDER
+(default "vapid"). O sender VAPID existe de verdade — `companion/push_vapid.py`
+assina o assertion ES256 da RFC 8292 e cifra o corpo em aes128gcm (RFC 8291),
+tudo na stdlib. Ele só NÃO roda sem segredo: sem SHAMBLETA_VAPID_PRIVATE_KEY
+configurado levanta NotImplementedError e a fila grava 'vapid_sender_unimplemented'
+(fail-closed, como antes de o módulo existir; nenhum "sucesso" silencioso). GET
+/push/vapid diz se o sender está pronto e publica a chave pública (pública por
+definição). Sem a chave no deploy, WebPush.CanDeliver() continua false e o
+jogador não vê o toggle.
+
 Contrato de promoção: reescrever em Go/Node + Postgres quando o CCU exigir
 (ARCHITECTURE §11). A tabela grant_queue e a semântica de idempotência não mudam.
 """
@@ -669,6 +688,154 @@ def refund_sweep(db_path, access_token, dry_run=False):
     return result
 
 
+# ---------------------------------------------------------------------------
+# SOM-IDLE W5 — web push: sender plugável + mecânica de fila (migration 052).
+#
+# O que EXISTE aqui e roda sem rede: registro de subscription (CLI
+# --push-register), varredura de contas offline que ENFILEIRA sem nunca enviar
+# inline (--push-sweep), drenagem da fila contra um sender plugável (CLI
+# --push-drain / --push-notify e o endpoint interno POST /push/test).
+#
+# O sender real mora em `companion/push_vapid.py` — FACHADA de quatro arquivos
+# (push_common/push_p256/push_aesgcm/push_vapid) porque o arquivo único estourou
+# o teto anti-god-node. Assertion VAPID (RFC 8292) e corpo `aes128gcm` (RFC 8291
+# + 8188) escritos com hashlib/hmac/secrets: o companion é stdlib-only por
+# contrato (o Dockerfile copia um arquivo e não roda pip). As primitivas são
+# medidas contra os vetores publicados das RFCs em
+# `companion/test_push_{common,p256,aesgcm,vapid}.py`. Fail-closed nos dois
+# sentidos: sem `SHAMBLETA_VAPID_PRIVATE_KEY`, ou com qualquer das quatro camadas
+# fora da imagem, o sender levanta `NotImplementedError` com o motivo e a fila
+# marca 'vapid_sender_unimplemented' (nenhum segredo vai para log). Sender
+# desconhecido em `SHAMBLETA_PUSH_SENDER` cai no vapid, nunca no stdout.
+# ---------------------------------------------------------------------------
+
+PUSH_SENDER_ENV = "SHAMBLETA_PUSH_SENDER"
+PUSH_ADMIN_TOKEN_ENV = "SHAMBLETA_PUSH_ADMIN_TOKEN"
+
+_push_vapid_module = "unset"
+_push_vapid_import_error = ""
+
+
+def load_push_vapid():
+    """Importa a fachada `push_vapid` uma vez, ou devolve None. TARDIO e
+    defensivo de propósito: o `deploy/companion/Dockerfile` copia `server.py`
+    sozinho, e uma `ImportError` no topo do arquivo derrubaria o webhook de
+    pagamento inteiro por causa de uma função opcional. A fachada importa as três
+    camadas de baixo, então `ModuleNotFoundError` de QUALQUER delas cai aqui: o
+    nome que faltou é guardado para o motivo da fila dizê-lo — nome de módulo não
+    é segredo, valor de chave é. O que NÃO pode acontecer é fingir sucesso."""
+    global _push_vapid_module, _push_vapid_import_error
+    if _push_vapid_module == "unset":
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        try:
+            import push_vapid
+            _push_vapid_module = push_vapid
+        except ImportError as exc:
+            _push_vapid_module = None
+            _push_vapid_import_error = str(exc)
+    return _push_vapid_module
+
+
+class PushSubscriptionGone(Exception):
+    """HTTP 404/410 do provedor (RFC 8030 §5.4): a subscription morreu. A fila
+    apaga o registro em vez de re-tentar para sempre. Mora aqui (e não vem do
+    módulo) para o `push_drain` funcionar mesmo sem `push_vapid` importado."""
+
+    def __init__(self, status=410, endpoint_host=""):
+        super().__init__("push subscription gone (HTTP %s @ %s)"
+                         % (status, endpoint_host))
+        self.status = int(status)
+        self.endpoint_host = endpoint_host
+
+
+# Rótulos de motivo que podem aparecer na rota pública GET /push/vapid. Lista
+# fechada de propósito: um motivo fino ("chave ilegível: <detalhe do parser>")
+# nunca sai do processo — só sai o nome coarse, o resto vira 'not_configured'.
+_PUSH_PUBLIC_REASONS = frozenset([
+    "no_vapid_private_key", "vapid_key_mismatch", "vapid_public_key_undecodable",
+])
+
+
+def vapid_webpush_send(subscription, title, body):
+    """Sender real de Web Push (VAPID) — default, e continua FECHADO.
+
+    Devolve True em 2xx (RFC 8030 §4.3 espera 201). Levanta:
+      * `NotImplementedError` quando NÃO há como entregar — camada ausente da
+        imagem ou chave não configurada/ilegível, com o motivo na exceção. É o
+        estado de qualquer deploy sem segredo, e a fila o grava como
+        'vapid_sender_unimplemented' (rótulo de antes de este sender existir:
+        credencial ausente nunca vira sucesso silencioso).
+      * `PushSubscriptionGone` em 404/410 → o registro morto sai do banco.
+      * `PushError` em qualquer outra falha de rede/HTTP: a linha fica 'failed'
+        com o motivo, sem retry automático. Nenhum segredo sai na mensagem."""
+    pv = load_push_vapid()
+    if pv is None:
+        raise NotImplementedError(
+            "vapid sender indisponivel: companion/push_vapid.py e suas camadas "
+            "(push_common/push_p256/push_aesgcm) nao acompanharam server.py no "
+            "deploy (deploy/companion/Dockerfile copia um unico arquivo)%s"
+            % ((" [" + _push_vapid_import_error + "]")
+               if _push_vapid_import_error else ""))
+    ready, reason = pv.push_ready()
+    if not ready:
+        raise NotImplementedError(
+            "vapid sender sem configuracao: %s" % reason)
+    try:
+        status = pv.send(subscription, title, body)
+    except pv.SubscriptionGone as exc:
+        raise PushSubscriptionGone(exc.status, exc.endpoint_host)
+    return 200 <= int(status) < 300
+
+
+def stdout_webpush_send(subscription, title, body):
+    """Sender de TESTE (SHAMBLETA_PUSH_SENDER=stdout): imprime e finge sucesso.
+    Prova a mecânica da fila (pending -> sent, dedupe, ordem FIFO) — nunca
+    entrega nada a um navegador. Nunca default."""
+    print("companion: push(stub-stdout) acct=%s title=%r body=%r endpoint=%s"
+          % (subscription.get("account_id"), title, body,
+             subscription.get("endpoint")), flush=True)
+    return True
+
+
+PUSH_SENDERS = {
+    "vapid": vapid_webpush_send,
+    "stdout": stdout_webpush_send,
+}
+
+
+def push_sender():
+    """Sender ativo: default FECHADO (vapid — que só entrega com chave VAPID
+    configurada, e levanta NotImplementedError sem ela). Nome desconhecido em
+    SHAMBLETA_PUSH_SENDER cai no default, nunca no stdout."""
+    name = os.environ.get(PUSH_SENDER_ENV, "vapid")
+    return PUSH_SENDERS.get(name, vapid_webpush_send)
+
+
+def push_sweep(db_path, offline_seconds=86400, quiet_seconds=3 * 86400,
+               title=None, body=None):
+    """Uma passada de varredura (CLI --push-sweep): ENFILEIRA aviso de retorno
+    para contas offline com subscription registrada e silenciosas na janela.
+    Nunca envia inline — a entrega é do --push-drain/POST /push/test. Retorna
+    {scanned, queued}."""
+    store = Store(db_path)
+    with store.connect() as con:
+        return {"scanned": store.push_subscribed_count(con),
+                "queued": store.push_sweep(
+                    con, offline_seconds=offline_seconds,
+                    quiet_seconds=quiet_seconds, title=title, body=body)}
+
+
+def push_drain(db_path, limit=20, sender=None):
+    """Drena até `limit` linhas pendentes contra o sender plugável. Retorna o
+    resumo {pending, sent, failed, skipped}. Exaustivo é responsabilidade do
+    operador (cron/flag), não do request."""
+    store = Store(db_path)
+    with store.connect() as con:
+        return store.push_drain(con, limit=limit, sender=sender)
+
+
 def normalize_event(provider, data):
     """Reduz o corpo (formato do provedor OU flat sandbox) a um grant canônico:
     {idempotency_key, account_id, username, sku, price_paid, currency}.
@@ -723,6 +890,35 @@ def normalize_event(provider, data):
             "sku": data.get("sku"), "price_paid": paid, "currency": currency}
 
 
+# P1-6b — quais eventos do provedor mandam REVERTER o que já foi entregue.
+#
+# `charged_back` é prova por si só: o MP só abre chargeback sobre payment
+# capturado, logo houve dinheiro e houve entrega (o grant saiu de `approved`).
+#
+# A recusa (`refused`/`rejected`/`cancelled`) é o contrário: não há valor
+# capturado nenhum e o MP emite esse status em TODA tentativa de cartão negada.
+# Então status nenhum autoriza débito — a única coisa que autoriza é a EVIDÊNCIA
+# de que aquele mesmo payment gerou grant nosso, que mora na nossa própria fila
+# (`grant_queue`, consultada por `granted_check`). O caso é real porque
+# `normalize_event` também concede em `authorized_payment`: uma autorização pode
+# ser recusada/cancelada depois de já termos entregue e sem nunca virar captura —
+# sem este ramo o jogador ficava com as gems de um dinheiro que nunca entrou.
+#
+# `granted_check` é callable (não bool) de propósito: o chargeback não paga o
+# lookup, e a pergunta nunca é feita para um status que não precisa dela.
+# Assinatura pura -> testável sem servidor HTTP (companion/test_webhook.py).
+RefusalStatuses = ("refused", "rejected", "cancelled")
+
+
+def is_reversal_event(status, granted_check):
+    """True se o webhook é de reversão (clawback), não de entrega."""
+    if str(status or "") == "charged_back":
+        return True
+    if str(status or "") in RefusalStatuses:
+        return bool(granted_check())
+    return False
+
+
 class Store:
     def __init__(self, db_path):
         self.db_path = db_path
@@ -761,6 +957,159 @@ class Store:
     def pending(self, con):
         return con.execute(
             "SELECT COUNT(*) FROM grant_queue WHERE status = 'pending';").fetchone()[0]
+
+    # ---- SOM-IDLE W5: web push (migration 052) ----------------------------
+    # Registro/dedupe/fila aqui, sender plugável lá em cima. Toda função assume
+    # as tabelas existentes: banco sem a migration 052 levanta sqlite3.Error e
+    # o chamador (CLI/HTTP) traduz em erro explícito — nada de DDL escondido no
+    # companion (a fonte do schema é única: data/conf/migrations/).
+
+    PUSH_DEFAULT_TITLE = "Shambleta"
+    PUSH_DEFAULT_BODY = "Sua colheita continua te esperando."
+
+    def push_register(self, con, account_id, endpoint, p256dh, auth, now=None):
+        """Upsert da subscription (uma por conta). A conta precisa existir no
+        banco do jogo — registration de conta fantasma é lixo na fila. Retorna
+        True se gravou, False se a conta não existe."""
+        if self.account_id(con, account_id) is None:
+            return False
+        if now is None:
+            now = int(time.time())
+        con.execute(
+            "INSERT INTO push_subscription (account_id, endpoint, p256dh, auth, "
+            "updated_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(account_id) DO UPDATE SET endpoint = excluded.endpoint, "
+            "p256dh = excluded.p256dh, auth = excluded.auth, "
+            "updated_at = excluded.updated_at;",
+            (int(account_id), str(endpoint), str(p256dh), str(auth), now))
+        con.commit()
+        return True
+
+    def push_enqueue(self, con, account_id, title=None, body=None, now=None):
+        """Enfileira uma notificação (status pending). Não envia nada."""
+        if not account_id:
+            raise ValueError("push_enqueue: account_id required")
+        if now is None:
+            now = int(time.time())
+        cur = con.execute(
+            "INSERT INTO push_outbox (account_id, title, body, status, created_at) "
+            "VALUES (?, ?, ?, 'pending', ?);",
+            (int(account_id),
+             title or self.PUSH_DEFAULT_TITLE,
+             body or self.PUSH_DEFAULT_BODY, now))
+        con.commit()
+        return cur.lastrowid
+
+    def push_subscribed_count(self, con):
+        return con.execute(
+            "SELECT COUNT(*) FROM push_subscription;").fetchone()[0]
+
+    def push_sweep(self, con, offline_seconds=86400, quiet_seconds=3 * 86400,
+                   title=None, body=None, now=None):
+        """Job único de varredura: contas COM subscription, offline há mais de
+        `offline_seconds` (last_timestamp velho — 0/null nunca notifica), e sem
+        QUALQUER linha na janela de silêncio `quiet_seconds`. Só enfileira;
+        nunca envia inline. Retorna quantas linhas novas entraram na fila."""
+        if now is None:
+            now = int(time.time())
+        rows = con.execute(
+            "SELECT s.account_id FROM push_subscription s "
+            "JOIN account a ON a.account_id = s.account_id "
+            "WHERE a.last_timestamp > 0 "
+            "AND a.last_timestamp < ? "
+            "AND NOT EXISTS (SELECT 1 FROM push_outbox o "
+            "                WHERE o.account_id = s.account_id "
+            "                AND o.created_at > ?);",
+            (now - int(offline_seconds), now - int(quiet_seconds))).fetchall()
+        for (acct,) in rows:
+            self.push_enqueue(con, acct, title=title, body=body, now=now)
+        return len(rows)
+
+    def push_drain(self, con, limit=20, sender=None, now=None):
+        """Drena até `limit` linhas pending contra o sender plugável. Sucesso
+        (retorno truthy) -> sent; NotImplementedError/qualquer exceção ->
+        failed com last_error estável para o gate ler ('vapid_sender_' prefix).
+        Sem subscription -> failed('no_subscription') (a fila não pode ficar
+        presa por registro apagado). 404/410 do provedor -> o registro morto é
+        apagado de push_subscription e a linha fica 'push_subscription_gone_N'
+        (re-tentar subscription morta para sempre é pior que perder o aviso).
+        Retry de failed é decisão de operador, não
+        daqui. Retorna resumo; nunca levanta erro de envio para o chamador."""
+        fn = sender or push_sender()
+        if now is None:
+            now = int(time.time())
+        summary = {"pending": 0, "sent": 0, "failed": 0, "skipped": 0}
+        rows = con.execute(
+            "SELECT o.id, o.account_id, o.title, o.body, "
+            "       s.endpoint, s.p256dh, s.auth "
+            "FROM push_outbox o LEFT JOIN push_subscription s "
+            "     ON s.account_id = o.account_id "
+            "WHERE o.status = 'pending' ORDER BY o.id LIMIT ?;",
+            (int(limit),)).fetchall()
+        total_pending = con.execute(
+            "SELECT COUNT(*) FROM push_outbox WHERE status = 'pending';"
+        ).fetchone()[0]
+        summary["pending"] = total_pending
+        for oid, acct, title, body, endpoint, p256dh, auth in rows:
+            if not endpoint:
+                con.execute(
+                    "UPDATE push_outbox SET status = 'failed', attempts = "
+                    "attempts + 1, last_error = 'no_subscription' WHERE id = ?;",
+                    (oid,))
+                con.commit()
+                summary["failed"] += 1
+                continue
+            sub = {"account_id": acct, "endpoint": endpoint,
+                   "p256dh": p256dh, "auth": auth}
+            try:
+                delivered = bool(fn(sub, title, body))
+            except NotImplementedError:
+                # Mensagem do gate no harness: prefixo estável + detalhe só do
+                # lado de fora do SQL (bind, nunca concatenação).
+                con.execute(
+                    "UPDATE push_outbox SET status = 'failed', attempts = "
+                    "attempts + 1, last_error = ? WHERE id = ?;",
+                    ("vapid_sender_unimplemented", oid))
+                con.commit()
+                summary["failed"] += 1
+                continue
+            except PushSubscriptionGone as exc:
+                # 404/410 (RFC 8030 §5.4): a subscription morreu no provedor.
+                # Re-tentar para sempre é pior que perder o aviso — o registro
+                # sai do banco e a linha confessa o motivo. Bind, nunca
+                # concatenação de SQL.
+                con.execute("DELETE FROM push_subscription WHERE account_id = ?;",
+                            (acct,))
+                con.execute(
+                    "UPDATE push_outbox SET status = 'failed', attempts = "
+                    "attempts + 1, last_error = ? WHERE id = ?;",
+                    ("push_subscription_gone_%d" % exc.status, oid))
+                con.commit()
+                summary["failed"] += 1
+                continue
+            except Exception as e:
+                con.execute(
+                    "UPDATE push_outbox SET status = 'failed', attempts = "
+                    "attempts + 1, last_error = ? WHERE id = ?;",
+                    (str(type(e).__name__) + ": " + str(e)[:180], oid))
+                con.commit()
+                summary["failed"] += 1
+                continue
+            if delivered:
+                con.execute(
+                    "UPDATE push_outbox SET status = 'sent', attempts = "
+                    "attempts + 1, sent_at = ?, last_error = NULL WHERE id = ?;",
+                    (now, oid))
+                con.commit()
+                summary["sent"] += 1
+            else:
+                con.execute(
+                    "UPDATE push_outbox SET attempts = attempts + 1, "
+                    "last_error = 'sender_refused' WHERE id = ?;", (oid,))
+                con.commit()
+                summary["skipped"] += 1
+        return summary
+
 
     def multi_account_suspicions(self, con):
         # A impressão digital é COLUNA de telemetry_event (migration 030), não uma
@@ -946,6 +1295,15 @@ class Handler(BaseHTTPRequestHandler):
             except sqlite3.Error as e:
                 self._send(500, {"error": "db_error", "detail": str(e)})
             return
+        if path == "/push/vapid":
+            # Readiness do sender + a chave pública VAPID. Nada aqui é segredo:
+            # `public_key` é exatamente o `applicationServerKey` que o service
+            # worker precisa conhecer para assinar, e o header `k` da RFC 8292
+            # é público por definição. NÃO toca o banco e nunca ecoa a privada;
+            # sem chave configurada responde apenas ready=false + o rótulo do
+            # motivo. O nginx do serviço `web` não proxya /push/*; esta rota é
+            # para o caminho direto do deploy (e para o harness).
+            return self._push_vapid_status()
         return self._send(404, {"error": "not_found"})
 
     def do_POST(self):
@@ -956,6 +1314,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._checkout_preference()
         if parsed.path == "/checkout/simulate":
             return self._checkout_simulate()
+        if parsed.path == "/push/test":
+            # SOM-W5: fila de push NUNCA é rota pública — o proxy do nginx só
+            # conhece /checkout/ e /webhooks/; mesmo assim o endpoint exige
+            # token próprio e some quando o token não está configurado.
+            return self._push_test()
         if parsed.path != "/webhooks/payments":
             return self._send(404, {"error": "not_found"})
         length = int(self.headers.get("Content-Length", 0))
@@ -1025,6 +1388,17 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, UnicodeDecodeError):
                 return self._send(400, {"error": "bad_json"})
         norm = normalize_event(provider, payload_data)
+        if norm is None and provider == "mercadopago" and payload_verified:
+            status = str(payload_data.get("status", ""))
+            # charged_back NÃO é evento de entrega: o provedor já tirou o
+            # dinheiro e nenhum webhook de "refund" nosso o precede. Sem clawback
+            # aqui, a conta fica com as gems pagas e o prejuízo só no provedor.
+            # O amount NÃO vem do provedor: resolve_grant_items re-deriva do
+            # catálogo (mesmo caminho do grant original, CDC).
+            if is_reversal_event(status,
+                                 lambda: self._payment_was_granted(
+                                     str(payload_data.get("id") or ""))):
+                return self._chargeback_clawback(payload_data)
         if not norm:
             # evento legítimo de não-entrega (ex.: MP pendente/estornado) → ACK 200
             # para o provedor parar de reenviar; nada é concedido.
@@ -1088,6 +1462,82 @@ class Handler(BaseHTTPRequestHandler):
                 price_paid if i == 0 else 0, currency if i == 0 else ""))
         return statuses
 
+    def _payment_was_granted(self, payment_id):
+        """Evidence de que ESTE payment gerou grant nosso (linha original da fila).
+
+        Só é chamada no ramo `refused`/`rejected`/`cancelled`, onde o status do
+        provedor não diz nada sobre entrega. A chave do grant original é o próprio
+        payment id (`normalize_event` → `idempotency_key`), e bundle escreve pernas
+        derivadas '<payment>:<i>:<kind>' — daí o prefixo. `LIKE` com um id que não
+        é puro dígito seria wildcard solto em consulta de dinheiro, então id
+        estranho responde 'não concedido' (fail-closed: sem clawback).
+
+        Leitura: o companion lê `account`/`grant_queue`/`season` desde sempre e
+        NUNCA escreve estado de saldo — ver _chargeback_clawback."""
+        if not payment_id or not payment_id.isdigit():
+            return False
+        try:
+            with self.server.store.connect() as con:
+                row = con.execute(
+                    "SELECT 1 FROM grant_queue WHERE kind <> 'chargeback' "
+                    "AND (idempotency_key = ? OR idempotency_key LIKE ?) LIMIT 1;",
+                    (payment_id, payment_id + ':%')).fetchone()
+            return row is not None
+        except sqlite3.Error as e:
+            alert("chargeback lookup DB error: %s" % e, "error")
+            return False
+
+    def _chargeback_clawback(self, payload_data):
+        """Registra o clawback na fila do jogo. NÃO debit nada: quem move saldo é
+        o servidor de jogo (CheckoutService._ApplyGrantRaw), único writer de
+        `wallet`/`ledger_transaction` sob o queryMutex — a mesma divisão que o
+        estorno do art.49 já usa (o jogo reverte as gems e marca 'refunded'; o
+        companion só chama a API do provedor no --refund-sweep).
+
+        O payload do provedor não carrega o que decidiria o débito: `status`,
+        `id`, `external_reference` ('<account>:<sku>'), `metadata.shambleta_sku` e
+        `transaction_amount` (o cobrado, em centavos via _paid_money). Não existe
+        campo "gems consumidas" nem "saldo pago" — e nada aqui inventa um: o
+        amount re-derivado do catálogo é a DÍVIDA pedida, e quanto disso ainda
+        existe como gem paga decidido pelo jogo na hora de aplicar, que é também
+        onde o rombo vira linha visível (grant_queue.error + fila de revisão)."""
+        key = str(payload_data.get("id") or "")
+        if not key:
+            return self._send(400, {"error": "bad_grant"})
+        acct, sku = parse_external_reference(payload_data.get("external_reference"))
+        if sku is None:
+            sku = (payload_data.get("metadata") or {}).get("shambleta_sku")
+        try:
+            items = resolve_grant_items(self.server.catalog, sku, None)
+        except CatalogError as e:
+            alert("chargeback sku rejeitado (%s) sku=%r" % (str(e), sku))
+            return self._send(400, {"error": str(e)})
+        claw = [it for it in items if it[0] == "gems"]
+        amount = int(claw[0][1]) if claw else 0
+        # amount 0 não é "nada a fazer": SKU de tempo/passe não tem o que debitar
+        # em gem, e a linha mesmo assim grava o clawback no ledger do jogo, que é
+        # o que fecha a porta do art.49 para o mesmo payment. O produto entregue é
+        # decisão de operador, não deste handler.
+        paid, currency = _paid_money(payload_data)
+        try:
+            with self.server.store.connect() as con:
+                account_id = self.server.store.account_id(con, acct)
+                if account_id is None:
+                    alert("chargeback sem conta para payment %s (sku=%r)" % (key, sku))
+                    return self._send(200, {"status": "ignored"})
+                status = self.server.store.enqueue(
+                    con, "%s:chargeback" % key, account_id, "chargeback", amount,
+                    {"sku": sku, "provider": "mercadopago", "kind": "chargeback",
+                     "payment_id": key},
+                    price_paid=paid, currency=currency)
+        except sqlite3.Error as e:
+            alert("chargeback DB error: %s" % e, "error")
+            return self._send(500, {"error": "db_error", "detail": str(e)})
+        # `enqueue` responde queued|duplicate: numa redelivery do mesmo charged_back
+        # a linha UNIQUE devolve duplicate e o provedor precisa ver o 200, não um
+        # retry infinito. O distinguishing fica no corpo para o operador.
+        return self._send(200, {"status": "chargeback_queued", "enqueue": status})
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length > 0 else b""
@@ -1095,6 +1545,60 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(raw.decode()) if raw else {}, raw
         except (ValueError, UnicodeDecodeError):
             return None, raw
+
+    def _push_test(self):
+        """POST /push/test — consome a fila push_outbox contra o sender
+        plugável e devolve o resumo. Fail-closed nos dois sentidos: sem
+        SHAMBLETA_PUSH_ADMIN_TOKEN configurado o endpoint não existe (503);
+        com ele, exige X-Push-Token igual (const-time). Corpo opcional
+        {"limit": N}. Sem chave VAPID no deploy nada é entregue: as linhas
+        viram failed('vapid_sender_unimplemented') — é isso que CanDeliver()
+        espera antes de o toggle aparecer para o jogador. Com a chave, o POST
+        é o sender real (push_vapid) e a linha vira sent apenas com 2xx do
+        provedor."""
+        token = getattr(self.server, "push_admin_token", "")
+        if not token:
+            return self._send(503, {"error": "push_disabled"})
+        if not _const_time(self.headers.get("X-Push-Token", ""), token):
+            return self._send(401, {"error": "bad_token"})
+        data, _raw = self._read_json()
+        if data is None:
+            return self._send(400, {"error": "bad_json"})
+        try:
+            limit = int(data.get("limit", 20))
+        except (TypeError, ValueError):
+            return self._send(400, {"error": "bad_grant"})
+        limit = max(1, min(limit, 100))
+        try:
+            with self.server.store.connect() as con:
+                summary = self.server.store.push_drain(con, limit=limit)
+        except sqlite3.Error as e:
+            return self._send(500, {"error": "db_error", "detail": str(e),
+                                    "hint": "apply migration 052_web_push"})
+        return self._send(200, {"status": "ok", "sender": os.environ.get(
+            PUSH_SENDER_ENV, "vapid"), "drain": summary})
+
+    def _push_vapid_status(self):
+        """GET /push/vapid — o readiness do sender + a chave pública VAPID.
+        É o handshake que `WebPush.CanDeliver()` espelha do lado do jogo: sem
+        segredo configurado responde ready=false com um rótulo coarse e NENHUMA
+        chave; com segredo, devolve a pública (os 87 caracteres de
+        `applicationServerKey`, pública por definição — é o `k` do header
+        `Authorization: vapid` da RFC 8292). A privada, o subject e qualquer
+        mensagem de erro fina nunca saem daqui."""
+        pv = load_push_vapid()
+        sender = os.environ.get(PUSH_SENDER_ENV, "vapid")
+        if pv is None:
+            return self._send(200, {"ready": False, "sender": sender,
+                                    "reason": "module_unavailable"})
+        ready, info = pv.push_ready()
+        if not ready:
+            reason = info if info in _PUSH_PUBLIC_REASONS else "not_configured"
+            return self._send(200, {"ready": False, "sender": sender,
+                                    "reason": reason})
+        return self._send(200, {"ready": True, "sender": sender,
+                                "public_key": info,
+                                "content_encoding": "aes128gcm"})
 
     def _resolve_checkout_account(self, con, data):
         """Identidade da conta p/ checkout, a partir da SESSÃO (beta fechado):
@@ -1310,7 +1814,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--db", required=True, help="caminho do live.db do game server")
+    ap.add_argument("--db", default="",
+                    help="caminho do live.db do game server (obrigatório em "
+                         "todo modo salvo --push-vapid-keygen)")
     ap.add_argument("--port", type=int, default=8901)
     ap.add_argument("--provider",
                     default=os.environ.get("SHAMBLETA_WEBHOOK_PROVIDER", "shared"),
@@ -1364,7 +1870,55 @@ def main():
                          "(cron diário sugerido)")
     ap.add_argument("--dry-run", action="store_true",
                     help="com --refund-sweep: só lista pendentes, sem chamar a API")
+    # ---- SOM-IDLE W5: web push (migration 052; sender default é o VAPID real
+    # de push_vapid.py, que continua honesto: NotImplementedError sem chave
+    # configurada — credencial ausente nunca vira envio) ----
+    ap.add_argument("--push-register", action="store_true",
+                    help="grava/upsert a subscription de push de uma conta "
+                         "(exige --account --endpoint --p256dh --auth) e sai")
+    ap.add_argument("--push-sweep", action="store_true",
+                    help="varre contas offline com subscription e ENFILEIRA "
+                         "aviso de retorno (nunca envia inline); exige a "
+                         "migration 052 aplicada e sai")
+    ap.add_argument("--push-drain", action="store_true",
+                    help="drena a fila push_outbox contra o sender plugável "
+                         "(SHAMBLETA_PUSH_SENDER; default vapid -> failed) e sai")
+    ap.add_argument("--push-notify", action="store_true",
+                    help="enfileira UMA notificação para --account e drena na "
+                         "hora (exit 2 se o sender não entregou — com o sender "
+                         "default nunca entrega)")
+    ap.add_argument("--account", type=int, default=None,
+                    help="account_id para as ações --push-*")
+    ap.add_argument("--endpoint", default="",
+                    help="URL do provedor de push (campo `endpoint` da subscription)")
+    ap.add_argument("--p256dh", default="",
+                    help="chave pública ECDH da subscription (base64url)")
+    ap.add_argument("--auth", default="",
+                    help="auth secret da subscription (base64url)")
+    ap.add_argument("--title", default="", help="título da notificação --push-notify")
+    ap.add_argument("--body", default="", help="corpo da notificação --push-notify")
+    ap.add_argument("--offline-hours", type=int, default=24,
+                    help="janela offline do --push-sweep (h; default 24)")
+    ap.add_argument("--quiet-hours", type=int, default=72,
+                    help="silêncio mínimo entre notificações da mesma conta (h; "
+                         "default 72)")
+    ap.add_argument("--push-admin-token",
+                    default=os.environ.get(PUSH_ADMIN_TOKEN_ENV, ""),
+                    help="token do endpoint interno POST /push/test "
+                         "(vazio = endpoint desligado; nunca publicar /push/ no nginx)")
+    ap.add_argument("--push-vapid-keygen", action="store_true",
+                    help="gera um par VAPID P-256 descartável: a PRIVADA vai para "
+                         "--push-vapid-key-out (modo 0600, nunca stdout/log) e só a "
+                         "PÚBLICA é impressa; pare o resultado no segredo de deploy")
+    ap.add_argument("--push-vapid-key-out", default="",
+                    help="arquivo onde --push-vapid-keygen grava a chave privada "
+                         "(obrigatório; não sobrescreve)")
     args = ap.parse_args()
+    if not args.db and not args.push_vapid_keygen:
+        # '--push-vapid-keygen' é o único modo que não toca o banco: o par
+        # VAPID nasce antes de existir deploy, muitas vezes no laptop de quem
+        # vai colar a pública no shell. Os demais modos exigem --db como antes.
+        ap.error("the following arguments are required: --db")
     if args.refund_sweep:
         if not os.path.exists(args.db):
             sys.stderr.write("companion: database not found: %s\n" % args.db)
@@ -1377,6 +1931,87 @@ def main():
             return 2
         print("companion: refund sweep: %s" % res, flush=True)
         return 0
+    if args.push_vapid_keygen:
+        # Gera um par VAPID descartável SEM tocar o banco. A privada nunca sai
+        # por stdout (que viraria log): vai para --push-vapid-key-out com 0600 e
+        # a saída pública traz só a pública + o caminho. O operador publica a
+        # pública no shell (applicationServerKey) e guarda a privada no segredo.
+        pv = load_push_vapid()
+        if pv is None:
+            sys.stderr.write("companion: push_vapid.py indisponivel para keygen\n")
+            return 2
+        if not args.push_vapid_key_out:
+            sys.stderr.write("companion: --push-vapid-keygen exige "
+                             "--push-vapid-key-out ARQUIVO (a privada nao vai "
+                             "para stdout)\n")
+            return 2
+        try:
+            priv, pub = pv.generate_keypair()
+            fd = os.open(args.push_vapid_key_out,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(priv)
+        except OSError as e:
+            sys.stderr.write("companion: keygen falhou: %s\n" % e)
+            return 2
+        print("companion: VAPID keygen privada=%s (0600) publica=%s"
+              % (args.push_vapid_key_out, pub), flush=True)
+        return 0
+    if (args.push_register or args.push_sweep or args.push_drain
+            or args.push_notify):
+        if not os.path.exists(args.db):
+            sys.stderr.write("companion: database not found: %s\n" % args.db)
+            return 2
+        store = Store(args.db)
+        try:
+            if args.push_register:
+                if not (args.account and args.endpoint and args.p256dh
+                        and args.auth):
+                    sys.stderr.write(
+                        "companion: --push-register exige --account --endpoint "
+                        "--p256dh --auth\n")
+                    return 2
+                with store.connect() as con:
+                    if not store.push_register(con, args.account, args.endpoint,
+                                               args.p256dh, args.auth):
+                        sys.stderr.write("companion: unknown account %s\n"
+                                         % args.account)
+                        return 2
+                print("companion: push registered account=%s" % args.account,
+                      flush=True)
+                return 0
+            if args.push_notify:
+                if not args.account:
+                    sys.stderr.write("companion: --push-notify exige --account\n")
+                    return 2
+                with store.connect() as con:
+                    if store.account_id(con, args.account) is None:
+                        sys.stderr.write("companion: unknown account %s\n"
+                                         % args.account)
+                        return 2
+                    oid = store.push_enqueue(con, args.account,
+                                             title=args.title or None,
+                                             body=args.body or None)
+                    summary = store.push_drain(con, limit=100)
+                print("companion: push notify id=%s drain=%s" % (oid, summary),
+                      flush=True)
+                # Honesto: sem sender implementado nada saiu do prédio.
+                return 0 if summary["sent"] > 0 else 2
+            if args.push_sweep:
+                res = push_sweep(args.db,
+                                 offline_seconds=args.offline_hours * 3600,
+                                 quiet_seconds=args.quiet_hours * 3600,
+                                 title=args.title or None,
+                                 body=args.body or None)
+                print("companion: push sweep: %s" % res, flush=True)
+                return 0
+            res = push_drain(args.db)
+            print("companion: push drain: %s" % res, flush=True)
+            return 0
+        except sqlite3.Error as e:
+            sys.stderr.write("companion: push tables missing? apply migration "
+                             "052_web_push (%s)\n" % e)
+            return 2
     try:
         catalog = load_catalog(args.catalog)
     except (ValueError, OSError, json.JSONDecodeError) as e:
@@ -1416,6 +2051,7 @@ def main():
     server.tolerance = args.tolerance
     server.allow_dev = bool(args.allow_dev)
     server.allow_dev_checkout = bool(args.allow_dev_checkout or args.allow_dev)
+    server.push_admin_token = args.push_admin_token
     print("companion: listening on %s:%d (db %s, provider %s, %d SKUs)"
           % (host, args.port, args.db, args.provider, len(catalog)), flush=True)
     try:

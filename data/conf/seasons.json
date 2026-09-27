@@ -1,0 +1,20 @@
+{
+  "_note": "OPS-2 (AUDITORIA_2026-09-27 §15, Live Ops 5/10): temporada como DADO. Uma linha por temporada; `data/conf/` já vem no pacote do servidor (mesma vinda de paid_catalog.json) e `SeasonConfig` relê com TTL de 60 s, então o relógio de temporada (5 min, SQLBackups) pega a edição na passada seguinte — sem PR, sem rebuild. Onde o .pck é só leitura, aponte o arquivo editado com SHAMBLETA_SEASONS_FILE=/caminho/seasons.json (mesma convenção do SHAMBLETA_CATALOG_FILE do companion).",
+  "_campos": "id [a-z][a-z0-9_]* e único; label = o nome que aparece no rules_frozen congelado na linha (hoje 'S1', lido pela GUI e por SuiteSeasonBootstrap); start_unix/end_unix = janela NOMINAL do calendário, ou 0/0 = ROTAÇÃO (abre agora e dura duration_days); duration_days default 30 (quando a janela é nominal, ela é a duração — divergir é erro de boot); theme é texto livre p/ a UI; races ⊆ EconomyCatalog.SEASON_KINDS; rewards_ref é a descrição congelada na prova auditável; premium_sku tem que existir no SHOP_CATALOG cobrável, senão o botão do passe vira unknown_sku (foi exatamente o M3); pass_tiers é OPCIONAL e cobre só as trilhas (free/premium por nível, max_level como teto, bonus_start/bonus_gems) — sem pass_tiers o passe usa o catálogo, que é o que o jogador já via.",
+  "_como_lancar_s2": "1) anexe {\"id\":\"s2\",\"label\":\"S2\",\"start_unix\":<unix da estreia>,\"end_unix\":<unix da estreia + 30*86400>,\"theme\":\"...\",\"premium_sku\":\"pass.s2\"} — as datas são a régua; 2) crie o SKU pass.s2 em paid_catalog.json + SHOP_CATALOG (a validação de boot cruza os dois e o companion cobra do mesmo arquivo); 3) se quiser trilha própria, ponha pass_tiers (cosmético fora do COSMETIC_CATALOG é erro, não item perdido); 4) nada em GDScript. Ao entrar na janela, o relógio congela a temporada de rotação em andamento (SeasonConfig.ShouldPreempt) e abre a S2 com rules_frozen carregando config_id=s2; no fim, fecha, liquida o placar congelado, auto-resgata o passe e não abre sucessora até você agendar a S3. Testes: as janelas nominais cobrem o SuiteSeasonBootstrap se rodarem dentro delas — a suíte congela 30 dias contados da abertura, então deixe a S1 de rotação no arquivo enquanto o beta mede isso.",
+  "_fail_closed": "Arquivo ausente, JSON quebrado, id duplicado, chave desconhecida (start_unx NÃO é 'sem janela', é uma temporada que nasce de rotação em silêncio), trilha acima do teto, SKU inexistente, ou nenhuma linha capaz de abrir: SeasonConfig.Errors() enche, o boot loga push_error uma vez por conteúdo e EnsureSeason devolve -1 — nenhuma temporada nova abre. Fechar e liquidar o que já está no banco continua funcionando: é dívida com o jogador, não decisão de agenda.",
+  "_estado_atual": "S1 é a temporada de rotação do beta: 30 dias contados da abertura, exatamente o que EnsureSeasonS1() fazia em código. Sem janela nominal no arquivo de propósito: SuiteSeasonBootstrap (IdleTests) amarra a duração de 30 dias contados da abertura, e uma janela fixa cobrindo o instante do teste mudaria a régua. Não há S2 agendada — anunciar data é decisão do dono.",
+  "seasons": [
+    {
+      "id": "s1",
+      "label": "S1",
+      "start_unix": 0,
+      "end_unix": 0,
+      "duration_days": 30,
+      "theme": "A Redescoberta",
+      "races": ["power", "spend", "boss_kills", "guild_points"],
+      "rewards_ref": "gems+cosmetics, non-cashable",
+      "premium_sku": "pass.s1"
+    }
+  ]
+}

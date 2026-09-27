@@ -20,6 +20,20 @@ presets/maps/*
 # linux env
 .mono
 
+# dotenv: o `.env.example` manda copiar para `.env` e não versionar, mas até aqui
+# não existia UMA regra dotenv nenhuma neste arquivo — `git check-ignore -v .env`
+# saía 1 (medido em 2026-09-27) e um `git add -A` apressado committaria
+# SHAMBLETA_MP_WEBHOOK_SECRET / SHAMBLETA_MP_ACCESS_TOKEN (.env.example:19-20) no
+# repositório que se declara open source (README.md:5). Vale também para
+# `deploy/.env` e `companion/.env`, que o compose lê. O `!.env.example` não é
+# enfeite: sem ele o `.env.*` abaixo engolia o próprio template que documenta as
+# chaves. A régua que impede o retruque (arquivo rastreado + valor vivo em arquivo
+# rastreado) mora em scripts/check_secrets.sh, chamada por scripts/test.sh.
+.env
+.env.*
+*.env
+!.env.example
+
 .vscode
 
 # tmp files

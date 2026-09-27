@@ -35,6 +35,34 @@ func GuildBuffForAccount(accountID : int) -> float:
 func GetGuildLeaderboard(limit : int = 10) -> Array[Dictionary]:
 	return Launcher.SQL.QueryBindings("SELECT g.guild_id, g.name, g.level, g.points, COUNT(m.account_id) AS members FROM guild g LEFT JOIN guild_member m ON m.guild_id = g.guild_id GROUP BY g.guild_id ORDER BY g.level DESC, g.points DESC, members DESC LIMIT ?;", [limit])
 
+# SOM-IDLE social (painel de guild): busca por nome para o fluxo "procurar e
+# entrar" sem comando. Case-insensitive, substring, limitado. LIKE faz o `LOWER`
+# das duas pontas — SQLite só tem collation NOCASE no ASCII, e é o bastante para
+# o catálogo de guilds (nomes validados por CheckSize). Devolve só o necessário
+# para o painel listar e oferecer "entrar": id, nome, tag, nível, pontos, membros.
+func SearchGuilds(query : String, limit : int = 20) -> Array[Dictionary]:
+	var clean : String = query.strip_edges()
+	if clean.is_empty():
+		return []
+	var pattern : String = "%" + clean.to_lower() + "%"
+	return Launcher.SQL.QueryBindings("SELECT g.guild_id, g.name, g.tag, g.level, g.points, COUNT(m.account_id) AS members FROM guild g LEFT JOIN guild_member m ON m.guild_id = g.guild_id WHERE LOWER(g.name) LIKE ? GROUP BY g.guild_id ORDER BY g.name ASC LIMIT ?;", [pattern, limit])
+
+# IDs de conta dos membros de uma guild — base do roteamento de chat de guild e
+# do fanout que o Server precisa para entregar uma linha ao canal. Server resolve
+# account → peer via Peers.accounts; a guild não conhece transporte, só pertinência.
+func GetMemberAccounts(guildID : int) -> Array:
+	var accounts : Array = []
+	for row in Launcher.SQL.QueryBindings("SELECT account_id FROM guild_member WHERE guild_id = ?;", [guildID]):
+		accounts.append(int(row["account_id"]))
+	return accounts
+
+func GetGuildIDForName(guildName : String) -> int:
+	var clean : String = guildName.strip_edges()
+	if clean.is_empty():
+		return 0
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT guild_id FROM guild WHERE LOWER(name) = ?;", [clean.to_lower()])
+	return int(rows[0]["guild_id"]) if not rows.is_empty() else 0
+
 func CreateGuild(accountID : int, charID : int, guildName : String) -> int:
 	var clean : String = guildName.strip_edges()
 	if not NetworkCommons.CheckSize(clean, 3, 30) or GetGuildForAccount(accountID) != 0:
@@ -252,19 +280,47 @@ func VaultSlotsForGuild(guildID : int) -> Dictionary:
 	var used : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM guild_vault WHERE guild_id = ?;", [guildID])
 	return {"cap": cap, "used": int(used[0]["n"]) if not used.is_empty() else 0, "purchased": int(rows[0].get("vault_slots_purchased", 0))}
 
+# SOM-IDLE social: stacks distintas do vault (item_id + count), para o painel
+# listar cada pilha com um botão de retirada. Read-only; não mexe no locking nem
+# no invariante do vault (só espelha guild_vault).
+func VaultStacks(guildID : int) -> Array[Dictionary]:
+	return Launcher.SQL.QueryBindings("SELECT item_id, count FROM guild_vault WHERE guild_id = ? ORDER BY item_id;", [guildID])
+
+# §14 (AUDITORIA 2026-09-27): o rastro do vault sai do SERVIDOR. Antes a tela tinha
+# um ramo de leitura que ia direto à `Launcher.SQL` "no boot dev", e a fronteira
+# que a suíte 2fa-m1 mede é justamente esta: quem desenha a UI não consulta o
+# banco, consulta o estado que o serviço autorizou. LIMIT fechado em 12 porque o
+# painel é uma janela, não um extrato.
+func VaultTrail(guildID : int) -> Array[Dictionary]:
+	return Launcher.SQL.QueryBindings("SELECT account_id, char_id, item_id, count, kind, created_at FROM guild_vault_log WHERE guild_id = ? ORDER BY id DESC LIMIT 12;", [guildID])
+
 func GetGuildState(accountID : int) -> Dictionary:
 	var guildID : int = GetGuildForAccount(accountID)
 	var mine : Dictionary = {}
 	if guildID > 0:
 		var g : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT name, tag, level, points FROM guild WHERE guild_id = ?;", [guildID])
 		var members : Array = []
-		for m in Launcher.SQL.QueryBindings("SELECT a.username, gm.rank FROM guild_member AS gm INNER JOIN account AS a ON a.account_id = gm.account_id WHERE gm.guild_id = ? ORDER BY gm.rank, a.username;", [guildID]):
-			members.append({"name": str(m.get("username", "?")), "rank": str(m.get("rank", "member"))})
+		# SOM-IDLE social: enriquece cada membro com account_id e a lista de nicks
+		# dos personagens da conta. Presença é por agente (nick), não por conta, e o
+		# painel precisa do nick para casar com o índice O(1) de OnlineList — antes
+		# só vinha `username`, que nunca bate com `agent.nick`. Aditivo: Social.gd e o
+		# push do Server leem name/rank e continuam funcionando.
+		var nicksByAccount : Dictionary = {}
+		for c in Launcher.SQL.QueryBindings("SELECT gm.account_id, ch.nickname FROM guild_member AS gm INNER JOIN character AS ch ON ch.account_id = gm.account_id WHERE gm.guild_id = ?;", [guildID]):
+			var cid : int = int(c.get("account_id", 0))
+			if not nicksByAccount.has(cid):
+				nicksByAccount[cid] = []
+			nicksByAccount[cid].append(str(c.get("nickname", "")))
+		for m in Launcher.SQL.QueryBindings("SELECT a.account_id, a.username, gm.rank FROM guild_member AS gm INNER JOIN account AS a ON a.account_id = gm.account_id WHERE gm.guild_id = ? ORDER BY gm.rank, a.username;", [guildID]):
+			var accID : int = int(m.get("account_id", 0))
+			members.append({"name": str(m.get("username", "?")), "rank": str(m.get("rank", "member")),
+				"account_id": accID, "nicks": nicksByAccount.get(accID, [])})
 		if not g.is_empty():
 			mine = {"id": guildID, "name": str(g[0].get("name", "?")), "tag": str(g[0].get("tag", "")),
 				"level": int(g[0].get("level", 1)),
 				"points": int(g[0].get("points", 0)), "my_rank": GetMemberRank(accountID),
-				"vault": VaultSlotsForGuild(guildID), "members": members}
+				"vault": VaultSlotsForGuild(guildID), "vault_stacks": VaultStacks(guildID),
+				"vault_log": VaultTrail(guildID), "members": members}
 	var board : Array = []
 	for b in Launcher.SQL.QueryBindings("SELECT name, tag, level, points FROM guild ORDER BY points DESC, guild_id ASC LIMIT 10;", []):
 		board.append({"name": str(b.get("name", "?")), "tag": str(b.get("tag", "")), "level": int(b.get("level", 1)), "points": int(b.get("points", 0))})

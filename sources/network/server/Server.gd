@@ -19,6 +19,11 @@ func CreateAccount(accountName : String, password : String, email : String, reme
 		if err == NetworkCommons.AuthError.ERR_OK:
 			# SOM-IDLE F4 follow-up: name and email collisions get distinct errors —
 			# "account name not available" for a taken EMAIL was misleading QA.
+			# SOM-IDLE AUTH-P1 (frente 2): decisão registrada — os dois códigos ficam
+			# porque o `gui/Login.gd` RAMIFICA UX por eles (focar o campo e empurrar
+			# para a recuperação). Cadastro sem colisão não pode responder uniforme
+			# sem quebrar esse fluxo; o oráculo que importa (login/recuperação/2FA) é
+			# uniforme nas outras rotas desta classe.
 			if Launcher.SQL.HasAccount(accountName):
 				err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
 			elif Launcher.SQL.HasEmail(email):
@@ -68,14 +73,34 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 	else:
 		err = NetworkCommons.CheckAuthInformation(accountName, password)
 		if err == NetworkCommons.AuthError.ERR_OK:
-			# SOM-IDLE A1: lockout responde genérico (anti-enumeration).
+			# SOM-IDLE AUTH-P1 (frente 1): teto por IP na frente do backoff por conta.
+			# Origem bloqueada cai no MESMO ERR_AUTH genérico sem tocar
+			# `ValidateAuthPassword` — o spray de fonte queimada para de escalar o
+			# contador da vítima. Decisão conta-vs-IP documentada em `SQLSecurity`.
+			var ipAddress : String = Peers.GetPeerIP(peerID)
 			var accountID : int = Launcher.SQL.GetAccountID(accountName)
-			if accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
+			if SQLSecurity.IsBlocked(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress):
 				err = NetworkCommons.AuthError.ERR_AUTH
+			# SOM-IDLE A1: lockout responde genérico (anti-enumeration).
+			elif accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
+				err = NetworkCommons.AuthError.ERR_AUTH
+				SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
 			else:
 				var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
 				if not accountData:
 					err = NetworkCommons.AuthError.ERR_AUTH
+					var noted : Dictionary = SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
+					if bool(noted.get("justBlocked", false)):
+						SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginIPBlock, accountID, JSON.stringify({"ip": ipAddress}))
+					if accountID == NetworkCommons.PeerUnknownID:
+						# Frente 2: sem esta linha, nome inexistente saía da verificação
+						# sem pagar o KDF que nome existente paga — latência respondia
+						# "esse nome existe?" sem erro nenhum na tela.
+						SQLSecurity.BurnKdfTime(password)
+					elif Launcher.SQL.IsLockedOut(accountID):
+						# Este ramo só alcança uma conta NÃO travada antes da tentativa:
+						# travada agora = transição = um evento por episódio de lockout.
+						SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginLockout, accountID)
 				elif not Launcher.SQL.IsConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion):
 					err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
 				elif Launcher.SQL.IsTwoFactorEnabled(accountData.accountID):
@@ -89,13 +114,66 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 func LoginWithTwoFactor(accountName : String, token : String, platform : int, peerID : int):
 	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
 	var peer : Peers.Peer = Peers.GetPeer(peerID)
-	# SOM-IDLE beta (T9): decisão no helper testável (binding + expiração +
-	# consumo); aqui só finaliza o login no sucesso.
-	err = Peers.ValidateTwoFactorChallenge(peer, accountName, token)
+	# SOM-IDLE AUTH-P1 (frente 3): orçamento de tentativa TOTP PERSISTIDO por
+	# CONTA — diferente do pending de reset (memória basta lá porque o restart
+	# derruba o código), o segredo TOTP survive deploy, então a tentativa também
+	# tem que sobreviver ou cada release devolve o budget cheio a quem já tem a
+	# senha. Travado: queima o desafio do peer e responde o MESMO ERR_AUTH
+	# genérico (sem código novo, sem oracle).
+	var accountID : int = Launcher.SQL.GetAccountID(accountName)
+	if accountID != NetworkCommons.PeerUnknownID and SQLSecurity.IsBlocked(Launcher.SQL, SQLSecurity.KindTotp, str(accountID)):
+		if peer:
+			peer.pendingTwoFactorAccount = ""
+			peer.pendingTwoFactorAt = 0
+		Network.AuthError(NetworkCommons.AuthError.ERR_AUTH, peerID)
+		return
+	var challengeAlive : bool = peer != null and not accountName.is_empty() and peer.pendingTwoFactorAccount == accountName
+	# SOM-IDLE AUTH-P1 (frente 3): a decisão do desafio é feita AQUI, e não por
+	# `Peers.ValidateTwoFactorChallenge`, porque aquele helper decide frescor por
+	# `SQL.ConsumeTwoFactorToken` — cuja detecção `SELECT changes()` o pool de
+	# leitura (ligado por padrão) roteia para uma conexão onde `changes()` é 0 e
+	# então rejeitaria TODO código válido (DoS no 2FA). Consomo pela variante
+	# roteável (`SQLSecurity.ConsumeTwoFactorTokenSafe`). As MESMAS regras são
+	# preservadas: sem desafio → NO_PEER_DATA; dono ≠ conta → AUTH (código válido
+	# p/ A nunca loga B); expirado → AUTH + queima o desafio; código errado → AUTH
+	# (desafio vivo, retry rate-limited); replay (certo já consumido) → AUTH;
+	# certo e inédito → OK + consome.
+	if peer == null or peer.pendingTwoFactorAccount.is_empty():
+		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
+	elif accountName != peer.pendingTwoFactorAccount:
+		err = NetworkCommons.AuthError.ERR_AUTH
+	elif peer.pendingTwoFactorAt > 0 and int(Time.get_unix_time_from_system()) - peer.pendingTwoFactorAt > NetworkCommons.TwoFactorChallengeSec:
+		peer.pendingTwoFactorAccount = ""
+		peer.pendingTwoFactorAt = 0
+		err = NetworkCommons.AuthError.ERR_AUTH
+	elif accountID == NetworkCommons.PeerUnknownID:
+		err = NetworkCommons.AuthError.ERR_AUTH
+	else:
+		var secret : String = Launcher.SQL.GetTwoFactorSecret(accountID)
+		if secret.is_empty() or not TwoFactorAuth.VerifyTOTP(secret, token):
+			err = NetworkCommons.AuthError.ERR_AUTH
+		elif not SQLSecurity.ConsumeTwoFactorTokenSafe(Launcher.SQL, accountID, token):
+			err = NetworkCommons.AuthError.ERR_AUTH
+		else:
+			peer.pendingTwoFactorAccount = ""
+			peer.pendingTwoFactorAt = 0
+			err = NetworkCommons.AuthError.ERR_OK
 	if err == NetworkCommons.AuthError.ERR_OK:
-		var accountID : int = Launcher.SQL.GetAccountID(accountName)
+		SQLSecurity.ClearFailures(Launcher.SQL, SQLSecurity.KindTotp, str(accountID))
 		var accountData : Peers.AccountData = Peers.AccountData.new(accountID, Launcher.SQL.GetAccountPermission(accountID))
 		err = Peers.FinalizeLogin(peer, accountName, accountData, platform, false)
+	elif err == NetworkCommons.AuthError.ERR_AUTH and challengeAlive:
+		var secret : String = Launcher.SQL.GetTwoFactorSecret(accountID)
+		if not secret.is_empty() and TwoFactorAuth.VerifyTOTP(secret, token) and SQLSecurity.IsTwoFactorTokenConsumed(Launcher.SQL, accountID, token):
+			# Código CERTO para esta janela, já consumido antes: replay (frente 4).
+			SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventTotpReplay, accountID)
+		else:
+			var budget : Dictionary = SQLSecurity.AttemptBudget(Launcher.SQL, SQLSecurity.KindTotp, str(accountID), SQLSecurity.TotpMaxFailures, SQLSecurity.TotpWindowSec)
+			if bool(budget.get("justExhausted", false)):
+				SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventTotpThrottle, accountID)
+				if peer:
+					peer.pendingTwoFactorAccount = ""
+					peer.pendingTwoFactorAt = 0
 	Network.AuthError(err, peerID)
 
 # SOM-IDLE M1: os quatro handlers abaixo são o lado do servidor do setup de 2FA —
@@ -209,12 +287,25 @@ func AcceptConsent(accountName : String, password : String, token : String, reme
 			err = NetworkCommons.CheckAuthInformation(accountName, password)
 			if err == NetworkCommons.AuthError.ERR_OK:
 				var accountID : int = Launcher.SQL.GetAccountID(accountName)
-				if accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
+				# SOM-IDLE AUTH-P1: este ramo confere senha exatamente como o login,
+				# então paga o MESMO pedágio: teto por IP antes, e tentativa errada
+				# carimbada no eixo IP depois (sem isso, o spray só mudava de RPC).
+				if SQLSecurity.IsBlocked(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress):
 					err = NetworkCommons.AuthError.ERR_AUTH
+				elif accountID != NetworkCommons.PeerUnknownID and Launcher.SQL.IsLockedOut(accountID):
+					err = NetworkCommons.AuthError.ERR_AUTH
+					SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
 				else:
 					accountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
 					if not accountData:
 						err = NetworkCommons.AuthError.ERR_AUTH
+						var noted : Dictionary = SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
+						if bool(noted.get("justBlocked", false)):
+							SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginIPBlock, accountID, JSON.stringify({"ip": ipAddress}))
+						if accountID == NetworkCommons.PeerUnknownID:
+							SQLSecurity.BurnKdfTime(password)
+						elif Launcher.SQL.IsLockedOut(accountID):
+							SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginLockout, accountID)
 		elif not token.is_empty():
 			accountData = Launcher.SQL.ValidateAuthToken(Launcher.SQL.GetAccountID(accountName), Hasher.HashPassword(token), ipAddress)
 			if not accountData:
@@ -233,6 +324,12 @@ func AcceptConsent(accountName : String, password : String, token : String, reme
 					Launcher.SQL.RefreshAuthToken(peer.accountID, ipAddress)
 	Network.AuthError(err, peerID)
 
+# SOM-IDLE AUTH-P0 (auditoria 2026-09-27 §10/§22-P0-2). Este handler é o único
+# ponto do fluxo que sabe se a conta existe; a resposta ao client é sempre a
+# MESMA (`ERR_RESET_EMAIL_SENT`) nos quatro ramos — conta inexistente, e-mail
+# vazio, budget da janela estourado e e-mail efetivamente enviado — então ele não
+# serve de oráculo de enumeração nem de multiplicador de tentativa: o teto agora é
+# por CONTA em janela rolante (`EmailService.BeginResetRequest`), não por peer.
 func RequestPasswordReset(accountName : String, peerID : int):
 	if not Launcher.Email or not Launcher.Email.IsConfigured():
 		Network.AuthError(NetworkCommons.AuthError.ERR_RESET_UNAVAILABLE, peerID)
@@ -240,31 +337,62 @@ func RequestPasswordReset(accountName : String, peerID : int):
 
 	var accountID : int = Launcher.SQL.GetAccountID(accountName)
 	if accountID != NetworkCommons.PeerUnknownID:
-		if not Launcher.Email.HasRecentReset(accountID):
+		if Launcher.Email.BeginResetRequest(accountID):
 			var email : String = Launcher.SQL.GetAccountEmail(accountID)
 			if not email.is_empty():
-				var code : String = Hasher.GenerateResetCode()
-				var codeHash : String = Hasher.HashPassword(code)
-				Launcher.Email.CreateReset(accountID, codeHash)
+				var code : String = Hasher.NormalizeResetCode(Hasher.GenerateResetCode())
+				Launcher.Email.CreateReset(accountID, Hasher.HashPassword(code))
 				Launcher.Email.SendPasswordResetEmail(email, code)
+		elif Launcher.SQL != null:
+			# Frente 4: budget da janela estourado é negação de serviço ao chamador —
+			# a resposta continua idêntica (anti-enumeration), mas o beta enxerga a
+			# tentativa agregada em `sec_reset_request_limit`.
+			SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventResetRequestLimit, accountID)
 
 	Network.AuthError(NetworkCommons.AuthError.ERR_RESET_EMAIL_SENT, peerID)
 
 func ConfirmPasswordReset(accountName : String, code : String, newPassword : String, peerID : int):
 	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_RESET_INVALID_CODE
 
+	# Normaliza ANTES de validar e antes de hashar: o storage guarda o hash do texto
+	# normalizado, então comparar o cru recusaria o código correto digitado em
+	# minúsculo (e-mail copiado no celular).
+	var normalized : String = Hasher.NormalizeResetCode(code)
 	var passwordErr : NetworkCommons.AuthError = NetworkCommons.CheckPasswordInformation(newPassword)
-	if passwordErr == NetworkCommons.AuthError.ERR_OK and NetworkCommons.CheckResetCode(code):
+	if passwordErr == NetworkCommons.AuthError.ERR_OK and NetworkCommons.CheckResetCode(normalized):
 		var accountID : int = Launcher.SQL.GetAccountID(accountName)
 		if accountID != NetworkCommons.PeerUnknownID:
-			var codeHash : String = Hasher.HashPassword(code)
+			var codeHash : String = Hasher.HashPassword(normalized)
+			# `ValidateReset` conta a tentativa errada aqui em baixo (consumo em
+			# `EmailService`); o acerto não consome — quem apaga o pending é este
+			# handler, e só depois do commit.
+			var hadPending : bool = Launcher.Email.HasPendingReset(accountID)
 			if Launcher.Email.ValidateReset(accountID, codeHash):
+				# Os dois writers são raw (`ExecuteBindings`), então cabem na
+				# transação; e o resultado deles agora É o veredito — antes o lambda
+				# devolvia `true` com o UPDATE falho e o player recebia
+				# "senha atualizada" sem senha atualizada (auditoria §5, disciplina
+				# transacional).
 				if Launcher.SQL.Transaction(func() -> bool:
-					Launcher.SQL.UpdateAccountPassword(accountID, newPassword)
+					var updated : bool = Launcher.SQL.UpdateAccountPassword(accountID, newPassword)
+					var revoked : bool = Launcher.SQL.RemoveAllAuthTokens(accountID)
+					return updated and revoked):
 					Launcher.Email.RemoveReset(accountID)
-					Launcher.SQL.RemoveAllAuthTokens(accountID)
-					return true):
 					err = NetworkCommons.AuthError.ERR_RESET_PASSWORD_UPDATED
+			# O gancho de esgotamento é do ramo ERRADO: numa tentativa certa o
+			# pending continua vivo (quem apaga é o commit acima), então é aqui
+			# — depois de `ValidateReset` devolver false — que se enxerga a
+			# diferença entre "só errou" e "bateu no teto e comeu o pending".
+			# Não recalculamos a aritmética do teto (é do `EmailService`, dono do
+			# pending, e uma tentativa a mais/menos ali mudaria o número sem mudar
+			# o sentido do sinal): basta "havia pending, a tentativa errada o
+			# sumiu". Isso é exatamente o esgotamento (ou o vencimento no mesmo
+			# golpe) — nunca um simples erro, que deixa o pending vivo.
+			elif hadPending and not Launcher.Email.HasPendingReset(accountID):
+				# Frente 4: pending CONSUMIDO pela tentativa errada que bateu no
+				# teto (a disciplina é do `EmailService`, nada duplicado aqui) — o
+				# sinal distingue "adivinho zerou o pending" de "só estava errado".
+				SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventResetExhausted, accountID)
 
 	Network.AuthError(err, peerID)
 
@@ -486,7 +614,7 @@ func ClaimOfflineSettle(peerID : int):
 	if charID == NetworkCommons.PeerUnknownID:
 		Network.AFKReport({}, peerID)
 		return
-	if not Peers.Footprint(peerID, "claim_settle", 60):
+	if not Peers.Footprint(peerID, "claim_settle", NetworkCommons.FootprintGateMs):
 		Network.AFKReport({}, peerID)
 		return
 
@@ -646,6 +774,17 @@ func SetTorment(level : int, peerID : int):
 		return
 	Network.CommandFeedback("Torment %d active" % int(result.get("level", 0)), peerID)
 	Network.TormentState(_TormentState(charID), peerID)
+
+# SOM-IDLE retenção: leitura do streak de login para a superfície do jogador. Só
+# LE — o estado é o que `StreakService.RecordLogin` escreveu no login (dia decidido
+# pelo relógio do servidor), e a escada vem do código que paga. Cliente não manda
+# número nenhum: sem esta linha o streak continuaria invisível.
+func GetStreak(peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		Network.StreakState({}, peerID)
+		return
+	Network.StreakState(StreakService.View(charID), peerID)
 
 func RunBossRush(peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
@@ -882,7 +1021,7 @@ func OpenChest(chestID : int, peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	var result : Dictionary = {}
 	if charID != NetworkCommons.PeerUnknownID and accountID != NetworkCommons.PeerUnknownID:
-		if not Peers.Footprint(peerID, "open_chest", 60):
+		if not Peers.Footprint(peerID, "open_chest", NetworkCommons.FootprintGateMs):
 			Network.ChestOpened({}, peerID)
 			return
 		result = Launcher.Economy.OpenChest(charID, chestID)
@@ -1014,7 +1153,7 @@ func ArenaAttack(defenderAccountID : int, peerID : int):
 		# O board pós-ataque vai para a SESSÃO do defensor, não para a conta dele:
 		# ArenaBoardResult termina em CallClient, cujo peerID é destino de transporte.
 		# Conta desconectada não tem peer — sem o gate, o rpc iria para -2.
-		var defenderPeer : int = Peers.accounts.get(defenderAccountID, NetworkCommons.PeerUnknownID)
+		var defenderPeer : int = Peers.GetAccountPeer(defenderAccountID)
 		if defenderPeer != NetworkCommons.PeerUnknownID:
 			Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(defenderAccountID), defenderPeer)
 
@@ -1025,6 +1164,257 @@ func ArenaBoard(peerID : int):
 		Network.ArenaBoardResult({"ok" = false, "reason" = "not_logged_in"}, peerID)
 		return
 	Network.ArenaBoardResult(Launcher.Economy.ArenaBoard(accountID), peerID)
+
+# ------------------------------------------------------------------ P1-1/P1-2: Auction House para a janela
+# O `/ah` de WorldCommands continua vivo (mesmo serviço, mesma sessão); estes
+# handlers dão à UI o mesmo acesso com payload estruturado. Nada aqui decide
+# preço, taxa ou saldo: `AuctionHouseService` move ouro/itens/gems, o handler só
+# autentica pelo transporte e devolve o estado REAL depois do movimento.
+# 059(b) (JUIZ MARKETPLACE): `BrowseListings` ganhou OFFSET no serviço, então a
+# janela de 40 linhas deixou de ser um recorte de leitura e passou a ser PÁGINA,
+# com filtro de preço e de item aplicados no SQL do servidor. O `limit` antigo
+# continua aceito (`GetAuctionListings` = página 0) para não partir o `/ah`.
+const AHMaxBrowseWindow : int = 40
+
+func GetAuctionListings(limit : int, peerID : int):
+	_AuctionWindow(clampi(limit, 1, EconomyCatalog.AHBrowsePageSize), 0, 0, 0, peerID)
+
+# Página pedida pelo painel: offset + filtro, resposta no MESMO payload de
+# `AuctionListings` (a forma da resposta é o estado da janela, não o modo de
+# busca — nada de um segundo canal para a mesma tela).
+func GetAuctionPage(offset : int, maxPrice : int, itemID : int, peerID : int):
+	_AuctionWindow(EconomyCatalog.AHBrowsePageSize, maxi(0, offset), maxi(0, maxPrice), maxi(0, itemID), peerID)
+
+func _AuctionWindow(limit : int, offset : int, maxPrice : int, itemID : int, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	if accountID == NetworkCommons.PeerUnknownID or charID == NetworkCommons.PeerUnknownID:
+		Network.AuctionListings({"ok" = false, "reason" = "not_logged_in"}, peerID)
+		return
+	var page : Dictionary = Launcher.Economy.BrowseListingsPage(limit, offset, maxPrice, itemID)
+	var listings : Array = []
+	var sellers : Array = []
+	for row in page.get("listings", []):
+		var sellerChar : int = int(row.get("seller_char", 0))
+		if not sellers.has(sellerChar):
+			sellers.append(sellerChar)
+		listings.append({
+			"id" = int(row.get("id", 0)),
+			"seller_char" = sellerChar,
+			"item_id" = int(row.get("item_id", 0)),
+			"count" = int(row.get("count", 1)),
+			"price_gold" = int(row.get("price_gold", 0)),
+			"highlight" = int(row.get("highlight", 0)),
+			"created_at" = int(row.get("created_at", 0)),
+			# "mine" habilita Cancel/Highlight no painel. O serviço já recusa
+			# cancelamento de anúncio alheio; a UI apenas esconde o impossível.
+			"mine" = sellerChar == charID,
+		})
+	var names : Dictionary = _AHSellerNames(sellers)
+	for entry in listings:
+		entry["seller"] = str(names.get(int(entry["seller_char"]), "?"))
+	var cap : int = Launcher.Economy.AHOpenCap(accountID)
+	Network.AuctionListings({
+		"ok" = true,
+		"listings" = listings,
+		# Tudo que a confirmação de gasto precisa mostrar ANTES do clique.
+		"gold" = _AHCharGold(charID),
+		"gems" = Launcher.Economy.GetGems(accountID),
+		"open" = _AHOpenCount(accountID),
+		"cap" = cap,
+		"list_fee_gems" = EconomyCatalog.AHListFeeGems,
+		"highlight_fee_gems" = EconomyCatalog.AHHighlightFeeGems,
+		# Custo do PRÓXIMO slot (a fórmula base × (extra+1) é do serviço, não da UI).
+		"slot_cost_gems" = EconomyCatalog.AHSlotBaseCost * (maxi(0, cap - EconomyCatalog.AHMaxOpenPerAccount) + 1),
+		"creator_fee_pct" = CraftCatalog.CREATOR_FEE_PCT,
+		# 059(b): paginação do lado do servidor — o painel não recorta mais.
+		"total" = int(page.get("total", 0)),
+		"offset" = int(page.get("offset", 0)),
+		"page_size" = int(page.get("page_size", limit)),
+		"max_page" = int(page.get("max_page", 0)),
+		# 059(a): preço realizado no servidor, lido de `ah_price_history`. O
+		# histórico deixa de ser memória de sessão: duas contas abertas na mesma
+		# hora veem o mesmo número, e ele sobrevive a fechar a janela.
+		"sold" = Launcher.Economy.RecentSoldSummary(itemID, EconomyCatalog.AHSoldHistoryWindow),
+		"sold_recent" = Launcher.Economy.RecentSoldPrices(itemID, EconomyCatalog.AHSoldHistoryWindow),
+		# 059(c): as ordens de compra em pé desta conta (gold em escrow).
+		"orders" = Launcher.Economy.BuyOrdersFor(charID, 8),
+		"bid_cap" = EconomyCatalog.AHMaxBuyOrdersPerAccount,
+		"bid_max_quantity" = EconomyCatalog.AHMaxBidQuantity,
+	}, peerID)
+
+func AuctionBuy(listingID : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("buy", listingID, false, "not_logged_in", peerID)
+		return
+	# Pré-leitura só refina o motivo visível; o veredito continua sendo do serviço,
+	# que faz tudo numa transação sob settleMutex (não há TOCTOU a explorar aqui).
+	var row : Dictionary = _AHListingRow(listingID)
+	if row.is_empty():
+		_AuctionResult("buy", listingID, false, "not_found", peerID)
+		return
+	if int(row.get("seller_account", 0)) == accountID:
+		_AuctionResult("buy", listingID, false, "own_listing", peerID)
+		return
+	var price : int = int(row.get("price_gold", 0))
+	if _AHCharGold(charID) < price:
+		_AuctionResult("buy", listingID, false, "insufficient_gold", peerID)
+		return
+	var ok : bool = Launcher.Economy.BuyListing(charID, listingID)
+	_AuctionResult("buy", listingID, ok, "ok" if ok else "rejected", peerID)
+	if ok:
+		_AuctionRefresh(peerID)
+
+func AuctionCancel(listingID : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("cancel", listingID, false, "not_logged_in", peerID)
+		return
+	if not Launcher.Economy.CancelListing(charID, listingID):
+		_AuctionResult("cancel", listingID, false, "rejected", peerID)
+		return
+	# A taxa de anúncio em gems é queimada e não volta (decisão do serviço).
+	_AuctionResult("cancel", listingID, true, "ok", peerID)
+	_AuctionRefresh(peerID)
+
+func AuctionList(itemID : int, count : int, priceGold : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("list", 0, false, "not_logged_in", peerID)
+		return
+	if itemID <= 0 or count <= 0 or priceGold <= 0:
+		_AuctionResult("list", 0, false, "bad_args", peerID)
+		return
+	var listing : int = Launcher.Economy.ListItemForSale(charID, itemID, count, priceGold)
+	_AuctionResult("list", listing, listing > 0, "ok" if listing > 0 else "rejected", peerID)
+	if listing > 0:
+		_AuctionRefresh(peerID)
+
+func AuctionHighlight(listingID : int, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("highlight", listingID, false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.HighlightListing(accountID, listingID)
+	var ok : bool = bool(result.get("ok", false))
+	_AuctionResult("highlight", listingID, ok, str(result.get("reason", "rejected")), peerID)
+	if ok:
+		_AuctionRefresh(peerID)
+
+# 059(c): ordem de compra. O ouro sai da carteira para o escrow DENTRO da
+# transação do serviço (`PlaceBuyOrder`); este handler autentica pelo transporte,
+# repassa e devolve o estado real — a mesma disciplina de `AuctionList` do lado
+# da oferta, e os mesmos `reason` estáveis (nada de token novo sem linha no
+# catálogo i18n: `rejected` cobre cap de ordens, saldo insuficiente e args
+# inválidos, que é o que o jogador precisa saber).
+# No resultado, `listing` é o id da ORDEM para as duas ações novas — a UI imprime
+# o id que o servidor devolveu, nunca inventa um.
+func AuctionBid(itemID : int, count : int, unitPrice : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("bid", 0, false, "not_logged_in", peerID)
+		return
+	if itemID <= 0 or count <= 0 or unitPrice <= 0:
+		_AuctionResult("bid", 0, false, "bad_args", peerID)
+		return
+	var order : int = Launcher.Economy.PlaceBuyOrder(charID, itemID, count, unitPrice)
+	var placed : bool = order > 0
+	_AuctionResult("bid", order, placed, "ok" if placed else "rejected", peerID)
+	if placed:
+		_AuctionRefresh(peerID)
+
+func AuctionBidCancel(orderID : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	if charID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("bid_cancel", orderID, false, "not_logged_in", peerID)
+		return
+	if not Launcher.Economy.CancelBuyOrder(charID, orderID):
+		_AuctionResult("bid_cancel", orderID, false, "rejected", peerID)
+		return
+	_AuctionResult("bid_cancel", orderID, true, "ok", peerID)
+	_AuctionRefresh(peerID)
+
+func AuctionBuySlot(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		_AuctionResult("slot", 0, false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyAHSlot(accountID)
+	var ok : bool = bool(result.get("ok", false))
+	_AuctionResult("slot", 0, ok, str(result.get("reason", "rejected")), peerID)
+	if ok:
+		_AuctionRefresh(peerID)
+
+# Veredito + saldo depois do movimento. O painel mostra ESTES números (e a
+# prévia de custo usa os campos que GetAuctionListings entregou), então a UI
+# nunca afirma um gasto que o servidor não confirmou.
+func _AuctionResult(action : String, listingID : int, ok : bool, reason : String, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	Network.AuctionTradeResult({
+		"action" = action,
+		"listing" = listingID,
+		"ok" = ok,
+		"reason" = reason,
+		"gold" = _AHCharGold(charID) if charID != NetworkCommons.PeerUnknownID else 0,
+		"gems" = Launcher.Economy.GetGems(accountID) if accountID != NetworkCommons.PeerUnknownID else 0,
+	}, peerID)
+
+# Pós-trade: re-puxa a janela de anúncios (o item saiu/entrou do mercado) e o
+# estado de economia, mesmo formato das ações pagas de Shop/Chests.
+func _AuctionRefresh(peerID : int):
+	GetAuctionListings(AHMaxBrowseWindow, peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID != NetworkCommons.PeerUnknownID and accountID != NetworkCommons.PeerUnknownID:
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+func _AHCharGold(charID : int) -> int:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])
+	return int(rows[0].get("gp", 0)) if not rows.is_empty() else 0
+
+func _AHOpenCount(accountID : int) -> int:
+	# Mesmo contador do guard de ListItemForSale (`seller_account`, não char).
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM auction_listing WHERE seller_account = ? AND status = 'open';", [accountID])
+	return int(rows[0].get("n", 0)) if not rows.is_empty() else 0
+
+func _AHListingRow(listingID : int) -> Dictionary:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id, seller_account, item_id, count, price_gold FROM auction_listing WHERE id = ? AND status = 'open';", [listingID])
+	return {} if rows.is_empty() else rows[0]
+
+# Um único IN parametrizado para a janela toda (nada de uma query por anúncio).
+func _AHSellerNames(charIDs : Array) -> Dictionary:
+	var out : Dictionary = {}
+	var placeholders : PackedStringArray = PackedStringArray()
+	var params : Array = []
+	for raw in charIDs:
+		var id : int = int(raw)
+		if id <= 0:
+			continue
+		placeholders.append("?")
+		params.append(id)
+	if placeholders.is_empty():
+		return out
+	for row in Launcher.SQL.QueryBindings("SELECT char_id, nickname FROM character WHERE char_id IN (%s);" % ", ".join(placeholders), params):
+		out[int(row.get("char_id", 0))] = str(row.get("nickname", "?"))
+	return out
+
+# ROADMAP_COMERCIAL S1 / P1-7: funil onboarding_done no caminho com Telemetria.
+# `Launcher.Telemetry` só existe no processo servidor (`Launcher.Server()`), então
+# o emit em `Onboarding.Stop()` não gravava nada no build web (cliente puro) — o
+# funil comercial perdia exatamente a última etapa do funil. O rpc chega a quem tem
+# o serviço e carimba conta/personagem DA SESSÃO, nunca do corpo do pacote.
+# Persistência: linha em `telemetry_event` com kind = "onboarding_done" (já existe
+# em TelemetryService.FUNNEL_KINDS) — nenhuma migration foi necessária.
+func OnboardingDone(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		return
+	if Launcher.get("Telemetry") != null and Launcher.Telemetry.has_method("RecordFunnel"):
+		Launcher.Telemetry.RecordFunnel("onboarding_done", accountID, charID)
 
 func RerollDailyShop(peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
@@ -1191,7 +1581,16 @@ func TriggerChat(channelName : String, text : String, peerID : int):
 			Network.ChatSystem(channelName, silenced, peerID)
 			return null
 		ChatModeration.Note(accountID, player.nick, channelName, message)
-		if channelName == str(GUICommons.ChatChannel.LOCAL):
+		if ChatModeration.IsGuildChannel(channelName):
+			# SOM-IDLE social (auditoria 2026-09-27 §SOCIAL): sem este ramo a linha
+			# caía no `else` de whisper, não reach ninguém e o falante lia "'guild:Foo'
+			# is no longer online". Quem recebe é decisão de moderação; aqui só o
+			# primitivo de envio e o aviso de entrega quando ela não aconteceu.
+			var delivered : int = ChatModeration.FanoutGuildChat(accountID, player.nick, channelName, player.get_rid().get_id(), message)
+			if delivered <= 0:
+				Network.ChatSystem(channelName, "No guild member session is online to receive this", peerID)
+			return null
+		elif channelName == str(GUICommons.ChatChannel.LOCAL):
 			Network.NotifyNeighbours(player, "ChatPlayer", [str(GUICommons.ChatChannel.LOCAL), player.nick, message, player.get_rid().get_id()])
 		elif channelName == str(GUICommons.ChatChannel.GLOBAL):
 			Network.NotifyGlobal("ChatPlayer", [str(GUICommons.ChatChannel.GLOBAL), player.nick, message, player.get_rid().get_id()])

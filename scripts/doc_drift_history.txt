@@ -1,0 +1,2 @@
+# Docs que NÃO são especificação viva: registro datado, varrido pelo gate de ponteiros
+# (tests/IdleTests.gd) e não pelo de drift. Um caminho por linha.

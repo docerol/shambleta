@@ -177,16 +177,29 @@ func DisplayProjectile(targetPos : Vector2, skill : SkillCell):
 
 func DisplayAlteration(target : Entity, emitter : Entity, value : int, alteration : ActorCommons.Alteration, skillID : int):
 	if Launcher.Map.currentFringe:
+		# SOM-GAMEPLAY G2: a fraqueza/resistência que o servidor já aplicou no
+		# número é lida AQUI das stats que o cliente tem do alvo (mesmo preset de
+		# EntitiesDB + mesmo ElementCommons compartilhado). Nenhum byte de protocolo
+		# mudou — é por isso que é heurística de exibição, não um dado novo.
+		var dealerStats : BaseStats = emitter.stat.current if emitter != null and emitter.stat != null else null
+		var targetStats : BaseStats = target.stat.current if target != null and target.stat != null else null
+		var affinity : int = ElementCommons.AffinityForAlteration(dealerStats, targetStats, alteration)
+
 		var newLabel : Label = ActorCommons.AlterationLabel.instantiate()
 		newLabel.SetPosition(visibleNode.get_global_position(), target.get_global_position())
-		newLabel.SetValue(emitter, value, alteration)
+		newLabel.SetValue(emitter, value, alteration, affinity)
 		Launcher.Map.currentFringe.add_child(newLabel)
 
 		if entity.type != ActorCommons.Type.PLAYER:
 			if alteration == ActorCommons.Alteration.HEAL:
 				target.stat.health += value
 				target.stat.RefreshVitalStats()
-			elif alteration == ActorCommons.Alteration.HIT or alteration == ActorCommons.Alteration.CRIT or alteration == ActorCommons.Alteration.DEADLY:
+			# SOM-GAMEPLAY G2: os DoTs elemental (poison/bleed/burn) também descem
+			# a barra local do mob. Antes não entravam neste branch: o servidor já
+			# tinha descontado a vida, mas a UI do HP ficava presa no último HIT —
+			# o mob "não morria" visualmente enquanto queimava.
+			elif alteration == ActorCommons.Alteration.HIT or alteration == ActorCommons.Alteration.CRIT or alteration == ActorCommons.Alteration.DEADLY \
+					or alteration == ActorCommons.Alteration.POISON or alteration == ActorCommons.Alteration.BLEED or alteration == ActorCommons.Alteration.BURN:
 				target.stat.health -= value
 				target.stat.RefreshVitalStats()
 

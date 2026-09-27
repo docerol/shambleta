@@ -7,6 +7,14 @@ var backups : SQLBackups			= null
 var queryMutex : Mutex				= Mutex.new()
 var _tableColumns : Dictionary		= {}
 
+# Read pool (WAL). A decisão e as conexões moram em `SQLReadRules` / `SQLReadPool`;
+# aqui só há delegação. `readTxnDepth` é o contador de transações de escrita em
+# aberto: dentro delas a leitura NÃO pode sair do handle `db` (é o handle da própria
+# transação), então a rota para o pool fica fechada — ver regra 1 de `SQLReadRules`.
+var readPool : SQLReadPool			= null
+var readPoolEnabled : bool			= SQLCommons.ReadPoolDefaultEnabled
+var readTxnDepth : int				= 0
+
 # Migrations
 func HasVersion() -> bool:
 	var result = Query("SELECT name FROM sqlite_master WHERE type=\"table\" AND name=\"migration\"")
@@ -529,8 +537,14 @@ func GetStat(charID : int) -> Dictionary:
 # detail, not a promise, and a lambda that outlives it deadlocks the process.
 func Transaction(callable : Callable) -> bool:
 	var committed : bool = false
-	queryMutex.lock()
+	_LockQueryMutex()
 	txCounter += 1
+	# Contador (não flag) porque a queryMutex é recursiva no Godot 4.7 e um lambda
+	# pode aninhar `Transaction()`: com flag, a saída do interno abriria a rota do
+	# pool para o externo, que ainda tem escrita não cometida no handle `db`.
+	# Incrementado sob a mutex, junto do BEGIN — é o que define "existe transação
+	# de escrita em aberto neste processo".
+	readTxnDepth += 1
 	if db.query("BEGIN TRANSACTION;"):
 		var result : bool = callable.call()
 		if result and db.query("COMMIT;"):
@@ -544,7 +558,8 @@ func Transaction(callable : Callable) -> bool:
 			# ficava no banco. Não tentamos consertar: só não deixamos passar.
 			if not db.query("ROLLBACK;"):
 				push_error("SQL.Transaction: o ROLLBACK não achou transação ativa — um writer aninhado (db.update_rows/delete_rows fazem BEGIN/END próprios) comitou o trabalho do lambda no meio da transação. Dentro de Transaction() só ops raw: UpdateRowsRaw/DeleteRowsRaw/insert_row/ExecNoLock.")
-	queryMutex.unlock()
+	readTxnDepth -= 1
+	_UnlockQueryMutex()
 	return committed
 
 # C1: whitelist de colunas para os writers que montam SQL a partir de um
@@ -926,10 +941,10 @@ func UpdatePowerScore(charID : int, score : int) -> bool:
 
 func GetLeaderboard(limit : int = 50) -> Array[Dictionary]:
 	return QueryBindings("SELECT c.char_id, c.nickname, s.level, c.power_score, a.username, \
-(SELECT ce.cosmetic_id FROM cosmetic_equip AS ce WHERE ce.account_id = a.account_id AND ce.slot = 'title') AS title_cosmetic \
+(SELECT ce.cosmetic_id FROM cosmetic_equip AS ce WHERE ce.account_id = a.account_id AND ce.slot = ?) AS title_cosmetic \
 FROM character AS c INNER JOIN account AS a ON c.account_id = a.account_id \
 INNER JOIN stat AS s ON s.char_id = c.char_id \
-ORDER BY c.power_score DESC, c.char_id ASC LIMIT ?;", [limit])
+ORDER BY c.power_score DESC, c.char_id ASC LIMIT ?;", [SQLCommons.CosmeticSlotTitle, limit])
 
 # SOM-IDLE: F4 — chest instance queries
 func GetClosedChests(charID : int) -> Array[Dictionary]:
@@ -1376,8 +1391,76 @@ func GetBanList(filter : String = "") -> Array[Dictionary]:
 var queryCounter : int = 0
 var txCounter : int = 0
 
+# ---------------------------------------------------------------- espera na mutex
+# P1 — escalabilidade: o gargalo do caminho de SQL neste processo é UMA mutex
+# (`queryMutex`, sources/sql/SQL.gd:7 — `grep -rn "Thread.new()" sources/` devolve
+# um hit só, o worker de backup), e até aqui ela era invisível: tínhamos quantas
+# round trips se faziam (queryCounter) e nunca QUANTO TEMPO alguém ficou na fila
+# para fazê-las. Sem esse número, "o banco está lento" e "todo mundo está esperando
+# o writer" são indistinguíveis em produção — e são diagnósticos com remédios
+# opostos. Os contadores abaixo são incrementados DEPOIS do lock, dentro da seção
+# crítica, porque é escrito de thread concorrente (o worker de backup também passa
+# por aqui, sources/sql/SQLBackups.gd:5).
+#
+# Leitura barata e sem lock: `QueryMutexWaitStats()` copia o par {waits, µs} dentro
+# da própria mutex, então o número nunca é rasgado — e um /metrics scrape a cada 30 s
+# (deploy/docker-compose.yml, healthcheck do `game`) não pode custar uma query.
+var mutexWaits : int = 0
+var mutexWaitMicroseconds : int = 0
+var mutexWaitMaxMicroseconds : int = 0
+# Cauda, em degrades. Média sozinha esconde o sintoma que importa: um passe de
+# backup que segura a mutex 400 ms numa média de 3 µs não aparece na média e aparece
+# no jogador.
+var mutexWaitOver1Ms : int = 0
+var mutexWaitOver10Ms : int = 0
+var mutexWaitOver100Ms : int = 0
+
+# Ponto único de lock dos caminhos de round trip (os quatro chamadores são
+# `Transaction`, `Query`, `QueryBindings`, `ExecuteBindings`): medir a espera aqui é
+# o que garante que nenhum caminho com lock esquece o contador. O getter
+# `QueryMutexWaitStats()` abaixo usa a mutex crua de propósito — ler estatística não
+# é round trip de SQL e não pode inflar a própria medida. O custo da medição é duas
+# chamadas a `Time.get_ticks_usec()` (~0,1 µs) por seção crítica.
+func _LockQueryMutex() -> void:
+	var started : int = Time.get_ticks_usec()
+	queryMutex.lock()
+	var waited : int = maxi(Time.get_ticks_usec() - started, 0)
+	mutexWaits += 1
+	mutexWaitMicroseconds += waited
+	if waited > mutexWaitMaxMicroseconds:
+		mutexWaitMaxMicroseconds = waited
+	if waited > 100000:
+		mutexWaitOver100Ms += 1
+	elif waited > 10000:
+		mutexWaitOver10Ms += 1
+	elif waited > 1000:
+		mutexWaitOver1Ms += 1
+
+func _UnlockQueryMutex() -> void:
+	queryMutex.unlock()
+
+# Acumulado de espera na mutex, em segundos — forma de counter Prometheus
+# (monotônico no processo), que é o que o `/metrics` precisa expor.
+func QueryMutexWaitSeconds() -> float:
+	return float(mutexWaitMicroseconds) / 1000000.0
+
+func QueryMutexWaitStats() -> Dictionary:
+	queryMutex.lock()
+	var stats : Dictionary = {
+		"waits": mutexWaits,
+		"microseconds": mutexWaitMicroseconds,
+		"maxMicroseconds": mutexWaitMaxMicroseconds,
+		"over1ms": mutexWaitOver1Ms,
+		"over10ms": mutexWaitOver10Ms,
+		"over100ms": mutexWaitOver100Ms,
+	}
+	queryMutex.unlock()
+	return stats
+
 func QueryCount() -> int:
-	return queryCounter
+	# Leitura roteada para o pool também é round trip: o orçamento do gate de
+	# benchmark (round trips por ação) tem que continuar contando igual.
+	return queryCounter + (readPool.readCount if readPool != null else 0)
 
 func TransactionCount() -> int:
 	return txCounter
@@ -1385,6 +1468,14 @@ func TransactionCount() -> int:
 func ResetCounters() -> void:
 	queryCounter = 0
 	txCounter = 0
+	mutexWaits = 0
+	mutexWaitMicroseconds = 0
+	mutexWaitMaxMicroseconds = 0
+	mutexWaitOver1Ms = 0
+	mutexWaitOver10Ms = 0
+	mutexWaitOver100Ms = 0
+	if readPool != null:
+		readPool.ResetStats()
 
 # Primitiva sancionada para dentro de `Transaction()`: os helpers com lock
 # re-entrariam em `queryMutex` e o `db.query_with_bindings` cru escaparia da
@@ -1407,28 +1498,86 @@ func ExecNoLockQuery(query : String, params : Array = []) -> Array[Dictionary]:
 	return []
 
 func Query(query : String) -> Array[Dictionary]:
+	var pooled : Dictionary = _PoolRead(query, [])
+	if bool(pooled.get("ok", false)):
+		return pooled["rows"]
 	var data : Array[Dictionary] = []
-	queryMutex.lock()
+	_LockQueryMutex()
 	queryCounter += 1
 	if db.query(query):
 		data = db.query_result
-	queryMutex.unlock()
+	_UnlockQueryMutex()
 	return data
 
 func QueryBindings(query : String, params : Array) -> Array[Dictionary]:
+	var pooled : Dictionary = _PoolRead(query, params)
+	if bool(pooled.get("ok", false)):
+		return pooled["rows"]
 	var data : Array[Dictionary] = []
-	queryMutex.lock()
+	_LockQueryMutex()
 	queryCounter += 1
 	if db.query_with_bindings(query, params):
 		data = db.query_result
-	queryMutex.unlock()
+	_UnlockQueryMutex()
 	return data
 
+# Rota de leitura (implementada em `SQLReadRules` + `SQLReadPool`, aqui só
+# delegação). A regra em uma linha: vai para uma conexão read-only do pool
+# exatamente quando a statement é leitura pura E não existe transação de escrita
+# em aberto neste processo. Dentro de transação a leitura continua no handle `db`
+# — é o handle da transação, e ler o último commit no lugar do trabalho ainda não
+# cometido do lambda é como se perde estado de dinheiro.
+# Falha do pool NÃO vira linha de menos: devolve ok=false e o chamador reexecuta
+# no caminho histórico (queryMutex + `db`), que é a mesma resposta de hoje.
+func _PoolRead(query : String, params : Array) -> Dictionary:
+	if not SQLReadRules.ShouldRoute(query, readTxnDepth, readPool != null and readPool.Ready(), readPoolEnabled):
+		return {"ok": false}
+	var attempt : Dictionary = readPool.ExecuteRead(query, params)
+	return attempt if bool(attempt.get("ok", false)) else {"ok": false}
+
+# ciclo de vida do pool — aberto depois das migrations (quem altera schema é o
+# handle do writer; uma conexão aberta no meio de um patch veria o schema anterior)
+func OpenReadPool(dbPath : String) -> bool:
+	CloseReadPool()
+	if not readPoolEnabled or LauncherCommons.isWeb or dbPath.is_empty():
+		return false
+	if readPool == null:
+		readPool = SQLReadPool.new()
+	var size : int = SQLCommons.ReadPoolSize
+	var envSize : String = OS.get_environment(SQLCommons.ReadPoolSizeEnv).strip_edges()
+	if envSize.is_valid_int():
+		size = int(envSize)
+	if not readPool.Open(dbPath, size):
+		push_warning("SQL: pool de leitura desligado (%s) — leituras seguem no mutex único" % readPool.lastError)
+		CloseReadPool()
+		return false
+	return true
+
+func CloseReadPool() -> void:
+	if readPool != null:
+		readPool.Close()
+
+# Liga/desliga em runtime (harness de medição e botão de emergência do ops).
+func SetReadPoolEnabled(enabled : bool) -> void:
+	readPoolEnabled = enabled
+
+func ReadPoolStats() -> Dictionary:
+	return readPool.Stats() if readPool != null else {"open": false, "slots": 0, "reads": 0, "failures": 0, "stuckResets": 0, "lastError": "pool ausente"}
+
+func ReadTxnDepth() -> int:
+	return readTxnDepth
+
+# A regra aplicada, na voz do processo: é isto que `tests/read_pool_test.gd`
+# confere, porque decidir a rota num arquivo e observá-la noutro é como uma
+# inversão de invariante passa despercebida.
+func ReadWouldRoute(query : String) -> bool:
+	return SQLReadRules.ShouldRoute(query, readTxnDepth, readPool != null and readPool.Ready(), readPoolEnabled)
+
 func ExecuteBindings(query : String, params : Array) -> bool:
-	queryMutex.lock()
+	_LockQueryMutex()
 	queryCounter += 1
 	var ret : bool = db.query_with_bindings(query, params)
-	queryMutex.unlock()
+	_UnlockQueryMutex()
 	return ret
 
 #
@@ -1464,6 +1613,16 @@ func _post_launch():
 				backups = SQLBackups.new()
 
 	ApplyMigrations()
+	# Pool de leitura aberto DEPOIS das migrations: quem altera schema é o handle
+	# do writer, e uma conexão aberta no meio do patch leria o schema anterior.
+	readPoolEnabled = SQLCommons.ReadPoolDefaultEnabled
+	var envPool : String = OS.get_environment(SQLCommons.ReadPoolEnableEnv).strip_edges().to_lower()
+	if envPool == "0" or envPool == "off" or envPool == "false":
+		readPoolEnabled = false
+	elif envPool == "1" or envPool == "on" or envPool == "true":
+		readPoolEnabled = true
+	if readPoolEnabled:
+		OpenReadPool(dbPath)
 	CleanExpiredTwoFactorTokens()
 	Peers.bannedAccounts = LoadBans()
 	Peers.bannedIPRanges = LoadIPBans()
@@ -1475,6 +1634,9 @@ func _post_launch():
 func Destroy():
 	if backups:
 		backups.Stop()
+	# o worker para primeiro (é ele o segundo usuário do pool), depois fecham as
+	# conexões de leitura, depois o handle de escrita
+	CloseReadPool()
 	if db:
 		db.close_db()
 

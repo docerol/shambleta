@@ -7,8 +7,23 @@ class_name CommunityService
 # (resgate idempotente por PK); R1 - referral por conta com marcos e scan
 # anti-fraude (multi-account, rajada de troca, velocidade de level, flip). Usa o
 # MESMO settleMutex do EconomyService via _eco - nenhuma mudanca de locking.
+# Live Ops antifraude: o detector com severidade composta e fila de revisão
+# acionável vive em FraudeReview.gd (gate anti-god-node); esta classe é a FACHADA
+# que a EconomyService/WorldCommands já conhecem — RunFraudScan, FlagMultiAccount,
+# a fila (ListFlagsPaged/ReviewFlag/FlagContext/FraudMetrics) e as portas de
+# referral (SetReferralCode/GrantReferralBonuses) consultam o módulo via _fraud().
 
 var _eco : EconomyService = null
+
+# Detector/fila de fraude (FraudeReview.gd). Lazy: o job diário e os comandos
+# /cs_* criam via este getter — nada de estado novo de processo.
+var fraud : FraudeReview = null
+
+func _fraud() -> FraudeReview:
+	if fraud == null:
+		fraud = FraudeReview.new()
+		fraud._eco = _eco
+	return fraud
 
 # ------------------------------------------------------------------ R3: live events (COMMUNITY_ROADMAP)
 # Eventos temporários rotativos: framework ativado por timestamp no job diário.
@@ -272,9 +287,11 @@ func ClaimAchievement(accountID : int, achievementID : String) -> Dictionary:
 	return result
 
 # ------------------------------------------------------------------ R1: referral (COMMUNITY_ROADMAP)
-# Código por conta, recompensa por marco (L10 + e-mail verificado), anti-farma
-# via marco + teto semanal + auto-referral bloqueado (fingerprint cai no
-# fraud_flag existente). Valores são proposta (dono confirma).
+# Código por conta, recompensa por marco (L10 + e-mail verificado). Anti-farma
+# (Live Ops): marco + teto semanal + auto-referral/ciclo recusados em
+# SetReferralCode + porta ReferralGuard no payout (maturidade de 5d, hold
+# protetor, teto vitalício e ring de fingerprint no resgate) — ver FraudeReview.
+# Valores são proposta (dono confirma).
 
 func GetReferralState(accountID : int) -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT username, referral_code, referred_by FROM account WHERE account_id = ?;", [accountID])
@@ -305,12 +322,18 @@ func SetReferralCode(accountID : int, code : String) -> Dictionary:
 		return {"ok" = false, "reason" = "window_expired"}
 	if clean == str(me[0].get("referral_code", "")) and not clean.is_empty():
 		return {"ok" = false, "reason" = "self_referral"}
-	var inv : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, username FROM account WHERE referral_code = ?;", [clean])
+	# Ghost anonimizado (LGPD) não pode receber indicação: 'deleted_%' sai da
+	# busca; sem isto o código órfão de uma conta apagada rouba o referred_by.
+	var inv : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, username FROM account WHERE referral_code = ? AND username NOT LIKE 'deleted%' ORDER BY account_id LIMIT 1;", [clean])
 	if inv.is_empty():
 		return {"ok" = false, "reason" = "unknown_code"}
 	var inviter : int = int(inv[0]["account_id"])
 	if inviter == accountID:
 		return {"ok" = false, "reason" = "self_referral"}
+	# R1-hardening (Live Ops): a escada A→B→A pagava os dois degraus. O ciclo é
+	# auto-indicação com um passo de intermediário — recusar antes do UPDATE.
+	if _fraud().IsSelfLadder(accountID, inviter):
+		return {"ok" = false, "reason" = "referral_cycle"}
 	if not Launcher.SQL.ExecuteBindings("UPDATE account SET referred_by = ? WHERE account_id = ? AND referred_by = 0;", [inviter, accountID]):
 		return {"ok" = false, "reason" = "db_error"}
 	return {"ok" = true, "reason" = "ok", "inviter" = str(inv[0].get("username", "?"))}
@@ -323,6 +346,12 @@ func _ReferralMaxLevel(accountID : int) -> int:
 
 # Job diário: paga bônus de marco (inviter + invitee). Idempotente por flag +
 # reason do ledger; teto semanal por inviter. Retorna pares pagos.
+# R1-hardening: antes do dinheiro, a porta ReferralGuard (FraudeReview) exige
+# qualificação de 5 dias da indicada, recusa hold protetor em qualquer ponta,
+# teto vitalício por inviter e o ring "mesma instalação resgatando o próprio
+# bônus". Tudo que bloqueia é PROTETIVO e temporário: nada marca
+# referral_bonus_claimed, então a passada seguinte paga o bônus legítimo quando
+# a janela passar / o operador descartar a flag.
 func GrantReferralBonuses() -> int:
 	var paid : int = 0
 	var now : int = SQLCommons.Timestamp()
@@ -333,6 +362,9 @@ func GrantReferralBonuses() -> int:
 		if not Launcher.SQL.IsEmailVerifiedRaw(invitee):
 			continue
 		if _ReferralMaxLevel(invitee) < EconomyCatalog.REFERRAL_MIN_LEVEL:
+			continue
+		var guard : Dictionary = _fraud().ReferralGuard(inviter, invitee, now)
+		if not bool(guard.get("allow", false)):
 			continue
 		var week : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason LIKE 'referral_bonus:%' AND created_at >= ?;", [inviter, weekAgo])
 		if not week.is_empty() and int(week[0].get("n", 0)) >= EconomyCatalog.REFERRAL_WEEKLY_CAP:
@@ -348,65 +380,51 @@ func GrantReferralBonuses() -> int:
 		paid += 1
 	return paid
 
-# SOM-IDLE D3: heuristic fraud scan (roda no job diário; revisão é manual via
-# /cs_flags). Heurísticas v1: rajada de trades, velocidade de level impossível,
-# flip do mesmo item (compra/vende em <1h — padrão RMT/laundering).
+# ------------------------------------------------------------------ D3/S5: antifraude (FraudeReview.gd)
+# As heurísticas v1 (rajada de troca, velocidade de level, flip) continuam
+# rodando, agora como SINAIS COM PESO dentro do score composto de
+# FraudeReview.Scan — IP/dispositivo sem sobreposição nunca abre flag sozinho
+# (LAN house/NGM é uso normal). A revisão é sempre humana (/cs_flags, /cs_flag);
+# a única ação automática é o hold protetor de referral em violação
+# determinística de ledger. Ver a matriz no cabeçalho de FraudeReview.gd.
 
 func RunFraudScan() -> int:
-	var opened : int = 0
-	var now : int = SQLCommons.Timestamp()
-	opened += _FlagTradeBursts(now)
-	opened += _FlagLevelVelocity(now)
-	opened += _FlagFlipTrades(now)
-	return opened
+	var fr : FraudeReview = _fraud()
+	var result : Dictionary = fr.Scan()
+	# Métrica de revisão no caminho que o /metrics do companion já lê: sem
+	# contadores fixos ninguém sabe se o detector está calibrado no beta.
+	fr.RecordMetricsTelemetry()
+	return int(result.get("flags_opened", 0))
 
-func _FlagOpen(accountID : int, charID : int, kind : String, detail : String) -> bool:
-	var dup : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id FROM fraud_flag WHERE account_id = ? AND kind = ? AND detail = ? AND status = 'open';", [accountID, kind, detail])
-	if not dup.is_empty():
-		return false
-	return Launcher.SQL.ExecuteBindings("INSERT INTO fraud_flag (created_at, account_id, char_id, kind, detail, status) VALUES (?, ?, ?, ?, ?, 'open');", [SQLCommons.Timestamp(), accountID, charID, kind, detail])
-
-# SOM-IDLE S5: abre flag na MESMA fila de revisão manual das outras heurísticas
-# (`/cs_flags`), sem ban automático por design — punição é decisão humana. Não há
-# produtor automático hoje: a única chamada vivia em `Peers.FinalizeLogin` e
-# coletava o hash do hardware do SERVIDOR, o que sinalizava todas as contas
-# (removida em 2026-09-24; ver AUDITORIA_INDEPENDENTE item (s)). O que falta é um
-# detector com entropia por instalação coletada no cliente, não a fila.
+# SOM-IDLE S5: mantém a assinatura pública (EconomyService.FlagMultiAccount) e a
+# fila manual, agora com severidade forte por premissa de sobreposição. Nunca
+# ban: punição é decisão humana na fila. O produtor automático continua não
+# existindo por design (a heurística de login coletava o hash do HARDWARE DO
+# SERVIDOR e sinalizava todas as contas — removida em 2026-09-24, ver
+# AUDITORIA_INDEPENDENTE item (s) e o comentário em Peers.FinalizeLogin).
 func FlagMultiAccount(accountID : int, detail : String) -> bool:
-	if accountID <= 0 or detail.is_empty():
-		return false
-	return _FlagOpen(accountID, 0, "multi_account", detail)
+	return _fraud().FlagMultiAccount(accountID, detail)
 
-func _FlagTradeBursts(now : int) -> int:
-	var opened : int = 0
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, COUNT(*) AS n FROM ledger_transaction WHERE reason LIKE 'trade_out:%' AND created_at >= ? GROUP BY account_id HAVING n > ?;", [now - 86400, EconomyCatalog.FraudTradeBurstPerDay])
-	for row in rows:
-		if _FlagOpen(int(row["account_id"]), 0, "trade_burst", "trades_24h=%d" % int(row["n"])):
-			opened += 1
-	return opened
+# P1-6b: porta da fachada para o rombo de clawback (chargeback sem gem paga
+# suficiente). O chamador é CheckoutService, que sabe o pedido e o tomado; quem
+# decide kind/severidade/score é o detector, no mesmo mapa de todo sinal — ver
+# FraudeReview.ChargebackShortfall. Continua sendo fila de REVISÃO: nenhuma linha
+# daqui bane, silencia ou tira saldo.
+func ChargebackShortfall(accountID : int, paymentID : String, requested : int, debited : int, sku : String, grantID : int = 0) -> bool:
+	return _fraud().ChargebackShortfall(accountID, paymentID, requested, debited, sku, grantID)
 
-func _FlagLevelVelocity(now : int) -> int:
-	var opened : int = 0
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, char_id, value, meta FROM telemetry_event WHERE kind = 'levelup' AND created_at >= ? AND value >= ?;", [now - 86400, EconomyCatalog.FraudLevelJump])
-	for row in rows:
-		var meta : Variant = JSON.parse_string(str(row.get("meta", "")))
-		if meta is Dictionary and float((meta as Dictionary).get("hours", 99.0)) < EconomyCatalog.FraudLevelJumpHours:
-			if _FlagOpen(int(row["account_id"]), int(row["char_id"]), "level_velocity", "jump=%d levels in %sh" % [int(row["value"]), str((meta as Dictionary).get("hours", "?"))]):
-				opened += 1
-	return opened
+# ------------------------------------------------------------------ fila de revisão (Live Ops)
+# Fachada dos comandos /cs_flags /cs_flag /cs_flag_info /cs_fraud_stats
+# (WorldCommands) — o operador não toca SQL.
 
-func _FlagFlipTrades(now : int) -> int:
-	# Flip = char enviou o item X e RECEBEU o mesmo X em <1h (padrão
-	# laundering/RMT). Trade bilateral normal (X por Y) não casa: itens diferem.
-	var opened : int = 0
-	var outs : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT account_id, char_id, reason, created_at FROM ledger_transaction WHERE reason LIKE 'trade_out:%' AND created_at >= ?;", [now - 86400])
-	for row in outs:
-		var parts : PackedStringArray = str(row["reason"]).split(":")
-		if parts.size() < 2:
-			continue
-		var item : String = parts[1]
-		var back : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id FROM ledger_transaction WHERE char_id = ? AND reason LIKE ? AND ABS(created_at - ?) < 3600 LIMIT 1;", [int(row["char_id"]), "trade_in:" + item + ":%", int(row["created_at"])])
-		if not back.is_empty():
-			if _FlagOpen(int(row["account_id"]), int(row["char_id"]), "flip_trade", "item=%s" % item):
-				opened += 1
-	return opened
+func ListFlagsPaged(status : String, page : int = 1, perPage : int = 10) -> Dictionary:
+	return _fraud().ListFlagsPaged(status, page, perPage)
+
+func ReviewFlag(flagID : int, status : String, reviewerAccountID : int, note : String = "") -> Dictionary:
+	return _fraud().ReviewFlag(flagID, status, reviewerAccountID, note)
+
+func FlagContext(flagID : int) -> Dictionary:
+	return _fraud().FlagContext(flagID)
+
+func FraudMetrics(now : int = 0) -> Dictionary:
+	return _fraud().Metrics(now)

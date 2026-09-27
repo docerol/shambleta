@@ -4,12 +4,24 @@ extends WindowPanel
 # grátis/premium lado a lado por nível claimável, missões do período com
 # progresso server-side e botões BuyPass/Skip. Tudo dinâmico a partir do
 # SeasonPassState; ações voltam como PassFeedback + estado fresco.
+#
+# SOM-IDLE auditoria 2026-09-27: os três gastos do passe (premium standard,
+# deluxe e skip em gems) saíam com um clique. Idiom da casa: handler arma a
+# pendência (`Request*`), `ConfirmPending()` é o ÚNICO caminho de rede, modal da
+# casa é a superfície. O skip cita o preço em gems que o próprio servidor cobra
+# (EconomyCatalog.PASS_SKIP_COST = 50, o mesmo número do botão).
 @onready var headerLabel : Label = $Layout/Header
 @onready var trackBox : VBoxContainer = $Layout/TrackScroll/TrackList
 @onready var missionBox : VBoxContainer = $Layout/MissionScroll/MissionList
 @onready var buyPassButton : Button = $Layout/BuyPass
 @onready var buyDeluxeButton : Button = $Layout/BuyDeluxe
 @onready var skipButton : Button = $Layout/SkipLevel
+
+var SendHook : Callable
+var _pending : Dictionary = {}
+# Último estado visto — a linha armada cita skips restantes, não chute.
+var _skipsUsed : int = 0
+var _skipsMax : int = 10
 
 func _ready():
 	visibility_changed.connect(_on_visibility_changed)
@@ -46,6 +58,8 @@ func ShowSeasonPass(state : Dictionary):
 	buyDeluxeButton.text = "Premium owned" if premium else "Buy deluxe — R$ 44,90"
 	var skips : int = int(state.get("skips_used", 0))
 	var skipsMax : int = int(state.get("skips_max", 10))
+	_skipsUsed = skips
+	_skipsMax = skipsMax
 	skipButton.disabled = skips >= skipsMax
 	skipButton.text = "Skip level — 50 gems (%d/%d)" % [skips, skipsMax]
 	for lvl in state.get("free_claimable", []):
@@ -86,11 +100,83 @@ func _add_missions(title : String, missions : Array):
 			row.pressed.connect(func() -> void: Network.ClaimMission(mid))
 		missionBox.add_child(row)
 
+# ------------------------------------------------------------------ gasto com freio
+# Mesmo bloco do leilão/arena. `BuyPass` no servidor só fabrica um intent de
+# checkout (dinheiro real) — ainda assim passa pelo freio porque abre diálogo de
+# pagamento, que é um compromisso para o jogador. O skip gasta gems de verdade.
 func _on_buy_pass_pressed():
-	Network.BuyPass("standard")
+	RequestBuyPass("standard")
 
 func _on_buy_deluxe_pressed():
-	Network.BuyPass("deluxe")
+	RequestBuyPass("deluxe")
+
+func RequestBuyPass(tier : String) -> bool:
+	if tier != "standard" and tier != "deluxe":
+		return false
+	var price : String = "R$ 24,90" if tier == "standard" else "R$ 44,90"
+	_pending = {
+		"method" = "BuyPass",
+		"args" = [tier],
+		"line" = "Buy the %s season pass — %s? A real-money checkout opens next; nothing is charged until you approve it there." % [tier, price],
+	}
+	_Ask(str(_pending["line"]))
+	return true
 
 func _on_skip_level_pressed():
-	Network.SkipPassLevel()
+	RequestSkipLevel()
+
+func RequestSkipLevel() -> bool:
+	if _skipsUsed >= _skipsMax:
+		return false
+	_pending = {
+		"method" = "SkipPassLevel",
+		"args" = [],
+		"line" = "Skip one pass level for 50 gems? The gems are spent now (%d/%d skips used this season)." % [_skipsUsed, _skipsMax],
+	}
+	_Ask(str(_pending["line"]))
+	return true
+
+func _Ask(text : String) -> void:
+	# O cabeçalho é o único texto neutro desta janela nascida de .tscn; fora do
+	# modal ele segura a pergunta armada (nunca envia sozinho).
+	if headerLabel:
+		headerLabel.text = text
+	var modal : bool = Launcher.GUI != null and Launcher.GUI.messageBox != null
+	if modal:
+		UICommons.MessageBox(text, Callable(self, "ConfirmPending"), "Confirm")
+
+# ÚNICO caminho que fala com a rede. Sem confirmação, este método não é chamado.
+func ConfirmPending() -> void:
+	if _pending.is_empty():
+		return
+	var methodName : String = str(_pending.get("method", ""))
+	var args : Array = _pending.get("args", []) as Array
+	_pending = {}
+	_send(methodName, args)
+	if is_node_ready():
+		ShowSeasonPass(NetClient.LastSeasonPass)
+
+func CancelPending() -> void:
+	_pending = {}
+
+# Estado observável pelo jogador e pelo harness: o que está armado agora.
+func PendingCount() -> int:
+	return 0 if _pending.is_empty() else 1
+
+func PendingLine() -> String:
+	return str(_pending.get("line", ""))
+
+func PendingArgs() -> Array:
+	return (_pending.get("args", []) as Array).duplicate()
+
+func _send(methodName : String, args : Array) -> void:
+	if SendHook.is_valid():
+		SendHook.call(methodName, args)
+		return
+	match methodName:
+		"BuyPass":
+			Network.BuyPass(str(args[0]))
+		"SkipPassLevel":
+			Network.SkipPassLevel()
+		_:
+			push_error("SeasonPass: unknown send target " + methodName)

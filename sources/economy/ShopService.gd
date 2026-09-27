@@ -115,14 +115,57 @@ func GetDailyShop(accountID : int) -> Dictionary:
 		"rerolls_used": int(row["rerolls_used"]), "rerolls_max": EconomyCatalog.DAILY_REROLLS_MAX,
 		"reroll_cost": EconomyCatalog.DAILY_REROLL_COST, "one_time": _OneTimeOffers(accountID)}
 
+# P1-10 (AUDITORIA_2026-09-27): débito + ledger + rotação num SÓ commit.
+# Antes: AddGems fechava a própria transação e _DoReroll autocomitava o
+# UPDATE por fora — crash entre as duas deixava gem cobrada sem rotação
+# (ou rotação grátis sem gem). Padrão do diretório: settleMutex +
+# Transaction + ops raw (vizinhos BuyChests/BuyVendorOffer). A cota
+# (rerolls_used) é relida DENTRO do commit: cap 3/dia verificado contra
+# estado velho não é cota. O caminho de anúncio (_DoReroll, uma escrita
+# só) continua autocomitado — já é atômico por construção.
 func RerollDailyShop(accountID : int) -> Dictionary:
 	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
 	var row : Dictionary = _DailyRow(accountID, day)
 	if int(row["rerolls_used"]) >= EconomyCatalog.DAILY_REROLLS_MAX:
 		return {"ok": false, "reason": "reroll_cap"}
-	if not _eco.AddGems(accountID, -EconomyCatalog.DAILY_REROLL_COST, "daily_reroll"):
-		return {"ok": false, "reason": "insufficient_gems"}
-	return _DoReroll(accountID, day, row)
+	var cost : int = EconomyCatalog.DAILY_REROLL_COST
+	var oneTime : Array = _OneTimeOffers(accountID)	# leitura fora do lambda (docs do Transaction: recursão de mutex é detalhe de implementação, não promessa)
+	var result : Dictionary = {"ok": false, "reason": "insufficient_gems"}
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var salt : int = int(row["salt"])
+		var used : int = int(row["rerolls_used"])
+		if sql.db.query_with_bindings("SELECT salt, rerolls_used FROM shop_daily WHERE account_id = ? AND day = ?;", [accountID, day]):
+			if not sql.db.query_result.is_empty():
+				salt = int(sql.db.query_result[0].get("salt", salt))
+				used = int(sql.db.query_result[0].get("rerolls_used", used))
+		if used >= EconomyCatalog.DAILY_REROLLS_MAX:
+			result["reason"] = "reroll_cap"
+			return false
+		var balance : int = sql.GetGemsRaw(accountID)
+		if balance < cost:
+			result["reason"] = "insufficient_gems"
+			return false
+		if not sql.SetGemsRaw(accountID, balance - cost):
+			return false
+		if not _eco._LedgerAppendLocked(accountID, 0, EconomyCatalog.LedgerKindGems, -cost, balance - cost, "daily_reroll"):
+			return false
+		var newSalt : int = salt + 1
+		var offers : Array = _RotatedDailyOffers(accountID, day, newSalt)
+		var claimed : Array = row["claimed"]
+		for e in offers:
+			(e as Dictionary)["claimed"] = str((e as Dictionary).get("id", "")) in claimed
+		if not sql.db.query_with_bindings("UPDATE shop_daily SET salt = ?, offers_json = ?, rerolls_used = rerolls_used + 1 WHERE account_id = ? AND day = ?;", [newSalt, JSON.stringify(offers), accountID, day]):
+			return false
+		result.clear()
+		result.merge({"ok": true, "day": day, "offers": offers,
+			"rerolls_used": used + 1, "rerolls_max": EconomyCatalog.DAILY_REROLLS_MAX,
+			"reroll_cost": cost, "one_time": oneTime})
+		return true):
+		pass
+	_eco.settleMutex.unlock()
+	return result
 
 # Gira a rotação (contador compartilhado pago/ad). Chamador já validou e
 # cobrou (ou registrou a view, no caso do ad).

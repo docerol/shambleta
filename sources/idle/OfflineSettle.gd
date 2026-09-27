@@ -3,15 +3,23 @@ class_name OfflineSettle
 
 # SOM-IDLE: F2 idle-spike settle (TECH_SPEC_CORE.md §3)
 # OfflineFactor = 0.6, death tax 5%, chests floor(h/4) cap 3.
-# O cap de horas não é mais um número fixo da conta: F2P liquida 1h, cada
+# O cap de horas não é mais um número fixo da conta: F2P liquida 8h, cada
 # anúncio assistido desde a última coleta soma +1h, e VIP dá as 24h sem
-# assistir nada (regra do dono, 2026-09-25). Ver CapHoursForCharacter.
+# assistir nada (baseline elevado em 2026-09-27 pela correção P1-retenção do
+# AUDITORIA §6 — ver BaseCapHours). Ver CapHoursForCharacter.
 # The whole settle runs in ONE SQLite transaction; idempotency is enforced by
 # re-reading last_settled_at INSIDE the transaction before any write.
 
 const OfflineFactor : float = 0.6
 # Baseline de quem não assistiu anúncio nem tem VIP.
-const BaseCapHours : float = 1.0
+# P1-retenção (AUDITORIA_2026-09-27 §6): 1h era o gatilho de uninstall mais
+# citado da categoria (cap curto força check-in; Melvor levou a base a 12→24h).
+# Baseline vira 8h — banda de tolerância do gênero, abaixo do cap histórico de
+# 12h que `ChestsPerDayFromSettle = 6` já cobria (ver EconomyCatalog), então o
+# faucet de baú não se move. Anúncio continua comprando +1h/view por cima e o
+# VIP vende as 24h + ×2 de loot (regra do dono de 2026-09-25 preservada no
+# degrau premium; o piso F2P é que saiu da zona hostil).
+const BaseCapHours : float = 8.0
 # SOM-IDLE Fase B: cap diferenciado por tier (MONETIZATION §2.2). Desde a regra
 # de 2026-09-25 os dois tiers dão as mesmas 24h sem anúncio nenhum; o que
 # separa o tier 2 é o ×2 permanente no loot da liquidação (_LootMult).
@@ -111,9 +119,9 @@ static func BuildReport(charID : int, now : int = 0) -> SettleReport:
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = _statInt(char, "farm_zone", 0)
 	report.lastSettledAt = _statInt(char, "last_settled_at", 0)
-	# Cap do PERSONAGEM: o que a compra da conta dá (1h no F2P, 24h no VIP) mais
-	# o que este personagem assistiu desde a última coleta. O anchor entra no
-	# corte porque hora já liquidada não pode ser vendida de novo.
+	# Cap do PERSONAGEM: o que a compra da conta dá (`BaseCapHours` no F2P, 24h no
+	# VIP) mais o que este personagem assistiu desde a última coleta. O anchor entra
+	# no corte porque hora já liquidada não pode ser vendida de novo.
 	report.capHours = CapHoursForCharacter(charID, report.accountID, report.lastSettledAt, clock)
 	report.hours = minf(float(elapsed) / 3600.0, report.capHours)
 	report.efficiency = clampf(float(char.get("session_efficiency", 1.0) if char.get("session_efficiency", 1.0) != null else 1.0), MinEfficiency, 1.0)
@@ -171,7 +179,8 @@ static func _LootMult(accountID : int, now : int = 0) -> int:
 
 # ------------------------------------------------------------------ formula
 
-# Teto comprado pela CONTA: 1h no F2P, 24h em qualquer tier de VIP (válido só
+# Teto comprado pela CONTA: 8h no F2P (banda de retenção da categoria — ver
+# BaseCapHours), 24h em qualquer tier de VIP (válido só
 # com janela ativa; expirado volta ao base). É a metade que não depende de
 # anúncio — a outra metade (horas assistidas) entra em CapHoursForCharacter.
 # Pura p/ seams.
@@ -218,7 +227,40 @@ static func GetModsForAccount(accountID : int, now : int = 0) -> float:
 			mods *= eco.GuildBuffForAccount(accountID)
 		if eco:
 			mods *= eco.GetLiveEventMods(accountID)
+		# OPS-3: a janela `double_xp` VIGENTE do calendário declarativo
+		# (`data/conf/liveops_calendar.json`, lido por `LiveOpsCalendar`) entra no
+		# MESMO eixo dos modificadores acima — escala XP, ouro e as chaves de boss
+		# derivadas do faucet. Baús têm eixo próprio (`LiveOpsChestMods`, aplicado
+		# na linha do `chestWanted` com o teto diário intacto) e o ×2 do VIP tier 2
+		# continua sendo `adMult`. Sem agenda no ar devolve 1.0.
+		mods *= LiveOpsXpMods(now)
 	return mods
+
+# Ponte com o calendário de live ops. Pura (timestamp entra, float sai) pelos
+# mesmos motivos dos seams acima: resolve sem Launcher, sem banco e sem transação,
+# então o multiplicador do settle é verificável número a num harness `-s`.
+# O kind é nomeado pelos dois nomes públicos da agenda: `KindDoubleXP` é a forma
+# histórica (sigla em maiúsculo) e `KindDoubleXp` é o alias by-name do contrato de
+# consumidor — o mesmo kind, declarado uma vez. A igualdade é checada em runtime
+# porque um alias que diverge do kind validado faria este eixo consultar um nome
+# que `ValidateCalendar` não conhece: o sentido seguro é fechar no neutro.
+static func LiveOpsXpMods(now : int) -> float:
+	if LiveOpsCalendar.KindDoubleXp != LiveOpsCalendar.KindDoubleXP:
+		return LiveOpsCalendar.DefaultMod
+	return LiveOpsCalendar.ValueAtKind(LiveOpsCalendar.KindDoubleXP, now, LiveOpsCalendar.DefaultMod)
+
+# OPS-4 (Live Ops): o `chest_bonus` da agenda entra na LINHA DO COFRE do settle
+# (`_ApplyFormula`), não no eixo do `mods` — baú não é XP, e o ×2 do VIP tier 2
+# continua sem alcançá-lo (MONETIZATION §2.5). Mesma forma fail-closed do
+# modificador de XP: arquivo ausente/inválido, kind sem janela ou valor fora da
+# banda devolvem o neutro 1.0. O que NÃO muda é o teto diário
+# (`EconomyCatalog.ChestsPerDayFromSettle`, aplicado em `_ChestBudgetToday`
+# DEPOIS daqui): a campanha faz o dia de baús encher mais cedo, nunca mintar mais
+# baús por dia. Sem essa restrição a agenda seria faucet novo de moeda premium
+# por um typo de JSON — exatamente o motivo pelo qual o kind ficou declarado e
+# sem consumidor até aqui.
+static func LiveOpsChestMods(now : int) -> float:
+	return LiveOpsCalendar.BonusMod(LiveOpsCalendar.KindChestBonus, now)
 
 static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int = 1):
 	var zone : FarmZoneData = FarmZoneData.GetZone(report.zoneID)
@@ -238,15 +280,26 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	report.mods = GetModsForAccount(report.accountID, _now())
 	# Tormento (D2): recompensa offline escala com a dificuldade do char.
 	report.mods *= Formula.TormentRewardMult(sql.GetTormentLevel(report.charID))
-	# SOM-IDLE newbie boost: primeiras 48h (até level 10) rendem 5× offline.
-	var charLevel : int = int(sql.GetCharacter(report.charID).get("level", 1))
+	# SOM-IDLE newbie boost: até level 10 rendem 5× de XP offline — só XP,
+	# espelhando a regra online (Formula: ×5 em zoneXp, nunca em zoneGold).
+	# P1-3-bis (AUDITORIA_2026-09-27): a tabela `character` NÃO tem coluna
+	# `level` (level mora em `stat`), então a leitura velha caía no fallback 1
+	# para qualquer char e o ×5 ficava grudado para sempre — AFK pagando 5× o
+	# farm ativo no endgame, violando a invariante "jogar nunca paga menos que
+	# esperar" em todo level. O gate agora lê a linha certa.
+	var charLevel : int = _statInt(sql.GetStat(report.charID), "level", 1)
 	var newbieMult : float = float(FarmZoneData.NewbieBoostFactor) if charLevel < FarmZoneData.NewbieBoostMaxLevel else 1.0
 	# Tier 2: o ×2 dobra XP/ouro/drops da liquidação. Baús, chaves e favores
 	# intactos. Essência de overflow acompanha o XP dobrado (mesmo eixo
 	# tempo-por-tempo do VIP 1.2× — §2.5, não é faucet de essência).
 	report.doubled = adMult > 1
 	report.xpEarned = roundi(float(zone.xpPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebXp * float(adMult) * newbieMult)
-	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold * float(adMult) * newbieMult)
+	# P1-3 (AUDITORIA_2026-09-27): o boost de newbie ×5 existe só no XP — online
+	# (Formula.ApplyXp) ele multiplica zoneXp e NUNCA zoneGold. Antes o gold
+	# offline carregava o ×5 também, ou seja, o jogador novo era punido por
+	# brincar (ganho de gold 5× maior enquanto online, 1× no farm normal).
+	# Gold offline obedece a MESMA regra do gold online: sem newbieMult.
+	report.goldEarned = roundi(float(zone.goldPerKill) * float(zone.parKillsPerHour) * h * eff * offFactor * report.mods * rebGold * float(adMult))
 	if eff < 1.0:
 		report.goldTaxed = roundi(float(report.goldEarned) * float(DeathTaxPct) / 100.0)
 
@@ -264,14 +317,23 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 		report.drops[itemHash] = dropCount
 
 	# Baús: 1 a cada 4h liquidadas, no máx. MaxChests por coleta. Com o baseline
-	# de 1h o floor() sozinho pagaria 0 baú para quem não assistiu anúncio
-	# nenhum, e a janela AFK é exatamente o produto do F2P — então 1h vale 1 baú
-	# (abaixo de 1h não há piso: coleta de 20 minutos não entrega nada). O teto
-	# diário por personagem fecha a outra ponta: com gate de pegada de 60 s em
-	# Server.gd:490, uma coleta por minuto pagaria 1 baú por minuto.
+	# de 8h o floor() já paga 2 por coleta cheia; o piso de 1 baú continua para
+	# janelas curtas abaixo do cap (coleta de 20 minutos não entrega nada — só
+	# ≥1h vale 1 baú). O teto diário por personagem fecha a outra ponta: com
+	# gate de pegada de 60 s em Server.gd:490, uma coleta por minuto pagaria
+	# 1 baú por minuto.
 	var chestWanted : int = mini(floori(h / float(ChestHoursPerChest)), MaxChests)
 	if chestWanted == 0 and h >= 1.0:
 		chestWanted = 1
+	# OPS-4: a campanha `chest_bonus` vigente multiplica o que a JANELA pagou, com
+	# o mesmo carry determinístico de meio baú dos drops (>=0.5 arredonda para
+	# cima — `roundi` arredonda para longe do zero, então não há moeda de meio
+	# baú vagando) e nunca para baixo de 1 baú quando a janela já valia um. O teto
+	# diário abaixo continua valendo em `chestWanted` já turbinado: a campanha
+	# antinge o dia mais cedo, não aumenta o dia.
+	var chestMods : float = LiveOpsChestMods(_now())
+	if chestWanted > 0:
+		chestWanted = maxi(chestWanted, roundi(float(chestWanted) * chestMods))
 	report.chests = mini(chestWanted, _ChestBudgetToday(sql, report.charID))
 
 	# SOM-IDLE: chaves de boss também acumulam offline (idle-first) — kills

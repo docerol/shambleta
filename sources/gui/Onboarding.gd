@@ -10,7 +10,10 @@ const STEP_CHARACTER : int = 1
 const STEP_FARM : int = 2
 const STEP_AFK : int = 3
 const STEP_SHOP : int = 4
-const STEP_COMPLETE : int = 5
+# §13 (AUDITORIA 2026-09-27): passo novo — ensina a barra de botões tocáveis
+# (Eventos/Guilda/AH/Arena/Idle) em vez de teclas que Web/celular não têm.
+const STEP_HUD : int = 5
+const STEP_COMPLETE : int = 6
 
 var _currentStep : int = STEP_WELCOME
 var _previousHighlightedNode : Node = null
@@ -116,21 +119,24 @@ func _show_step():
 	var text : String = ""
 	match _currentStep:
 		STEP_WELCOME:
-			text = "Welcome to Shambleta!\n\nThis is an idle RPG — your character fights on its own. Let's take a quick tour."
+			text = tr("Welcome to Shambleta!\n\nThis is an idle RPG — your character fights on its own. Let's take a quick tour.")
 		STEP_CHARACTER:
-			text = "Your character is shown here.\n\nYou can customize attributes, equipment, and skills. Press F2 to open the character window."
+			text = tr("Your character is shown here.\n\nOpen the Menu (F1) and tap the Stat icon — or press F2 on a keyboard — to customize attributes, equipment, and skills.")
 			_highlight_node(Launcher.GUI.statWindow)
 		STEP_FARM:
-			text = "Pick a farm zone to start earning gold and XP automatically.\n\nOpen the zone map with /zones or F6."
+			text = tr("Pick a farm zone to start earning gold and XP automatically.\n\nOpen the Menu (F1) and tap the Zone Map icon to choose where to farm.")
 			_highlight_node(Launcher.GUI.zoneWindow)
 		STEP_AFK:
-			text = "When you come back, your AFK earnings are ready to claim.\n\nCheck the AFK report window for offline progress."
+			text = tr("When you come back, your AFK earnings are ready to claim.\n\nOpen the Menu (F1) and tap the AFK icon to collect your offline progress.")
 			_highlight_node(Launcher.GUI.afkWindow)
 		STEP_SHOP:
-			text = "Spend your gems in the shop!\n\nBuy chests, VIP status, and more."
+			text = tr("Spend your gems in the shop!\n\nOpen the Menu (F1) and tap the Shop icon to buy chests, VIP status, and more.")
 			_highlight_node(Launcher.GUI.shopWindow)
+		STEP_HUD:
+			text = tr("The quick bar at the top of your screen is touch-friendly: Eventos lists live events, Guilda opens your guild, AH the auction house, Arena the PvP ladder, and Idle hides everything else.")
+			_highlight_node(Launcher.GUI.manualSkillBar)
 		STEP_COMPLETE:
-			text = "You're all set!\n\nYour character will now farm automatically. Come back later to collect your rewards."
+			text = tr("You're all set!\n\nYour character will now farm automatically. Come back later to collect your rewards.")
 			_nextButton.text = "Finish"
 			_highlight_node(null)
 			if Launcher.GUI:
