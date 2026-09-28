@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://dqipr2unymwk3"]
+
+[ext_resource type="NavigationPolygon" uid="uid://cu6lx7iryjg2m" path="res://presets/maps/navigations/candor/Candor Cave.tres" id="1_dxtly"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_0n8ki"]
+[ext_resource type="Resource" uid="uid://bjdvrm4wr7ik" path="res://presets/maps/server/candor/Candor Cave.tres" id="3_scviu"]
+
+[resource]
+script = ExtResource("2_0n8ki")
+serverData = ExtResource("3_scviu")
+layersPath = "res://presets/maps/layers/candor/Candor Cave.tscn"
+navigation = ExtResource("1_dxtly")
+minimapPath = "res://data/graphics/minimaps/candor/Candor Cave.png"
+_name = "Candor Cave"

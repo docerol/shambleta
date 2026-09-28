@@ -1,0 +1,56 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://cma0a1b0uqbx0"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_23tc3"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_2tel7"]
+[ext_resource type="Script" uid="uid://d2lwo0c2hl6" path="res://sources/scripts/ship/Nard-PoemAboutPoems.gd" id="3_lcyp4"]
+[ext_resource type="Script" uid="uid://bmb3lsqqpomjq" path="res://sources/scripts/ship/Nard.gd" id="4_5r46x"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="5_6buqh"]
+
+[sub_resource type="Resource" id="Resource_q5d7r"]
+script = ExtResource("2_2tel7")
+id = 1629942628
+nick = "Poem about Poems"
+type = 2
+player_script = ExtResource("3_lcyp4")
+spawn_position = Vector2i(982, 749)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_7vaqr"]
+script = ExtResource("2_2tel7")
+id = 2089386186
+type = 2
+player_script = ExtResource("4_5r46x")
+spawn_position = Vector2i(911, 891)
+is_persistant = true
+direction = 2
+state = 2
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_uiwva"]
+script = ExtResource("2_2tel7")
+id = 2089709631
+nick = "To First Deck"
+type = 2
+own_script = ExtResource("5_6buqh")
+spawn_position = Vector2i(672, 864)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 4229445336
+destination_pos = Vector2(1040, 912)
+
+[sub_resource type="Resource" id="Resource_endShipN00"]
+script = ExtResource("2_2tel7")
+count = 1
+id = 2088963654
+type = 1
+spawn_position = Vector2i(800, 800)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_23tc3")
+name = "Ship Nard's Room"
+spawns = Array[ExtResource("2_2tel7")]([SubResource("Resource_q5d7r"), SubResource("Resource_7vaqr"), SubResource("Resource_uiwva"), SubResource("Resource_endShipN00")])

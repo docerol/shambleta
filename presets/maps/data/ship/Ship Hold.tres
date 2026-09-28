@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://4w7l3g4m1rql"]
+
+[ext_resource type="NavigationPolygon" uid="uid://lbcfjp8uh1nk" path="res://presets/maps/navigations/ship/Ship Hold.tres" id="1_4nbtj"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_tx1r7"]
+[ext_resource type="Resource" uid="uid://bge8utqhfkqoc" path="res://presets/maps/server/ship/Ship Hold.tres" id="3_t4t2w"]
+
+[resource]
+script = ExtResource("2_tx1r7")
+serverData = ExtResource("3_t4t2w")
+layersPath = "res://presets/maps/layers/ship/Ship Hold.tscn"
+navigation = ExtResource("1_4nbtj")
+minimapPath = "res://data/graphics/minimaps/ship/Ship Hold.png"
+_name = "Ship Hold"

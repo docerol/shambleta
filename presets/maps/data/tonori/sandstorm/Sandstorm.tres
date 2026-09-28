@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bf16chqfc8xht"]
+
+[ext_resource type="NavigationPolygon" uid="uid://ekhlm50uym4c" path="res://presets/maps/navigations/tonori/sandstorm/Sandstorm.tres" id="1_m6cja"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_rmdml"]
+[ext_resource type="Resource" uid="uid://c6xenqy4g6lci" path="res://presets/maps/server/tonori/sandstorm/Sandstorm.tres" id="3_03c1p"]
+
+[resource]
+script = ExtResource("2_rmdml")
+serverData = ExtResource("3_03c1p")
+layersPath = "res://presets/maps/layers/tonori/sandstorm/Sandstorm.tscn"
+navigation = ExtResource("1_m6cja")
+minimapPath = "res://data/graphics/minimaps/tonori/sandstorm/Sandstorm.png"
+_name = "Sandstorm"

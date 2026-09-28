@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://d371htqqqw482"]
+
+[ext_resource type="NavigationPolygon" uid="uid://b12fujsmjbj3o" path="res://presets/maps/navigations/tonori/manayir/Manayir Beach.tres" id="1_5dsr5"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_dkjpx"]
+[ext_resource type="Resource" uid="uid://cga04irty2077" path="res://presets/maps/server/tonori/manayir/Manayir Beach.tres" id="3_yxv1w"]
+
+[resource]
+script = ExtResource("2_dkjpx")
+serverData = ExtResource("3_yxv1w")
+layersPath = "res://presets/maps/layers/tonori/manayir/Manayir Beach.tscn"
+navigation = ExtResource("1_5dsr5")
+minimapPath = "res://data/graphics/minimaps/tonori/manayir/Manayir Beach.png"
+_name = "Manayir Beach"

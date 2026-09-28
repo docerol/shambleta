@@ -1,0 +1,137 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://borhhxqvlcwib"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_7u31u"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_bjkpp"]
+[ext_resource type="Script" uid="uid://cmuwdfqjtis2m" path="res://sources/scripts/tonori/desertpit/SnakePitClueGlobal.gd" id="3_p50e1"]
+[ext_resource type="Script" uid="uid://cfxvatfebowx4" path="res://sources/scripts/tonori/desertpit/Clue1.gd" id="4_fm1q0"]
+[ext_resource type="Script" uid="uid://0t3u7qtt3hjn" path="res://sources/scripts/tonori/desertpit/Clue3.gd" id="5_wjt5q"]
+[ext_resource type="Script" uid="uid://b0xq1bxjkt7ad" path="res://sources/scripts/tonori/desertpit/Clue4.gd" id="6_k566e"]
+[ext_resource type="Script" uid="uid://c8v7pm18iky0f" path="res://sources/scripts/tonori/desertpit/Clue5.gd" id="7_kfntg"]
+[ext_resource type="Script" uid="uid://bvxt2wp7n67c8" path="res://sources/scripts/tonori/desertpit/Clue2.gd" id="8_5bjg1"]
+[ext_resource type="Script" uid="uid://bsooimuhy3ogm" path="res://sources/scripts/tonori/desertpit/WaterPondGlobal.gd" id="9_5jws2"]
+[ext_resource type="Script" uid="uid://d2a7ghpesdohr" path="res://sources/scripts/tonori/desertpit/WaterPond.gd" id="10_hrhrm"]
+[ext_resource type="Script" uid="uid://ddwvwci2bkkj7" path="res://sources/scripts/tonori/desertpit/WaterPondFilthy.gd" id="11_5xuq5"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="12_cm8up"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="13_kkf1s"]
+
+[sub_resource type="Resource" id="Resource_sc28d"]
+script = ExtResource("2_bjkpp")
+count = 150
+id = 236646007
+type = 1
+spawn_position = Vector2i(-29, 11)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_5pjnf"]
+script = ExtResource("2_bjkpp")
+id = 1190381389
+type = 2
+player_script = ExtResource("4_fm1q0")
+own_script = ExtResource("3_p50e1")
+spawn_position = Vector2i(2725, 1007)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_kq0y2"]
+script = ExtResource("2_bjkpp")
+id = 1190381389
+type = 2
+player_script = ExtResource("5_wjt5q")
+own_script = ExtResource("3_p50e1")
+spawn_position = Vector2i(2814, 1028)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_jlgtl"]
+script = ExtResource("2_bjkpp")
+id = 1190381389
+type = 2
+player_script = ExtResource("6_k566e")
+own_script = ExtResource("3_p50e1")
+spawn_position = Vector2i(2708, 1125)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_tx0po"]
+script = ExtResource("2_bjkpp")
+id = 1190381389
+type = 2
+player_script = ExtResource("7_kfntg")
+own_script = ExtResource("3_p50e1")
+spawn_position = Vector2i(2833, 1137)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_d6v2t"]
+script = ExtResource("2_bjkpp")
+id = 1190381389
+type = 2
+player_script = ExtResource("8_5bjg1")
+own_script = ExtResource("3_p50e1")
+spawn_position = Vector2i(2572, 1165)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_b07h6"]
+script = ExtResource("2_bjkpp")
+id = 1190851605
+type = 2
+player_script = ExtResource("10_hrhrm")
+own_script = ExtResource("9_5jws2")
+spawn_position = Vector2i(2616, 2555)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ekdsg"]
+script = ExtResource("2_bjkpp")
+id = 1190851605
+type = 2
+player_script = ExtResource("11_5xuq5")
+spawn_position = Vector2i(1507, 2615)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_wlnk3"]
+script = ExtResource("2_bjkpp")
+id = 1190851605
+type = 2
+player_script = ExtResource("10_hrhrm")
+own_script = ExtResource("9_5jws2")
+spawn_position = Vector2i(2851, 2823)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_e3hmw"]
+script = ExtResource("2_bjkpp")
+id = 2089709631
+nick = "To Desert"
+type = 2
+player_script = ExtResource("13_kkf1s")
+own_script = ExtResource("12_cm8up")
+spawn_position = Vector2i(1632, 960)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3490954041
+destination_pos = Vector2(3280, 1584)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_uuakd"]
+script = ExtResource("2_bjkpp")
+id = 2089709631
+nick = "To Desert"
+type = 2
+own_script = ExtResource("12_cm8up")
+spawn_position = Vector2i(984, 2831)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(8, 81, -8, 49, 88, 49, 72, 81)
+destination_map = 3490954041
+destination_pos = Vector2(2640, 3280)
+
+[resource]
+script = ExtResource("1_7u31u")
+name = "Snake Pit"
+spawns = Array[ExtResource("2_bjkpp")]([SubResource("Resource_sc28d"), SubResource("Resource_5pjnf"), SubResource("Resource_kq0y2"), SubResource("Resource_jlgtl"), SubResource("Resource_tx0po"), SubResource("Resource_d6v2t"), SubResource("Resource_b07h6"), SubResource("Resource_ekdsg"), SubResource("Resource_wlnk3"), SubResource("Resource_e3hmw"), SubResource("Resource_uuakd")])

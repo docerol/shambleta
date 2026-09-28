@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bpldcuxvsm1dr"]
+
+[ext_resource type="NavigationPolygon" uid="uid://cxu7312uvgk7c" path="res://presets/maps/navigations/tonori/tulimshar outskirts/Tulimshar Western Cave.tres" id="1_0qdnc"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_j5nkl"]
+[ext_resource type="Resource" uid="uid://c44ho61vn4mmt" path="res://presets/maps/server/tonori/tulimshar outskirts/Tulimshar Western Cave.tres" id="3_7pkej"]
+
+[resource]
+script = ExtResource("2_j5nkl")
+serverData = ExtResource("3_7pkej")
+layersPath = "res://presets/maps/layers/tonori/tulimshar outskirts/Tulimshar Western Cave.tscn"
+navigation = ExtResource("1_0qdnc")
+minimapPath = "res://data/graphics/minimaps/tonori/tulimshar outskirts/Tulimshar Western Cave.png"
+_name = "Tulimshar Western Cave"

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://dhbsq62cp3b7u"]
+
+[ext_resource type="NavigationPolygon" uid="uid://dvh38k0bd1kiu" path="res://presets/maps/navigations/tonori/desertpit/Desert Mountain Cave.tres" id="1_8kr7q"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_h1guk"]
+[ext_resource type="Resource" uid="uid://jj737yl08akf" path="res://presets/maps/server/tonori/desertpit/Desert Mountain Cave.tres" id="3_nnrpl"]
+
+[resource]
+script = ExtResource("2_h1guk")
+serverData = ExtResource("3_nnrpl")
+layersPath = "res://presets/maps/layers/tonori/desertpit/Desert Mountain Cave.tscn"
+navigation = ExtResource("1_8kr7q")
+minimapPath = "res://data/graphics/minimaps/tonori/desertpit/Desert Mountain Cave.png"
+_name = "Desert Mountain Cave"

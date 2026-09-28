@@ -1,0 +1,642 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://jj737yl08akf"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_jgqm5"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_a4136"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_g2f58"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="4_46ceb"]
+
+[sub_resource type="Resource" id="Resource_7p470"]
+script = ExtResource("2_a4136")
+count = 20
+id = 193452188
+type = 1
+spawn_position = Vector2i(-74, 44)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_0uaq7"]
+script = ExtResource("2_a4136")
+count = 5
+id = 825312237
+type = 1
+spawn_position = Vector2i(-49, 44)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_u4a3c"]
+script = ExtResource("2_a4136")
+count = 10
+id = 3842739378
+type = 1
+spawn_position = Vector2i(-73, 67)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_hptit"]
+script = ExtResource("2_a4136")
+count = 3
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3476, 793)
+spawn_offset = Vector2i(407, 90)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_isrwy"]
+script = ExtResource("2_a4136")
+id = 2399925469
+type = 1
+spawn_position = Vector2i(2610, 947)
+spawn_offset = Vector2i(96, 128)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_1fngu"]
+script = ExtResource("2_a4136")
+count = 10
+id = 2399925469
+type = 1
+spawn_position = Vector2i(2346, 1211)
+spawn_offset = Vector2i(310, 388)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_7c5x5"]
+script = ExtResource("2_a4136")
+count = 8
+id = 2399925469
+type = 1
+spawn_position = Vector2i(1322, 1256)
+spawn_offset = Vector2i(498, 424)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_vhrrq"]
+script = ExtResource("2_a4136")
+count = 7
+id = 193452188
+type = 1
+spawn_position = Vector2i(3495, 1129)
+spawn_offset = Vector2i(315, 85)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_vtvmi"]
+script = ExtResource("2_a4136")
+count = 6
+id = 193452188
+type = 1
+spawn_position = Vector2i(979, 1804)
+spawn_offset = Vector2i(294, 436)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_q3ltx"]
+script = ExtResource("2_a4136")
+count = 2
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3251, 1548)
+spawn_offset = Vector2i(180, 167)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_fhn83"]
+script = ExtResource("2_a4136")
+count = 4
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3781, 1621)
+spawn_offset = Vector2i(153, 160)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_avdtt"]
+script = ExtResource("2_a4136")
+count = 3
+id = 2399925469
+type = 1
+spawn_position = Vector2i(1041, 1952)
+spawn_offset = Vector2i(369, 192)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_nnu0f"]
+script = ExtResource("2_a4136")
+count = 3
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3475, 2022)
+spawn_offset = Vector2i(173, 233)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_w5u7o"]
+script = ExtResource("2_a4136")
+count = 7
+id = 2399925469
+type = 1
+spawn_position = Vector2i(2072, 2292)
+spawn_offset = Vector2i(472, 452)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_4smfm"]
+script = ExtResource("2_a4136")
+count = 3
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3994, 1958)
+spawn_offset = Vector2i(176, 96)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_46jsr"]
+script = ExtResource("2_a4136")
+count = 3
+id = 1435506622
+type = 1
+spawn_position = Vector2i(3761, 2115)
+spawn_offset = Vector2i(133, 105)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_xscap"]
+script = ExtResource("2_a4136")
+id = 1435506622
+type = 1
+spawn_position = Vector2i(2207, 2372)
+spawn_offset = Vector2i(428, 345)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_sfnba"]
+script = ExtResource("2_a4136")
+count = 2
+id = 2399925469
+type = 1
+spawn_position = Vector2i(2953, 2169)
+spawn_offset = Vector2i(189, 109)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_6mt0m"]
+script = ExtResource("2_a4136")
+count = 2
+id = 1435506618
+type = 1
+spawn_position = Vector2i(3908, 2456)
+spawn_offset = Vector2i(124, 304)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_a25dj"]
+script = ExtResource("2_a4136")
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3540, 2511)
+spawn_offset = Vector2i(171, 143)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_qoxoy"]
+script = ExtResource("2_a4136")
+id = 1435506618
+type = 1
+spawn_position = Vector2i(2663, 2548)
+spawn_offset = Vector2i(404, 104)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_k452q"]
+script = ExtResource("2_a4136")
+count = 6
+id = 1435506622
+type = 1
+spawn_position = Vector2i(1015, 3118)
+spawn_offset = Vector2i(224, 574)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_gkbws"]
+script = ExtResource("2_a4136")
+count = 2
+id = 1435506618
+type = 1
+spawn_position = Vector2i(3239, 2765)
+spawn_offset = Vector2i(248, 114)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_xrtbr"]
+script = ExtResource("2_a4136")
+count = 3
+id = 1435506622
+type = 1
+spawn_position = Vector2i(2784, 2951)
+spawn_offset = Vector2i(480, 120)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_f2ceu"]
+script = ExtResource("2_a4136")
+count = 6
+id = 2399925469
+type = 1
+spawn_position = Vector2i(1817, 3351)
+spawn_offset = Vector2i(406, 472)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_qmc7o"]
+script = ExtResource("2_a4136")
+count = 2
+id = 1435506618
+type = 1
+spawn_position = Vector2i(992, 3357)
+spawn_offset = Vector2i(224, 286)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_fjwgc"]
+script = ExtResource("2_a4136")
+count = 3
+id = 1836204198
+type = 1
+spawn_position = Vector2i(3745, 3289)
+spawn_offset = Vector2i(123, 164)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_rjvaf"]
+script = ExtResource("2_a4136")
+count = 6
+id = 1435506622
+type = 1
+spawn_position = Vector2i(2728, 3396)
+spawn_offset = Vector2i(224, 240)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_sidk4"]
+script = ExtResource("2_a4136")
+count = 2
+id = 1836204198
+type = 1
+spawn_position = Vector2i(3488, 3485)
+spawn_offset = Vector2i(128, 175)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_8hu44"]
+script = ExtResource("2_a4136")
+count = 2
+id = 1836204198
+type = 1
+spawn_position = Vector2i(3176, 3576)
+spawn_offset = Vector2i(160, 160)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_5bt18"]
+script = ExtResource("2_a4136")
+count = 4
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3904, 3726)
+spawn_offset = Vector2i(256, 240)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_10eyj"]
+script = ExtResource("2_a4136")
+count = 3
+id = 1435506622
+type = 1
+spawn_position = Vector2i(2003, 3793)
+spawn_offset = Vector2i(245, 108)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ouj2a"]
+script = ExtResource("2_a4136")
+count = 3
+id = 1435506618
+type = 1
+spawn_position = Vector2i(2323, 3899)
+spawn_offset = Vector2i(220, 62)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_g6ym7"]
+script = ExtResource("2_a4136")
+count = 5
+id = 2399925469
+type = 1
+spawn_position = Vector2i(1432, 3972)
+spawn_offset = Vector2i(480, 128)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_aqk0v"]
+script = ExtResource("2_a4136")
+count = 5
+id = 2399925469
+type = 1
+spawn_position = Vector2i(2915, 4033)
+spawn_offset = Vector2i(288, 128)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ijffg"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(3936, 608)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(3952, 816)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_68qkj"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2912, 672)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2992, 816)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_d5870"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2592, 704)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2768, 816)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_ua1hf"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(1280, 736)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3490954041
+destination_pos = Vector2(6384, 4144)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_786w6"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(1696, 768)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(1776, 944)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_hduh1"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2080, 768)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2000, 1040)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_m1lum"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(3264, 1312)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(3344, 1488)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_ic1o3"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2432, 1312)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2512, 1488)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_lrghj"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(3616, 1408)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(3696, 1648)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_kdon7"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(3456, 1696)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(3568, 1872)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_vh0th"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(4000, 1728)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(4080, 1936)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_1x6t1"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2944, 1920)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2992, 2064)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_7lmsp"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(1856, 1984)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(1968, 1904)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_3oxsq"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(3552, 2272)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(3568, 2416)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_ag5gk"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2368, 2784)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2352, 2992)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_uyq0h"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(1600, 2784)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(1712, 2992)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_1kf31"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(3904, 3392)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(3920, 3600)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_p5l55"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(2528, 3744)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(2608, 3888)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_ssa0q"]
+script = ExtResource("2_a4136")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("4_46ceb")
+own_script = ExtResource("3_g2f58")
+spawn_position = Vector2i(1184, 3776)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3262969514
+destination_pos = Vector2(1136, 3952)
+auto_warp = false
+
+[resource]
+script = ExtResource("1_jgqm5")
+name = "Desert Mountain Cave"
+spawns = Array[ExtResource("2_a4136")]([SubResource("Resource_7p470"), SubResource("Resource_0uaq7"), SubResource("Resource_u4a3c"), SubResource("Resource_hptit"), SubResource("Resource_isrwy"), SubResource("Resource_1fngu"), SubResource("Resource_7c5x5"), SubResource("Resource_vhrrq"), SubResource("Resource_vtvmi"), SubResource("Resource_q3ltx"), SubResource("Resource_fhn83"), SubResource("Resource_avdtt"), SubResource("Resource_nnu0f"), SubResource("Resource_w5u7o"), SubResource("Resource_4smfm"), SubResource("Resource_46jsr"), SubResource("Resource_xscap"), SubResource("Resource_sfnba"), SubResource("Resource_6mt0m"), SubResource("Resource_a25dj"), SubResource("Resource_qoxoy"), SubResource("Resource_k452q"), SubResource("Resource_gkbws"), SubResource("Resource_xrtbr"), SubResource("Resource_f2ceu"), SubResource("Resource_qmc7o"), SubResource("Resource_fjwgc"), SubResource("Resource_rjvaf"), SubResource("Resource_sidk4"), SubResource("Resource_8hu44"), SubResource("Resource_5bt18"), SubResource("Resource_10eyj"), SubResource("Resource_ouj2a"), SubResource("Resource_g6ym7"), SubResource("Resource_aqk0v"), SubResource("Resource_ijffg"), SubResource("Resource_68qkj"), SubResource("Resource_d5870"), SubResource("Resource_ua1hf"), SubResource("Resource_786w6"), SubResource("Resource_hduh1"), SubResource("Resource_m1lum"), SubResource("Resource_ic1o3"), SubResource("Resource_lrghj"), SubResource("Resource_kdon7"), SubResource("Resource_vh0th"), SubResource("Resource_1x6t1"), SubResource("Resource_7lmsp"), SubResource("Resource_3oxsq"), SubResource("Resource_ag5gk"), SubResource("Resource_uyq0h"), SubResource("Resource_1kf31"), SubResource("Resource_p5l55"), SubResource("Resource_ssa0q")])

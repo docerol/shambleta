@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bhy2l5u3158ew"]
+
+[ext_resource type="NavigationPolygon" uid="uid://br1s7g0a8ui65" path="res://presets/maps/navigations/ocean/Ocean.tres" id="1_q4qfk"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_0vv4r"]
+[ext_resource type="Resource" uid="uid://bbmd8h6fs37p3" path="res://presets/maps/server/ocean/Ocean.tres" id="3_hejie"]
+
+[resource]
+script = ExtResource("2_0vv4r")
+serverData = ExtResource("3_hejie")
+layersPath = "res://presets/maps/layers/ocean/Ocean.tscn"
+navigation = ExtResource("1_q4qfk")
+minimapPath = "res://data/graphics/minimaps/ocean/Ocean.png"
+_name = "Ocean"

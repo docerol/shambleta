@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://6nk3foabjdx7"]
+
+[ext_resource type="NavigationPolygon" uid="uid://bfwnys32fe0e" path="res://presets/maps/navigations/tonori/desertpit/Desert Mountains.tres" id="1_6kq3p"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_r3igk"]
+[ext_resource type="Resource" uid="uid://cwgpfq3l0pftl" path="res://presets/maps/server/tonori/desertpit/Desert Mountains.tres" id="3_cy8rr"]
+
+[resource]
+script = ExtResource("2_r3igk")
+serverData = ExtResource("3_cy8rr")
+layersPath = "res://presets/maps/layers/tonori/desertpit/Desert Mountains.tscn"
+navigation = ExtResource("1_6kq3p")
+minimapPath = "res://data/graphics/minimaps/tonori/desertpit/Desert Mountains.png"
+_name = "Desert Mountains"

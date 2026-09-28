@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://bi4cgm65gew8p"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_3anis"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_2kh6o"]
+[ext_resource type="Script" uid="uid://ctkhe80cclyu2" path="res://sources/scripts/generic/ChestGlobal.gd" id="3_ewobm"]
+[ext_resource type="Script" uid="uid://h0xovocquuyk" path="res://sources/scripts/splatyna/Chest.gd" id="4_wptxf"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="5_ga34l"]
+
+[sub_resource type="Resource" id="Resource_ff6fg"]
+script = ExtResource("2_2kh6o")
+id = 4054136443
+type = 2
+player_script = ExtResource("4_wptxf")
+own_script = ExtResource("3_ewobm")
+spawn_position = Vector2i(1979, 1350)
+spawn_offset = Vector2i(11, 10)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_vrx2a"]
+script = ExtResource("2_2kh6o")
+id = 3314548081
+type = 1
+spawn_position = Vector2i(1733, 1539)
+spawn_offset = Vector2i(48, 64)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_tju37"]
+script = ExtResource("2_2kh6o")
+id = 2089709631
+nick = "Splatyna Cave"
+type = 2
+own_script = ExtResource("5_ga34l")
+spawn_position = Vector2i(1472, 2272)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -23, -47, 87, -47, 64, 0, 32, 32)
+destination_map = 3863109455
+destination_pos = Vector2(3568, 4208)
+
+[resource]
+script = ExtResource("1_3anis")
+name = "Splatyna's Chamber"
+spawns = Array[ExtResource("2_2kh6o")]([SubResource("Resource_ff6fg"), SubResource("Resource_vrx2a"), SubResource("Resource_tju37")])
+flags = 4

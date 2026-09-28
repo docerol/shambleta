@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://dj60s5eerhiti"]
+
+[ext_resource type="NavigationPolygon" uid="uid://bjn3ksid1skus" path="res://presets/maps/navigations/overworld/Overworld.tres" id="1_v223j"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_oicx8"]
+[ext_resource type="Resource" uid="uid://crk43tex4pnbg" path="res://presets/maps/server/overworld/Overworld.tres" id="3_mwxpy"]
+
+[resource]
+script = ExtResource("2_oicx8")
+serverData = ExtResource("3_mwxpy")
+layersPath = "res://presets/maps/layers/overworld/Overworld.tscn"
+navigation = ExtResource("1_v223j")
+minimapPath = "res://data/graphics/minimaps/overworld/Overworld.png"
+_name = "Overworld"

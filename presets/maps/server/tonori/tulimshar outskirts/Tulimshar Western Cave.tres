@@ -1,0 +1,195 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://c44ho61vn4mmt"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_qrteu"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_iv2dg"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_l7mrl"]
+
+[sub_resource type="Resource" id="Resource_axqyb"]
+script = ExtResource("2_iv2dg")
+count = 3
+id = 193452188
+type = 1
+spawn_position = Vector2i(1854, 1221)
+spawn_offset = Vector2i(167, 108)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_yuw2a"]
+script = ExtResource("2_iv2dg")
+count = 5
+id = 193452188
+type = 1
+spawn_position = Vector2i(1189, 1387)
+spawn_offset = Vector2i(179, 231)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_r5ehb"]
+script = ExtResource("2_iv2dg")
+count = 6
+id = 193452188
+type = 1
+spawn_position = Vector2i(2462, 1597)
+spawn_offset = Vector2i(83, 336)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_8otfx"]
+script = ExtResource("2_iv2dg")
+count = 2
+id = 3842739378
+type = 1
+spawn_position = Vector2i(1416, 1427)
+spawn_offset = Vector2i(130, 137)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_tfg57"]
+script = ExtResource("2_iv2dg")
+count = 4
+id = 3842739378
+type = 1
+spawn_position = Vector2i(1932, 1669)
+spawn_offset = Vector2i(287, 269)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_np6pw"]
+script = ExtResource("2_iv2dg")
+count = 2
+id = 890728458
+type = 1
+spawn_position = Vector2i(1794, 1543)
+spawn_offset = Vector2i(76, 136)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ty7v4"]
+script = ExtResource("2_iv2dg")
+count = 3
+id = 890728458
+type = 1
+spawn_position = Vector2i(1126, 1971)
+spawn_offset = Vector2i(116, 227)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_0xb30"]
+script = ExtResource("2_iv2dg")
+count = 5
+id = 193452188
+type = 1
+spawn_position = Vector2i(1747, 2226)
+spawn_offset = Vector2i(74, 325)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_q8q0k"]
+script = ExtResource("2_iv2dg")
+count = 2
+id = 890728458
+type = 1
+spawn_position = Vector2i(1498, 2130)
+spawn_offset = Vector2i(76, 136)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_dfe1r"]
+script = ExtResource("2_iv2dg")
+count = 6
+id = 193452188
+type = 1
+spawn_position = Vector2i(1248, 2449)
+spawn_offset = Vector2i(167, 100)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_70g14"]
+script = ExtResource("2_iv2dg")
+count = 4
+id = 3842739378
+type = 1
+spawn_position = Vector2i(2258, 2463)
+spawn_offset = Vector2i(265, 94)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_druko"]
+script = ExtResource("2_iv2dg")
+count = 2
+id = 825312237
+type = 1
+spawn_position = Vector2i(2078, 2422)
+spawn_offset = Vector2i(40, 25)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_8cm0u"]
+script = ExtResource("2_iv2dg")
+id = 2089709631
+nick = "To Tulimshar Western Hills"
+type = 2
+own_script = ExtResource("3_l7mrl")
+spawn_position = Vector2i(2175, 1280)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-15.1667, -31.8333, 80.8333, -31.8333, 32.8333, 17.1667)
+destination_map = 1967386498
+destination_pos = Vector2(2224, 3888)
+
+[sub_resource type="Resource" id="Resource_stvc6"]
+script = ExtResource("2_iv2dg")
+id = 2089709631
+nick = "To Tulimshar Western Hills"
+type = 2
+own_script = ExtResource("3_l7mrl")
+spawn_position = Vector2i(1471, 1568)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-15.1667, -31.8333, 80.8333, -31.8333, 32.8333, 17.1667)
+destination_map = 1967386498
+destination_pos = Vector2(1456, 4176)
+
+[sub_resource type="Resource" id="Resource_pbdht"]
+script = ExtResource("2_iv2dg")
+id = 2089709631
+nick = "To Tulimshar Beach"
+type = 2
+own_script = ExtResource("3_l7mrl")
+spawn_position = Vector2i(2079, 2016)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-15.1667, -31.8333, 80.8333, -31.8333, 32.8333, 17.1667)
+destination_map = 3632810769
+destination_pos = Vector2(2768, 1040)
+
+[sub_resource type="Resource" id="Resource_2ukw5"]
+script = ExtResource("2_iv2dg")
+id = 2089709631
+nick = "To Tulimshar Western Hills"
+type = 2
+own_script = ExtResource("3_l7mrl")
+spawn_position = Vector2i(2527, 2271)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-15.1667, -31.8333, 80.8333, -31.8333, 32.8333, 17.1667)
+destination_map = 1967386498
+destination_pos = Vector2(2576, 4944)
+
+[sub_resource type="Resource" id="Resource_oplqo"]
+script = ExtResource("2_iv2dg")
+id = 2089709631
+nick = "To Tulimshar Western Hills"
+type = 2
+own_script = ExtResource("3_l7mrl")
+spawn_position = Vector2i(1567, 2400)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-15.1667, -31.8333, 80.8333, -31.8333, 32.8333, 17.1667)
+destination_map = 1967386498
+destination_pos = Vector2(1552, 5136)
+
+[resource]
+script = ExtResource("1_qrteu")
+name = "Tulimshar Western Cave"
+spawns = Array[ExtResource("2_iv2dg")]([SubResource("Resource_axqyb"), SubResource("Resource_yuw2a"), SubResource("Resource_r5ehb"), SubResource("Resource_8otfx"), SubResource("Resource_tfg57"), SubResource("Resource_np6pw"), SubResource("Resource_ty7v4"), SubResource("Resource_0xb30"), SubResource("Resource_q8q0k"), SubResource("Resource_dfe1r"), SubResource("Resource_70g14"), SubResource("Resource_druko"), SubResource("Resource_8cm0u"), SubResource("Resource_stvc6"), SubResource("Resource_pbdht"), SubResource("Resource_2ukw5"), SubResource("Resource_oplqo")])

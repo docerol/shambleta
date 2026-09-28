@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://c6rr7h50lmuy4"]
+
+[ext_resource type="NavigationPolygon" uid="uid://47hedoyyeudq" path="res://presets/maps/navigations/tonori/sandstorm/Desert Mines.tres" id="1_6xl76"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_ru1ow"]
+[ext_resource type="Resource" uid="uid://c6pwywncnwuof" path="res://presets/maps/server/tonori/sandstorm/Desert Mines.tres" id="3_shveo"]
+
+[resource]
+script = ExtResource("2_ru1ow")
+serverData = ExtResource("3_shveo")
+layersPath = "res://presets/maps/layers/tonori/sandstorm/Desert Mines.tscn"
+navigation = ExtResource("1_6xl76")
+minimapPath = "res://data/graphics/minimaps/tonori/sandstorm/Desert Mines.png"
+_name = "Desert Mines"

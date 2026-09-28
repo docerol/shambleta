@@ -1,0 +1,74 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://bge8utqhfkqoc"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_emx7g"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_fok7a"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_ac1y2"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="4_yra8r"]
+
+[sub_resource type="Resource" id="Resource_575ks"]
+script = ExtResource("2_fok7a")
+id = 2089709631
+nick = "To Second Deck"
+type = 2
+player_script = ExtResource("4_yra8r")
+own_script = ExtResource("3_ac1y2")
+spawn_position = Vector2i(1536, 928)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 2122050188
+destination_pos = Vector2(2320, 1168)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_40u5u"]
+script = ExtResource("2_fok7a")
+id = 2089709631
+nick = "To Alige Hide"
+type = 2
+player_script = ExtResource("4_yra8r")
+own_script = ExtResource("3_ac1y2")
+spawn_position = Vector2i(736, 992)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 944914549
+destination_pos = Vector2(1296, 1008)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_endShipH00"]
+script = ExtResource("2_fok7a")
+count = 6
+id = 235013903
+type = 1
+spawn_position = Vector2i(1536, 928)
+spawn_offset = Vector2i(32, 32)
+respawn_delay = 45000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_endShipH01"]
+script = ExtResource("2_fok7a")
+count = 3
+id = 2834092087
+type = 1
+spawn_position = Vector2i(736, 992)
+spawn_offset = Vector2i(48, 48)
+respawn_delay = 90000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_endShipH02"]
+script = ExtResource("2_fok7a")
+count = 2
+id = 890728458
+type = 1
+spawn_position = Vector2i(1100, 960)
+spawn_offset = Vector2i(32, 32)
+respawn_delay = 120000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_emx7g")
+name = "Ship Hold"
+spawns = Array[ExtResource("2_fok7a")]([SubResource("Resource_575ks"), SubResource("Resource_40u5u"), SubResource("Resource_endShipH00"), SubResource("Resource_endShipH01"), SubResource("Resource_endShipH02")])

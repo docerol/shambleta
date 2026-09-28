@@ -1,0 +1,83 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://byp3fm51m1wct"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_0v504"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_w0p8l"]
+[ext_resource type="Script" uid="uid://llgsboygteee" path="res://sources/scripts/splatyna/Locks.gd" id="3_jaovg"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="4_2vkt4"]
+
+[sub_resource type="Resource" id="Resource_wr738"]
+script = ExtResource("2_w0p8l")
+count = 60
+id = 2250973363
+type = 1
+spawn_position = Vector2i(-184, 136)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_n5sd1"]
+script = ExtResource("2_w0p8l")
+id = 228382689
+type = 2
+player_script = ExtResource("3_jaovg")
+spawn_position = Vector2i(3552, 4160)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_b12tv"]
+script = ExtResource("2_w0p8l")
+id = 2089709631
+nick = "Splatyna's Marvin Hole"
+type = 2
+own_script = ExtResource("4_2vkt4")
+spawn_position = Vector2i(1024, 1216)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 1258335808
+destination_pos = Vector2(1232, 1648)
+
+[sub_resource type="Resource" id="Resource_3hxs1"]
+script = ExtResource("2_w0p8l")
+id = 2089709631
+nick = "Splatyna Cave Entrance"
+type = 2
+own_script = ExtResource("4_2vkt4")
+spawn_position = Vector2i(2240, 1440)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -23, -47, 87, -47, 64, 0, 32, 32)
+destination_map = 2961248192
+destination_pos = Vector2(1520, 1008)
+
+[sub_resource type="Resource" id="Resource_dji7m"]
+script = ExtResource("2_w0p8l")
+id = 2089709631
+nick = "Splatyna's Gabriel Pit"
+type = 2
+own_script = ExtResource("4_2vkt4")
+spawn_position = Vector2i(2848, 2624)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 575697006
+destination_pos = Vector2(1136, 1712)
+
+[sub_resource type="Resource" id="Resource_inquu"]
+script = ExtResource("2_w0p8l")
+id = 2089709631
+nick = "Splatyna's Dorian Dead End"
+type = 2
+own_script = ExtResource("4_2vkt4")
+spawn_position = Vector2i(1408, 3456)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -23, -47, 87, -47, 64, 0, 32, 32)
+destination_map = 678881037
+destination_pos = Vector2(1552, 1136)
+
+[resource]
+script = ExtResource("1_0v504")
+name = "Splatyna's Corridor"
+spawns = Array[ExtResource("2_w0p8l")]([SubResource("Resource_wr738"), SubResource("Resource_n5sd1"), SubResource("Resource_b12tv"), SubResource("Resource_3hxs1"), SubResource("Resource_dji7m"), SubResource("Resource_inquu")])

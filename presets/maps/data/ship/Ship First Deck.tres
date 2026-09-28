@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://c30kg2py3xe5q"]
+
+[ext_resource type="NavigationPolygon" uid="uid://k22jvcrcn0y8" path="res://presets/maps/navigations/ship/Ship First Deck.tres" id="1_3r7bp"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_a0gwb"]
+[ext_resource type="Resource" uid="uid://dhpdb1xtata3p" path="res://presets/maps/server/ship/Ship First Deck.tres" id="3_51eot"]
+
+[resource]
+script = ExtResource("2_a0gwb")
+serverData = ExtResource("3_51eot")
+layersPath = "res://presets/maps/layers/ship/Ship First Deck.tscn"
+navigation = ExtResource("1_3r7bp")
+minimapPath = "res://data/graphics/minimaps/ship/Ship First Deck.png"
+_name = "Ship First Deck"

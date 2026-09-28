@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bi2epfgwaan1t"]
+
+[ext_resource type="NavigationPolygon" uid="uid://b7gp4lwbgrwfo" path="res://presets/maps/navigations/splatyna/Splatyna's Gabriel Pit.tres" id="1_3rdbn"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_vihrk"]
+[ext_resource type="Resource" uid="uid://cfhoemavp7s2d" path="res://presets/maps/server/splatyna/Splatyna's Gabriel Pit.tres" id="3_6mddx"]
+
+[resource]
+script = ExtResource("2_vihrk")
+serverData = ExtResource("3_6mddx")
+layersPath = "res://presets/maps/layers/splatyna/Splatyna's Gabriel Pit.tscn"
+navigation = ExtResource("1_3rdbn")
+minimapPath = "res://data/graphics/minimaps/splatyna/Splatyna's Gabriel Pit.png"
+_name = "Splatyna's Gabriel Pit"

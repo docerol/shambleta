@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cf0d4bh8pshqk"]
+
+[ext_resource type="NavigationPolygon" uid="uid://cytx4ywi5yydx" path="res://presets/maps/navigations/splatyna/Splatyna's Dorian Dead End.tres" id="1_tpfkg"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_457f2"]
+[ext_resource type="Resource" uid="uid://wg3cdiqygl2h" path="res://presets/maps/server/splatyna/Splatyna's Dorian Dead End.tres" id="3_quler"]
+
+[resource]
+script = ExtResource("2_457f2")
+serverData = ExtResource("3_quler")
+layersPath = "res://presets/maps/layers/splatyna/Splatyna's Dorian Dead End.tscn"
+navigation = ExtResource("1_tpfkg")
+minimapPath = "res://data/graphics/minimaps/splatyna/Splatyna's Dorian Dead End.png"
+_name = "Splatyna's Dorian Dead End"

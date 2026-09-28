@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://c0f1gqip7wta7"]
+
+[ext_resource type="NavigationPolygon" uid="uid://ddf6s8yh54cfn" path="res://presets/maps/navigations/splatyna/Splatyna Cave Entrance.tres" id="1_d7ys3"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_n03dp"]
+[ext_resource type="Resource" uid="uid://cmjk1htygow2y" path="res://presets/maps/server/splatyna/Splatyna Cave Entrance.tres" id="3_sexjm"]
+
+[resource]
+script = ExtResource("2_n03dp")
+serverData = ExtResource("3_sexjm")
+layersPath = "res://presets/maps/layers/splatyna/Splatyna Cave Entrance.tscn"
+navigation = ExtResource("1_d7ys3")
+minimapPath = "res://data/graphics/minimaps/splatyna/Splatyna Cave Entrance.png"
+_name = "Splatyna Cave Entrance"

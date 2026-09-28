@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bk4nwdrgnii8i"]
+
+[ext_resource type="NavigationPolygon" uid="uid://b7b2esbkhj2ov" path="res://presets/maps/navigations/tonori/desertpit/Snake Pit.tres" id="1_go40r"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_75ajq"]
+[ext_resource type="Resource" uid="uid://borhhxqvlcwib" path="res://presets/maps/server/tonori/desertpit/Snake Pit.tres" id="3_ivvri"]
+
+[resource]
+script = ExtResource("2_75ajq")
+serverData = ExtResource("3_ivvri")
+layersPath = "res://presets/maps/layers/tonori/desertpit/Snake Pit.tscn"
+navigation = ExtResource("1_go40r")
+minimapPath = "res://data/graphics/minimaps/tonori/desertpit/Snake Pit.png"
+_name = "Snake Pit"

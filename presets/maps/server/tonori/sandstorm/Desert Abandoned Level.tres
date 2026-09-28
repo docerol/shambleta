@@ -1,0 +1,132 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://um6hrfnm4yhq"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_3ihv3"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_1qvci"]
+[ext_resource type="Script" uid="uid://ctkhe80cclyu2" path="res://sources/scripts/generic/ChestGlobal.gd" id="3_oau66"]
+[ext_resource type="Script" uid="uid://cxndxtl8j5fs" path="res://sources/scripts/tonori/sandstorm/Chest.gd" id="4_dphgh"]
+[ext_resource type="Script" uid="uid://c4f2lsyrguvqy" path="res://sources/scripts/tonori/sandstorm/NickosGlobal.gd" id="5_0jmcr"]
+[ext_resource type="Script" uid="uid://dtnsxawwjrqm5" path="res://sources/scripts/tonori/sandstorm/Nickos.gd" id="6_5y73o"]
+[ext_resource type="Script" uid="uid://c3utn6l8tdjvs" path="res://sources/scripts/tonori/sandstorm/DeepLevelEntranceGlobal.gd" id="7_4y2qq"]
+[ext_resource type="Script" uid="uid://dqkgv6ccouyfr" path="res://sources/scripts/tonori/sandstorm/DeepLevelEntrance.gd" id="8_pv2r4"]
+[ext_resource type="Script" uid="uid://bsl3gtqh5dy4q" path="res://sources/scripts/tonori/sandstorm/MineKey.gd" id="9_0x6r6"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="10_3t2mv"]
+
+[sub_resource type="Resource" id="Resource_ikkad"]
+script = ExtResource("2_1qvci")
+count = 15
+id = 1836204198
+type = 1
+spawn_position = Vector2i(-91, 15)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_2nc20"]
+script = ExtResource("2_1qvci")
+count = 20
+id = 193452188
+type = 1
+spawn_position = Vector2i(-48, 48)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_56otl"]
+script = ExtResource("2_1qvci")
+count = 3
+id = 3842739378
+type = 1
+spawn_position = Vector2i(1147, 1265)
+spawn_offset = Vector2i(173, 331)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_2dk1t"]
+script = ExtResource("2_1qvci")
+id = 217460284
+type = 2
+player_script = ExtResource("4_dphgh")
+own_script = ExtResource("3_oau66")
+spawn_position = Vector2i(2924, 1353)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_l2hw8"]
+script = ExtResource("2_1qvci")
+id = 3312816684
+type = 2
+player_script = ExtResource("6_5y73o")
+own_script = ExtResource("5_0jmcr")
+spawn_position = Vector2i(2860, 1832)
+is_persistant = true
+trigger_radius = 80.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_k85hn"]
+script = ExtResource("2_1qvci")
+count = 3
+id = 3842739378
+type = 1
+spawn_position = Vector2i(1296, 2237)
+spawn_offset = Vector2i(373, 125)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_lfrkm"]
+script = ExtResource("2_1qvci")
+id = 434267405
+nick = "???"
+type = 2
+player_script = ExtResource("8_pv2r4")
+own_script = ExtResource("7_4y2qq")
+spawn_position = Vector2i(2880, 2442)
+is_persistant = true
+trigger_radius = 16.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_rhwob"]
+script = ExtResource("2_1qvci")
+count = 4
+id = 3842739378
+type = 1
+spawn_position = Vector2i(1475, 2794)
+spawn_offset = Vector2i(139, 192)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_bqva4"]
+script = ExtResource("2_1qvci")
+count = 4
+id = 3842739378
+type = 1
+spawn_position = Vector2i(2167, 3125)
+spawn_offset = Vector2i(397, 217)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_6gjup"]
+script = ExtResource("2_1qvci")
+id = 3478975634
+type = 2
+player_script = ExtResource("9_0x6r6")
+spawn_position = Vector2i(2881, 2938)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_v13pb"]
+script = ExtResource("2_1qvci")
+id = 2089709631
+nick = "To Mine Entrance"
+type = 2
+own_script = ExtResource("10_3t2mv")
+spawn_position = Vector2i(1120, 3328)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -32, -64, 96, -64, 64, 0, 32, 32)
+destination_map = 599332840
+destination_pos = Vector2(2192, 3216)
+
+[resource]
+script = ExtResource("1_3ihv3")
+name = "Desert Abandoned Level"
+spawns = Array[ExtResource("2_1qvci")]([SubResource("Resource_ikkad"), SubResource("Resource_2nc20"), SubResource("Resource_56otl"), SubResource("Resource_2dk1t"), SubResource("Resource_l2hw8"), SubResource("Resource_k85hn"), SubResource("Resource_lfrkm"), SubResource("Resource_rhwob"), SubResource("Resource_bqva4"), SubResource("Resource_6gjup"), SubResource("Resource_v13pb")])

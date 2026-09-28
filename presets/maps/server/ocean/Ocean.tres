@@ -1,0 +1,40 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://bbmd8h6fs37p3"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_fx7nl"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_lwlcb"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_qby1y"]
+[ext_resource type="Script" uid="uid://bi3dqo4e0lbdn" path="res://sources/scripts/generic/OverworldWarp.gd" id="4_8f17j"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="5_1fdnf"]
+
+[sub_resource type="Resource" id="Resource_7d1p5"]
+script = ExtResource("2_lwlcb")
+id = 2089709631
+nick = "Ship"
+type = 2
+own_script = ExtResource("3_qby1y")
+spawn_position = Vector2i(2263, 1731)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(41.2025, 60.7943, 41.2025, 29.1813, 72.8964, 29.1813, 72.8964, 60.7943)
+destination_map = 4229445336
+destination_pos = Vector2(656, 912)
+
+[sub_resource type="Resource" id="Resource_qs63w"]
+script = ExtResource("2_lwlcb")
+id = 2089709631
+nick = "Helm"
+type = 2
+player_script = ExtResource("5_1fdnf")
+own_script = ExtResource("4_8f17j")
+spawn_position = Vector2i(2229, 1777)
+respawn_delay = 0.0
+is_persistant = true
+is_targetable = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 48, 0, 48, 32)
+destination_map = 1009372873
+auto_warp = false
+
+[resource]
+script = ExtResource("1_fx7nl")
+name = "Ocean"
+spawns = Array[ExtResource("2_lwlcb")]([SubResource("Resource_7d1p5"), SubResource("Resource_qs63w")])

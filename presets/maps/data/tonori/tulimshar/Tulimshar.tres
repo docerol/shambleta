@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bsmli8gp7diq2"]
+
+[ext_resource type="NavigationPolygon" uid="uid://b6r6w2nyqhov1" path="res://presets/maps/navigations/tonori/tulimshar/Tulimshar.tres" id="1_ga2v6"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_y74cy"]
+[ext_resource type="Resource" uid="uid://nmluki01408v" path="res://presets/maps/server/tonori/tulimshar/Tulimshar.tres" id="3_k2j0n"]
+
+[resource]
+script = ExtResource("2_y74cy")
+serverData = ExtResource("3_k2j0n")
+layersPath = "res://presets/maps/layers/tonori/tulimshar/Tulimshar.tscn"
+navigation = ExtResource("1_ga2v6")
+minimapPath = "res://data/graphics/minimaps/tonori/tulimshar/Tulimshar.png"
+_name = "Tulimshar"

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cumbw6u1bohn1"]
+
+[ext_resource type="NavigationPolygon" uid="uid://d200l1rwkgvnr" path="res://presets/maps/navigations/tonori/tulimshar/Tulimshar West Chamber.tres" id="1_gngka"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_e8ivq"]
+[ext_resource type="Resource" uid="uid://bdftc35aghxae" path="res://presets/maps/server/tonori/tulimshar/Tulimshar West Chamber.tres" id="3_3pnnk"]
+
+[resource]
+script = ExtResource("2_e8ivq")
+serverData = ExtResource("3_3pnnk")
+layersPath = "res://presets/maps/layers/tonori/tulimshar/Tulimshar West Chamber.tscn"
+navigation = ExtResource("1_gngka")
+minimapPath = "res://data/graphics/minimaps/tonori/tulimshar/Tulimshar West Chamber.png"
+_name = "Tulimshar West Chamber"

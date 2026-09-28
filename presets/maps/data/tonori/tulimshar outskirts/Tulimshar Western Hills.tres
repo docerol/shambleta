@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://2cf3blwabi0"]
+
+[ext_resource type="NavigationPolygon" uid="uid://bxttyeairwlci" path="res://presets/maps/navigations/tonori/tulimshar outskirts/Tulimshar Western Hills.tres" id="1_dcaw4"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_vvvwy"]
+[ext_resource type="Resource" uid="uid://b4iv0e5vyekpp" path="res://presets/maps/server/tonori/tulimshar outskirts/Tulimshar Western Hills.tres" id="3_ennmd"]
+
+[resource]
+script = ExtResource("2_vvvwy")
+serverData = ExtResource("3_ennmd")
+layersPath = "res://presets/maps/layers/tonori/tulimshar outskirts/Tulimshar Western Hills.tscn"
+navigation = ExtResource("1_dcaw4")
+minimapPath = "res://data/graphics/minimaps/tonori/tulimshar outskirts/Tulimshar Western Hills.png"
+_name = "Tulimshar Western Hills"

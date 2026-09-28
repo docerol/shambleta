@@ -1,0 +1,153 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://b4iv0e5vyekpp"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_ss3y5"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_cbuxk"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_hne1x"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="4_vh0tv"]
+
+[sub_resource type="Resource" id="Resource_gx7mc"]
+script = ExtResource("2_cbuxk")
+count = 5
+id = 3387138907
+type = 1
+spawn_position = Vector2i(-92, 64)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_n3v8n"]
+script = ExtResource("2_cbuxk")
+count = 4
+id = 3842739378
+type = 1
+spawn_position = Vector2i(2445, 2178)
+spawn_offset = Vector2i(230, 575)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_b3ayj"]
+script = ExtResource("2_cbuxk")
+count = 4
+id = 825312237
+type = 1
+spawn_position = Vector2i(2800, 2317)
+spawn_offset = Vector2i(192, 234)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_384br"]
+script = ExtResource("2_cbuxk")
+count = 2
+id = 3562408837
+type = 1
+spawn_position = Vector2i(1995, 2371)
+spawn_offset = Vector2i(233, 96)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_uibi3"]
+script = ExtResource("2_cbuxk")
+count = 3
+id = 3562408837
+type = 1
+spawn_position = Vector2i(1556, 3000)
+spawn_offset = Vector2i(172, 200)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ad2cf"]
+script = ExtResource("2_cbuxk")
+count = 4
+id = 2089009292
+type = 1
+spawn_position = Vector2i(1204, 4871)
+spawn_offset = Vector2i(234, 316)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_5ks2u"]
+script = ExtResource("2_cbuxk")
+id = 2089709631
+nick = "To Tulimshar Bay"
+type = 2
+player_script = ExtResource("4_vh0tv")
+own_script = ExtResource("3_hne1x")
+spawn_position = Vector2i(3005, 936)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 2910030842
+destination_pos = Vector2(1232, 2096)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_0ncap"]
+script = ExtResource("2_cbuxk")
+id = 2089709631
+nick = "To Tulimshar Center"
+type = 2
+player_script = ExtResource("4_vh0tv")
+own_script = ExtResource("3_hne1x")
+spawn_position = Vector2i(2988, 3478)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(19, 90, 4, 74, 68, 74, 52, 90)
+destination_map = 2851687439
+destination_pos = Vector2(1648, 2416)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_sxwsy"]
+script = ExtResource("2_cbuxk")
+id = 2089709631
+nick = "To Tulimshar Western Cave"
+type = 2
+own_script = ExtResource("3_hne1x")
+spawn_position = Vector2i(2174, 3784)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 2011687557
+destination_pos = Vector2(2192, 1200)
+
+[sub_resource type="Resource" id="Resource_qjdof"]
+script = ExtResource("2_cbuxk")
+id = 2089709631
+nick = "To Tulimshar Western Cave"
+type = 2
+own_script = ExtResource("3_hne1x")
+spawn_position = Vector2i(1436, 4072)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 2011687557
+destination_pos = Vector2(1488, 1488)
+
+[sub_resource type="Resource" id="Resource_36qqh"]
+script = ExtResource("2_cbuxk")
+id = 2089709631
+nick = "To Tulimshar Western Cave"
+type = 2
+own_script = ExtResource("3_hne1x")
+spawn_position = Vector2i(2524, 4840)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 2011687557
+destination_pos = Vector2(2544, 2192)
+
+[sub_resource type="Resource" id="Resource_6dmgl"]
+script = ExtResource("2_cbuxk")
+id = 2089709631
+nick = "To Tulimshar Western Cave"
+type = 2
+own_script = ExtResource("3_hne1x")
+spawn_position = Vector2i(1532, 5032)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 2011687557
+destination_pos = Vector2(1584, 2320)
+
+[resource]
+script = ExtResource("1_ss3y5")
+name = "Tulimshar Western Hills"
+spawns = Array[ExtResource("2_cbuxk")]([SubResource("Resource_gx7mc"), SubResource("Resource_n3v8n"), SubResource("Resource_b3ayj"), SubResource("Resource_384br"), SubResource("Resource_uibi3"), SubResource("Resource_ad2cf"), SubResource("Resource_5ks2u"), SubResource("Resource_0ncap"), SubResource("Resource_sxwsy"), SubResource("Resource_qjdof"), SubResource("Resource_36qqh"), SubResource("Resource_6dmgl")])

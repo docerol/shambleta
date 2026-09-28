@@ -1,0 +1,195 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://ogyqjt1flxtk"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_pcdmo"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_xl74i"]
+[ext_resource type="Script" uid="uid://u7fhvs0m08w3" path="res://sources/scripts/tonori/tulimshar/LightTriggerGlobal.gd" id="3_ule5m"]
+[ext_resource type="Script" uid="uid://bq7wls8w7537q" path="res://sources/scripts/tonori/tulimshar/Ben.gd" id="4_87fy6"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="5_gjgbt"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="6_0edfs"]
+
+[sub_resource type="Resource" id="Resource_2ph25"]
+script = ExtResource("2_xl74i")
+count = 5
+id = 235013903
+type = 1
+spawn_position = Vector2i(-38, 18)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_x3882"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(3377, 943)
+is_persistant = true
+trigger_radius = 160.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_w0kv6"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(3312, 1234)
+is_persistant = true
+trigger_radius = 160.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_xhal6"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(3504, 1234)
+is_persistant = true
+trigger_radius = 160.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_sp8re"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(2528, 1249)
+is_persistant = true
+trigger_radius = 256.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_478v1"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(3424, 1791)
+is_persistant = true
+trigger_radius = 256.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_u8y1b"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(2720, 2016)
+is_persistant = true
+trigger_radius = 256.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_mt8es"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(1744, 2320)
+is_persistant = true
+trigger_radius = 128.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_p45o3"]
+script = ExtResource("2_xl74i")
+id = 193452314
+type = 2
+player_script = ExtResource("4_87fy6")
+spawn_position = Vector2i(1562, 2367)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_def6f"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(1776, 2580)
+is_persistant = true
+trigger_radius = 160.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_c4010"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(2032, 2580)
+is_persistant = true
+trigger_radius = 160.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_isor8"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(1072, 2832)
+is_persistant = true
+trigger_radius = 128.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_a3n1o"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(1168, 2833)
+is_persistant = true
+trigger_radius = 128.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_lkln5"]
+script = ExtResource("2_xl74i")
+id = 31947249
+type = 2
+own_script = ExtResource("3_ule5m")
+spawn_position = Vector2i(2591, 2848)
+is_persistant = true
+trigger_radius = 256.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_0qoig"]
+script = ExtResource("2_xl74i")
+id = 2089709631
+nick = "To Tulimshar"
+type = 2
+player_script = ExtResource("6_0edfs")
+own_script = ExtResource("5_gjgbt")
+spawn_position = Vector2i(3862, 1525)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(41, 43, 9, 11, 28, 3, 55, 3, 73, 11)
+destination_map = 3958259487
+destination_pos = Vector2(1552, 1616)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_i4abj"]
+script = ExtResource("2_xl74i")
+id = 2089709631
+nick = "To Tulimshar Center"
+type = 2
+player_script = ExtResource("6_0edfs")
+own_script = ExtResource("5_gjgbt")
+spawn_position = Vector2i(1595, 2278)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(19, 94, 19, 74, 37, 58, 53, 58, 68, 74, 68, 94)
+destination_map = 1967386498
+destination_pos = Vector2(3024, 3504)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_w6vxp"]
+script = ExtResource("2_xl74i")
+id = 2089709631
+nick = "To Castle"
+type = 2
+own_script = ExtResource("5_gjgbt")
+spawn_position = Vector2i(904, 2668)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(24, 36, 24, 4, 56, -28, 56, 68)
+destination_map = 2666049907
+destination_pos = Vector2(1392, 1424)
+
+[resource]
+script = ExtResource("1_pcdmo")
+name = "Tulimshar West Wall Pathway"
+spawns = Array[ExtResource("2_xl74i")]([SubResource("Resource_2ph25"), SubResource("Resource_x3882"), SubResource("Resource_w0kv6"), SubResource("Resource_xhal6"), SubResource("Resource_sp8re"), SubResource("Resource_478v1"), SubResource("Resource_u8y1b"), SubResource("Resource_mt8es"), SubResource("Resource_p45o3"), SubResource("Resource_def6f"), SubResource("Resource_c4010"), SubResource("Resource_isor8"), SubResource("Resource_a3n1o"), SubResource("Resource_lkln5"), SubResource("Resource_0qoig"), SubResource("Resource_i4abj"), SubResource("Resource_w6vxp")])

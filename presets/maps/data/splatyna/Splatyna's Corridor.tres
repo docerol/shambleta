@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cwbqjdm5lwsby"]
+
+[ext_resource type="NavigationPolygon" uid="uid://baprvdpyogo14" path="res://presets/maps/navigations/splatyna/Splatyna's Corridor.tres" id="1_m1ko6"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_50ieo"]
+[ext_resource type="Resource" uid="uid://byp3fm51m1wct" path="res://presets/maps/server/splatyna/Splatyna's Corridor.tres" id="3_lu1r2"]
+
+[resource]
+script = ExtResource("2_50ieo")
+serverData = ExtResource("3_lu1r2")
+layersPath = "res://presets/maps/layers/splatyna/Splatyna's Corridor.tscn"
+navigation = ExtResource("1_m1ko6")
+minimapPath = "res://data/graphics/minimaps/splatyna/Splatyna's Corridor.png"
+_name = "Splatyna's Corridor"

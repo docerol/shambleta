@@ -1,0 +1,60 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://cmjk1htygow2y"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_fftci"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_63l8l"]
+[ext_resource type="Script" uid="uid://c35kjdj05j734" path="res://sources/scripts/splatyna/Bicies.gd" id="3_lmi4k"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="4_j8jsn"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="5_3jbo2"]
+
+[sub_resource type="Resource" id="Resource_bdwgx"]
+script = ExtResource("2_63l8l")
+id = 2843189460
+type = 2
+player_script = ExtResource("3_lmi4k")
+spawn_position = Vector2i(1425, 1351)
+spawn_offset = Vector2i(73, 64)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ab1qw"]
+script = ExtResource("2_63l8l")
+id = 2089709631
+nick = "Splatyna Cave"
+type = 2
+own_script = ExtResource("4_j8jsn")
+spawn_position = Vector2i(1504, 896)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3863109455
+destination_pos = Vector2(2256, 1360)
+
+[sub_resource type="Resource" id="Resource_gwjrg"]
+script = ExtResource("2_63l8l")
+id = 2089709631
+nick = "Overworld"
+type = 2
+player_script = ExtResource("5_3jbo2")
+own_script = ExtResource("4_j8jsn")
+spawn_position = Vector2i(1728, 1760)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -32, -64, 96, -64, 64, 0, 32, 32)
+destination_map = 1009372873
+destination_pos = Vector2(1336, 3640)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_endSplat00"]
+script = ExtResource("2_63l8l")
+count = 1
+id = 2715760142
+type = 1
+spawn_position = Vector2i(1600, 1300)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_fftci")
+name = "Splatyna Cave Entrance"
+spawns = Array[ExtResource("2_63l8l")]([SubResource("Resource_bdwgx"), SubResource("Resource_ab1qw"), SubResource("Resource_gwjrg"), SubResource("Resource_endSplat00")])

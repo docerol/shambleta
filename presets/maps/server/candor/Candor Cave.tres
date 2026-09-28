@@ -1,0 +1,50 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://bjdvrm4wr7ik"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_i8uy2"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_mpn8r"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_326l1"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="4_jmxeg"]
+
+[sub_resource type="Resource" id="Resource_qyd6x"]
+script = ExtResource("2_mpn8r")
+count = 20
+id = 2250973363
+type = 1
+spawn_position = Vector2i(-66, 68)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_aoqx5"]
+script = ExtResource("2_mpn8r")
+id = 2089709631
+nick = "Warp Overworld"
+type = 2
+player_script = ExtResource("4_jmxeg")
+own_script = ExtResource("3_326l1")
+spawn_position = Vector2i(1600, 832)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 96, -16, 64, 0, 32, 32, 0, 64, 32, 80, 64, 80, 96)
+destination_map = 1009372873
+destination_pos = Vector2(1848, 2120)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_q4abi"]
+script = ExtResource("2_mpn8r")
+id = 2089709631
+nick = "Warp Main Arena"
+type = 2
+own_script = ExtResource("3_326l1")
+spawn_position = Vector2i(1600, 2336)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -32, -64, 96, -64, 64, 0, 32, 32)
+destination_map = 4111682275
+destination_pos = Vector2(2032, 752)
+
+[resource]
+script = ExtResource("1_i8uy2")
+name = "Candor Cave"
+spawns = Array[ExtResource("2_mpn8r")]([SubResource("Resource_qyd6x"), SubResource("Resource_aoqx5"), SubResource("Resource_q4abi")])

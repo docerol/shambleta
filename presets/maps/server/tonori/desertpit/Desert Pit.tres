@@ -1,0 +1,263 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://b7khjlcd0rouf"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_24chr"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_kxbn5"]
+[ext_resource type="Script" uid="uid://bsy8incqdhao4" path="res://sources/scripts/generic/DryWell.gd" id="3_lemn2"]
+[ext_resource type="Script" uid="uid://dn7yqxl7boik5" path="res://sources/scripts/tonori/desertpit/Mauro.gd" id="4_ka4me"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="5_r471v"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="6_s071k"]
+
+[sub_resource type="Resource" id="Resource_y2yaf"]
+script = ExtResource("2_kxbn5")
+count = 5
+id = 1435506622
+type = 1
+spawn_position = Vector2i(-27, -18)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_pnh33"]
+script = ExtResource("2_kxbn5")
+count = 7
+id = 1836204198
+type = 1
+spawn_position = Vector2i(3312, 1376)
+spawn_offset = Vector2i(1072, 384)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_nwdhv"]
+script = ExtResource("2_kxbn5")
+id = 2624609623
+type = 1
+spawn_position = Vector2i(3360, 1130)
+spawn_offset = Vector2i(133, 104)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_u5wvb"]
+script = ExtResource("2_kxbn5")
+count = 3
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3344, 1600)
+spawn_offset = Vector2i(144, 96)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_dwptn"]
+script = ExtResource("2_kxbn5")
+count = 10
+id = 1435506622
+type = 1
+spawn_position = Vector2i(4193, 2333)
+spawn_offset = Vector2i(782, 784)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_2p4oo"]
+script = ExtResource("2_kxbn5")
+count = 10
+id = 1435506622
+type = 1
+spawn_position = Vector2i(2606, 2352)
+spawn_offset = Vector2i(782, 784)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_g7jdb"]
+script = ExtResource("2_kxbn5")
+count = 20
+id = 3842739378
+type = 1
+spawn_position = Vector2i(3552, 2512)
+spawn_offset = Vector2i(1536, 848)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_2p0wo"]
+script = ExtResource("2_kxbn5")
+count = 4
+id = 1435506622
+type = 1
+spawn_position = Vector2i(1360, 2144)
+spawn_offset = Vector2i(336, 384)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_byqne"]
+script = ExtResource("2_kxbn5")
+count = 8
+id = 2399925469
+type = 1
+spawn_position = Vector2i(5616, 3072)
+spawn_offset = Vector2i(528, 1056)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_sb86m"]
+script = ExtResource("2_kxbn5")
+id = 1435506618
+type = 1
+spawn_position = Vector2i(1942, 2275)
+spawn_offset = Vector2i(64, 48)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_upnwk"]
+script = ExtResource("2_kxbn5")
+count = 4
+id = 1836204198
+type = 1
+spawn_position = Vector2i(2933, 2710)
+spawn_offset = Vector2i(741, 318)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_lsxdl"]
+script = ExtResource("2_kxbn5")
+count = 3
+id = 825312237
+type = 1
+spawn_position = Vector2i(3189, 2763)
+spawn_offset = Vector2i(446, 152)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_87y18"]
+script = ExtResource("2_kxbn5")
+id = 1435506618
+type = 1
+spawn_position = Vector2i(4192, 3024)
+spawn_offset = Vector2i(64, 48)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ai5ia"]
+script = ExtResource("2_kxbn5")
+id = 2089713785
+type = 2
+player_script = ExtResource("3_lemn2")
+spawn_position = Vector2i(4192, 3024)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_gxb8k"]
+script = ExtResource("2_kxbn5")
+count = 12
+id = 3842739378
+type = 1
+spawn_position = Vector2i(3584, 3568)
+spawn_offset = Vector2i(1376, 528)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_54hud"]
+script = ExtResource("2_kxbn5")
+count = 2
+id = 2399925469
+type = 1
+spawn_position = Vector2i(3061, 3160)
+spawn_offset = Vector2i(160, 112)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_6mt7u"]
+script = ExtResource("2_kxbn5")
+id = 229085321
+type = 2
+player_script = ExtResource("4_ka4me")
+spawn_position = Vector2i(2554, 3239)
+is_persistant = true
+state = 2
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_8wrxu"]
+script = ExtResource("2_kxbn5")
+id = 236646007
+type = 1
+spawn_position = Vector2i(6305, 4240)
+spawn_offset = Vector2i(160, 132)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_amxky"]
+script = ExtResource("2_kxbn5")
+count = 3
+id = 236646007
+type = 1
+spawn_position = Vector2i(5952, 4533)
+spawn_offset = Vector2i(208, 271)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_t5rxk"]
+script = ExtResource("2_kxbn5")
+id = 2399925469
+type = 1
+spawn_position = Vector2i(5937, 4647)
+spawn_offset = Vector2i(80, 112)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_xjd6d"]
+script = ExtResource("2_kxbn5")
+id = 2089709631
+nick = "To Snake Pit"
+type = 2
+player_script = ExtResource("6_s071k")
+own_script = ExtResource("5_r471v")
+spawn_position = Vector2i(3228, 1448)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 1717452900
+destination_pos = Vector2(1680, 1072)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_ota3g"]
+script = ExtResource("2_kxbn5")
+id = 2089709631
+nick = "To Sandstorm"
+type = 2
+own_script = ExtResource("5_r471v")
+spawn_position = Vector2i(940, 1986)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(20, 189.818, 20, 45.8182, 52, 45.8182, 52, 189.818)
+destination_map = 1083397696
+destination_pos = Vector2(4944, 3088)
+
+[sub_resource type="Resource" id="Resource_hkowi"]
+script = ExtResource("2_kxbn5")
+id = 2089709631
+nick = "To Snake Pit"
+type = 2
+own_script = ExtResource("5_r471v")
+spawn_position = Vector2i(2620, 3144)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(5, 72, 20, 56, 52, 56, 67, 72)
+destination_map = 1717452900
+destination_pos = Vector2(1040, 2832)
+
+[sub_resource type="Resource" id="Resource_jq57d"]
+script = ExtResource("2_kxbn5")
+id = 2089709631
+nick = "To Desert Mountains"
+type = 2
+player_script = ExtResource("6_s071k")
+own_script = ExtResource("5_r471v")
+spawn_position = Vector2i(6364, 4008)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(19, 90, 5, 72, 20, 56, 52, 56, 67, 72, 52, 90)
+destination_map = 173323126
+destination_pos = Vector2(1328, 880)
+auto_warp = false
+
+[resource]
+script = ExtResource("1_24chr")
+name = "Desert Pit"
+spawns = Array[ExtResource("2_kxbn5")]([SubResource("Resource_y2yaf"), SubResource("Resource_pnh33"), SubResource("Resource_nwdhv"), SubResource("Resource_u5wvb"), SubResource("Resource_dwptn"), SubResource("Resource_2p4oo"), SubResource("Resource_g7jdb"), SubResource("Resource_2p0wo"), SubResource("Resource_byqne"), SubResource("Resource_sb86m"), SubResource("Resource_upnwk"), SubResource("Resource_lsxdl"), SubResource("Resource_87y18"), SubResource("Resource_ai5ia"), SubResource("Resource_gxb8k"), SubResource("Resource_54hud"), SubResource("Resource_6mt7u"), SubResource("Resource_8wrxu"), SubResource("Resource_amxky"), SubResource("Resource_t5rxk"), SubResource("Resource_xjd6d"), SubResource("Resource_ota3g"), SubResource("Resource_hkowi"), SubResource("Resource_jq57d")])

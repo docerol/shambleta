@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://df3e4rx5bb21k"]
+
+[ext_resource type="NavigationPolygon" uid="uid://dk3r28m3nuqoo" path="res://presets/maps/navigations/splatyna/Splatyna's Marvin Hole.tres" id="1_c3iw8"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_87r3i"]
+[ext_resource type="Resource" uid="uid://f43037euns3p" path="res://presets/maps/server/splatyna/Splatyna's Marvin Hole.tres" id="3_v6pin"]
+
+[resource]
+script = ExtResource("2_87r3i")
+serverData = ExtResource("3_v6pin")
+layersPath = "res://presets/maps/layers/splatyna/Splatyna's Marvin Hole.tscn"
+navigation = ExtResource("1_c3iw8")
+minimapPath = "res://data/graphics/minimaps/splatyna/Splatyna's Marvin Hole.png"
+_name = "Splatyna's Marvin Hole"

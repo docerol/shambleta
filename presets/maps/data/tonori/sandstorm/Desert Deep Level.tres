@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bfknl4u1aawg7"]
+
+[ext_resource type="NavigationPolygon" uid="uid://coa1vpbw1w3sh" path="res://presets/maps/navigations/tonori/sandstorm/Desert Deep Level.tres" id="1_ab6o4"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_ehhrr"]
+[ext_resource type="Resource" uid="uid://d2he52gtbmnto" path="res://presets/maps/server/tonori/sandstorm/Desert Deep Level.tres" id="3_qbhb2"]
+
+[resource]
+script = ExtResource("2_ehhrr")
+serverData = ExtResource("3_qbhb2")
+layersPath = "res://presets/maps/layers/tonori/sandstorm/Desert Deep Level.tscn"
+navigation = ExtResource("1_ab6o4")
+minimapPath = "res://data/graphics/minimaps/tonori/sandstorm/Desert Deep Level.png"
+_name = "Desert Deep Level"

@@ -12,7 +12,15 @@ publishing/*
 
 # imported files
 .godot/*
-presets/maps/*
+
+# As salas NÃO são importadas por ferramenta nenhuma: `presets/maps/data/**` é a
+# fonte do `MapsDB` (sources/system/Path.gd:49 → sources/db/DB.gd:271) e
+# `presets/maps/server/**` é onde os mobs das arenas de boss estão spawneados.
+# Estar no `.gitignore` portanto nunca foi "artefato regenerável" — era um clone
+# sem mapa: `git clone` + gate dá `MapsDB` vazio, e as réguas que existem PARA isso
+# (`tests/balance_test.gd:648` zona → mapa real, `tests/content_hygiene_test.gd:282`
+# arena de boss real) morrem na origem. 160 arquivos, 20 MiB, rastreados desde
+# 2026-09-28 por decisão do dono.
 
 # addons
 ~*.dll

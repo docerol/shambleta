@@ -1,0 +1,111 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://c37qw88b77jg4"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_g5rmi"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_sakrc"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_o5ksk"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="4_h6qh1"]
+
+[sub_resource type="Resource" id="Resource_64pi0"]
+script = ExtResource("2_sakrc")
+count = 35
+id = 2469123693
+type = 1
+spawn_position = Vector2i(-108, 43)
+spawn_offset = Vector2i(24, 24)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_m63sf"]
+script = ExtResource("2_sakrc")
+count = 50
+id = 2450367875
+type = 1
+spawn_position = Vector2i(-176, 256)
+spawn_offset = Vector2i(24, 24)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_etfua"]
+script = ExtResource("2_sakrc")
+count = 15
+id = 193452188
+type = 1
+spawn_position = Vector2i(-139, 448)
+spawn_offset = Vector2i(24, 24)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_kojx2"]
+script = ExtResource("2_sakrc")
+count = 2
+id = 235013903
+type = 1
+spawn_position = Vector2i(2023, 1599)
+spawn_offset = Vector2i(92, 73)
+respawn_delay = 10.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_jfa84"]
+script = ExtResource("2_sakrc")
+count = 2
+id = 4234567318
+type = 1
+spawn_position = Vector2i(1385, 1769)
+spawn_offset = Vector2i(92, 73)
+respawn_delay = 10.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_5wl2s"]
+script = ExtResource("2_sakrc")
+id = 2089709631
+nick = "Warp Artis South"
+type = 2
+player_script = ExtResource("4_h6qh1")
+own_script = ExtResource("3_o5ksk")
+spawn_position = Vector2i(3296, 896)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 215463816
+destination_pos = Vector2(4944, 1680)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_csvoj"]
+script = ExtResource("2_sakrc")
+id = 2089709631
+nick = "Warp Overworld"
+type = 2
+player_script = ExtResource("4_h6qh1")
+own_script = ExtResource("3_o5ksk")
+spawn_position = Vector2i(1984, 1440)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 1009372873
+destination_pos = Vector2(4296, 1560)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_xgp7a"]
+script = ExtResource("2_sakrc")
+id = 2089709631
+nick = "Warp Artis South"
+type = 2
+player_script = ExtResource("4_h6qh1")
+own_script = ExtResource("3_o5ksk")
+spawn_position = Vector2i(2592, 4352)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 215463816
+destination_pos = Vector2(2832, 4208)
+auto_warp = false
+
+[resource]
+script = ExtResource("1_g5rmi")
+name = "Artis Sewer"
+spawns = Array[ExtResource("2_sakrc")]([SubResource("Resource_64pi0"), SubResource("Resource_m63sf"), SubResource("Resource_etfua"), SubResource("Resource_kojx2"), SubResource("Resource_jfa84"), SubResource("Resource_5wl2s"), SubResource("Resource_csvoj"), SubResource("Resource_xgp7a")])

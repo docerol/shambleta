@@ -1,0 +1,70 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://dhpdb1xtata3p"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_0rkmh"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_lkgnb"]
+[ext_resource type="Script" uid="uid://ds7tbew8mcds3" path="res://sources/scripts/ship/JohanneLaLiberte-OMana.gd" id="3_h4hxd"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="4_gafkw"]
+
+[sub_resource type="Resource" id="Resource_bpa4i"]
+script = ExtResource("2_lkgnb")
+id = 1629942628
+nick = "Ô Mana"
+type = 2
+player_script = ExtResource("3_h4hxd")
+spawn_position = Vector2i(942, 825)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_jtgqm"]
+script = ExtResource("2_lkgnb")
+id = 2089709631
+nick = "To Second Deck"
+type = 2
+own_script = ExtResource("4_gafkw")
+spawn_position = Vector2i(992, 802)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 46.5, 0, 0, 32, 0, 32, 46.5)
+destination_map = 2122050188
+destination_pos = Vector2(2320, 944)
+
+[sub_resource type="Resource" id="Resource_d001h"]
+script = ExtResource("2_lkgnb")
+id = 2089709631
+nick = "ToOutside"
+type = 2
+own_script = ExtResource("4_gafkw")
+spawn_position = Vector2i(608, 896)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 231511051
+destination_pos = Vector2(2288, 1776)
+
+[sub_resource type="Resource" id="Resource_vv3sp"]
+script = ExtResource("2_lkgnb")
+id = 2089709631
+nick = "To Nard's Room"
+type = 2
+own_script = ExtResource("4_gafkw")
+spawn_position = Vector2i(1056, 896)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 1234630261
+destination_pos = Vector2(720, 880)
+
+[sub_resource type="Resource" id="Resource_endShipF00"]
+script = ExtResource("2_lkgnb")
+count = 1
+id = 2834092087
+type = 1
+spawn_position = Vector2i(800, 860)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_0rkmh")
+name = "Ship First Deck"
+spawns = Array[ExtResource("2_lkgnb")]([SubResource("Resource_bpa4i"), SubResource("Resource_jtgqm"), SubResource("Resource_d001h"), SubResource("Resource_vv3sp"), SubResource("Resource_endShipF00")])

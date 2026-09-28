@@ -1,0 +1,147 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://cq3syosvwuolb"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_m3ng4"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_jtot1"]
+[ext_resource type="Script" uid="uid://c4lsx7dt4wdmx" path="res://sources/scripts/generic/Greeting.gd" id="3_not7l"]
+[ext_resource type="Script" uid="uid://b5i4qyk8l14e1" path="res://sources/scripts/tonori/manayir/Hommer.gd" id="4_lofjj"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="5_qit47"]
+[ext_resource type="Script" uid="uid://chwiw6fu3ry08" path="res://sources/scripts/generic/Warp.gd" id="6_0bxym"]
+
+[sub_resource type="Resource" id="Resource_l2s55"]
+script = ExtResource("2_jtot1")
+count = 3
+id = 2089466690
+type = 1
+spawn_position = Vector2i(-101, 64)
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_l0080"]
+script = ExtResource("2_jtot1")
+count = 4
+id = 1744780248
+type = 1
+spawn_position = Vector2i(2646, 1538)
+spawn_offset = Vector2i(283, 434)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_y3u23"]
+script = ExtResource("2_jtot1")
+count = 3
+id = 1744780248
+type = 1
+spawn_position = Vector2i(2035, 2143)
+spawn_offset = Vector2i(208, 317)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_fuxbg"]
+script = ExtResource("2_jtot1")
+id = 999510798
+nick = "Gonzo"
+type = 2
+player_script = ExtResource("3_not7l")
+spawn_position = Vector2i(2275, 3032)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_jdrn0"]
+script = ExtResource("2_jtot1")
+id = 608165177
+nick = "Corgit"
+type = 2
+player_script = ExtResource("3_not7l")
+spawn_position = Vector2i(3623, 3101)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_1ubyk"]
+script = ExtResource("2_jtot1")
+id = 999510798
+nick = "Medave"
+type = 2
+player_script = ExtResource("3_not7l")
+spawn_position = Vector2i(1367, 3230)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_elyqo"]
+script = ExtResource("2_jtot1")
+id = 999510798
+nick = "Hommer"
+type = 2
+player_script = ExtResource("4_lofjj")
+spawn_position = Vector2i(2506, 3381)
+is_persistant = true
+state = 0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_losef"]
+script = ExtResource("2_jtot1")
+count = 4
+id = 3562408837
+type = 1
+spawn_position = Vector2i(1715, 3817)
+spawn_offset = Vector2i(248, 249)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_lme5m"]
+script = ExtResource("2_jtot1")
+count = 3
+id = 1744780248
+type = 1
+spawn_position = Vector2i(2452, 4325)
+spawn_offset = Vector2i(248, 224)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_30igd"]
+script = ExtResource("2_jtot1")
+id = 2089709631
+nick = "To Manayir Tower"
+type = 2
+player_script = ExtResource("6_0bxym")
+own_script = ExtResource("5_qit47")
+spawn_position = Vector2i(2428, 2696)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(19, 90, 5, 72, 20, 56, 52, 56, 67, 72, 52, 90)
+destination_map = 356913494
+destination_pos = Vector2(2480, 3408)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_lna7a"]
+script = ExtResource("2_jtot1")
+id = 2089709631
+nick = "To Manayir Tower"
+type = 2
+player_script = ExtResource("6_0bxym")
+own_script = ExtResource("5_qit47")
+spawn_position = Vector2i(2428, 3272)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(19, 90, 5, 72, 20, 56, 52, 56, 67, 72, 52, 90)
+destination_map = 356913494
+destination_pos = Vector2(2480, 2832)
+auto_warp = false
+
+[sub_resource type="Resource" id="Resource_e5f34"]
+script = ExtResource("2_jtot1")
+id = 2089709631
+nick = "To Manayir Beach"
+type = 2
+own_script = ExtResource("5_qit47")
+spawn_position = Vector2i(2416, 4505)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 135, -16, 103, 112, 103, 111.667, 135)
+destination_map = 996649801
+destination_pos = Vector2(1616, 816)
+
+[resource]
+script = ExtResource("1_m3ng4")
+name = "Manayir"
+spawns = Array[ExtResource("2_jtot1")]([SubResource("Resource_l2s55"), SubResource("Resource_l0080"), SubResource("Resource_y3u23"), SubResource("Resource_fuxbg"), SubResource("Resource_jdrn0"), SubResource("Resource_1ubyk"), SubResource("Resource_elyqo"), SubResource("Resource_losef"), SubResource("Resource_lme5m"), SubResource("Resource_30igd"), SubResource("Resource_lna7a"), SubResource("Resource_e5f34")])

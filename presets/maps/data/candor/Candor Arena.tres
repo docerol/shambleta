@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cfhyed4jfhntt"]
+
+[ext_resource type="NavigationPolygon" uid="uid://bj4yitcf7l3g6" path="res://presets/maps/navigations/candor/Candor Arena.tres" id="1_h60sa"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_xyvbk"]
+[ext_resource type="Resource" uid="uid://ctbasiwglkakx" path="res://presets/maps/server/candor/Candor Arena.tres" id="3_56a0w"]
+
+[resource]
+script = ExtResource("2_xyvbk")
+serverData = ExtResource("3_56a0w")
+layersPath = "res://presets/maps/layers/candor/Candor Arena.tscn"
+navigation = ExtResource("1_h60sa")
+minimapPath = "res://data/graphics/minimaps/candor/Candor Arena.png"
+_name = "Candor Arena"

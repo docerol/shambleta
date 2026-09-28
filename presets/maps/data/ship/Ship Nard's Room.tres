@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://4tw07o682gij"]
+
+[ext_resource type="NavigationPolygon" uid="uid://bumbfptdc5db7" path="res://presets/maps/navigations/ship/Ship Nard's Room.tres" id="1_stdf6"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_jj5t4"]
+[ext_resource type="Resource" uid="uid://cma0a1b0uqbx0" path="res://presets/maps/server/ship/Ship Nard's Room.tres" id="3_4v862"]
+
+[resource]
+script = ExtResource("2_jj5t4")
+serverData = ExtResource("3_4v862")
+layersPath = "res://presets/maps/layers/ship/Ship Nard's Room.tscn"
+navigation = ExtResource("1_stdf6")
+minimapPath = "res://data/graphics/minimaps/ship/Ship Nard's Room.png"
+_name = "Ship Nard's Room"

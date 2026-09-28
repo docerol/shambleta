@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://f43037euns3p"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_kpqfs"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_hd3wb"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_dhqwu"]
+
+[sub_resource type="Resource" id="Resource_sc4vp"]
+script = ExtResource("2_hd3wb")
+id = 3264744754
+type = 1
+spawn_position = Vector2i(1998, 1369)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_8g5kh"]
+script = ExtResource("2_hd3wb")
+id = 2089709631
+nick = "Splatyna Cave"
+type = 2
+own_script = ExtResource("3_dhqwu")
+spawn_position = Vector2i(1216, 1728)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 0, -23, -46, 87, -46, 64, 0, 32, 32)
+destination_map = 3863109455
+destination_pos = Vector2(1072, 1328)
+
+[resource]
+script = ExtResource("1_kpqfs")
+name = "Splatyna's Marvin Hole"
+spawns = Array[ExtResource("2_hd3wb")]([SubResource("Resource_sc4vp"), SubResource("Resource_8g5kh")])

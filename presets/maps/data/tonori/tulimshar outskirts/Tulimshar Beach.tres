@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://df6j25x0rnah6"]
+
+[ext_resource type="NavigationPolygon" uid="uid://c5twgjyy3f4hl" path="res://presets/maps/navigations/tonori/tulimshar outskirts/Tulimshar Beach.tres" id="1_s5oa5"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_621ng"]
+[ext_resource type="Resource" uid="uid://djj332o0w1q6o" path="res://presets/maps/server/tonori/tulimshar outskirts/Tulimshar Beach.tres" id="3_sywqx"]
+
+[resource]
+script = ExtResource("2_621ng")
+serverData = ExtResource("3_sywqx")
+layersPath = "res://presets/maps/layers/tonori/tulimshar outskirts/Tulimshar Beach.tscn"
+navigation = ExtResource("1_s5oa5")
+minimapPath = "res://data/graphics/minimaps/tonori/tulimshar outskirts/Tulimshar Beach.png"
+_name = "Tulimshar Beach"

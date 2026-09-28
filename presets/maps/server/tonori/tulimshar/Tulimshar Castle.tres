@@ -1,0 +1,121 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://8xx311s3r3f4"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_xxyto"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_vspim"]
+[ext_resource type="Script" uid="uid://ds1ovpuvvgaji" path="res://sources/scripts/tonori/tulimshar/castle/RedQueenGlobal.gd" id="3_hu18w"]
+[ext_resource type="Script" uid="uid://cn3nclp43csns" path="res://sources/scripts/tonori/tulimshar/castle/RedQueen.gd" id="4_0icva"]
+[ext_resource type="Script" uid="uid://c4wrigjicub5o" path="res://sources/scripts/generic/TriggerGlobal.gd" id="5_tm7df"]
+[ext_resource type="Script" uid="uid://c477iu4jcwn0t" path="res://sources/scripts/tonori/tulimshar/castle/Guard.gd" id="6_iu8s4"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="7_sexex"]
+
+[sub_resource type="Resource" id="Resource_028c4"]
+script = ExtResource("2_vspim")
+id = 3662818686
+type = 2
+player_script = ExtResource("4_0icva")
+own_script = ExtResource("3_hu18w")
+spawn_position = Vector2i(1792, 1003)
+is_persistant = true
+trigger_radius = 512.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_0mnon"]
+script = ExtResource("2_vspim")
+id = 3639315857
+nick = "Guard"
+type = 2
+player_script = ExtResource("6_iu8s4")
+own_script = ExtResource("5_tm7df")
+spawn_position = Vector2i(1710, 1738)
+is_persistant = true
+state = 0
+trigger_radius = 160.0
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_hkvko"]
+script = ExtResource("2_vspim")
+id = 2089709631
+nick = "To Castle Corridors"
+type = 2
+own_script = ExtResource("7_sexex")
+spawn_position = Vector2i(1000, 2060)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(24, 36, 24, 4, 56, -28, 56, 68)
+destination_map = 398960913
+destination_pos = Vector2(1936, 3056)
+
+[sub_resource type="Resource" id="Resource_kd4mv"]
+script = ExtResource("2_vspim")
+id = 2089709631
+nick = "To Castle Corridors"
+type = 2
+own_script = ExtResource("7_sexex")
+spawn_position = Vector2i(2536, 2060)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-7, 68, -7, -28, 24, 4, 24, 36)
+destination_map = 398960913
+destination_pos = Vector2(3504, 3056)
+
+[sub_resource type="Resource" id="Resource_otw3s"]
+script = ExtResource("2_vspim")
+id = 2089709631
+nick = "To Tulimshar"
+type = 2
+own_script = ExtResource("7_sexex")
+spawn_position = Vector2i(1751, 2229)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(41, 43, 9, 11, 28, 3, 55, 3, 73, 11)
+destination_map = 2608626462
+destination_pos = Vector2(1360, 1520)
+
+[sub_resource type="Resource" id="Resource_endTulim00"]
+script = ExtResource("2_vspim")
+count = 4
+id = 2834092087
+type = 1
+spawn_position = Vector2i(1792, 1003)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 90000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_endTulim01"]
+script = ExtResource("2_vspim")
+count = 4
+id = 890728458
+type = 1
+spawn_position = Vector2i(1710, 1738)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 120000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_endTulim02"]
+script = ExtResource("2_vspim")
+count = 3
+id = 3045949408
+type = 1
+spawn_position = Vector2i(1000, 2060)
+spawn_offset = Vector2i(48, 48)
+respawn_delay = 90000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_endTulim03"]
+script = ExtResource("2_vspim")
+count = 6
+id = 3842739378
+type = 1
+spawn_position = Vector2i(2536, 2060)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 45000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_xxyto")
+name = "Tulimshar Castle"
+spawns = Array[ExtResource("2_vspim")]([SubResource("Resource_028c4"), SubResource("Resource_0mnon"), SubResource("Resource_hkvko"), SubResource("Resource_kd4mv"), SubResource("Resource_otw3s"), SubResource("Resource_endTulim00"), SubResource("Resource_endTulim01"), SubResource("Resource_endTulim02"), SubResource("Resource_endTulim03")])

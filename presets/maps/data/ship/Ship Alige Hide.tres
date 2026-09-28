@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://blsjtq13wk07c"]
+
+[ext_resource type="NavigationPolygon" uid="uid://dlialv0drgs1f" path="res://presets/maps/navigations/ship/Ship Alige Hide.tres" id="1_07vot"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_8e4sw"]
+[ext_resource type="Resource" uid="uid://bctx5psagdoxj" path="res://presets/maps/server/ship/Ship Alige Hide.tres" id="3_icbsg"]
+
+[resource]
+script = ExtResource("2_8e4sw")
+serverData = ExtResource("3_icbsg")
+layersPath = "res://presets/maps/layers/ship/Ship Alige Hide.tscn"
+navigation = ExtResource("1_07vot")
+minimapPath = "res://data/graphics/minimaps/ship/Ship Alige Hide.png"
+_name = "Ship Alige Hide"

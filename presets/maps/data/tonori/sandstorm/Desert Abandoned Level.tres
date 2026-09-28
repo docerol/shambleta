@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://bnvfftkch7hfx"]
+
+[ext_resource type="NavigationPolygon" uid="uid://cv7hev0jp1802" path="res://presets/maps/navigations/tonori/sandstorm/Desert Abandoned Level.tres" id="1_td184"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_w0uv5"]
+[ext_resource type="Resource" uid="uid://um6hrfnm4yhq" path="res://presets/maps/server/tonori/sandstorm/Desert Abandoned Level.tres" id="3_2x1hk"]
+
+[resource]
+script = ExtResource("2_w0uv5")
+serverData = ExtResource("3_2x1hk")
+layersPath = "res://presets/maps/layers/tonori/sandstorm/Desert Abandoned Level.tscn"
+navigation = ExtResource("1_td184")
+minimapPath = "res://data/graphics/minimaps/tonori/sandstorm/Desert Abandoned Level.png"
+_name = "Desert Abandoned Level"

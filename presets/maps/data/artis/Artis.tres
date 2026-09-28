@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cyaaxaym1sgj5"]
+
+[ext_resource type="NavigationPolygon" uid="uid://cuywpegups4vk" path="res://presets/maps/navigations/artis/Artis.tres" id="1_foo48"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_l3fp3"]
+[ext_resource type="Resource" uid="uid://dyb2on0d5sr57" path="res://presets/maps/server/artis/Artis.tres" id="3_l3g2q"]
+
+[resource]
+script = ExtResource("2_l3fp3")
+serverData = ExtResource("3_l3g2q")
+layersPath = "res://presets/maps/layers/artis/Artis.tscn"
+navigation = ExtResource("1_foo48")
+minimapPath = "res://data/graphics/minimaps/artis/Artis.png"
+_name = "Artis"

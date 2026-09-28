@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://ctbasiwglkakx"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_snkdb"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_q7ol7"]
+[ext_resource type="Script" uid="uid://cvp01ps7dd525" path="res://sources/scripts/candor/GabzGlobal.gd" id="3_0g7sr"]
+[ext_resource type="Script" uid="uid://duly4rqaouh3k" path="res://sources/scripts/candor/Gabz.gd" id="4_yx854"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="5_lli8u"]
+
+[sub_resource type="Resource" id="Resource_1xxp1"]
+script = ExtResource("2_q7ol7")
+id = 2089134121
+type = 2
+player_script = ExtResource("4_yx854")
+own_script = ExtResource("3_0g7sr")
+spawn_position = Vector2i(1744, 1851)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_044lx"]
+script = ExtResource("2_q7ol7")
+id = 2089709631
+nick = "Warp Candor Cave"
+type = 2
+own_script = ExtResource("5_lli8u")
+spawn_position = Vector2i(2016, 608)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 96, -16, 64, 0, 32, 32, 0, 64, 32, 80, 64, 80, 96)
+destination_map = 515101915
+destination_pos = Vector2(1616, 2224)
+
+[sub_resource type="Resource" id="Resource_endCando00"]
+script = ExtResource("2_q7ol7")
+count = 1
+id = 3045949408
+type = 1
+spawn_position = Vector2i(1900, 1200)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_snkdb")
+name = "Candor Arena"
+spawns = Array[ExtResource("2_q7ol7")]([SubResource("Resource_1xxp1"), SubResource("Resource_044lx"), SubResource("Resource_endCando00")])
+flags = 5

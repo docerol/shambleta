@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://wg3cdiqygl2h"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_6vxrq"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_2l1al"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_qr0kp"]
+
+[sub_resource type="Resource" id="Resource_fg3tf"]
+script = ExtResource("2_2l1al")
+id = 2929114690
+type = 1
+spawn_position = Vector2i(1179, 1748)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_k03rf"]
+script = ExtResource("2_2l1al")
+id = 2089709631
+nick = "Splatyna Cave"
+type = 2
+own_script = ExtResource("3_qr0kp")
+spawn_position = Vector2i(1504, 1024)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
+destination_map = 3863109455
+destination_pos = Vector2(1424, 3376)
+
+[resource]
+script = ExtResource("1_6vxrq")
+name = "Splatyna's Dorian Dead End"
+spawns = Array[ExtResource("2_2l1al")]([SubResource("Resource_fg3tf"), SubResource("Resource_k03rf")])

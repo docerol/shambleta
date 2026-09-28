@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://b5osleyfrji8g"]
+
+[ext_resource type="NavigationPolygon" uid="uid://ct6pqvmkb740e" path="res://presets/maps/navigations/splatyna/Splatyna's Chamber.tres" id="1_tlsuo"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_uod7e"]
+[ext_resource type="Resource" uid="uid://bi4cgm65gew8p" path="res://presets/maps/server/splatyna/Splatyna's Chamber.tres" id="3_5l6uk"]
+
+[resource]
+script = ExtResource("2_uod7e")
+serverData = ExtResource("3_5l6uk")
+layersPath = "res://presets/maps/layers/splatyna/Splatyna's Chamber.tscn"
+navigation = ExtResource("1_tlsuo")
+minimapPath = "res://data/graphics/minimaps/splatyna/Splatyna's Chamber.png"
+_name = "Splatyna's Chamber"

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cwbg2barobi02"]
+
+[ext_resource type="NavigationPolygon" uid="uid://08kbwu1aeqci" path="res://presets/maps/navigations/sewer/Artis Sewer.tres" id="1_w3ld8"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_x8gmc"]
+[ext_resource type="Resource" uid="uid://c37qw88b77jg4" path="res://presets/maps/server/sewer/Artis Sewer.tres" id="3_abqoh"]
+
+[resource]
+script = ExtResource("2_x8gmc")
+serverData = ExtResource("3_abqoh")
+layersPath = "res://presets/maps/layers/sewer/Artis Sewer.tscn"
+navigation = ExtResource("1_w3ld8")
+minimapPath = "res://data/graphics/minimaps/sewer/Artis Sewer.png"
+_name = "Artis Sewer"

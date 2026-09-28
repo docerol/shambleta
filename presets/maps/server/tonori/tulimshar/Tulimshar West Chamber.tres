@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://bdftc35aghxae"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_8icnh"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_gdt1w"]
+[ext_resource type="Script" uid="uid://bgny0cwaahmpg" path="res://sources/scripts/tonori/tulimshar/LetterStash.gd" id="3_uaqur"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="4_b1kh5"]
+
+[sub_resource type="Resource" id="Resource_36q2r"]
+script = ExtResource("2_gdt1w")
+id = 3922677720
+type = 2
+player_script = ExtResource("3_uaqur")
+spawn_position = Vector2i(1312, 1280)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_4puyo"]
+script = ExtResource("2_gdt1w")
+id = 2089709631
+nick = "To Castle"
+type = 2
+own_script = ExtResource("4_b1kh5")
+spawn_position = Vector2i(1448, 1388)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(-7, 68, -7, -28, 24, 4, 24, 36)
+destination_map = 2851687439
+destination_pos = Vector2(1008, 2672)
+
+[sub_resource type="Resource" id="Resource_endTulim00"]
+script = ExtResource("2_gdt1w")
+count = 1
+id = 890728458
+type = 1
+spawn_position = Vector2i(1312, 1280)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[resource]
+script = ExtResource("1_8icnh")
+name = "Tulimshar West Chamber"
+spawns = Array[ExtResource("2_gdt1w")]([SubResource("Resource_36q2r"), SubResource("Resource_4puyo"), SubResource("Resource_endTulim00")])

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://kg0dd5g0ympt"]
+
+[ext_resource type="NavigationPolygon" uid="uid://c634smb2lsejy" path="res://presets/maps/navigations/tonori/tulimshar/Tulimshar West Wall Pathway.tres" id="1_psbfx"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_6gkfa"]
+[ext_resource type="Resource" uid="uid://ogyqjt1flxtk" path="res://presets/maps/server/tonori/tulimshar/Tulimshar West Wall Pathway.tres" id="3_a5qju"]
+
+[resource]
+script = ExtResource("2_6gkfa")
+serverData = ExtResource("3_a5qju")
+layersPath = "res://presets/maps/layers/tonori/tulimshar/Tulimshar West Wall Pathway.tscn"
+navigation = ExtResource("1_psbfx")
+minimapPath = "res://data/graphics/minimaps/tonori/tulimshar/Tulimshar West Wall Pathway.png"
+_name = "Tulimshar West Wall Pathway"

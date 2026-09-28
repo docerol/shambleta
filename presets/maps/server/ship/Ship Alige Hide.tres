@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="MapServerData" format=3 uid="uid://bctx5psagdoxj"]
+
+[ext_resource type="Script" uid="uid://bb6b4t21kugex" path="res://addons/tiled_importer/MapServerData.gd" id="1_fggly"]
+[ext_resource type="Script" uid="uid://dsvyjgt4h20g8" path="res://addons/tiled_importer/SpawnObject.gd" id="2_tjg0u"]
+[ext_resource type="Script" uid="uid://dpig3bsvwjoxp" path="res://sources/scripts/generic/WarpGlobal.gd" id="3_23h0s"]
+
+[sub_resource type="Resource" id="Resource_2wxou"]
+script = ExtResource("2_tjg0u")
+count = 2
+id = 235013903
+type = 1
+spawn_position = Vector2i(-63, 60)
+spawn_offset = Vector2i(16, 16)
+respawn_delay = 10.0
+is_persistant = true
+is_global = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_mkmvk"]
+script = ExtResource("2_tjg0u")
+id = 2089709631
+nick = "To Hold"
+type = 2
+own_script = ExtResource("3_23h0s")
+spawn_position = Vector2i(1312, 960)
+respawn_delay = 0.0
+is_persistant = true
+trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
+destination_map = 1266994400
+destination_pos = Vector2(816, 1040)
+
+[resource]
+script = ExtResource("1_fggly")
+name = "Ship Alige Hide"
+spawns = Array[ExtResource("2_tjg0u")]([SubResource("Resource_2wxou"), SubResource("Resource_mkmvk")])

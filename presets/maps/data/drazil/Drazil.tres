@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="MapData" format=3 uid="uid://cvcx4qlqru1ys"]
+
+[ext_resource type="NavigationPolygon" uid="uid://ucpcm0ur8ugg" path="res://presets/maps/navigations/drazil/Drazil.tres" id="1_c1kio"]
+[ext_resource type="Script" uid="uid://c32vn1v0sk73o" path="res://sources/db/instance/MapData.gd" id="2_ifb37"]
+[ext_resource type="Resource" uid="uid://bo48u45258rtx" path="res://presets/maps/server/drazil/Drazil.tres" id="3_g5h3q"]
+
+[resource]
+script = ExtResource("2_ifb37")
+serverData = ExtResource("3_g5h3q")
+layersPath = "res://presets/maps/layers/drazil/Drazil.tscn"
+navigation = ExtResource("1_c1kio")
+minimapPath = "res://data/graphics/minimaps/drazil/Drazil.png"
+_name = "Drazil"
