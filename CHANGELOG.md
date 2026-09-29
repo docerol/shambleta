@@ -22,12 +22,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The lockout-duration check in `tests/login_hardening_test.gd` was an unsatisfiable wall-clock
+  assertion. `RecordFailedLogin` (`sources/sql/SQL.gd:381`) stamps `lockedUntil` from
+  `SQLCommons.Timestamp()` at the moment of the write (`sources/sql/SQL.gd:386`) — a
+  second-granularity clock — and the check compared `lockedUntil - _now()` after reading the row
+  back, so every second that elapsed between the write and the read demanded the full
+  `BaseLockoutSec` from a window that had already passed. Red in the full run, green when the
+  harness happens to be fast: the shape of a flake, on a runner slower than this machine. The
+  duration is now measured against a clock read before the attempts. Proven three ways against
+  the same suite: with 1.1 s of sleep between write and read the old form printed 94 checks and 1
+  failure, the new form prints 94 and 0 against that same sleep, and with the product capped to
+  grant 60 s while `BaseLockoutSec` still declares 300 the new check goes red — so the ruler
+  stopped reading the calendar without stopping reading the product.
 - The harness that proves #86 had never finished a run, and it took three separate defects to
   get one — each isolated by changing exactly one of them. `_spawnAgent` warmed the farm zone on
   every call, and `CreateInstance` (`sources/world/WorldMap.gd:38`) only writes
   `instances[instanceID]` (`sources/world/WorldMap.gd:40`), so the second warm-up replaced the
-  live instance and left
-  the first peer's agent standing in an orphan: the guard "two real PlayerAgents spawned" read a
+  live instance and left the first peer's agent standing in an orphan: the guard "two real
+  PlayerAgents spawned" read a
   freed reference, which in GDScript is `== null`, printed no `[spawn bail]` line and no script
   error at all, and aborted the run at 49 checks — 23 of the 72 never executed. Reproduced 2/2
   against the committed state before the fix, green after: the instance is created only when the

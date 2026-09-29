@@ -373,7 +373,7 @@ func _suiteLockoutMultiOrigem() -> void:
 	var pid : int = _peer("10.66.1.1")
 	var kindIP : String = str(_secConst("KindLoginIP"))
 	var lockoutEvents : int = _eventCount(str(_secConst("EventLoginLockout")))
-
+	var clockBefore : int = _now()  # a duração é medida contra este instante, não contra um relógio lido depois
 	var i : int = 0
 	while i < maxAttempts:
 		i += 1
@@ -385,7 +385,7 @@ func _suiteLockoutMultiOrigem() -> void:
 	CheckEq(failedAttempts, maxAttempts, "contador POR CONTA persistido em account.failed_attempts (%d)" % failedAttempts)
 	Check(lockedUntil > _now(), "lockout ativo em account.locked_until (durável — sobrevive a restart, não é memória)")
 	CheckEq(lockedUntil - _now() <= maxLockout, true, "lockout tem teto finito (<= MaxLockoutSec): pagante nunca fica travado para sempre")
-	CheckEq(lockedUntil - _now() >= baseLockout, true, "primeiro lockout dura ao menos BaseLockoutSec")
+	CheckEq(lockedUntil - clockBefore >= baseLockout, true, "primeiro lockout dura ao menos BaseLockoutSec (a duração só pode ser medida contra o relógio de antes da escrita: sources/sql/SQL.gd:386 soma `Timestamp()` com granularidade de segundo, e conferir contra um relógio lido depois cobra o prazo inteiro de uma janela que já passou — com 1,1 s de espera entre a escrita e a leitura, medida do jeito antigo, esta régua acusava falha)")
 	CheckEq(_eventCount(str(_secConst("EventLoginLockout"))), lockoutEvents + 1, "sec_login_lockout emitido UMA vez por episódio")
 
 	# Conta travada: senha CERTA não passa (e-mail de suporte, não bypass) e o
