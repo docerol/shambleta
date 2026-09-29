@@ -173,26 +173,26 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 
 | categoria | R1 | R2 | juiz A (R3) | juiz B (R3) | mínima vigente | lacuna nomeada em R3 |
 |---|---|---|---|---|---|---|
-| Core Gameplay | 8,3 | — |  | 8,5 | 8,3 | R3B: nenhuma régua roda `IdlePolicy` por N ticks com morte real para afirmar a curva morte→eficiência→revive; a política confia no comentário de `FarmZoneData.gd:45-47` |
-| Core Loop | 8,7 | — |  | 6,5 | **6,5** | R3B: nine writers of `stat.gp` bypass the kernel and the player snapshot is absolute, so an online character's vendor debit is reverted within 600 s — a gold dupe the kernel's own detector is blind to by construction |
-| Meta Game | 8,5 | — |  | 7,5 | 7,5 | R3B: o ranking de temporada pontua estado ACUMULADO (`power_score`, `bosses_beaten`) em vez do delta da janela, e `pass_tiers` está `{}` nos dados — a agenda declarada ainda não controla a recompensa |
-| Game Design | 8,6 | — |  | 7,0 | 7,0 | R3B: nenhum sumiouro de gold escala com a torneira exponencial (~2,26M gold/h na zona 27 contra ~29k/dia de teto no vendor), e `Experience.gd:9-10` afirma "3 semanas" e "satura na zona 24" contra os números que a curva de 27 zonas produz |
+| Core Gameplay | 8,3 | — | 8,4 | 8,5 | 8,3 | R3A+R3B: nenhum harness afirma a curva morte→eficiência→revive nem "sessão de 300 s na zona 1 com ≤2 mortes"; o L1 nu não tem a maçã do `autoPotionItemHash` (`IdlePolicy.gd:81`) e a política convive com ~8 mortes declaradas em comentário (`FarmZoneData.gd:45-47`) |
+| Core Loop | 8,7 | — | 8,5 | 6,5 | **6,5** | R3B (conferido pelo orquestrador): nove escritores crus de `stat.gp` + snapshot absoluto (`SQL.gd:1156`) revertem o débito do vendor em ≤600 s para personagem conectado, e o detector do kernel só enxerga a perna de baixo (`EconomyKernel.gd:187`). R3A: nenhuma régua emenda o ciclo (logar→farmar→liquidar→gastar→subir zona→renascer na mesma sessão) |
+| Meta Game | 8,5 | — | 7,6 | 7,5 | 7,5 | R3A+R3B: `pass_tiers` é `{}` na S1 — a única temporada no ar corre por default de código (`SeasonConfig.gd:244` valida a faixa, `PassService.gd:84` leria o arquivo se existisse) — e as `races` power/spend não têm produtor rastreado; o ranking de temporada pontua estado acumulado, não o delta da janela (`SeasonService.gd:174-207`) |
+| Game Design | 8,6 | — | 8,0 | 7,0 | 7,0 | R3A+R3B: nenhum sumiouro de gold escala com a torneira (z27 paga ~3,77 M gold/h contra guild L10 a 10 M e teto de vendor ~29 k/dia), a trilha gratuita soma 100 gemas por temporada contra 120 por baú (`EconomyCatalog.gd:447,529`) — o F2P nunca alcança um baú — e `Experience.gd:9-10` afirma "3 semanas"/"satura na zona 24" contra a curva de 27 zonas |
 | Retenção | 7,8 | — |  |  | 7,8 |  |
 | Economia | 9,4 | — |  |  | 9,4 |  |
 | Monetização | 9,4 | — |  |  | 9,4 |  |
 | Marketplace | 8,5 | — |  |  | 8,5 |  |
-| Analytics | 8,0 | — |  |  | 8,0 |  |
-| Live Ops | 9,2 | — | 6,0 |  | **6,0** | R3A: falta a ponta do operador — nenhum dashboard versionado, nenhum prova executada de entrega de alerta, nenhum exercício cronometrado do drain; e o `SHAMBLETA_ALERT_PAGE_WEBHOOK_URL` vazio por default pagina para ninguém |
-| Arquitetura | 8,5 | — |  | 8,9 | 8,5 | R3B: nenhum run verde exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
-| Performance | 8,5 | — |  | 8,7 | 8,5 | R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms, e nenhuma harness compara a cauda com o orçamento |
-| Escalabilidade | 7,4 | — |  | 7,9 | 7,4 | R3B: teto horizontal (multi-processo) continua `[NÃO MEDIDO]`, e o `deploy/SCALING.md` afirma um erro por-passo em `AIAgent.gd` que o código já não tem |
+| Analytics | 8,0 | — | 8,5 |  | 8,0 | R3A: o D1 é honesto sobre a própria janela nas duas pontas (`TelemetryService.gd:163-176,281`, `companion/server.py:430-478`, migration 045) mas `telemetry_event` não tem poda temporal — único `DELETE` é por conta (LGPD, `SQL.gd:326`); falta agregado diário + expiração do cru no padrão da migration 056 |
+| Live Ops | 9,2 | — | 6,0 | 6,8 | **6,0** | R3A+R3B: `deploy/alertmanager.yml:60-64` materializa os dois receivers como `webhook_configs: []` — por default do repo o `severity: page` não acorda ninguém; nenhum dashboard versionado; rotação de temporada/campanha é PULL com TTL de 60 s (`LiveOpsCalendar.gd:108`) e não há cron versionado (`deploy/STAGING.md:136`), então a transição depende de trocar arquivo no host. *A favor, medido por R3B:* as dez séries de `alerts.rules.yml` resolvem em `MetricsServer.gd:190-244` e o orçamento do drain tem controle negativo que morde (`check_compose.sh`) |
+| Arquitetura | 8,5 | — |  | 8,9 | 8,5 | R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
+| Performance | 8,5 | — |  | 8,7 | 8,5 | R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms e nenhuma harness compara a cauda com o orçamento |
+| Escalabilidade | 7,4 | — |  | 7,9 | 7,4 | R3B: teto horizontal `[NÃO MEDIDO]`, e `deploy/SCALING.md:125-127` afirma um erro por-passo em `AIAgent.gd:64` que o código já não tem |
 | Código | 8,2 | — |  | 8,6 | 8,2 | R3B: `harness_marker()` não casa marcador mixed-case, então `one benchmarks` e `one test_backup_restore` devolvem vermelho com `godot exit=0` — e nenhuma régua cobre o caminho `one` |
-| Testes | 8,2 | — | 7,8 |  | **7,8** | R3A: ~419 de 4.290 linhas de `Check*` casam TEXTO do fonte em vez de executar o comportamento; e `check_ci.sh:190` aceita `needs` de build como portão, passando verde sobre o buraco que ela mesma existe para fechar |
-| UX/UI | 7,5 | — |  |  | 7,5 |  |
-| Social | 5,5 | 9,0 |  |  | 5,5 |  |
-| Segurança | 8,7 | 6,8 | 7,2 |  | 6,8 | R3A: o limitador de RPC mora no processo do chamador (`Network.CallServer`), o servidor não cobra chat nem fan-out global, e a cesta pré-auth de `Admission` nunca é podada |
-| DevOps | 8,9 | 8,8 | 6,3 |  | **6,3** | R3A: o que publica não é barrado por teste (`snap`/`release` com `needs: builds`), nenhuma imagem tem registry por SHA, o smoke de compose roda 0 serviços por falta de docker na máquina, e `entrypoint.sh` é conferido só por casamento de texto |
-| Documentação | 8,6 | 7,5 |  |  | 7,5 |  |
+| Testes | 8,2 | — | 7,8 | 8,2 | **7,8** | R3A: ~419 de 4.290 linhas de `Check*` casam TEXTO do fonte; `check_ci.sh:190` aceita `needs` de build como portão. R3B: `tests/nginx_hardening_test.gd:570-574` DEGRADA para ler a doc quando não há nginx no host e `deploy/web/Dockerfile:30` só `COPY`a o `nginx.conf` sem `nginx -t` — um proxy que o nginx recusa passa em todos os gates e chega ao prod |
+| UX/UI | 7,5 | — | 7,0 |  | **7,0** | R3A: 66 chaves de conteúdo NPC sem `pt_BR` (`data/i18n/coverage_report.md:10`) e a lista `phoneLegacy` do R3 só encolhe por contrato de teto, não por geometria verde no tree; ele não conseguiu rodar `panel_fit_test` (fila do boot lock) |
+| Social | 5,5 | 9,0 | 8,0 |  | **5,5** | R3A: o teto de roster é conferido ANTES do INSERT e o próprio código nomeia o buraco (`GuildRoster.gd:82-85`: duas admissões simultâneas deixam a fileira em 21); falta transação com recontagem + harness de N joins simultâneos |
+| Segurança | 8,7 | 6,8 | 7,2 | 7,5 | 6,8 | R3A+R3B: a cota existe só ANTES da credencial (`Admission.gd:67`, `NetworkCommons.gd:63`) — varredura por `MsgPerSec|PerPeer|Throttle|RateLimit` não acha janela pós-auth — então `TriggerChat` (`Server.gd:1644-1671`) amplifica 1→N sem taxa por peer; cesta pré-auth nunca podada; APK de release com debug keystore (`release.yml:107-109`) |
+| DevOps | 8,9 | 8,8 | 6,3 | 7,0 | **6,3** | R3A+R3B: `snap`/`release` com `needs: builds` publicam com teste vermelho; `deploy/ROLLBACK.md:26-33` declara que não há registry e `pull_policy: never` (`docker-compose.yml:50,102,211,319,374`), então o `SHAMBLETA_TAG` do job `container-images` morre no runner efêmero; smoke de compose roda 0 containers e nenhum `up` existe no caminho |
+| Documentação | 8,6 | 7,5 | 8,5 |  | 7,5 | R3A: taxa de erro falsa medida por ele = 0/5 (`DOC DRIFT: 1391 checks, 0 failures`), mas nenhuma afirmação de COMPORTAMENTO é coberta — números de `SCALING.md`/`OPS_RUNBOOK.md`/`WEB_SLIM.md` e o "4.7.2" de `deploy/web/landing/index.html:118`, construído em 4.7.1; e `tests/panel_fit_test.gd:6-7` aponta `WindowPanel.gd:235-237` para código que está em :238-239 sem acusação |
 
 R1 foi um juiz por categoria (a regra 6 só passou a valer na rodada 2), então a
 coluna R1 é nota única. `Social` teve R2 re-medida à parte, com a governança de
@@ -295,6 +295,43 @@ Loop foi conferida pelo orquestrador no fonte e é real (ver §"P0 do dual-write
   const de GDScript. Torneira × gasto: ~2,26M gold/h na zona 27 contra ~29.000 gold/dia de
   teto do vendor, 10.000 a chave de boss, 5.000 a guilda, `500 × tier²` = 40.500 na forja
   tier 9 (`CraftCatalog.gd:111-112`).
+
+
+### Veredito bruto — juiz A, grupo produto (Core Gameplay, Core Loop, Meta Game, Game Design)
+
+Chegou 2026-09-28 (44 chamadas, assento relançado com teto). Também **não mediu nada**: as
+três tentativas de harness caíram em `GATE PULADO: godot estrangeiro (pid 269904)` — um godot
+órfão reparentado a systemd segurava o boot havia mais de 30 minutos, fora do alcance da
+isenção por ancestralidade do boot guard. (O orquestrador conferiu depois: o pid não existia
+mais e a锁 voltou a girar; o achado operacional é o próprio órfão segurar o portão.)
+
+- **Core Gameplay 8,4.** `IdlePolicy.gd:191` produz `State.DEAD`, `:529-535` revive in-place
+  com downtime e `sessionDeaths` na eficiência; kill nosso leva a `State.LOOT` e `_tickLoot`
+  colhe com raio travado (`:373`, `:494`, `:28`); cap de aggro com `pop_front()`
+  (`AIAgent.gd:68`). *Lacuna:* L1 nu não tem a maçã do `autoPotionItemHash` (`:81`) e nenhuma
+  régua afirma a sessão de 300 s com ≤2 mortes.
+- **Core Loop 8,5.** A perna earn existe em código (`OfflineSettle.gd:302,308`, kills
+  alimentando drop e chave em `:319,:326,:362`); spend real com débito + ledger
+  `vendor:<offer>` na mesma transação (`ShopService.gd:297-299`) e gemas queimando em
+  `:33-35`; cadeado de capacidade por `Formula.GetPowerScore` (`Server.gd:612`) e essência
+  nascendo no level (`OfflineSettle.gd:417`). *Lacuna:* nenhum harness emenda o ciclo
+  inteiro — cada transição é verde isolada. *Hipótese declarada:* não rodou o
+  `economy_invariant_fuzz`, não leu o kernel do reset.
+- **Meta Game 7,6.** `SeasonConfig.gd:244` valida `pass_tiers.max_level` contra o produto e
+  `PassService.gd:84` lê a trilha do arquivo; `SeasonService.gd:169` abre a temporada do JSON
+  e congela as regras, com preempt da S2 agendada em `:249`; o meta entra na torneira real
+  (`OfflineSettle.gd:233,269`). *Contra:* em `data/conf/liveops_calendar.json` nenhuma janela
+  está no ar hoje (uma encerrada 20–21/09, o resto em nov/2026 e jan/2027), `pass_tiers` é `{}`
+  na S1 — que é a temporada que corre — e das quatro `races` só tracei `guild_points` e
+  `boss_kills`.
+- **Game Design 8,0.** Curva calculada por ele: `z1 xp/h=180000`, `z24 xp/h=16466328`,
+  `z27 xp/h=30175572`, `hours at z27 = 183.1 (7.6 days); at z24 = 335.5`, e a última linha
+  `offline z1: 8h*0.6*eff1 xp= 864000  xp needed L1->2= 9760`. `economy_base_catalog.json`
+  com `chest_cost_gems: 120` dentro da banda 60..240, lido via `ShopService.gd:30` (faixa,
+  não igualdade — rebalance sem rebuild). *Contra:* trilha gratuita soma 100 gemas por
+  temporada contra 120 por baú (`EconomyCatalog.gd:447,529`), com `REFERRAL_BONUS_GEMS = 200`
+  como única torneira social; guild L10 a 10 M de gold é ~2,6 h de farm na zona 27.
+
 
 
 ### Veredito bruto — juiz A, grupo entrega (Testes, Segurança, DevOps, Live Ops)
