@@ -1,5 +1,7 @@
 extends SceneTree
 
+# gate-marker: == Backup Restore Probe:
+
 # SOM-IDLE A2: backup restore probe — CI gate.
 # Cria um backup, relê, e confere a integridade do schema.
 # Usage: godot --headless --path . -s tests/test_backup_restore.gd

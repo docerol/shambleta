@@ -144,6 +144,11 @@ var _ahPayPrefix : String = "fuzzahp_"
 var _ahGemGrants : int = 0
 var _ahGemClawbacks : int = 0
 var _ahGemRefunds : int = 0
+# Censo de débito de gema paga (IG2c): motivo -> linhas, e motivo -> gemas. O
+# contador existe porque a régua antiga pedia um "estado legal" sem nome; agora
+# cada débito fora do gate de origem tem que aparecer aqui com o seu motivo.
+var _paidDrainRoots : Dictionary = {}
+var _paidDrainGems : Dictionary = {}
 
 # Trajetória: quais chaves já foram enfileiradas, por qual conta, e quantas vezes
 # a fila as processou. É o que permite afirmar "este grant virou UMA linha" em vez
@@ -639,6 +644,24 @@ func _ahSweep(at : String) -> void:
 		# IG3/IG4 — o ledger de gemas espelha a carteira mesmo com grant de IAP,
 		# clawback, refund E a linha `ah_list_fee` (SetGemsRaw + _LedgerAppendLocked)
 		# todas no mesmo kind. Uma que escreve carteira sem linha (ou linha sem
+		# carteira) aparece aqui.
+		# IG2 — `gems_paid <= gems`, ASSERTO. A versão anterior desta régua declarava
+		# o estado "inalcançável" porque "a taxa de anúncio gasta gemas pagas por fora
+		# do gate de origem"; ela não gasta por fora: `ah_list_fee` queima saldo pelo
+		# ÚNICO writer de `wallet.gems` (`SQL.SetGemsRaw`), e esse writer clampa
+		# `gems_paid` a `[0, gems]` na mesma escrita (sources/sql/SQL.gd:1146 —
+		# `newPaid = clampi(paid - spent, 0, max(0, gems))`). Uma taxa pode levar
+		# `paid` junto com `gems`, nunca deixá-lo ACIMA da carteira. `paid > gems` não
+		# é estado legal do leilão: é writer fora do funil, e é exatamente isso que
+		# o clawback (`CheckoutService.gd:379`, teto `clampi(paid, 0, saldo)`) e o
+		# `not_paid` do art.49 (`:722`) leem como se fosse verdade de origem. Régua que
+		# o próprio detector declara inalcançável é buraco de auditoria, não escolha:
+		# a sensibilidade do predicado é conferida por sonda em `_ig2Probe()`.
+		var paid : int = _paid(accountID)
+		_note(paid >= 0 and paid <= gems, "IG2 paid dentro de [0, gems] no mercado (%s conta %d gems=%d paid=%d)" % [at, accountID, gems, paid])
+		# IG3/IG4 — o ledger de gemas espelha a carteira mesmo com grant de IAP,
+		# clawback, refund E a linha `ah_list_fee` (SetGemsRaw + _LedgerAppendLocked)
+		# todas no mesmo kind. Uma que escreve carteira sem linha (ou linha sem
 		# carteira) aparece aqui. IG2 (`paid <= gems`) é deliberadamente NÃO-asserto
 		# nestas contas: a taxa de anúncio gasta gemas pagas por fora do gate de
 		# origem, então `paid > wallet` é estado legal do leilão, não buraco.
@@ -672,3 +695,101 @@ func _ahReport() -> void:
 	_note(_ahGemGrants >= 1, "grant de IAP caiu sobre conta de mercado (%d)" % _ahGemGrants)
 	_note(_ahGemClawbacks >= 1, "chargeback de IAP foi tentado em conta de mercado (%d)" % _ahGemClawbacks)
 	_note(_ahGemRefunds >= 1, "refund de IAP foi tentado em conta de mercado (%d)" % _ahGemRefunds)
+	_ahPaidAudit()
+	_ig2Probe()
+
+# IG2b/IG2c — o que a confissão antiga chamava de "estado legal" agora é MEDIDO:
+# cada débito de gema paga destas contas tem exatamente um motivo, o motivo tem que
+# ser reconhecível no catálogo de pias do produto (`EconomyKernel.CensusSinkFamilies`,
+# lido do código, não redigitado aqui) e o total queimado por taxa vira contador.
+# IG2b é o aperto de dois lados que só ledger + fila de grant sabem: `paid` nunca
+# acima do que as linhas `grant:` creditaram COM preço (`grant_queue.price_paid > 0`)
+# e nunca abaixo desse crédito menos o total dos débitos enumerados. O lado de baixo
+# precisa da fila porque a carteira não conta origem: `SetGemsRaw` só sobe pago na
+# perna paga do checkout, então um grant com `price_paid = 0` aparece na carteira
+# sem aparecer em `paid` — e é isso que a confissão antiga confundia com "pago
+# gasto por fora do gate".
+func _ahPaidAudit() -> void:
+	var kernelConsts : Dictionary = load("res://sources/economy/EconomyKernel.gd").get_script_constant_map()
+	var sinkRoots : PackedStringArray = kernelConsts.get("CensusSinkFamilies", PackedStringArray())
+	var known : Dictionary = {}
+	for root in sinkRoots:
+		known[str(root)] = true
+	# Raiz do próprio fuzz: `AddGems(..., "fuzzah:delta")` endowment/reversal de
+	# fixture. Não é writer do produto e é por isso que ela é NOMEADA aqui em vez de
+	# entrar no catálogo do kernel.
+	var harnessRoots : PackedStringArray = PackedStringArray(["fuzzah"])
+	var feeBurned : int = 0
+	var unattributed : int = 0
+	var debits : int = 0
+	for accountID in _ahAccounts:
+		var rows : Array = _sql.call("QueryBindings",
+			"SELECT substr(reason, 1, CASE WHEN instr(reason, ':') > 0 THEN instr(reason, ':') - 1 ELSE length(reason) END) AS family,"
+			+ " COALESCE(SUM(-amount),0) AS burned, COUNT(*) AS n FROM ledger_transaction"
+			+ " WHERE account_id = ? AND kind = ? AND amount < 0 GROUP BY family;", [accountID, _gemsKind])
+		for r in rows:
+			var rec : Dictionary = r as Dictionary
+			var fam : String = str(rec.get("family", ""))
+			var burned : int = int(rec.get("burned", 0))
+			var n : int = int(rec.get("n", 0))
+			debits += n
+			if known.has(fam):
+				_paidDrainRoots[fam] = int(_paidDrainRoots.get(fam, 0)) + n
+				_paidDrainGems[fam] = int(_paidDrainGems.get(fam, 0)) + burned
+				if fam == "ah_list_fee":
+					feeBurned += burned
+			elif harnessRoots.has(fam):
+				_paidDrainRoots[fam] = int(_paidDrainRoots.get(fam, 0)) + n
+			else:
+				unattributed += n
+				_paidDrainRoots["UNATTRIBUTED:" + fam] = int(_paidDrainRoots.get("UNATTRIBUTED:" + fam, 0)) + n
+		var gems : int = _gems(accountID)
+		var paid : int = _paid(accountID)
+		# O aperto de `paid` não pode sair da carteira: `SetGemsRaw` só sobe a coluna
+		# na perna de grant que o checkout REGISTRA como dinheiro (`grant_queue.
+		# price_paid > 0`, migration 044). Uma linha `grant:` com price_paid 0 é
+		# unidade de jogo disfarçada de pago, e linha sem perna na fila é tratada como
+		# paga — o censo não acusa o que não pode provar.
+		var grantCredit : int = int(_sql.call("QueryBindings",
+			"SELECT COALESCE(SUM(amount),0) AS s FROM ledger_transaction WHERE account_id = ? AND kind = ? AND amount > 0 AND reason LIKE 'grant:%';",
+			[accountID, _gemsKind])[0].get("s", 0))
+		var freeGrantCredit : int = int(_sql.call("QueryBindings",
+			"SELECT COALESCE(SUM(l.amount),0) AS s FROM ledger_transaction l JOIN grant_queue g"
+			+ " ON g.idempotency_key = substr(l.reason, 7) AND g.account_id = l.account_id"
+			+ " WHERE l.account_id = ? AND l.kind = ? AND l.amount > 0 AND l.reason LIKE 'grant:%' AND g.price_paid = 0;",
+			[accountID, _gemsKind])[0].get("s", 0))
+		var gemDebit : int = int(_sql.call("QueryBindings",
+			"SELECT COALESCE(SUM(-amount),0) AS s FROM ledger_transaction WHERE account_id = ? AND kind = ? AND amount < 0;",
+			[accountID, _gemsKind])[0].get("s", 0))
+		var paidCredit : int = grantCredit - freeGrantCredit
+		_note(paid >= 0 and paid <= paidCredit, "IG2b pago nunca acima do que o checkout registrou como dinheiro (conta %d paid=%d creditadoPagado=%d grantGratis=%d gems=%d)" % [accountID, paid, paidCredit, freeGrantCredit, gems])
+		_note(paid >= maxi(0, paidCredit - gemDebit), "IG2b pago nunca abaixo do creditado pago menos os débitos enumerados (conta %d paid=%d creditadoPagado=%d debit=%d)" % [accountID, paid, paidCredit, gemDebit])
+	print("  [paid] %d débitos de gema | por motivo: %s | taxa de anúncio queimada: %d gemas" % [debits, _paidDrainRoots.keys(), feeBurned])
+	_note(unattributed == 0, "IG2c todo débito de gema fora do gate tem motivo enumerável (%d órfãos: %s)" % [unattributed, _paidDrainRoots.keys()])
+	_note(int(_paidDrainRoots.get("ah_list_fee", 0)) >= 1 and feeBurned >= _listFeeGems,
+		"IG2c a taxa de anúncio queimou gema paga e foi CONTADA (linhas %d, gemas %d)" % [int(_paidDrainRoots.get("ah_list_fee", 0)), feeBurned])
+
+# Controle negativo do PREDICADO da IG2, plantado e medido: uma conta de sonda que
+# ninguém varre recebe `gems_paid` ACIMA da carteira por UPDATE cru — o estado que a
+# confissão antiga dizia ser "legal". Se a sonda não vermelhar o mesmo predicado que
+# IG2 usa, a régua é ruído: ela não sabe falhar. A sonda é a última coisa do run e
+# não entra em `_ahAccounts`, então nenhum dinheiro real é tocado.
+func _ig2Probe() -> void:
+	var tag : int = int(Time.get_unix_time_from_system())
+	var name : String = "fuzig2_%d" % tag
+	var nc : GDScript = load("res://sources/network/NetworkCommons.gd")
+	var consts : Dictionary = nc.get_script_constant_map()
+	if not bool(_sql.call("AddAccount", name, "senha-de-fuzz-123", name + "@fuzz.test.local",
+			consts.get("AgreementTosVersion"), consts.get("AgreementPrivacyVersion"), "203.0.113.9")):
+		_note(false, "sonda de IG2 criada (%s)" % name)
+		return
+	var probe : int = int(_sql.call("GetAccountID", name))
+	_note(_gems(probe) == 0 and _paid(probe) == 0, "sonda nasce zerada (conta %d)" % probe)
+	var balanceOK : bool = bool(_sql.call("SetGems", probe, 10))
+	_note(balanceOK, "sonda recebe 10 gemas pelo funil (SetGems) — paid drena junto")
+	_note(_paid(probe) <= _gems(probe), "IG2 vale na sonda antes do plantio (paid=%d gems=%d)" % [_paid(probe), _gems(probe)])
+	var planted : int = _gems(probe) + 1
+	var bitten : bool = not bool(_sql.call("ExecuteBindings", "UPDATE wallet SET gems_paid = ? WHERE account_id = ?;", [planted, probe])) \
+		or _paid(probe) > _gems(probe)
+	_note(bitten, "IG2 VERMELHA com gems_paid escrito por fora do funil (paid=%d gems=%d)" % [_paid(probe), _gems(probe)])
+	_note(bool(_sql.call("SetGems", probe, _gems(probe))), "sonda re-normalizada pelo funil (paid volta ao teto do saldo: paid=%d gems=%d)" % [_paid(probe), _gems(probe)])

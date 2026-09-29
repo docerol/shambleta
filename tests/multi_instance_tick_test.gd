@@ -40,6 +40,14 @@ extends SceneTree
 #      TRABALHO auto-relatado (`Performance.TIME_PHYSICS_PROCESS` +
 #      `Performance.TIME_PROCESS`). Publicamos os dois e a discordança entre eles,
 #      porque é ela que manda o número do beta ser o conservador (trabalho).
+#   3b) A RÉGUA DE CAUDA nos degraus afirmados: p95 e max, por passo de parede e por
+#      trabalho, cobrados CONTRA O ORÇAMENTO na pior passada (`CheckCeiling`). Antes
+#      dela o verde era a mediana, e mediana dentro do orçamento convive com cauda
+#      fora: um degrau cujo centro cabe e cujo p95 não cabe entrega passos estourados
+#      a jogador real e ainda assim imprimia `[ok]`. A mesma grandeza passa a sair por
+#      `/metrics` (`sources/launcher/Launcher.gd` + `sources/system/MetricsServer.gd`),
+#      e o nível conferido: o contador exportado e esta janela têm de contar o mesmo
+#      passo, senão o alerta pagina etiqueta e não medição.
 #   4) MEMÓRIA E CPU DO PROCESSO, lidos do próprio kernel: `VmRSS` de
 #      `/proc/self/status` (é RSS, a grandeza que o `mem_limit` do compose morde —
 #      `OS.get_static_memory_usage()` é só o heap do engine e é impresso junto, não
@@ -111,6 +119,11 @@ const CalibrationFloorPct : float = 0.60
 const CalibrationCeilPct : float = 1.30
 const OverloadBurnUs : int = 40000		# 40 ms/passo > orçamento: tem de estourar de verdade
 const PeriodToleranceMs : float = 1.0	# folga do throttle, medida em tests/tick_capacity_test.gd
+# Banda de concordância entre os dois instrumentos do mesmo passo (os `await
+# physics_frame` deste harness e o acumulador do laço de produção): a fronteira da
+# janela é contada em dois lugares, e dois passos é o que cabe dessa diferença sem
+# cobrar exatidão de relógio.
+const PeriodTailAgreementSteps : int = 6
 const CpuOverPeriodPct : float = 1.10	# CPU do passo nunca pode passar do muro do período
 const AttributionFloorPct : float = 0.50	# a pausa tem de devolver >= 50% do custo marginal previsto
 const MonotonicFloorPct : float = 0.70		# degrau mais fundo pode perder <= 30% do passo pro ruído da máquina
@@ -705,8 +718,18 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 	var work : Array = []
 	var physSamples : Array = []
 	var idleSamples : Array = []
+	# CAUDA POR PASSO. As amostras de `work` são monitores de média móvel de 1 s: a
+	# p95 delas é a cauda das JANELAS, não dos passos — e foi exatamente isso que
+	# deixou 42,09 ms de p95 conviver com um verde de mediana. Estes aqui são deltas
+	# de parede entre dois `physics_frame` consecutivos: uma observação por passo,
+	# com a qual um p95/max significa "quantos passos não couberam no tick".
+	var stepPeriodsMs : Array = []
 	var sqlStart : int = int(sql.call("QueryCount"))
 	var mutexStart : Dictionary = sql.call("QueryMutexWaitStats")
+	# Instrumento do PRODUCTO, lido na mesma janela: o acumulado que o próprio
+	# processo exporta por /metrics (sources/launcher/Launcher.gd). Se a régua daqui
+	# e a métrica de lá não contarem o mesmo passo, uma das duas é etiqueta.
+	var prodBefore : Dictionary = launcher.call("StepBudgetSnapshot")
 	var framesStart : int = int(Engine.get_physics_frames())
 	var wallStart : int = Time.get_ticks_usec()
 	var cpuStart : int = _cpuUs()
@@ -715,10 +738,13 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 	var previousSampledFrame : int = framesStart
 	var awaited : int = 0
 	await physics_frame
+	var lastStepUs : int = Time.get_ticks_usec()
 	for i in range(SampleFrames):
 		await physics_frame
 		awaited += 1
 		wallEnd = Time.get_ticks_usec()
+		stepPeriodsMs.append(float(wallEnd - lastStepUs) / 1000.0)
+		lastStepUs = wallEnd
 		var frameID : int = int(Engine.get_physics_frames())
 		if frameID <= previousSampledFrame:
 			continue
@@ -728,16 +754,27 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		physSamples.append(phys)
 		idleSamples.append(idle)
 		work.append(phys + idle)
+	var prodAfter : Dictionary = launcher.call("StepBudgetSnapshot")
 	var sqlEnd : int = int(sql.call("QueryCount"))
 	var mutexEnd : Dictionary = sql.call("QueryMutexWaitStats")
 	var framesEnd : int = int(Engine.get_physics_frames())
 	var cpuUs : int = _cpuUs() - cpuStart
 	if cpuUs < 0:
 		cpuUs = 0
+	# Quantos passos NÃO couberam em orçamento+folga na janela inteira, contado antes
+	# de podar o transitório: é a mesma janela que o acumulador do produto viu, e é
+	# com ela que a régua de concordância abaixo fala.
+	var tailLimitMs : float = budgetMs + PeriodToleranceMs
+	var stepsOverBudget : int = 0
+	for stepMs in stepPeriodsMs:
+		if float(stepMs) > tailLimitMs:
+			stepsOverBudget += 1
 	for cut in range(mini(SkipFrames, work.size())):
 		work.pop_front()
 		physSamples.pop_front()
 		idleSamples.pop_front()
+		if not stepPeriodsMs.is_empty():
+			stepPeriodsMs.pop_front()
 	var wallMs : float = float(wallEnd - wallStart) / 1000.0
 	# De quanta CPU da máquina esta janela precisou, e de quanta dela não foi deste
 	# processo. As duas juntas são o que decide se o número abaixo é medido ou é o
@@ -778,6 +815,14 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		"idleMs": _median(idleSamples),
 		"p95Ms": _p(0.95, work),
 		"maxMs": float(work.max()) if not work.is_empty() else 0.0,
+		"periodP95Ms": _p(0.95, stepPeriodsMs),
+		"periodMaxMs": float(stepPeriodsMs.max()) if not stepPeriodsMs.is_empty() else 0.0,
+		"periodSamples": stepPeriodsMs.size(),
+		"stepsOverBudget": stepsOverBudget,
+		"periodSteps": awaited,
+		"prodSteps": int(prodAfter.get("steps", 0)) - int(prodBefore.get("steps", 0)),
+		"prodOverBudget": int(prodAfter.get("overBudget", 0)) - int(prodBefore.get("overBudget", 0)),
+		"prodLost": int(prodAfter.get("lost", 0)) - int(prodBefore.get("lost", 0)),
 		"periodMs": periodMs,
 		"steps": steps,
 		"wallMs": wallMs,
@@ -810,6 +855,11 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		int(row["mobs"]), int(row["policies"]), float(row["queriesPerTick"]), float(row["mutexUsPerTick"]),
 		int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)), int(row["samples"]),
 		coresCount, foreignShare, ownShare, float(row["loadavg1"])])
+	print("  . cauda por passo (%d observações, uma por fronteira de física): p95 %.2f ms, max %.2f ms | %d/%d passos acima de orçamento+folga (%.2f ms)" % [
+			int(row["periodSamples"]), float(row["periodP95Ms"]), float(row["periodMaxMs"]),
+			stepsOverBudget, awaited, tailLimitMs])
+	print("  . instrumento do produto na MESMA janela (o que sai por /metrics): +%d passos amostrados, +%d acima do orçamento, +%d passos perdidos" % [
+			int(row["prodSteps"]), int(row["prodOverBudget"]), int(row["prodLost"])])
 	return row
 
 # Uma janela com a máquina tomada por outro processo não mede nada: remede até o teto
@@ -857,11 +907,21 @@ func _measurePasses(label : String, totalPlayers : int, instances : int) -> Dict
 	for passID in range(MeasurePasses):
 		passes.append(await _measure("%s p%d" % [label, passID + 1], totalPlayers, instances))
 	var keep : Dictionary = passes[passes.size() - 1]
-	for medianaKey in ["medianMs", "physMs", "idleMs", "p95Ms", "periodMs", "achievedHz", "cpuMsPerStep", "cores", "queriesPerTick", "mutexUsPerTick", "foreignPct"]:
+	for medianaKey in ["medianMs", "physMs", "idleMs", "p95Ms", "maxMs", "periodP95Ms", "periodMaxMs", "stepsOverBudget", "prodOverBudget", "periodMs", "achievedHz", "cpuMsPerStep", "cores", "queriesPerTick", "mutexUsPerTick", "foreignPct"]:
 		var samples : Array = []
 		for rowPass in passes:
 			samples.append(float(rowPass[medianaKey]))
 		keep[medianaKey] = _median(samples)
+	# A cauda é cobrada na PIOR passada, não na mediana das passadas: o argumento de
+	# que "um teto cumprido numa janela suja continua cumprido na quieta" vale para o
+	# valor central; para uma cauda, a passada que a máquina entregou mais devagar é
+	# justamente a que o jogador sentiu, e ela não pode ser medianada para fora.
+	for tailPair in [["worstP95Ms", "p95Ms"], ["worstMaxMs", "maxMs"],
+			["worstPeriodP95Ms", "periodP95Ms"], ["worstPeriodMaxMs", "periodMaxMs"]]:
+		var worst : float = 0.0
+		for rowPass in passes:
+			worst = maxf(worst, float(rowPass[tailPair[1]]))
+		keep[tailPair[0]] = worst
 	var medians : Array = []
 	for rowPass in passes:
 		medians.append(float(rowPass["medianMs"]))
@@ -1110,6 +1170,50 @@ func _run() -> void:
 			CheckCeiling(hzOK,
 					"nível %s: o processo entregou %.2f Hz dos %d Hz de produção (orçamento cumprido de ponta a ponta)" % [
 						label, float(row["achievedHz"]), serverFps])
+			# RÉGUA DE CAUDA nos degraus afirmados. Existir porque a mediana mentia:
+			# num degrau em que a cauda sai do orçamento e o centro não, `medianMs`
+			# continua verde e o jogador recebe passos estourados. Verde daqui significa
+			# uma frase só, e é ela: em TODAS as passadas deste nível, 95% dos passos de
+			# física fecharam dentro do orçamento, e o pior passo da janela também
+			# fechou dentro de orçamento+folga. Não significa "o nível coube" para a
+			# mediana — significa que a cauda coube.
+			#
+			# Por que `CheckCeiling` e não `CheckTiming`: um teto de cauda tem a
+			# assinatura de um teto. O vizinho de máquina só pode ENCOLHER a folga desta
+			# janela (preemption e fila de scheduler entram no relógio do passo, nunca
+			# saem), então um p95/max que coube num degrau sujo cabe no mesmo degrau
+			# quieto — e é essa a régua que o beta precisa sobreviver. `CheckTiming`
+			# jogaria fora, em toda máquina de desenvolvimento tomada, exatamente a
+			# assertiva que não pode ser fabricada por ruído; `Check` seria pior ainda,
+			# porque vermelharia o run por causa do vizinho e o veredito deixaria de ser
+			# do produto. A elegibilidade é a mesma da função: é UMA janela, não a
+			# diferença entre duas.
+			var tailLimit : float = budgetMs + PeriodToleranceMs
+			CheckCeiling(float(row["worstP95Ms"]) <= budgetMs,
+					"nível %s: p95 do trabalho por passo %.2f ms dentro do orçamento de %.2f ms na PIOR passada — o verde não é mais da mediana" % [
+						label, float(row["worstP95Ms"]), budgetMs])
+			CheckCeiling(float(row["worstMaxMs"]) <= budgetMs,
+					"nível %s: o pior passo de trabalho da janela (%.2f ms na pior passada) cabe no orçamento" % [
+						label, float(row["worstMaxMs"])])
+			CheckCeiling(float(row["worstPeriodP95Ms"]) <= tailLimit,
+					"nível %s: p95 do período de parede por passo %.2f ms dentro de orçamento+folga (%.2f ms) na pior passada" % [
+						label, float(row["worstPeriodP95Ms"]), tailLimit])
+			CheckCeiling(float(row["worstPeriodMaxMs"]) <= tailLimit,
+					"nível %s: nenhum passo de parede desta janela passou de %.2f ms na pior passada (pior: %.2f ms)" % [
+						label, tailLimit, float(row["worstPeriodMaxMs"])])
+			# CONCORDÂNCIA DE INSTRUMENTO: a mesma grandeza, medida por dois caminhos —
+			# os `await physics_frame` deste harness e o acumulador do LAÇO DE PRODUTO
+			# (`sources/launcher/Launcher.gd`), que é o número que sai por /metrics e que
+			# `deploy/alerts.rules.yml` pagina. Dois passos de margem pela fronteira da
+			# janela; passa disso, a métrica exportada não é o que a escada cobra, e o
+			# alerta estaría paginando uma etiqueta.
+			var overDelta : int = int(row["prodOverBudget"]) - int(row["stepsOverBudget"])
+			Check(absi(overDelta) <= PeriodTailAgreementSteps,
+					"nível %s: o contador que o produto exporta viu %d passos acima de orçamento+folga, esta janela viu %d (diff %d, banda %d) — /metrics e escada medem o mesmo passo" % [
+						label, int(row["prodOverBudget"]), int(row["stepsOverBudget"]), overDelta, PeriodTailAgreementSteps])
+			CheckCeiling(int(row["prodSteps"]) >= int(row["periodSteps"]) - PeriodTailAgreementSteps,
+					"nível %s: o acumulador do produto amostrou %d passos numa janela de %d — a série existe neste processo, não é bloco morto do /metrics" % [
+						label, int(row["prodSteps"]), int(row["periodSteps"])])
 			if periodOK and workOK and hzOK:
 				insideCount += 1
 		else:
@@ -1654,6 +1758,47 @@ func _anchorNumbers(title : String) -> Array:
 				break
 	return out
 
+# A âncora de degrau era unilateral: `medido >= afirmado` só enxerga capacidade CAIR.
+# Um run que mede o dobro do que a doc promete passava verde, e quem provisiona o
+# servidor lê a doc. A banda agora é medida em DEGRAUS da escada que o próprio run
+# andou, não em players: ±100 players sobre 200 aceitava 100, ou seja um erro de 2×
+# na promessa passa. Um degrau é o spread que o §3 confessa entre duas corridas (200
+# na máquina concorrida, 300 na quieta); dois degraus é o dobro ou a metade do
+# afirmado, e isso não é ruído de janela — é a doc mentindo sobre o degrau.
+const RungOk : int = 0
+const RungOutside : int = 1
+const RungUnwalked : int = 2
+
+static func rungBandOk(anchor : int, measured : int, maxSteps : int, ladder : Array) -> int:
+	var ia : int = ladder.find(anchor)
+	var ib : int = ladder.find(measured)
+	if ia < 0 or ib < 0:
+		return RungUnwalked
+	if absi(ia - ib) > maxSteps:
+		return RungOutside
+	return RungOk
+
+static func rungVerdict(code : int) -> String:
+	if code == RungUnwalked:
+		return "a âncora ou o degrau medido não está na escada que este run andou — a doc promete um degrau que a medição não conhece"
+	if code == RungOutside:
+		return "fora da banda: run e doc não estão no mesmo degrau, nem a um degrau de distância"
+	return "no mesmo degrau, ou a um degrau — dentro do spread que a doc confessa"
+
+# Controles plantados da régua de banda: passam pelo MESMO predicado que julga a doc.
+# Se a régua voltar a ser unilateral, o controle do degrau acima morde na mesma
+# passada; nada aqui é escrito em disco.
+func _checkAnchorControls() -> void:
+	print("-- controles da régua de degrau (banda bilateral) --")
+	var escada : Array = [0, 1, 20, 40, 100, 200, 300, 400]
+	Check(rungBandOk(200, 200, 1, escada) == RungOk, "controle: doc 200, run 200 — passa")
+	Check(rungBandOk(200, 300, 1, escada) == RungOk, "controle: run um degrau ACIMA da doc passa, porque é o spread que a própria doc confessa")
+	Check(rungBandOk(200, 100, 1, escada) == RungOk, "controle: run um degrau ABAIXO passa")
+	Check(rungBandOk(200, 400, 1, escada) == RungOutside, "controle: run medindo o DOBRO do que a doc promete fica VERMELHO — era aqui que a régua unilateral passava verde")
+	Check(rungBandOk(200, 40, 1, escada) == RungOutside, "controle: run três degraus abaixo da doc fica vermelho")
+	Check(rungBandOk(250, 200, 1, escada) == RungUnwalked, "controle: âncora fora da escada é confessada, não tolerada")
+	Check(rungBandOk(200, 400, 2, escada) == RungOk, "controle: quem alarga a banda é a doc, não a régua")
+
 func _checkDocAnchors() -> void:
 	print("-- âncora de doc: o número de deploy/SCALING.md vs. o que este run mede --")
 	if not Check(FileAccess.file_exists(ScalingDocPath), "%s legível a partir do projeto (caminho %s)" % [ScalingDocPath, ScalingDocPath]):
@@ -1672,11 +1817,20 @@ func _checkDocAnchors() -> void:
 		CheckTiming(d2 <= a2[1], "doc diz teto de %d ±%d players por processo; este run extrapola %d (diff %d)" % [
 				a2[0], a2[1], ceilingPlayers, d2])
 	var a3 : Array = _anchorNumbers(AnchorRung)
-	Check(a3.size() >= 1, "âncora `<!-- DRIFT %s <players> -->` presente na doc" % AnchorRung)
-	if a3.size() >= 1:
-		CheckTiming(deepestInsidePlayers >= a3[0],
-				"doc afirma %d players conviventes dentro do orçamento; este run mede no máximo %d dentro de %.2f ms — capacidade real caiu abaixo do que a doc promete" % [
-					a3[0], deepestInsidePlayers, budgetMs])
+	var hasBand : bool = Check(a3.size() >= 2,
+			"âncora `<!-- DRIFT %s <players> <degraus> -->` presente na doc COM a banda em degraus — sem banda a régua volta a ser unilateral" % AnchorRung)
+	if hasBand:
+		var ladder : Array = []
+		for row in rows:
+			var p : int = int(row["players"])
+			if not ladder.has(p):
+				ladder.append(p)
+		Check(not ladder.is_empty(), "a escada deste run tem degraus para ancorar (%s)" % [ladder])
+		var verdict : int = rungBandOk(a3[0], deepestInsidePlayers, a3[1], ladder)
+		CheckTiming(verdict == RungOk,
+				"doc afirma %d players conviventes dentro do orçamento, banda de %d degrau(s), escada %s; este run mede %d dentro de %.2f ms — %s" % [
+					a3[0], a3[1], ladder, deepestInsidePlayers, budgetMs, rungVerdict(verdict)])
+	_checkAnchorControls()
 func _finish() -> void:
 	print("-- limpeza --")
 	for agent in agents.duplicate():

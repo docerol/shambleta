@@ -279,6 +279,10 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	if cost <= 0 or count <= 0:
 		return {"ok" = false, "reason" = "bad_offer"}
 	var result : Dictionary = {"ok" = false, "reason" = "rejected"}
+	# WorkOrder #88: ouro só se move pelo kernel. `moves` é devolvido para
+	# `ApplyGoldMoves` depois do commit — é o que mantém o agente carregado e o
+	# banco na mesma carteira quando o snapshot relativo de `SQL.UpdateStat` roda.
+	var goldMoves : Dictionary = {}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
@@ -294,9 +298,7 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 		if gp < cost:
 			result["reason"] = "insufficient_gold"
 			return false
-		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - cost}):
-			return false
-		if not _eco._LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -cost, gp - cost, "vendor:" + offerID):
+		if not _eco.kernel._MoveGoldLocked(sql, charID, accountID, -cost, "vendor:" + offerID, goldMoves):
 			return false
 		var itemHash : int = str(offer.get("item", "")).hash()
 		if _eco._GrantStackRaw(charID, accountID, itemHash, count, "vendor:" + offerID, "vendor") == 0:
@@ -313,4 +315,8 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 		return true):
 		pass
 	_eco.settleMutex.unlock()
+	if bool(result.get("ok", false)):
+		_eco.kernel.ApplyGoldMoves(goldMoves)
+	else:
+		goldMoves.clear()
 	return result

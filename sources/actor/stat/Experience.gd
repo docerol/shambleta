@@ -3,11 +3,15 @@ class_name Experience
 
 # SOM-IDLE: F2 idle progression — hardcoded table replaced by formula
 # Contract: TECH_SPEC_CORE.md §1 + XP_PROGRESSION.md §4/§4.2
-# XP(L -> L+1) = round(XpBase * Growth^L).
-# SOM-IDLE rebirth (2026-07, B+C): MAX_LEVEL is the REBIRTH CAP, not a number
-# to reach "someday" — income saturates at zone 24, so the only honest cap is
-# where the first cycle lasts ~3 weeks (L60). XP earned at cap converts to
-# essence (RebirthData), never vanishes. int64-safe to ~L180 >> 60.
+# THIS FILE IS ONLY THE XP-THRESHOLD TABLE. The curve, measured from
+# GetNeededExperienceForNextLevel, is XP(L -> L+1) = round(8000 * 1.22^L) with
+# XpBase=8000 and Growth=1.22, so L1->L2 = 9760 and clearing MAX_LEVEL=60 costs
+# 5523999861 XP total. At/above MAX_LEVEL the table returns MAX_LEVEL_REACHED (0)
+# and the level simply stops. This file computes no income, no zone saturation and
+# no real-time pacing; the cap's XP->essence conversion is done by
+# Stats.AddExperience (sources/actor/Stats.gd:244), not here. Cumulative to the cap
+# of 60 is ~5.5e9, ~9 orders of magnitude below int64 max, so the cache is always
+# int64-safe at the levels the cap allows.
 
 const MAX_LEVEL_REACHED : int = 0
 

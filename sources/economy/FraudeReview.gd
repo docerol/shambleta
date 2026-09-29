@@ -27,6 +27,12 @@ class_name FraudeReview
 #                      |      | dividindo PC / NGM — normal, não é fraude
 # trade_burst          |  2   | rajada de trades/dia (heurística v1, preservada)
 # flip_trade           |  2   | compra+vende o mesmo item <1h (laundering/RMT)
+# ah_wash_pair         |  2   | PAR de contas fechando ciclo no LEILÃO: A anuncia,
+#                      |      | B compra, B anuncia, A compra o mesmo item (7d). O
+#                      |      | `flip_trade` só olhava `trade_out:`/`trade_in:`, que
+#                      |      | o AH não escreve desde #26 — lavado no AH era
+#                      |      | invisível. Mesmo peso do flip: uma perna só (A→B
+#                      |      | repetido, fornecedor regular) NÃO casa.
 # level_velocity       |  2   | níveis ganhos rápido demais p/ o meta declarado
 # reports_cluster      |  2   | ≥3 denunciantes DISTINTOS na mesma conta em 7d
 # referral_ring        |  2   | inviter+invitee logando na MESMA instalação no
@@ -49,6 +55,7 @@ class_name FraudeReview
 #   device_shared isolado (família/NGM) ....... 1 → sem flag   (prova FP-2)
 #   ip_shared + subnet_shared + device_shared . 1 → sem flag   (prova FP-3)
 #   trade_burst isolado ....................... 2 → flag média (paridade com v1)
+#   ah_wash_pair isolado ...................... 2 → flag média nos DOIS lados do par
 #   device_overlap isolado .................... 3 → flag alta  (prova TP-1)
 #   ledger_divergent .......................... 4 → flag crítica + hold protetor
 #
@@ -73,6 +80,18 @@ const ReopenCooldownSec : int = 30 * 86400	# descarte proteje contra re-flag 30d
 const ReferralQualifySec : int = 5 * 86400	# bônus espera a indicada ter 5 dias
 const ReferralLifetimeCap : int = 25		# tetos por inviter, além do semanal
 const ReferralRingWindowSec : int = 7 * 86400
+# Janela do ciclo de lavagem no leilão (#93.2). 7 dias e não 1h como o
+# `flip_trade` direto porque o AH é assíncrono por natureza: A anuncia, alguém
+# demora a comprar, B anuncia de volta dias depois — é o MESMO fato econômico
+# (mercadoria foi e voltou entre as mesmas duas contas, sem nunca ter um dono que
+# a usou) com um relógio diferente. 7d = a mesma janela de tudo que é fingerprint
+# aqui, e o par que alterna todos os dias continua casando.
+const AHWashWindowSec : int = 7 * 86400
+# Teto de linhas de preço realizado lidas por Scan: o custo do detector é O(pares
+# vendidos na janela), nunca O(catálogo). Passar disso é a vitrine inteira de um
+# servidor maduro; 600 linhas cobrem um dia de mercado ativo e o laço é 1-2
+# leituras indexadas por par candidato.
+const AHWashScanLimit : int = 600
 
 const SignalWeights : Dictionary = {
 	"ip_shared": 1,
@@ -80,6 +99,7 @@ const SignalWeights : Dictionary = {
 	"device_shared": 1,
 	"trade_burst": 2,
 	"flip_trade": 2,
+	"ah_wash_pair": 2,
 	"level_velocity": 2,
 	"reports_cluster": 2,
 	"referral_ring": 2,
@@ -159,6 +179,7 @@ static func WhyOf(signalKind : String) -> String:
 		"device_shared": return "mesma instalação sem produção sobreposta — FRACO: família/NGM dividido"
 		"trade_burst": return "rajada de trades em 24h acima da régua v1"
 		"flip_trade": return "mesmo item devolvido em <1h (padrão laundering/RMT)"
+		"ah_wash_pair": return "ciclo fechado no LEILÃO entre o MESMO par de contas em 7d: A anunciou, B comprou, B anunciou, A comprou o mesmo item (ah_list:/ah_in: corroboram as duas pontas)"
 		"level_velocity": return "saltos de nível rápidos demais para o meta declarado"
 		"reports_cluster": return "3+ denunciantes distintos na mesma conta em 7d"
 		"referral_ring": return "inviter e invitee logando na mesma instalação no resgate do bônus"
@@ -337,6 +358,12 @@ func _CollectMediumHeuristics(now : int, signals : Dictionary, details : Diction
 			_PushDetail(details, acct, "jump=%d levels in %sh" % [int(row["value"]), str((meta as Dictionary).get("hours", "?"))])
 	# Flip = char enviou o item X e RECEBEU o mesmo X em <1h (padrão
 	# laundering/RMT). Trade bilateral normal (X por Y) não casa: itens diferem.
+	# ATENÇÃO #93.2: estas duas pernas leem `trade_out:`/`trade_in:`, que são o
+	# namespace da TROCA DIRETA. O leilão escreveu `trade_in:` até a #26, quando o
+	# namespace próprio passou a ser `ah_list:`/`ah_in:` — e o detector não mudou
+	# junto. Resultado medido: um ciclo A→B→A de lavagem feito todo no AH não
+	# produzia UMA linha em 'trade_%'. A perna abaixo fecha essa janela; ela é a
+	# paridade do flip para o mercado, não um segundo flip.
 	for row in Launcher.SQL.QueryBindings("SELECT account_id, char_id, reason, created_at FROM ledger_transaction WHERE reason LIKE 'trade_out:%' AND created_at >= ?;", [now - 86400]):
 		var parts : PackedStringArray = str(row["reason"]).split(":")
 		if parts.size() < 2:
@@ -347,6 +374,74 @@ func _CollectMediumHeuristics(now : int, signals : Dictionary, details : Diction
 			var acct : int = int(row["account_id"])
 			_PushSignal(signals, acct, "flip_trade")
 			_PushDetail(details, acct, "item=%s" % item)
+	_CollectAHWashPairs(now, signals, details)
+
+# #93.2 — lavagem de par no leilão. O que existe no servidor e não era lido:
+# `ah_price_history` (migração 059) grava CADA venda liquidada com
+# `seller_account` e `buyer_account`, escrita dentro do mesmo commit de
+# `_SettleListingLocked`. Um item que faz A→B e depois B→A entre as mesmas duas
+# contas, na mesma janela, é o ciclo que a lavagem precisa para inflar volume:
+# ninguém nunca usou a mercadoria, e o gold saiu de A, passou por B e voltou para
+# A (ou o contrário) com só a taxa de anúncio pelo meio.
+#
+# Dois pontos de desenho, os dois exigidos pelo achado:
+#  1. O alvo é o PAR. Uma conta recomprando o PRÓPRIO item não é representável
+#     aqui — `_SettleListingLocked` recusa `buyerAccount == sellerAccount`, e as
+#     linhas de histórico têm `seller_account != buyer_account` na própria query.
+#     É exatamente o falso-positivo que a mudança de namespace da #26 matou, e ele
+#     não volta por esta perna: nada aqui compara uma conta consigo mesma, nem arma
+#     cooldown de troca, nem lê `trade_in:`.
+#  2. As duas pontas têm que existir no NAMESPACE DO LEILÃO: além do par de vendas
+#     cruzadas, o ledger precisa mostrar o anúncio de quem vendeu
+#     (`ah_list:<item>:%`) e a compra de quem comprou (`ah_in:<item>:lot%`) nos dois
+#     sentidos. Uma venda de mercado cruzada sem as pernas do AH é dado antigo ou
+#     importado; com elas, é duas contas se alternando na mesma mercadoria.
+# Peso 2 = fila média, como `flip_trade`: uma direção só (fornecedor regular que
+# vende sempre para o mesmo cliente) NÃO casa, e casa de novo vendendo de volta.
+func _CollectAHWashPairs(now : int, signals : Dictionary, details : Dictionary) -> void:
+	var flows : Dictionary = {}
+	for row in Launcher.SQL.QueryBindings("SELECT item_id, seller_account, buyer_account FROM ah_price_history WHERE sold_at >= ? AND seller_account != buyer_account ORDER BY sold_at DESC, id DESC LIMIT ?;", [now - AHWashWindowSec, AHWashScanLimit]):
+		var item : int = int(row["item_id"])
+		var seller : int = int(row["seller_account"])
+		var buyer : int = int(row["buyer_account"])
+		if item <= 0 or seller <= 0 or buyer <= 0:
+			continue
+		var key : String = "%d|%d>%d" % [item, seller, buyer]
+		flows[key] = int(flows.get(key, 0)) + 1
+	var checked : Dictionary = {}
+	for key in flows:
+		var head : PackedStringArray = str(key).split("|")
+		var tail : PackedStringArray = str(head[1]).split(">")
+		var item : int = int(head[0])
+		var a : int = int(tail[0])
+		var b : int = int(tail[1])
+		var pairKey : String = "%d|%d|%d" % [item, mini(a, b), maxi(a, b)]
+		if checked.has(pairKey):
+			continue
+		checked[pairKey] = true
+		if not flows.has("%d|%d>%d" % [item, b, a]):
+			continue
+		# Corroboração no namespace do leilão, nas duas direções.
+		if not (_AHLedgerLeg(a, item, true, now) and _AHLedgerLeg(b, item, false, now)):
+			continue
+		if not (_AHLedgerLeg(b, item, true, now) and _AHLedgerLeg(a, item, false, now)):
+			continue
+		_PushSignal(signals, a, "ah_wash_pair")
+		_PushSignal(signals, b, "ah_wash_pair")
+		_PushDetail(details, a, "ah_cycle item=%d: %d->%d->%d (%d/%d)" % [item, a, b, a, int(flows.get("%d|%d>%d" % [item, a, b], 0)), int(flows.get("%d|%d>%d" % [item, b, a], 0))])
+		_PushDetail(details, b, "ah_cycle item=%d: %d->%d->%d (%d/%d)" % [item, b, a, b, int(flows.get("%d|%d>%d" % [item, b, a], 0)), int(flows.get("%d|%d>%d" % [item, a, b], 0))])
+
+
+# Perna do AH no ledger: anúncio (`ah_list:<item>:uids...`, conta de quem PÔS na
+# vitrine) ou compra (`ah_in:<item>:lot<uid>`, conta de quem TIRou da vitrine).
+# LIKE com o prefixo numérico exato do item — não `ah_list:%` solto, que casaria
+# qualquer mercadoria e transformaria dois vendedores honestos em um par.
+func _AHLedgerLeg(accountID : int, itemID : int, isListing : bool, now : int) -> bool:
+	if accountID <= 0 or itemID <= 0:
+		return false
+	var pattern : String = ("ah_list:%d:%%" % itemID) if isListing else ("ah_in:%d:lot%%" % itemID)
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason LIKE ? AND created_at >= ? LIMIT 1;", [accountID, pattern, now - AHWashWindowSec])
+	return not rows.is_empty()
 
 # O canal de denúncia (chat_report, migration 043) já é humano; 3+ denunciantes
 # DISTINTOS na mesma conta viram peso 2 aqui — 1-2 denúncias ficam só na fila do

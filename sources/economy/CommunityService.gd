@@ -149,6 +149,11 @@ func GetSeasonBoardsState(limit : int = 10) -> Dictionary:
 	return {
 		"season_id" = seasonID,
 		"ends_at" = int(season["ends_at"]),
+		# O regime do número, lido da coluna que a 064 grava na abertura. "delta"
+		# é o que vale para toda temporada aberta depois daqui; "current" existe
+		# para a vitrine não chamar de "o que você fez nesta temporada" um número
+		# que é tudo o que o personagem já fez.
+		"scoring" = "delta" if int(season.get("baselines_at", 0)) > 0 else "current",
 		"power" = _NamedSeasonBoard(seasonID, "power", limit),
 		"spend" = _NamedSeasonBoard(seasonID, "spend", limit),
 		"boss_kills" = _NamedSeasonBoard(seasonID, "boss_kills", limit),

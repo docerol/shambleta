@@ -14,10 +14,10 @@ extends SceneTree
 #     devolve FALSE em run headless `-s` (confirmei: 182 classes GDScript vivem em
 #     `ProjectSettings.get_global_class_list()`, não no ClassDB nativo). A suíte B
 #     daqui refaz os três fatos com a régua certa e passa a cobrá-los.
-#  C) PORTÃO SEM CHAMADOR. O motivo escrito de `check_secrets.sh`
-#     (`scripts/test.sh:516-527`) diz exatamente isto: um gate não chamado é régua
-#     sem efeito — e foi isso que aconteceu com `check_doc_drift.sh` e
-#     `check_compose.sh` (42 checks verdes, zero chamadores).
+#  C) PORTÃO SEM CHAMADOR. A razão pela qual
+#     `check_secrets.sh` (`scripts/test.sh:579-585`) entrou na lista diz exatamente
+#     isto: um gate não chamado é régua sem efeito — e foi isso que aconteceu com
+#     `check_doc_drift.sh` e `check_compose.sh` (42 checks verdes, zero chamadores).
 #     Esta suíte torna a frase verificável nos dois sentidos: todo `scripts/*.sh` e
 #     todo `tests/*.gd` tem de ser alcançável por um de três caminhos DECLARADOS
 #     (glob de descoberta, chamada nominal no runner/CI, ferramenta de mão com
@@ -365,7 +365,7 @@ func _suiteReachability() -> void:
 	# check_ci.sh entrou no runner, o que se lia era "got 5, want 4" sem dizer o
 	# quinto, e quem conserta adivinha.
 	var sg : String = _fnBody(runner, "structure_gates")
-	var gates : Array = ["check_god_nodes.sh", "check_doc_drift.sh", "check_compose.sh", "check_secrets.sh", "check_ci.sh", "check_dead_code.sh", "check_untracked.sh", "check_gate_log.sh", "check_boot_sandbox.sh"]
+	var gates : Array = ["check_god_nodes.sh", "check_doc_drift.sh", "check_compose.sh", "check_secrets.sh", "check_ci.sh", "check_dead_code.sh", "check_untracked.sh", "check_gate_log.sh", "check_boot_sandbox.sh", "check_gate_markers.sh", "check_write_funnel.sh"]
 	var calledGates : Array = []
 	for g in gates:
 		if not sg.contains(g):
@@ -427,7 +427,17 @@ func _fnBody(source : String, fnName : String) -> String:
 # `GuiSandboxFlows`, `GuiUiScale`). `MAX_LINES` não foi tocado: o teto continua
 # 800, e a lista vazia é o estado verde que esta suíte cobra de quem fatiou
 # (motivo velho é allowlist podre).
-const NEAR_FENCE : Array = []
+# Quem encosta na banda [98%, 100%] do teto do `check_god_nodes.sh` precisa de
+# motivo REGISTRADO AQUI, junto da entrada — a banda não é punição, é o sinal de
+# que o arquivo está a uma onda do estouro e alguém precisa dizer por que ainda é
+# ele o lugar certo. O teto continua sendo o do gate (800): esta lista não compra
+# cheque em branco, compra explicação.
+const NEAR_FENCE : Array = [
+	{
+		"path": "sources/economy/EconomyService.gd",
+		"reason": "odres/estagios de 2026-09-28-29 (#96-#104): o ciclo de temporada (CloseSeason congela placar, SnapshotSeasonSpend tem teto em `ends_at`, SettleSeasonPrizes liquida, EnsureSeasonS1 idempotente, _trySeedAuctionBots gated-off) e o ReconcileDaily moram nos braços do MESMO mutex de settle, cada um com a sua guarda de transação; mover orquestração para um colaborador no meio de uma rodada de hardening seria redesenho de economia, não arrumação de tamanho. Saída registrada: a próxima onda que tocar este arquivo baixa `SeasonS1Rules`/`EnsureSeasonS1` para um `SeasonRules` próprio e a banda volta a ter folga.",
+	},
+]
 
 func _suiteCeiling() -> void:
 	print("-- D) folga contra o teto: medir é mais barato que brigar na cerca")

@@ -36,8 +36,11 @@ extends SceneTree
 #      têm a chamada real no arquivo do consumidor, lida do fonte.
 #   G  `data/conf/liveops_calendar.json` tem campanha FUTURA real: parseia, o
 #      `next_start` sai no `/metrics`, e dentro da janela dela os modificadores
-#      aterrçam — fora dela, 1.0 (nenhuma janela cobre o instante do run, que é a
-#      regra que protege o `SuiteSettleGolden`).
+#      aterrçam. Fora de janela o consumidor devolve o catálogo 1.0 — e o instante
+#      fora de janela é DERIVADO do arquivo, nunca o relógio de quem roda, porque
+#      desde a costura do Achado #98 o eixo `tournament` está no ar quase todos os
+#      dias (só `double_xp`/`chest_bonus` é que têm de continuar fora do instante do
+#      run: é isso o que protege o `SuiteSettleGolden`).
 
 const DaySeconds : int = 86400
 const HourSeconds : int = 3600
@@ -724,7 +727,51 @@ func _suiteFutureCampaign():
 	if not futureTourney.is_empty():
 		var tourMid : int = int(futureTourney.get("start_unix", 0)) + HourSeconds
 		_checkNear(float(_arena.call("PrizePoolMod", tourMid)), float(futureTourney.get("value", 0.0)), 0.000001, "o pool de copa da janela futura pega o value do arquivo")
-		_checkNear(float(_arena.call("PrizePoolMod", now)), 1.0, 0.000001, "e a copa de hoje paga o catálogo")
+		# "Hoje" não é neutro por construção, e a régua que jurava isso tinha virado
+		# suposição de calendário, não régua de produto: desde a costura do Achado #98 o
+		# eixo `tournament` é o ÚNICO que pode ficar permanentemente no ar
+		# (data/conf/liveops_calendar.json, `_cuidado_com_a_suite`:5 e `_estado_atual`:7,
+		# que declara `copa_semanal_set23_out07` NO AR), e tests/season_liveops_test.gd
+		# E1/E1b (:578-579) exige campanha no ar no instante do run. O que se afirma do
+		# consumidor é uma coisa só, em qualquer instante: ELE PAGA A LINHA DO ARQUIVO que
+		# cobre o instante consultado — e nenhuma, quando nenhuma cobre. A linha é lida
+		# do `entries` pela key que o próprio resolvedor anuncia (`ActiveKeyAt`), então o
+		# esperado vem do arquivo e não do resolvedor: um consumidor que parar de
+		# consultar a agenda continua acusado. O instante "fora de toda janela" é
+		# DERIVADO do arquivo (uma hora depois do fim da última janela de copa), nunca o
+		# relógio de quem roda.
+		var tourEnd : int = 0
+		for item in entries:
+			var e2 : Dictionary = item
+			if str(e2.get("kind", "")) == str(_cal.get("KindTournament")):
+				tourEnd = maxi(tourEnd, int(e2.get("end_unix", 0)))
+		if _check(tourEnd > 0, "há janela tournament no arquivo para derivar o instante fora de janela"):
+			_checkNear(float(_arena.call("PrizePoolMod", tourEnd + HourSeconds)), 1.0, 0.000001, "fora de toda janela de copa o consumidor devolve o catálogo")
+		var tourKey : String = String(_cal.call("ActiveKeyAt", _cal.get("KindTournament"), now))
+		var tourExpected : float = 1.0
+		if not tourKey.is_empty():
+			var tourLine : Dictionary = _entryByKey(entries, tourKey)
+			if _check(not tourLine.is_empty(), "a copa que o resolvedor põe no ar (%s) é uma linha do arquivo" % tourKey):
+				tourExpected = float(tourLine.get("value", 0.0))
+				var poolLo : float = float(_cal.get("MinPoolMod"))
+				var poolHi : float = float(_cal.get("MaxPoolMod"))
+				# Faixa do consumidor LIDA do produto, não redigitada: uma linha de copa
+				# fora dela é recusada por `SanitizePoolMod` e paga o catálogo, i.e. a
+				# campanha foi declarada e não chega a ninguém. É o `value == 1,0` da
+				# fachada com outra cara, e a régua abaixo acusaria por um motivo errado se
+				# isto não estivesse dito aqui.
+				_check(tourExpected >= poolLo and tourExpected <= poolHi, "a copa no ar (%s) paga dentro da faixa do consumidor (%s..%s): %s" % [tourKey, str(poolLo), str(poolHi), str(tourExpected)])
+		_checkNear(float(_arena.call("PrizePoolMod", now)), tourExpected, 0.000001, "e a copa de hoje paga a linha do arquivo que está no ar (%s)" % (tourKey if not tourKey.is_empty() else "sem janela"))
+		# Controle negativo do MESMO predicado, plantado: troca-se só a linha no ar, no
+		# MESMO instante consultado. Sem isto a régua acima poderia continuar verde com um
+		# consumidor que não lê a agenda (1,0 == 1,0 num dia sem copa) nem com um que lê a
+		# linha errada, porque esperado e medido viriam do mesmo lugar.
+		var planted : float = 1.75
+		_cal.call("SetRawForTests", _eventsRaw([_event("tournament", "copa_hoje_plantada", now - HourSeconds, now + HourSeconds, planted)]))
+		_checkNear(float(_arena.call("PrizePoolMod", now)), planted, 0.000001, "controle plantado: com outra linha no ar no MESMO instante, o consumidor paga %s (nem o catálogo, nem a linha do repo)" % str(planted))
+		_checkEq(String(_cal.call("ActiveKeyAt", _cal.get("KindTournament"), tourEnd + HourSeconds)), "", "e o plantado cobre só a janela que ele declara — o instante derivado continua fora")
+		_cal.call("ClearRawForTests")
+		_checkNear(float(_arena.call("PrizePoolMod", now)), tourExpected, 0.000001, "e o plantado foi desmontado: a linha do repo voltou a pagar no mesmo instante (%s)" % (tourKey if not tourKey.is_empty() else "sem janela"))
 	# XP: nenhuma janela double_xp cobre o instante do run (protege o
 	# SuiteSettleGolden, que calcula expectativa com mods = 1.0).
 	_checkNear(float(_offline.call("LiveOpsXpMods", now)), 1.0, 0.000001, "nenhum double_xp no ar neste instante (a suíte dourada continua em mods 1.0)")
@@ -750,5 +797,18 @@ func _entryStartingAt(entries : Array, start : int) -> Dictionary:
 	for item in entries:
 		var entry : Dictionary = item
 		if int(entry.get("start_unix", 0)) == start:
+			return entry
+	return {}
+
+# A linha do arquivo por `key`. `key` é única no arquivo (é o que `ValidateCalendar`
+# cobra), então isto é uma leitura, não uma resolução: quem decide QUAL janela está no
+# ar continua sendo o produto (`ActiveKeyAt`), e a régua só pergunta quanto que essa
+# linha promete — esperado do arquivo, medido no consumidor.
+func _entryByKey(entries : Array, key : String) -> Dictionary:
+	if key.is_empty():
+		return {}
+	for item in entries:
+		var entry : Dictionary = item
+		if str(entry.get("key", "")) == key:
 			return entry
 	return {}

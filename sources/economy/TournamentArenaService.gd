@@ -265,6 +265,9 @@ func GetTournaments(accountID : int) -> Dictionary:
 
 func EnterTournament(accountID : int, charID : int, tournamentID : int) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
+	# WorkOrder #88: taxa de entrada sai pelo caminho único do kernel (ver
+	# `EconomyKernel._MoveGoldLocked`); o delta é espelhado no agente depois do commit.
+	var goldMoves : Dictionary = {}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
@@ -285,17 +288,20 @@ func EnterTournament(accountID : int, charID : int, tournamentID : int) -> Dicti
 			return false
 		var power : Array = sql.db.select_rows("character", "char_id = %d" % charID, ["power_score"])
 		var start : int = int(power[0].get("power_score", 0)) if not power.is_empty() and power[0].get("power_score", null) != null else 0
-		if not sql.UpdateRowsRaw("stat", "char_id = %d" % charID, {"gp" = gp - fee}):
+		if not _eco.kernel._MoveGoldLocked(sql, charID, accountID, -fee, "tournament_entry:%d" % tournamentID, goldMoves):
 			return false
 		if not sql.ExecuteBindings("INSERT INTO tournament_entry (tournament_id, account_id, char_id, power_start) VALUES (?, ?, ?, ?);", [tournamentID, accountID, charID, start]):
-			return false
-		if not _eco._LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGold, -fee, gp - fee, "tournament_entry:%d" % tournamentID):
 			return false
 		result["ok"] = true
 		result["reason"] = "ok"
 		return true):
 		pass
 	_eco.settleMutex.unlock()
+	# WorkOrder #88: espelha no agente carregado só o que de fato comitou.
+	if bool(result.get("ok", false)):
+		_eco.kernel.ApplyGoldMoves(goldMoves)
+	else:
+		goldMoves.clear()
 	return result
 
 # Liquida um torneio vencido: power_end = power atual, rank por ganho,

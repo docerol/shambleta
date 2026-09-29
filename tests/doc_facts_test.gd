@@ -22,7 +22,7 @@ var checks : int = 0
 var failures : int = 0
 var dbScript : GDScript = null
 
-# Piso de checks: medido na corrida verde (66), com folga. Sem a guarda, um SCRIPT
+# Piso de checks: medido na corrida verde (78), com folga. Sem a guarda, um SCRIPT
 # ERROR no meio derruba o `_run()` e o RESULT sairia "0 failures" com metade das
 # checks feitas — o CI assinaria o que não rodou.
 const ExpectedChecks : int = 60
@@ -119,6 +119,7 @@ func _run():
 	_FactComposeGateIsWired()
 	_FactLogGroups()
 	_FactCompanionErrorLiteral()
+	_FactLiveOpsCalendarCounts()
 
 	_finish()
 
@@ -393,6 +394,96 @@ func _FactCompanionErrorLiteral() -> void:
 		"COOLIFY.md ensina a reconhecer o corpo real do 401")
 	Check(not coolify.contains("missing auth_token"),
 		"COOLIFY.md não cita corpo que o código não devolve")
+
+# --- 12. a agenda de live ops: o numeral da prosa EMBARCADA é o do arquivo -----
+# A costura de copas de 2026-09-29 pôs onze janelas de `tournament` no arquivo e a
+# nota do próprio `liveops_calendar.json` jurou "NOVE". Numeral de agenda não é
+# enfeite: é o que o operador lê para decidir se falta cobertura. A régua conta por
+# kind no caminho do produto (`LiveOpsCalendar.Entries()`) e cobra que TODO numeral
+# colado ao nome do kind — em algarismo ou por extenso, que é como a prosa fala —
+# seja o número medido. O "NOVE" escaparia de uma regex que só soubesse dígito.
+const CalendarWordNumbers : Dictionary = {
+	"um": 1, "uma": 1, "dua": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5,
+	"seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10, "onze": 11, "doze": 12,
+	"treze": 13, "quatorze": 14, "quinze": 15, "dezesseis": 16, "dezessete": 17,
+	"dezoito": 18, "dezenove": 19, "vinte": 20,
+}
+
+func _CalendarNumeral(text : String) -> int:
+	var lower : String = text.to_lower()
+	for pair in [["ê", "e"], ["é", "e"], ["á", "a"], ["ó", "o"], ["ç", "c"]]:
+		lower = lower.replace(String(pair[0]), String(pair[1]))
+	if lower.is_empty():
+		return -1
+	if RegEx.create_from_string("^\\d+$").search(lower) != null:
+		return int(lower)
+	return int(CalendarWordNumbers.get(lower, -1))
+
+# `N \`kind\`` / `N janelas de \`kind\`` — o numeral ANTES do nome. A forma inversa
+# ("double_xp ×2") é valor de multiplicador, não contagem, e fica fora de propósito.
+func _CalendarKindMatcher(kind : String) -> RegEx:
+	return RegEx.create_from_string("(?i)\\b(\\d{1,3}|uma?|duas?|tr[êe]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)\\b(?:\\s+janelas\\s+de)?\\s+`" + kind + "`")
+
+func _CalendarTotalMatcher() -> RegEx:
+	return RegEx.create_from_string("(?i)\\b(\\d{1,3}|uma?|duas?|tr[êe]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)\\b\\s+linhas\\b")
+
+func _CalendarNumeralAccusations(raw : String, counts : Dictionary, total : int) -> Array[String]:
+	var out : Array[String] = []
+	for kind in counts.keys():
+		for found in _CalendarKindMatcher(String(kind)).search_all(raw):
+			if _CalendarNumeral(found.get_string(1)) != int(counts[kind]):
+				out.append("%s: a prosa afirma %s, o arquivo tem %d" % [String(kind), found.get_string(1), int(counts[kind])])
+	for found in _CalendarTotalMatcher().search_all(raw):
+		if _CalendarNumeral(found.get_string(1)) != total:
+			out.append("total: a prosa afirma %s linhas, o arquivo tem %d" % [found.get_string(1), total])
+	return out
+
+func _FactLiveOpsCalendarCounts() -> void:
+	var cal : GDScript = load("res://sources/ops/LiveOpsCalendar.gd")
+	var entries : Array = cal.call("Entries")
+	var raw : String = cal.call("CurrentRaw")
+	if not Check(not entries.is_empty(), "a agenda é lida pelo caminho do produto (%d janelas)" % entries.size()):
+		return
+	if not Check(raw.length() > 0, "CurrentRaw devolve o texto do arquivo, não só as entradas (%d bytes)" % raw.length()):
+		return
+	var counts : Dictionary = {}
+	for entry in entries:
+		var kind : String = str((entry as Dictionary)["kind"])
+		counts[kind] = int(counts.get(kind, 0)) + 1
+	CheckEq(_CalendarNumeralAccusations(raw, counts, entries.size()), [] as Array[String],
+		"nenhum numeral de contagem da prosa embarcada diverge do arquivo")
+	# O predicado acima é de acusação; sozinho ele deixaria passar um arquivo que
+	# nunca nomeia a própria contagem. Esta perna exige que o número MEDIDO apareça
+	# escrito — em algarismo ou por extenso, porque é a mesma regex que resolve as
+	# duas formas.
+	for entryKind in counts.keys():
+		var kindName : String = String(entryKind)
+		var measured : int = int(counts[kindName])
+		var hits : Array = _CalendarKindMatcher(kindName).search_all(raw)
+		var right : int = 0
+		for found in hits:
+			if _CalendarNumeral(found.get_string(1)) == measured:
+				right += 1
+		Check(right >= 1, "a prosa escreve a contagem medida de %s (medido %d; %d menções, %d no número)" % [kindName, measured, hits.size(), right])
+	var totalHits : Array = _CalendarTotalMatcher().search_all(raw)
+	var totalRight : int = 0
+	for found in totalHits:
+		if _CalendarNumeral(found.get_string(1)) == entries.size():
+			totalRight += 1
+	Check(totalRight >= 1, "a prosa escreve quantas linhas o arquivo tem (medidas %d; %d menções, %d no número)" % [entries.size(), totalHits.size(), totalRight])
+	# Controle negativo: o MESMO predicado sobre uma cópia com o numeral trocado pelo
+	# vizinho. Sem isto, "0 acusações" poderia significar que a regex não acha nada.
+	var biggest : String = ""
+	for probeKind in counts.keys():
+		if biggest == "" or int(counts[String(probeKind)]) > int(counts.get(biggest, 0)):
+			biggest = String(probeKind)
+	var foundMatch : RegExMatch = _CalendarKindMatcher(biggest).search(raw)
+	if Check(foundMatch != null, "a contagem de %s está nomeada na prosa (o controle tem o que trocar)" % biggest):
+		var full : String = foundMatch.get_string(0)
+		var numeral : String = foundMatch.get_string(1)
+		var mutated : String = raw.replace(full, full.replace(numeral, str(int(counts[biggest]) + 1)))
+		Check(_CalendarNumeralAccusations(mutated, counts, entries.size()).size() >= 1,
+			"e a cópia com o numeral vizinho é acusada — a régua lê o número, não a existência da palavra")
 
 func _finish():
 	# Teardown: junta qualquer preload ainda em voo ANTES do quit(), senão o join

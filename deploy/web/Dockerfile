@@ -46,6 +46,15 @@ COPY deploy/web/sw.js /usr/share/nginx/html/sw.js
 # SOM-IDLE P1: música servida separadamente para não pesar no primeiro load.
 # Os arquivos .ogg ficam em /usr/share/nginx/music/ e são servidos por /music/.
 COPY data/music/ /usr/share/nginx/music/
+# Finding #89 (2026-09-29): até aqui este build só COPIAVA o nginx.conf — um arquivo
+# que o nginx recusa (diretiva fora de contexto, `location` duplicada, chave sem
+# fechar, `proxy_pass` com variável sem `resolver`) atravessava o build verde e só
+# falhava no boot do container, no meio de um deploy. `nginx -t` aqui é o validador
+# do próprio software que vai servir: mesmo binário, mesma versão 1.27 do produção,
+# mesma config de nível `http` que o nginx.conf da imagem monta em torno de
+# conf.d/default.conf. Uma imagem que existe foi validada — não é uma asserção de
+# README nem um smoke que "pula quando não tem nginx": o build inteiro é o smoke.
+RUN nginx -t
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1
 # NOTA: para expor via Cloudflare Tunnel (WSS sem abrir portas), configure

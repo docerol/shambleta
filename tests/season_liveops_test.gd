@@ -20,6 +20,15 @@ extends SceneTree
 #   D  o multiplicador que o caminho real de gameplay aplica bate número a número
 #      com o valor do arquivo (`OfflineSettle.LiveOpsXpMods`, consumido por
 #      `GetModsForAccount`), inclusive o neutro 1.0 fora de janela e o fail-closed.
+#   E  a agenda EMBARCADA cobre o calendário: existe campanha no ar no instante do
+#      run, nenhum vão entre coberturas passa da cadência de uma copa
+#      (`EconomyCatalog.TOURNAMENT_DAYS`, o N medido do fonte), cada dia de cada
+#      temporada com janela nominal tem kind no ar, o horizonte da agenda não
+#      abandona temporada nenhuma e não existe janela de fachada (value == neutro).
+#      É a régua do Achado #98: seis eventos declarados, nada no ar e dois desertos
+#      medidos no arquivo de antes — 44 dias entre a campanha encerrada e a Semana
+#      do Cofre Cheio, 65 entre a Copa de Novembro e a abertura da S2 — não eram
+#      erro de sintaxe, eram agenda de calendário de parede.
 #
 # Contrato dos scripts `-s` do repo (ver `run_idle_tests.gd` / `economy_design_fix_test.gd`):
 # o script compila antes dos autoloads, então nada de `class_name` nem de
@@ -136,6 +145,7 @@ func _run():
 	_suiteCalendarWindows()
 	_suiteCalendarFailClosed()
 	_suiteLiveOpsMultiplierPath()
+	_suiteAgendaCoverage()
 	_cfg.call("ClearRawForTests")
 	_cal.call("ClearRawForTests")
 	_finish()
@@ -168,7 +178,16 @@ func _suiteConfigFiles():
 	# em que `SuiteSettleGolden` roda (a expectativa dela é mods = 1.0).
 	var now : int = int(Time.get_unix_time_from_system())
 	_checkNear(float(_cal.call("ValueAtKind", _cal.get("KindDoubleXP"), now, 1.0)), 1.0, 0.000001, "nenhum double_xp no ar neste instante (SuiteSettleGolden continua em mods 1.0)")
-	_checkEq(int(_cfg.call("PassMaxLevel", s1)), int(_catalog.get("PASS_MAX_LEVEL")), "passe da S1 sem trilha declarada = teto do catálogo")
+	# A trilha da S1 é dado do arquivo desde 2026-09-29. Comparada pelo LEITOR do
+	# produto (`PassTiers`, que normaliza a chave de nível para int), nível a nível e
+	# nos dois sentidos, contra o catálogo que o jogador recebia: sem esta perna o
+	# "espelho" do arquivo seria só a promessa de um comentário, e a temporada no ar
+	# continuaria sendo a única cuja trilha nenhum teste do caminho real exercita.
+	_checkEq(int(_cfg.call("PassMaxLevel", s1)), int(_catalog.get("PASS_MAX_LEVEL")), "teto da S1 lido do arquivo bate o do catálogo")
+	_checkEq(int(_cfg.call("PassBonusStart", s1)), int(_catalog.get("PASS_BONUS_START")), "bônus da S1 começa no nível de sempre")
+	_checkEq(int(_cfg.call("PassBonusGems", s1)), int(_catalog.get("PASS_BONUS_GEMS")), "e paga as gems de sempre")
+	_checkTrackMirrors(s1, "free", _catalog.get("PASS_FREE"))
+	_checkTrackMirrors(s1, "premium", _catalog.get("PASS_PREMIUM"))
 
 # ------------------------------------------------------------------ suite A: resolução por timestamp
 
@@ -322,6 +341,31 @@ func _suiteSeasonFailClosed():
 	var badField : Dictionary = _rolling("s12", "S12", 30)
 	badField["pass_tiers"] = {"free": {"2": {"glims": 5}}}
 	_checkHas(_cfg.call("ValidateSeasons", _seasonsRaw([badField])), "não conhece", "campo que o aplicador não sabe pagar é erro")
+	# Os dois silenciosos que sobraram na trilha declarada, medidos pelo caminho que
+	# o jogador paga: `_IntOf` devolve o default do catálogo quando o valor não é
+	# inteiro (trocar `"max_level": "30"` seria abrir a temporada com a trilha de
+	# antes, sem um erro), e o bônus SUBSTITUI a tabela a partir de `bonus_start`
+	# (`PassService.gd:319`), então um nível premium declarado ali é um prêmio que
+	# ninguém nunca recebe. A régua de baixo fecha a faixa do `bonus_gems` pelo mesmo
+	# motivo: gemas negativas são débito escrito como prêmio.
+	var badScalar : Dictionary = _rolling("s15", "S15", 30)
+	badScalar["pass_tiers"] = {"max_level": "30"}
+	_checkHas(_cfg.call("ValidateSeasons", _seasonsRaw([badScalar])), "max_level precisa ser inteiro",
+		"escalar de trilha como texto é erro, não o default do catálogo em silêncio")
+	var badGems : Dictionary = _rolling("s16", "S16", 30)
+	badGems["pass_tiers"] = {"max_level": 30, "bonus_start": 21, "bonus_gems": -5}
+	_checkHas(_cfg.call("ValidateSeasons", _seasonsRaw([badGems])), "bonus_gems -5 é negativo",
+		"bônus negativo não é prêmio, é débito")
+	var swallowed : Dictionary = _rolling("s17", "S17", 30)
+	swallowed["pass_tiers"] = {"max_level": 30, "bonus_start": 21, "premium": {"25": {"gems": 40}}}
+	_checkHas(_cfg.call("ValidateSeasons", _seasonsRaw([swallowed])), "nunca paga",
+		"nível premium coberto pelo bônus é recusa, não prêmio morto escrito")
+	# Controle da fronteira, nos dois sentidos: abaixo de `bonus_start` o mesmo nível
+	# paga, então a recusa de cima mede a faixa e não um `return` sem condição.
+	var underBonus : Dictionary = _rolling("s18", "S18", 30)
+	underBonus["pass_tiers"] = {"max_level": 30, "bonus_start": 21, "premium": {"20": {"gems": 40}}}
+	_checkEq(_cfg.call("ValidateSeasons", _seasonsRaw([underBonus])).size(), 0,
+		"controle: o nível logo abaixo do bônus valida limpo (a recusa não é always-on)")
 	var badDur : Dictionary = _scheduled("s13", "S13", t0, 10)
 	badDur["duration_days"] = 12
 	_checkHas(_cfg.call("ValidateSeasons", _seasonsRaw([badDur])), "duration_days", "janela e duração divergentes são erro")
@@ -500,3 +544,203 @@ func _suiteLiveOpsMultiplierPath():
 	var branch : int = settleSrc.rfind("if accountID > 0 and now > 0:", inBranch)
 	_check(branch >= 0 and branch < inBranch and inBranch - branch < 900, "a chamada está no ramo de conta com relógio (não no preview anônimo)")
 	_checkEq(int(_offline.call("GetModsForAccount", 0, t0 + DaySeconds) * 1000), int(float(_offline.get("GuildHookFactor")) * 1000), "preview sem conta continua no gancho neutro (nada de agenda em quem não tem conta)")
+
+# ------------------------------------------------------------------ suite E: cobertura do calendário
+
+# Uma janela [start, end). `end_unix` exclusivo já é a regra do produto
+# (`_Covers`), então encadear a no marco exato não cria vão nem cria sobreposição.
+func _windowOf(entry : Dictionary) -> Array:
+	var startsAt : int = int(entry.get("start_unix", 0))
+	var endsAt : int = int(entry.get("end_unix", 0))
+	return [startsAt, endsAt] if endsAt > startsAt else []
+
+# O maior vão em DIAS entre coberturas da agenda, sobre a UNIÃO de todos os kinds.
+# União e não por-kind porque a pergunta do Achado #98 é do jogador ("tem alguma
+# coisa no ar hoje?"), não do operador ("tem copa hoje?"): um dia coberto por
+# qualquer eixo não é deserto. Devolve -1 para agenda sem janela (o vão é todo o
+# calendário) e nunca mede depois da última janela — o horizonte é régua à parte
+# (E4), porque "fim do arquivo" não tem para onde medir vão.
+func _maxGapDays(entries : Array) -> int:
+	var windows : Array = []
+	for item in entries:
+		var w : Array = _windowOf(item as Dictionary)
+		if not w.is_empty():
+			windows.append(w)
+	if windows.is_empty():
+		return -1
+	windows.sort_custom(func(x : Variant, y : Variant) -> bool: return int((x as Array)[0]) < int((y as Array)[0]))
+	var maxGap : int = 0
+	var runEnd : int = int((windows[0] as Array)[1])
+	for i in range(1, windows.size()):
+		var s : int = int((windows[i] as Array)[0])
+		var e : int = int((windows[i] as Array)[1])
+		if s <= runEnd:
+			runEnd = maxi(runEnd, e)
+			continue
+		var gapDays : int = ceilf(float(s - runEnd) / float(DaySeconds))
+		if gapDays > maxGap:
+			maxGap = gapDays
+		runEnd = e
+	return maxGap
+
+func _suiteAgendaCoverage():
+	print("[suite] E: agenda embarcada sem dia em branco (instante do run, vão medido, temporada em serviço)")
+	# Estado conhecido: as suítes anteriores injetaram raw em memória, e esta régua
+	# só vale alguma coisa se medir o ARQUIVO DO REPO pelo caminho do produto.
+	_cal.call("ClearRawForTests")
+	_cfg.call("ClearRawForTests")
+	var entries : Array = _cal.call("Entries")
+	var seasons : Array = _cfg.call("Entries")
+	var neutral : float = float(_cal.get("DefaultMod"))
+	if not _check(entries.size() >= 2 and seasons.size() >= 2, "os dois arquivos embarcados devolvem entradas (%d campanhas, %d temporadas)" % [entries.size(), seasons.size()]):
+		return
+	# O N da régua é lido do produto, não chutado: uma copa dura `TOURNAMENT_DAYS`,
+	# então "nenhum jogador espera mais de uma copa por nada" é exatamente a
+	# cadência de `EconomyCatalog.TOURNAMENT_DAYS`.
+	var cadence : int = int(_catalog.get("TOURNAMENT_DAYS"))
+	if not _check(cadence > 0, "E0: a cadência de uma copa (EconomyCatalog.TOURNAMENT_DAYS = %d) existe e é o N do vão" % cadence):
+		return
+	var now : int = int(Time.get_unix_time_from_system())
+	# E1 — o instante do run. Era isto que faltava: com o maior vão em 65 dias (E6
+	# mede), a agenda válida e o fail-closed 1.0 passavam em verde sem entregar
+	# campanha nenhuma.
+	var activeNow : Array = _cal.call("ActiveEntriesAt", entries, now)
+	var keysNow : String = ""
+	var realNow : int = 0
+	for item in activeNow:
+		var entry : Dictionary = item
+		keysNow += "%s=%s " % [str(entry.get("kind", "")), str(entry.get("key", ""))]
+		if float(entry.get("value", neutral)) > neutral:
+			realNow += 1
+	_check(activeNow.size() >= 1, "E1: há campanha no ar neste instante (%d) — (%s)" % [now, keysNow])
+	_check(realNow >= 1, "E1b: e a campanha do ar paga acima do neutro (%s): cobertura de fachada não segura retenção" % str(neutral))
+	# E2 — o vão entre coberturas, medido na união das janelas.
+	var gap : int = _maxGapDays(entries)
+	var horizon : Array = _horizonOf(entries)
+	_check(gap >= 0 and gap <= cadence, "E2: maior vão de cobertura = %d dia(s), dentro da cadência de uma copa (%d) — horizonte %d..%d" % [gap, cadence, int(horizon[0]), int(horizon[1])])
+	print("  [medido] E2: %d janelas, vão máximo %d dia(s), N = cadência da copa = %d, cobertura %d..%d" % [entries.size(), gap, cadence, int(horizon[0]), int(horizon[1])])
+	# E3 — cada DIA de cada temporada com janela nominal tem kind no ar. A rotação
+	# (0/0) fica de fora porque não dá intervalo para varrer: é ela que responde
+	# pelo instante do run, e é por isso que E1 existe (ver `_s1_sem_janela` em
+	# data/conf/seasons.json).
+	var walked : int = 0
+	var blank : String = ""
+	var scheduled : int = 0
+	for item in seasons:
+		var season : Dictionary = item
+		if not bool(_cfg.call("IsScheduled", season)):
+			continue
+		scheduled += 1
+		var id : String = str(_cfg.call("ConfigID", season))
+		var ts : int = int(season.get("start_unix", 0))
+		var seasonEnd : int = int(season.get("end_unix", 0))
+		var day : int = 0
+		while ts < seasonEnd:
+			walked += 1
+			if (_cal.call("ActiveEntriesAt", entries, ts) as Array).is_empty():
+				blank += "%s+dia%d " % [id, day]
+			ts += DaySeconds
+			day += 1
+	_check(scheduled >= 1 and walked > 0, "E3: %d temporada(s) nominal(is) varrida(s), %d dia(s) checados (a régua não é vacua: há janela no arquivo)" % [scheduled, walked])
+	_checkEq(blank.length(), 0, "E3: nenhum dia de temporada agendada abre sem campanha (%s)" % blank)
+	# E4 — a agenda não abandona a temporada em serviço: o horizonte do arquivo
+	# alcança o fim da última janela nominal. É o que impede o penhasco de virar
+	# "último dia da temporada" de novo, só que mais longe.
+	var lastEnd : int = int(horizon[1])
+	var seasonEndAll : int = 0
+	for item in seasons:
+		if bool(_cfg.call("IsScheduled", item)):
+			seasonEndAll = maxi(seasonEndAll, int((item as Dictionary).get("end_unix", 0)))
+	_check(seasonEndAll > 0, "E4: existe temporada com janela nominal para ser servida (%d)" % seasonEndAll)
+	_check(lastEnd >= seasonEndAll, "E4: o horizonte da agenda (%d) não deixa a temporada %s em serviço sem campanha (%d)" % [lastEnd, str(_seasonIdAt(seasons, seasonEndAll)), seasonEndAll])
+	# E5 — zero fachada no arquivo inteiro: uma janela com value == neutro é
+	# cobertura de planilha, não campanha. `MinPoolMod`/`MinBonusValue` são 1.0,
+	# então o validador do produto NÃO recusa isso; quem recusa é esta régua.
+	var facade : String = ""
+	for item in entries:
+		var entry : Dictionary = item
+		if float(entry.get("value", neutral)) <= neutral:
+			facade += "%s=%s " % [str(entry.get("key", "")), str(entry.get("value", 0.0))]
+	_checkEq(facade.length(), 0, "E5: nenhuma janela paga o neutro (value > %s em todo o arquivo) (%s)" % [str(neutral), facade])
+	# E6 — controle negativo medido na MESMA função: o eixo da copa é o que costura
+	# o calendário. Tirando-o, o arquivo volta ao estado do Achado #98 e a régua
+	# precisa acusar, em vez de "passar porque o instante do run mudou".
+	var semCopa : Array = []
+	for item in entries:
+		if str((item as Dictionary).get("kind", "")) != str(_cal.get("KindTournament")):
+			semCopa.append(item)
+	var gapSemCopa : int = _maxGapDays(semCopa)
+	_checkEq(semCopa.size(), entries.size() - _countKind(entries, str(_cal.get("KindTournament"))), "E6: a cópia sem o eixo da copa é só uma filtragem (%d de %d sobram)" % [semCopa.size(), entries.size()])
+	_check(gapSemCopa > cadence, "E6: sem a copa o vão vira %d dia(s) > %d — a régua morde o arquivo como ele estava, não a minha cópia" % [gapSemCopa, cadence])
+	_checkEq((_cal.call("ActiveEntriesAt", semCopa, now) as Array).size(), 0, "E6: e neste instante não sobre NADA no ar (é exatamente a linha que o arquivo de antes não passava)")
+	# E7 — a régua é sobre o arquivo, não sobre a minha boa vontade: o vão medido
+	# bate com a resolução do produto num instante do meio do deserto antigo
+	# (20/10/2026, 30 dias depois do fim da última campanha histórica).
+	var deadDay : int = 1792540800 - DaySeconds
+	_check((_cal.call("ActiveEntriesAt", semCopa, deadDay) as Array).is_empty(), "E7: %d (deserto de outubro, arquivo sem a copa) está vazio de verdade, por `%s` no resolvedor" % [deadDay, "ActiveEntriesAt"])
+	_check((_cal.call("ActiveEntriesAt", entries, deadDay) as Array).size() >= 1, "E7: com a agenda do repo o mesmo instante tem %d kind(s) no ar" % (_cal.call("ActiveEntriesAt", entries, deadDay) as Array).size())
+
+func _horizonOf(entries : Array) -> Array:
+	var first : int = 0
+	var last : int = 0
+	for item in entries:
+		var w : Array = _windowOf(item as Dictionary)
+		if w.is_empty():
+			continue
+		if first == 0 or int(w[0]) < first:
+			first = int(w[0])
+		last = maxi(last, int(w[1]))
+	return [first, last]
+
+func _countKind(entries : Array, kind : String) -> int:
+	var n : int = 0
+	for item in entries:
+		if str((item as Dictionary).get("kind", "")) == kind:
+			n += 1
+	return n
+
+func _seasonIdAt(entries : Array, endUnix : int) -> String:
+	for item in entries:
+		var season : Dictionary = item
+		if int(season.get("end_unix", 0)) == endUnix:
+			return str(_cfg.call("ConfigID", season))
+	return "?"
+
+# Compara a trilha DECLARADA pelo LEITOR do produto (`SeasonConfig.PassTiers`, que
+# normaliza a chave de nível para int) com a tabela do catálogo, nível a nível e nos
+# dois sentidos: um nível a mais, a menos, ou com um campo trocado é falha nomeada.
+# Não é `==` de dicionários porque o catálogo só escreve os campos que paga e
+# `_NormalizeReward` devolve os quatro sempre — o `0`/`[]` implícito é o que torna a
+# comparação a mesma coisa que o jogador recebe.
+func _checkTrackMirrors(entry : Dictionary, track : String, catalogTable : Dictionary) -> void:
+	var declared : Dictionary = _cfg.call("PassTiers", entry, track)
+	# A UNION dos níveis dos dois lados, sem repetição: um nível só no arquivo é
+	# acréscimo, um só no catálogo é sumiço, e os dois casos têm que aparecer.
+	var levels : Array = []
+	for declaredKey in declared.keys():
+		if not levels.has(int(declaredKey)):
+			levels.append(int(declaredKey))
+	for catalogKey in catalogTable.keys():
+		if not levels.has(int(catalogKey)):
+			levels.append(int(catalogKey))
+	levels.sort()
+	var mismatches : Array[String] = []
+	for level in levels:
+		var lvl : int = int(level)
+		if not _RewardSame(declared.get(lvl, {}) as Dictionary, catalogTable.get(lvl, {}) as Dictionary):
+			mismatches.append("nível %d: arquivo %s vs catálogo %s" % [lvl, str(declared.get(lvl, {})), str(catalogTable.get(lvl, {}))])
+	_checkEq(mismatches.size(), 0, "a trilha %s da temporada no ar é o espelho exato do catálogo (%d níveis)%s" %
+		[track, levels.size(), ("" if mismatches.is_empty() else " — " + "; ".join(mismatches))])
+
+func _RewardSame(a : Dictionary, b : Dictionary) -> bool:
+	for field : String in ["gems", "chests", "vip_days"]:
+		if int(a.get(field, 0)) != int(b.get(field, 0)):
+			return false
+	var fromFile : Array = a.get("cosmetics", [])
+	var fromCatalog : Array = b.get("cosmetics", [])
+	if fromFile.size() != fromCatalog.size():
+		return false
+	for cid in fromFile:
+		if not fromCatalog.has(str(cid)):
+			return false
+	return true

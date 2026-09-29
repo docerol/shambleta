@@ -12,7 +12,31 @@ cd "$PROJECT"
 # quit(0) sobre um segfault sai 0). Cada harness é gravado em log e passado por
 # scripts/ci_gate_log.sh, que exige zero SCRIPT ERROR/Parse Error, linha de
 # resultado presente, contagem de falhas lida DA LINHA e exit code conferido à
-# parte. `gate <log> <marker> <script>` roda e avalia.
+# parte.
+#
+# CASOS REAIS desta CLI (a lista é conferida por scripts/check_gate_markers.sh
+# contra os rótulos do `case` abaixo — anunciar porta que não existe foi o defeito
+# #81: um juiz lendo a linha anterior ia abrir `gate`, não existir, e rodar
+# check_*.sh na mão; o verde dele não era o verde do portão):
+#   all|quick|idle|backup|benchmarks|rpc|companion|fixation|preflight|structure|one|diag|clean
+# `gate`, `gate_sh`, `gate_py` e `harness_marker` são FUNÇÕES INTERNAS (não casos).
+# Para validar um log já escrito sem boot, o caminho é `bash scripts/ci_gate_log.sh
+# <log> <marcador> <exit-code> [harness]`; para rodar um harness pelo machinery
+# inteiro (locks, sandbox, marcador do arquivo, quádruplo de §24-8), o caso é `one`.
+#
+# Contrato do MARCADOR (findings #81): o marcador cobrado vem do próprio harness,
+# nunca de uma regex que adivinha por caixa ou por posição no arquivo.
+#   1. `# gate-marker: == BENCH:` nas primeiras linhas do arquivo é a fonte
+#      autorizada e vence tudo (é assim que um harness cujo veredito final não é
+#      `== RESULT:` entra no portão sem depender de acidente textual).
+#   2. sem declaração, o marcador é a ÚLTIMA linha de resultado do arquivo, i.e. a
+#      string impressa que tem a forma `<marcador>: … <n> failures…` (ordem de
+#      fonte, caixa irrelevante). `== REASON: …` sem contagem de falha é banner, não
+#      resultado, e não concorre.
+#   3. nada disso existindo, o default universal é `== RESULT:`.
+# A régua que faz o contrato valer está em scripts/check_gate_markers.sh (case
+# `structure`, chamado pela CI), e ela também confere que todo marcador LITERAL
+# usado numa chamada `gate`/`gate_sh`/`gate_py` daqui é o marcador daquele alvo.
 #
 # Gate vermelho não aborta a passada: ele é anotado e o veredito sai no resumo do
 # case. Um `all` que morre no primeiro gate conta uma falha por execução — e as
@@ -433,11 +457,44 @@ harnesses_extra() {
 }
 
 harness_marker() {
-	local m
-	m="$(grep -ohE '"== [A-Z]+[A-Z ]*:' "tests/$1.gd" 2>/dev/null | head -1 | tr -d '"')"
-	[ -n "$m" ] || m="== RESULT:"
-	echo "$m"
+	# Contrato #81: (1) `# gate-marker: <M>` declarado pelo harness vence; (2) senão,
+	# a ÚLTIMA linha de resultado do arquivo — uma string impressa da forma
+	# `<M>: … <n> failures…`, qualquer caixa, escolhida por forma e não por regex de
+	# maiúsculas nem por primeira-aparição; (3) senão, o default universal
+	# `== RESULT:`. As três portas são conferidas por scripts/check_gate_markers.sh
+	# contra o arquivo: declaração que não é a última linha de resultado é gate
+	# vermelho, e é isso que impede o marcador de virar mais uma prosa que o portão
+	# acredita.
+	local file="tests/$1.gd" declared last
+	[ -f "$file" ] || { echo "== RESULT:"; return 0; }
+	# (1) declaração — só vale nas primeiras linhas: marcador no meio do arquivo é
+	# texto de teste, não contrato do harness (a régua abaixo confere o mesmo teto).
+	declared="$(head -n 40 "$file" | sed -nE 's/^#[[:space:]]*gate-marker:[[:space:]]*(.+)[[:space:]]*$/\1/p' | head -n 1)"
+	if [ -n "$declared" ]; then
+		echo "$declared"
+		return 0
+	fi
+	# (2) última linha de resultado: uma string impressa da forma
+	# `"== X: … <contagem> failures …"` — a contagem colada em `failures` é o que o
+	# ci_gate_log.sh:42 lê, então só linha com ela concorre (prosa que menciona
+	# falha, ou banner sem contagem, não elege marcador). Caixa e posição não
+	# importam; a última linha de resultado vence.
+	last="$(grep -oE '"== [^"]{0,160}' "$file" 2>/dev/null \
+		| grep -E '(%[-0-9.]*[diu]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|[0-9]+)[[:space:]]+failures' \
+		| sed -nE 's/^"(== [^:"]{1,80}:).*/\1/p' | tail -n 1)"
+	# (3) default universal
+	[ -n "$last" ] || last="== RESULT:"
+	echo "$last"
 }
+
+# O marcador que UM CASE cobra é derivado desta mesma função pelo gate de
+# estrutura; as chamadas que escrevem o marcador como literal (path explícito,
+# conferido por check_gate_markers.sh regra R2) têm de bater com o arquivo.
+harness_marker_declared() {
+	head -n 40 "tests/$1.gd" 2>/dev/null \
+		| sed -nE 's/^#[[:space:]]*gate-marker:[[:space:]]*(.+)[[:space:]]*$/\1/p' | head -n 1
+}
+
 
 # Pré-voo: `--check-only` é o único ponto do gate que lê um harness antes de
 # qualquer boot, então ele existe para não se depender dos 20 min do gate para
@@ -533,6 +590,16 @@ structure_gates() {
 	gate_sh /tmp/shambleta-ci.log "== CI GATE:" scripts/check_ci.sh
 	gate_sh /tmp/shambleta-deadcode.log "== DEAD CODE GATE:" scripts/check_dead_code.sh
 	gate_sh /tmp/shambleta-untracked.log "== UNTRACKED GATE:" scripts/check_untracked.sh
+	# Contrato de marcador (#81): o veredito cobrado de cada harness é o veredito do
+	# harness, e nenhum `gate`/`gate_sh`/`gate_py` daqui pode cobrar literal que o
+	# alvo não imprime. Ela lê as chamadas desta mesma função, então vive aqui.
+	gate_sh /tmp/shambleta-gatemarker.log "== GATE-MARKER:" scripts/check_gate_markers.sh
+	# WorkOrder #91: census do funil de escrita. `deploy/SCALING.md` §7 jura que a
+	# `queryMutex` é o único funil, e nada no repo conferia isso — um `db.update_rows`
+	# cru pegado em `Launcher.SQL.db` escapa da mutex, do contador de round trips e do
+	# commit da transação em aberto. Lista de writers + prova de transação + controles
+	# plantados em scripts/check_write_funnel.sh.
+	gate_sh /tmp/shambleta-writefunnel.log "== WRITE FUNNEL GATE:" scripts/check_write_funnel.sh
 	# Auto-teste do próprio leitor de veredito. Ele entrou nesta lista pelo motivo
 	# geral da casa: o bloco novo de ruído externo imprimi NOTA, não falha — um run
 	# verde com réguas não lidas continua verde — e nada no portão, fora deste

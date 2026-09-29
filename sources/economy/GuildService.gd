@@ -91,10 +91,35 @@ func CreateGuild(accountID : int, charID : int, guildName : String) -> int:
 	_eco.settleMutex.unlock()
 	return int(out["id"])
 
+# Admissão ao roster. A checagem de fora (`JoinReason`) é para DEVOLVER O MOTIVO ao
+# jogador; ela não é a decisão. AUDITORIA rodada 3 (social): aqui e em
+# `PromoteMember`/`DemoteMember`/`RemoveMember` o caminho era
+# leitura (`QueryBindings`, lock próprio) → escrita (`ExecuteBindings`, lock próprio)
+# sem nenhum funil segurando as duas — entre as duas acquisition outro join/promote
+# entrava, e o resultado era ou roster acima do teto ou posto perdido (merge perdido).
+# Agora as quatro mutações do roster passam pelo MESMO funil serializado do resto do
+# arquivo (`_eco.settleMutex` + `Launcher.SQL.Transaction`), que é o padrão que
+# `CreateGuild`, `LeaveGuild`, `DepositToVault` e `WithdrawFromVault` já usam, e
+# re-fazem a política dentro da transação com as leituras cruas que a transação
+# permite (`db.select_rows` / `db.query_with_bindings` / `UpdateRowsRaw`).
 func JoinGuild(accountID : int, guildID : int) -> bool:
 	if GuildRoster.JoinReason(accountID, guildID) != GuildRoster.ReasonOk:
 		return false	# o motivo é um token do catálogo; `GuildRoster.RefusalFor` o devolve para a tela
-	return Launcher.SQL.ExecuteBindings("INSERT INTO guild_member (guild_id, account_id, rank, joined_at) VALUES (?, ?, 'member', ?);", [guildID, accountID, SQLCommons.Timestamp()])
+	var joined : bool = false
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		if sql.db.select_rows("guild", "guild_id = %d" % guildID, ["guild_id"]).is_empty():
+			return false
+		if not sql.db.select_rows("guild_member", "account_id = %d" % accountID, ["guild_id"]).is_empty():
+			return false
+		# O teto re-respondido DENTRO do funil, pela boca única de `GuildRoster`.
+		if GuildRoster.IsFullLocked(sql, guildID):
+			return false
+		return bool(sql.db.query_with_bindings("INSERT INTO guild_member (guild_id, account_id, rank, joined_at) VALUES (?, ?, 'member', ?);", [guildID, accountID, SQLCommons.Timestamp()]))):
+		joined = true
+	_eco.settleMutex.unlock()
+	return joined
 
 func LeaveGuild(accountID : int) -> bool:
 	var guildID : int = GetGuildForAccount(accountID)
@@ -260,29 +285,58 @@ func LevelUpGuild(accountID : int, charID : int) -> bool:
 	_eco.settleMutex.unlock()
 	return ok
 
+# Quantas linhas a ÚLTIMA escrita desta conexão mexeu. Só tem significado dentro do
+# funil: lida fora da transação, ela respondia pela escrita do OUTRO thread (o
+# `changes()` é por conexão, não por chamada). Com `settleMutex` + `Transaction`
+# segurando o par escrita→contagem, é a prova de que o posto mudou mesmo.
+func _ChangedRaw(sql : SQLService) -> int:
+	if not bool(sql.db.query_with_bindings("SELECT changes() AS c;", [])):
+		return 0
+	var res : Array = sql.db.query_result
+	return int(res[0].get("c", 0)) if not res.is_empty() else 0
+
+# Posto de um account DA GUILDA DO LÍDER, re-respondido dentro do funil. É a perna
+# de escrita dos dois verbos de posto (`PromoteMember`/`DemoteMember`); existia antes
+# como dois bodies separados que liam rank/guild por `QueryBindings` (lock próprio) e
+# gravavam por `ExecuteBindings` (outro lock) — dois promotes concorrentes sobre o
+# mesmo roster podiam um escrever em cima do outro, e o `WHERE account_id = ?` ainda
+# alcançava qualquer guilda do banco, não só a do ator.
+func _SetMemberRank(leaderAccount : int, targetAccount : int, rank : String) -> bool:
+	if leaderAccount <= 0 or targetAccount <= 0 or rank.is_empty():
+		return false
+	var done : bool = false
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var leaderRows : Array = sql.db.select_rows("guild_member", "account_id = %d" % leaderAccount, ["guild_id", "rank"])
+		if leaderRows.is_empty() or str(leaderRows[0]["rank"]) != "leader":
+			return false
+		var guildID : int = int(leaderRows[0]["guild_id"])
+		if guildID <= 0:
+			return false
+		var targetRows : Array = sql.db.select_rows("guild_member", "guild_id = %d AND account_id = %d" % [guildID, targetAccount], ["rank"])
+		if targetRows.is_empty():
+			return false
+		if str(targetRows[0]["rank"]) == "leader":
+			return false
+		if not sql.UpdateRowsRaw("guild_member", "guild_id = %d AND account_id = %d" % [guildID, targetAccount], {"rank" = rank}):
+			return false
+		return _ChangedRaw(sql) > 0):
+		done = true
+	_eco.settleMutex.unlock()
+	return done
+
 func PromoteMember(leaderAccount : int, targetAccount : int) -> bool:
-	if GetMemberRank(leaderAccount) != "leader":
-		return false
-	if GetGuildForAccount(targetAccount) != GetGuildForAccount(leaderAccount) or GetGuildForAccount(leaderAccount) == 0:
-		return false
-	if GetMemberRank(targetAccount) == "leader":
-		# O líder não tem posto acima dele para onde ser "promovido", e deixá-lo sem
-		# linha de líder seria a guilda órfã por um clique. `GuildRoster.Kick` recusa o
-		# mesmo caso por outro motivo (ninguém se chuta); aqui é a tabela se protegendo.
-		return false
-	return Launcher.SQL.ExecuteBindings("UPDATE guild_member SET rank = 'officer' WHERE account_id = ?;", [targetAccount])
+	# O líder não tem posto acima dele para onde ser "promovido", e deixá-lo sem
+	# linha de líder seria a guilda órfã por um clique. `GuildRoster.Kick` recusa o
+	# mesmo caso por outro motivo (ninguém se chuta); aqui é a tabela se protegendo.
+	return _SetMemberRank(leaderAccount, targetAccount, "officer")
 
 # Rebaixa a `member`. É o avesso de `PromoteMember` e existe pelo mesmo motivo do
 # outro lado da política: sem rebaixar, promover é um depósito — um posto errado fica
 # errado para sempre. O líder não é rebaixável pela mesma razão de acima.
 func DemoteMember(leaderAccount : int, targetAccount : int) -> bool:
-	if GetMemberRank(leaderAccount) != "leader":
-		return false
-	if GetGuildForAccount(targetAccount) != GetGuildForAccount(leaderAccount) or GetGuildForAccount(leaderAccount) == 0:
-		return false
-	if GetMemberRank(targetAccount) == "leader":
-		return false
-	return Launcher.SQL.ExecuteBindings("UPDATE guild_member SET rank = 'member' WHERE account_id = ?;", [targetAccount])
+	return _SetMemberRank(leaderAccount, targetAccount, "member")
 
 # Tira um account da fileira. ESCREVE só em `guild_member`: dissolver a guilda não é
 # remoção, é `LeaveGuild` (que exige vault vazio e promove o mais antigo quando sobra
@@ -290,14 +344,23 @@ func DemoteMember(leaderAccount : int, targetAccount : int) -> bool:
 # vault sem ninguém para esvaziá-lo. O `rank <> 'leader'` na WHERE é o teto da decisão
 # nº 3 da política dentro do dono da tabela: quem chuta não é o líder, e quem é o líder
 # não sai por aqui. `changes()` confere que a linha caiu mesmo (um UPDATE/DELETE que não
-# casa linha nenhuma é sucesso de query — precedente `SQL.gd`, `ResolveReport`).
+# casa linha nenhuma é sucesso de query — precedente `SQL.gd`, `ResolveReport`), e por
+# isso a contagem passou a ser lida NA MESMA transação da escrita: lida do lado de
+# fora, ela era o resultado da escrita de outro thread (dois kicks do mesmo alvo
+# davam "removi" para quem não removeu nada, e "nada" para quem removeu).
 func RemoveMember(guildID : int, targetAccount : int) -> bool:
 	if guildID <= 0 or targetAccount <= 0:
 		return false
-	if not Launcher.SQL.ExecuteBindings("DELETE FROM guild_member WHERE guild_id = ? AND account_id = ? AND rank <> 'leader';", [guildID, targetAccount]):
-		return false
-	var changed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT changes() AS c;", [])
-	return not changed.is_empty() and int(changed[0].get("c", 0)) > 0
+	var removed : bool = false
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		if not bool(sql.db.query_with_bindings("DELETE FROM guild_member WHERE guild_id = ? AND account_id = ? AND rank <> 'leader';", [guildID, targetAccount])):
+			return false
+		return _ChangedRaw(sql) > 0):
+		removed = true
+	_eco.settleMutex.unlock()
+	return removed
 
 # Trilha de auditoria da GOVERNANÇA (AUDITORIA 2026-09-28, item 3): cada promote/demote/
 # kick que o SERVIDOR aceitou fica reviewável depois, na MESMA forma append-only do

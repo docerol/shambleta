@@ -211,7 +211,18 @@ const TradeDailyCapRef : int = 20
 
 const TradeDailyCapVIPRef : int = 40
 
-# Os cinco números que o catálogo base parametriza, num dicionário — é o DEFAULT
+# ACHADO #107 (gold sink cego de zona): elasticidade da taxa de forja contra a curva
+# de renda da zona do personagem, em MILÉSIMOS — 1000 = taxa 100% proporcional à
+# renda, 886 = o MENOR inteiro que cabe na banda declarada pelo produto ("um tier 9 de
+# forja custa entre 60 e 180 minutos de fazenda par em toda zona onde o tier é
+# alcançável"), medida por `tests/gold_sink_scale_test.gd`. É inteiro porque o validador
+# de knobs só admite número inteiro (`_IsWholeNumber`, JSON lê 19.90 como float): a
+# elasticidade entra como permille, não como float, e o leitor está em
+# `ItemForgeService.ForgeFeeForZone`. A zona 1 não entra nesta conta: o fator é
+# normalizado nela, então o knob nunca muda o preço de quem ainda não saiu do início.
+const ForgeFeeZoneElasticityPermilleRef : int = 886
+
+# Os seis números que o catálogo base parametriza, num dicionário — é o DEFAULT
 # (fallback) de cada knob. A FAIXA aceita mora no arquivo (`_knob_ranges`), e é
 # contra ela que `ValidateBaseCatalog` confere; este dict serve para (a) saber
 # quais nomes têm leitor e (b) dar o valor de reserva quando o arquivo falha.
@@ -221,6 +232,7 @@ const BASE_KNOBS_REF : Dictionary = {
 	"trade_cooldown_sec": TradeCooldownSecRef,
 	"trade_daily_cap": TradeDailyCapRef,
 	"trade_daily_cap_vip": TradeDailyCapVIPRef,
+	"forge_fee_zone_elasticity_permille": ForgeFeeZoneElasticityPermilleRef,
 }
 
 # Ordem ENTRE knobs, e esta regra entrou porque a faixa declarada abriu a porta:

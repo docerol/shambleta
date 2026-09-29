@@ -8,9 +8,9 @@ não foi conferido no código está marcado como **[NÃO MEDIDO]**.
 
 | dado | caminho lógico | caminho no container | origem |
 |---|---|---|---|
-| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `sources/system/Path.gd:55` (`Local = "user://"`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
-| histórico de backup | `user://sql-backups/{DAILY,WEEKLY,MONTHLY}/AAAA-MM-DD_HH-MM-SS.db` | dentro do **mesmo** `/data` | `sources/sql/SQLCommons.gd:8` (`BackupPath`), `sources/sql/SQLBackups.gd:10-19` |
-| cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `sources/sql/SQLCommons.gd:107-108`, `sources/sql/SQLBackups.gd:35-51`, `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
+| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `Local` = `user://` (`sources/system/Path.gd:55`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
+| histórico de backup | `user://sql-backups/{DAILY,WEEKLY,MONTHLY}/AAAA-MM-DD_HH-MM-SS.db` | dentro do **mesmo** `/data` | `sources/sql/SQLCommons.gd:8` (`BackupPath`), `sources/sql/SQLBackups.gd:10-19` (`CreateDailyBackup()`) |
+| cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `sources/sql/SQLCommons.gd:107-108`, `sources/sql/SQLBackups.gd:35-51` (`PushOffsite()`), `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
 
 Os diretórios são **MAIÚSCULOS** e isto não é cosmetismo: o nome vem das chaves do
 enum `BackupFrequency` (`sources/sql/SQLCommons.gd:43`, `{DAILY, WEEKLY, MONTHLY}`,
@@ -43,8 +43,8 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
   (`:47-49`, `:54-64`).
 - **O offsite nunca é podado**: `PruneBackups()` só caminha por `GetBackupPath()`
   (`:69`). A rotação de longa duração é do operator (§5).
-- **[PENDÊNCIA, arquivo de outro dono]** `sources/sql/SQLBackups.gd:92` inicializa
-  `lastDailyBackupTimestamp = SQLCommons.Timestamp()`, então o primeiro diário só
+- **[PENDÊNCIA, arquivo de outro dono]** o `lastDailyBackupTimestamp` é inicializado por
+  `Run()` em `sources/sql/SQLBackups.gd:91-92` com `SQLCommons.Timestamp()`, então o primeiro diário só
   existe 24 h depois do boot — um redeploy zera o relógio. É o defeito que o
   `#28` corrigiu para o job meta (`:97-102`, `lastMetaJobTimestamp = 0`) e que
   ficou para trás no backup. Mudança pedida: nascer em `0` (ou persistir o último

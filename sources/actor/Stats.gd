@@ -5,6 +5,12 @@ class_name ActorStats
 var level : int							= 0
 var experience : int					= 0
 var gp : int							= 0
+# WorkOrder #88: lastro do snapshot de ouro. `SQL.UpdateStat` escreve `stat.gp`
+# como DELTA (gp - gpFlushed) e não mais como valor absoluto, porque o ouro da
+# carteira também muda no banco por fora do agente (kernel `_MoveGoldLocked`:
+# loja, forja, guilda, copa, boss, streak, checkout, leilão). -1 = carga de
+# banco nunca feita, e aí o snapshot não credita nada às cegas.
+var gpFlushed : int						= -1
 var health : int						= ActorCommons.MaxStatValue
 var mana : int							= ActorCommons.MaxStatValue
 var stamina : int						= ActorCommons.MaxStatValue

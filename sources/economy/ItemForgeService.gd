@@ -75,7 +75,7 @@ func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dict
 	if accountID == NetworkCommons.PeerUnknownID:
 		result["reason"] = "no_character"
 		return result
-	var fee : int = EconomyCatalog.CORRUPT_FEE_BASE * maxi(cell.tier, 1) * maxi(cell.tier, 1)
+	var fee : int = _ForgeFee(charID, EconomyCatalog.CORRUPT_FEE_BASE, maxi(cell.tier, 1))
 	var mutex : Mutex = _eco._get_settle_mutex(accountID)
 	mutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
@@ -239,7 +239,7 @@ func SalvageItem(charID : int, itemID : int) -> Dictionary:
 #
 # Dois insumos, dois débitos de ledger: `CraftCatalog.MaterialPerCraft(tier)`
 # unidades da matéria-prima da faixa do item (`craft_material:<hash>`, permitindo
-# lote bound) e `CraftCatalog.SubmitFee(tier)` de ouro (`craft_submit_fee:...`).
+# lote bound) e `SubmitFee(tier) × fator de zona` de ouro (`craft_submit_fee:...`).
 # Antes de 2026-09-28 só existia o ouro, e a matéria-prima do drop não tinha
 # consumo nenhum no repo — ver o bloco de `MATERIAL_UNITS_PER_TIER` no catálogo.
 #
@@ -303,7 +303,7 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 		return result
 
 	var rarity : String = CraftCatalog.RarityForUsage(float(budgetUsed) / float(budgetCap) * 100.0)
-	var fee : int = CraftCatalog.SubmitFee(tier)
+	var fee : int = _ForgeFee(charID, CraftCatalog.SUBMIT_FEE_BASE, tier)
 	# #27: `smith_week` existia como kind com `fee_mod` no parâmetro, mas nenhum
 	# caminho de código lia o valor — o evento era inerte. Esta é a taxa que ele
 	# modula. Leitura pura, antes do lock (a consulta abaixo pega o queryMutex).
@@ -477,3 +477,47 @@ func RejectCraftSubmission(gm : PlayerAgent, submissionID : int, reason : String
 	return Launcher.SQL.ExecuteBindings(
 		"UPDATE craft_submission SET status = 'rejected', decided_at = ?, decided_by = ?, decide_reason = ? WHERE id = ? AND status = 'pending';",
 		[now, gmAccount, reason, submissionID])
+
+# ------------------------------------------------------------------ #107: a taxa de forja lê a zona
+# As duas taxas de forja eram `base × tier²` e cegas ao mapa, enquanto a renda por
+# hora não é: `FarmZoneData` sobe ~1.25^zona por kill, então o MESMO tier 9 custava
+# 1,8 h de fazenda na zona 1 e ~38 s na zona 27. O sumidouro encolhia exatamente
+# onde a torneira explode (ACHADO #107). `ForgeFeeForZone` é a FONTE ÚNICA dos dois
+# fees (`corrupt_fee:` e `craft_submit_fee:`) e multiplica `base × tier²` pela curva
+# de renda da ZONA DO PERSONAGEM, normalizada na zona 1: lá o quociente é 1.0 exato
+# (mesmo inteiro sobre si mesmo), `pow(1, x) = 1` e `roundi` não tem o que mover — a
+# zona 1 continua pagando as constantes de antes bit-for-bit, sem exceção no código
+# nem default escondido. A elasticidade é o knob inteiro em MILÉSIMOS
+# `forge_fee_zone_elasticity_permille` (1000 = taxa 100% proporcional à renda); o
+# default 886 não é gosto, é o MENOR inteiro dentro da banda declarada pelo produto
+# — "um tier 9 de forja custa entre 60 e 180 minutos de fazenda par em toda zona
+# onde o tier é alcançável" — medida por `tests/gold_sink_scale_test.gd`, que também
+# confere monotonicidade na curva real, a igualdade da zona 1 e o ledger.
+static func ForgeFeeForZone(baseGold : int, tier : int, zoneID : int, elasticityPermille : int) -> int:
+	var safeTier : int = maxi(tier, 1)
+	var raw : float = float(baseGold) * float(safeTier * safeTier)
+	if elasticityPermille <= 0:
+		return maxi(1, roundi(raw))
+	var anchor : FarmZoneData = FarmZoneData.GetZone(1)
+	if anchor == null or anchor.goldPerHour <= 0:
+		return maxi(1, roundi(raw))
+	# Zona sem catálogo (conteúdo novo, além da tabela) cobra o topo da tabela:
+	# sem isto o achado #107 voltaria como penhasco no zona 28.
+	var zone : FarmZoneData = FarmZoneData.GetZone(clampi(zoneID, 1, FarmZoneData.GetZoneCount()))
+	if zone == null or zone.goldPerHour <= 0:
+		return maxi(1, roundi(raw))
+	var ratio : float = float(zone.goldPerHour) / float(anchor.goldPerHour)
+	if ratio <= 1.0:
+		return maxi(1, roundi(raw))
+	return maxi(1, roundi(raw * pow(ratio, float(elasticityPermille) / 1000.0)))
+
+# Ponta do produto: os DOIS fees passam por aqui. A zona é a do PERSONAGEM (nunca a
+# do item nem a da última região visitada) e o knob vem do catálogo validado — sem
+# arquivo, o default do código (`BASE_KNOBS_REF`) fica de pé; char sem zona (0, ainda
+# não ancorou) está na zona 1 e paga exatamente o preço de sempre.
+func _ForgeFee(charID : int, baseGold : int, tier : int) -> int:
+	var info : Dictionary = Launcher.SQL.GetCharacter(charID)
+	var zoneVar : Variant = info.get("farm_zone", 0)
+	var zoneID : int = int(zoneVar) if zoneVar != null else 0
+	return ForgeFeeForZone(baseGold, tier, zoneID, EconomyCatalog.BaseKnob(
+		"forge_fee_zone_elasticity_permille", EconomyBaseCatalog.ForgeFeeZoneElasticityPermilleRef))

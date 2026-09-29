@@ -165,7 +165,7 @@ func _repoFile(path : String) -> String:
 
 # Só código, sem linhas de comentário: uma régua que lê o arquivo inteiro dá
 # verde quando a chamada é apagada e a frase sobrevive na doc de quem a descreveu
-# (mesma razão de `_StripCommentLines` em `tests/IdleTests.gd:6124-6139`).
+# (mesma razão de `_StripCommentLines` em `tests/IdleTests.gd:6167`).
 func _codeOnly(text : String) -> String:
 	var kept : String = ""
 	for rawLine in text.split("\n"):

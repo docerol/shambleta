@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-09-28
+## [Unreleased] - 2026-09-29
 
 ### Removed
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`
@@ -22,6 +22,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Every `arquivo:NN` pointer living in the conf prose was lying — three at HEAD, three
+  false — and no gate could see it. `data/conf/seasons.json` pinned the
+  `not IsScheduled(s1)` leg at
+  "tests/season_liveops_test.gd:173" while the leg had moved to `:175`;
+  `data/conf/liveops_calendar.json` justified its "no XP or chest window may cover the
+  run" rule by "SuiteSettleGolden (IdleTests.gd:238)", a citation with no directory and
+  no backticks whose line was neither the golden assertion (`tests/IdleTests.gd:286`) nor
+  the function (`:232`); and `data/conf/economy_base_catalog.json` sent the reader to
+  "EconomyCatalog.gd:64,67" for the chest price and cap — where the file now holds the
+  comment *describing that move* — and to "EconomyService.gd:208-212" for the trade
+  friction, four lines of chest-odds delegation. The consts had been cut into
+  `sources/economy/EconomyBaseCatalog.gd`, at `:199` and `:201` for the chest and
+  `:208`, `:210`, `:212` for the trade trio. The three notes now cite those lines, each in
+  the house form (the symbol in backticks immediately before the pointer), which is what
+  gives the extended corpus something to bite on: a clause that names nothing is a clause
+  the identity ruler cannot judge, and that fresta is why these three survived. A range
+  that crosses a blank line is a dead pointer here too, which is why the trade trio is
+  three single-line pointers rather than one `:208-212`.
+- A season opening that rolled back still handed back an id.
+  `SeasonService._CreateSeasonWindow` writes the `season` row and the 064 race marks in
+  one `SQL.Transaction`, and read `out["id"]` *after* the `if` rather than inside the
+  committed branch. When `_StampRaceBaselines` failed — which is exactly what a database
+  where migration 064 has not been applied does — the `ROLLBACK` took the `season` row
+  away and the function returned the number of a season that no longer existed.
+  `EnsureSeason` printed its "opened from seasons.json" line for that id, and
+  `SQLBackups` counted it as `opened 1` in the season-clock log, while `CloseSeason` on
+  the same id returns false (`status = 'active'` finds no row) — the operator's own log
+  was the only trace of a season that could never be closed. The id is now read only on
+  the committed path, so a rolled-back opening answers 0, the same answer `CreateSeason`
+  already gives for "there is an active season". Leg S9 of
+  `tests/season_race_delta_test.gd` renames `season_score_baseline` out of the way so the
+  mark write fails for the real reason, requires `CreateSeason` to answer 0 *and* the
+  `season` row census to be unchanged, then restores the table and requires the same
+  opening to commit — the point of the control being that "returns 0" is also true of a
+  dead facade. Measured red on the pre-fix code (it returned id 10) and green after:
+  33 checks, 0 failures.
+- The item recipe told the reader to run a script that does not exist.
+  `docs/adding-an-item.md` said to generate the `.translation` files with
+  `python3 tools/i18n/extract_i18n.py`: the tool is `tools/extract_i18n.py`, it writes a
+  coverage report and can append missing keys, and the compiled `.translation` the
+  `TranslationServer` actually reads comes from the engine's `csv_translation` importer.
+  No ruler could see the dead command, for two reasons stacked: the doc-path ruler judges
+  only `.md` tokens in prose (extending that corpus to `.py` and `.sh` had been measured
+  as noise), and the four recipe docs under `docs/` were in no doc corpus at all.
+  Section 27 of `scripts/check_doc_drift.sh` now reads the command lines inside fenced
+  blocks of every doc someone executes — README, `docs/*.md`, `docs/development/*.md`,
+  `deploy/*.md` — and requires each path-with-extension to exist in the tree, with the
+  container-absolute, `res://` and glob forms filtered and each filter carrying its own
+  control. Measured on the run that found it: 76 command paths across 19 docs, 8/8
+  controls biting, one accusation, and the recipe now names the importer command plus the
+  `i18n_catalog_test` that checks the compiled catalog against the CSV.
+- Picking up a drop could delete it. `WorldDrop.PickupDrop` chained
+  `PopDrop(dropID, inst)` *before* `inventory.AddItem(cell, count)`, so on a full bag
+  the item left the world and never reached the player — a silent loss, not a refusal,
+  and the ground was gone so there was nothing to retry. The order is now
+  `CanHold(cell, count)` → `PopDrop` → `AddItem`: `CanHold` is the same `PushItem`
+  consult the real add performs, so an item only leaves the floor when it enters the
+  inventory. Measured by the floor-guard conservation leg of
+  `tests/IdleTestsFrontier.gd` (the full-bag case must leave the drop on the ground and
+  the room-y case must move it), inside the 3219-check idle gate, green 2026-09-29.
+- The live-ops calendar had two measured deserts and the note in the file miscounted
+  its own rows. `data/conf/liveops_calendar.json` shipped six events: nothing in the
+  air on a normal day, 44 days between the ended weekend campaign and the next window
+  (2026-09-21 → 2026-11-04) and 65 between the November cup and the S2 opening. The
+  `tournament` axis is what stitches it, because it is the only axis where being always
+  on is honest: the gem pool already exists, the modifier only announces a bigger prize
+  for the window whose `ends_at` it covers, and it touches no XP, gold, keys or chests.
+  Eleven `tournament` windows now cover 2026-09-23 (1790121600) through the S2 end
+  (1802563200) with zero uncovered days — the largest gap anywhere in the file is
+  2 days — and the last one ends on the same unix the season ends, so the agenda does
+  not abandon a season in service. Suite E of `tests/season_liveops_test.gd` (E0–E7;
+  the harness closes at 180 checks) measures the instant, the union gap, every day of every scheduled
+  season, the neutral-value facades and the negative control that filters the cup axis
+  out and gets the desert back. Writing the ruler also caught the prose lying about
+  itself: `_estado_atual` swore "NOVE janelas de `tournament`" in a file holding eleven,
+  and no ruler measured a single numeral in it. `_FactLiveOpsCalendarCounts` in
+  `tests/doc_facts_test.gd` now counts per kind through `LiveOpsCalendar.Entries()` and
+  requires every count in the note — spelled as a digit *or* as a word, which is the
+  form that escaped — to equal the measurement, with a control that swaps the numeral on
+  a copy and must be accused. `doc_facts_test` is 78 checks green.
 - Two timing rulers in `tests/multi_instance_tick_test.gd` were read for the first
   time on a quiet host (`== NOISE-DECLARED: 0 ==`, 182 checks) and both came back red
   for different reasons. The overload leg predicted that 40 ms/step of injected spin
@@ -148,16 +228,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spend is asserted).
 - `docs/development/testing.md` claimed the idle gate runs "137 suites"; nothing in the
   repository reproduced 137. The count is now an anchor recomputed by the drift gate.
-- Five pointers into `scripts/test.sh` were false after the reaper landed (function
-  bodies had moved ~40 lines): three cited ranges that no longer contain what their own
-  sentence names — `harnesses_extra()` in `tests/deploy_ops_test.gd:6` and
-  `docs/development/setup.md:80`, `harness_marker()` in `tests/deploy_ops_test.gd:7`,
-  `companion_gates()` in `docs/development/testing.md:99` — and two pointed at a line of
-  unrelated code while saying what the gate does *not* check: `tests/IdleTests.gd:6018`
-  cited `scripts/test.sh:431` (`echo "$n"`) to claim `check_secrets.sh` entered the
-  runner there, when the entry is line 532, and `tests/repo_layout_test.gd:18` cited
-  421-427 for the written reason a gate without a caller is a ruler without effect,
-  which lives at 516-527. All five now resolve to the code their sentence promises.
+- Five pointers into `scripts/test.sh` were false after the reaper landed: function
+  bodies had moved ~40 lines, and three cites named a range that no longer held the
+  function their own sentence promised. The cite of `harnesses_extra()` lived at
+  `tests/deploy_ops_test.gd:6` and again at `docs/development/setup.md:80`; the cite
+  of `harness_marker()` lived at `tests/deploy_ops_test.gd:7`; the cite of
+  `companion_gates()` lived in the companion row, `docs/development/testing.md:115`.
+  Two more pointed at unrelated code while saying what the gate does *not* check: the
+  secrets comment, which lived at `tests/IdleTests.gd:6061`, cited runner line 431 to
+  claim `check_secrets.sh` entered the gate list there, when the entry was then line
+  532; and `tests/repo_layout_test.gd:18` cited 421-427 for the written reason a gate
+  without a caller is a ruler without effect, which lived at 516-527. All five now
+  resolve to the code their sentence promises. A locator is a claim too, so the four
+  that name a place in today's tree were re-read on 2026-09-29: the companion row is
+  `docs/development/testing.md:115`, the secrets comment is
+  `tests/IdleTests.gd:6061`, the gate entry is `scripts/test.sh:589` and the no-caller
+  reason is `scripts/test.sh:579-585`.
 - The class those two survivors belong to is closed, not just the instances. The
   identity ruler cannot see a bare `check_secrets.sh` (its `IDENT` rejects the dot) and
   the literal ruler refuses any token living more than once in the target, so the
@@ -197,6 +283,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from that zero rather than presented as a separation that was never measured.
 
 ### Changed
+- The forge fee reads the zone the character farms in (finding #107), and the band it has
+  to land in is measured at both edges. Both gold sinks of
+  `sources/economy/ItemForgeService.gd` charged `base × tier²` with no notion of place: a
+  tier-9 corruption at zone 27 cost 40 500 gold against a faucet of 3 771 956 gold/h —
+  0.64 minutes of par farming, while the largest guild upgrade step costs 10 000 000 gold
+  (`GuildLevelCostGold` at `sources/economy/EconomyCatalog.gd:289`). The fee is now
+  `base × tier² × ratio^elasticity`, with `ratio` the zone's `goldPerHour` over zone 1's
+  read through `FarmZoneData.GetZone` and `elasticity` the new
+  `forge_fee_zone_elasticity_permille` knob, shipped at 886 ‰
+  (`ForgeFeeZoneElasticityPermilleRef` at `sources/economy/EconomyBaseCatalog.gd:223`).
+  The same tier-9 corruption at zone 27 now costs 3 786 686 gold — 60.23 minutes of par
+  farming — and zone 1 still pays the old constants bit for bit, because the curve is
+  normalized there, so nothing a fresh character pays moved. 886 is arithmetic, not taste:
+  `tests/gold_sink_scale_test.gd` sweeps every reachable (zone, tier) pair of both sinks
+  against a band of 60–180 minutes of par farming at tier 9, scaled by `(tier/9)²`, and
+  proves the declared band `[886, 1099]` is tight on both edges — 885 breaks the floor at
+  59.93 minutes and 1100 breaks the ceiling at 180.24, each in exactly one pair, and it is
+  the same pair (zone 27, tier 9) that decides both. Measured 2026-09-29: the harness
+  closes at 159 checks with 0 failures, and the sinks' neighbours re-ran green the same day
+  — `craft_authority_test` 56, `craft_wiring_test` 316, `faucet_census_test` 62,
+  `economy_knob_range_test` 67, `economy_design_fix_test` 92, `scale_test` 95,
+  `balance_test` 1919 and `economy_invariant_fuzz` 21 891. An unaffordable fee stays a
+  refusal rather than a debt: both paths still test `gp < fee` and answer
+  `insufficient_gold`.
+- Season races score the window, not the character's life (migration 064). Three of
+  the four races were read off a current counter with no history —
+  `character.power_score`, `character.bosses_beaten`, `guild.points` — so freezing
+  the board at `CloseSeason` froze in everything the player had done *before* the
+  season opened, and the prize went to whoever arrived big instead of whoever rose
+  during the window. `season_score_baseline` is the zero mark: `CreateSeason`/
+  `EnsureSeason` copy the live state of all three tables inside the *same*
+  transaction as the `INSERT INTO season` — the two halves have different readers
+  (`baselines_at` is only the label the leaderboard shows, the subtraction is the
+  `LEFT JOIN`, which never consults the label), so an opening committed outside this
+  transaction could promise `delta` with no mark at all — `COALESCE(b.value, 0)`
+  hands back the absolute and the prize pays for work done before the window — or
+  promise `current` while a partial mark is subtracted), and every
+  snapshot subtracts it with `LEFT JOIN` + `MAX(0, cur − COALESCE(b.value, 0))`.
+  Ordering is by the delta, which is the other half of the fix: with `limit = 1` the
+  old `ORDER BY power_score DESC` cut exactly the player the race exists to find. A
+  subject with no mark (born after the open, or a season predating 064) gets the
+  current value back, and `season.baselines_at` makes the two regimes observable
+  instead of assumed: `CommunityService.GetSeasonBoardsState` reports
+  `scoring = "delta" | "current"` and `Leaderboard` says so on screen. Pinned by
+  `tests/season_race_delta_test.gd` (33 checks, S1–S9, measured 2026-09-29) —
+  including both legs of the confession, because pinning only the legacy `"current"`
+  left a facade that always answers `"current"` passing the whole suite. The screen
+  is measured too: the idle suite's `ShowSeason` block renders the board with and
+  without the mark and requires the word `lifetime` to appear in exactly the
+  no-mark case, so deleting the label is caught where the player would see it.
 - The map rooms are in git. `presets/maps/*` sat under `# imported files` in
   `.gitignore`, but nothing imports them: `presets/maps/data/**` is what builds
   `MapsDB` (`sources/system/Path.gd:49` → `sources/db/DB.gd:280`) and
@@ -219,6 +355,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`checks`/`failures`) and the shared world fixture (`lastCharID`).
 
 ### Added
+- A pointer into prose now has its *line* judged, not just its file. The identity arm of
+  `SuiteEvidencePointers` asks whether the symbol a clause names lives at the cited line,
+  and for a `.md` target that question had no teeth: prose declares nothing, so the symbol
+  index arrives empty by design and the arm that answers from the whole file
+  (`_IdentityVerdict`, `tests/IdleTestsFrontier.gd:454`) returned "the name is in this
+  document" and stayed silent about the number. Found while writing the #107 register: a
+  sentence locating `companion_gates()` at testing.md line 99 read green while the row that
+  names it is `docs/development/testing.md:115`. The sweep gained a fourth arm,
+  `_ProseTargetVerdict` (`tests/IdleTestsFrontier.gd:428`), gated by `_IsProseTarget`
+  (`tests/IdleTestsFrontier.gd:414`): a prose target that writes the name somewhere but not
+  inside the cited window is accused by symbol *and* by line number, and one that writes it
+  nowhere returns the same silence the series ruler uses, because a name the document never
+  spells is the path and literal rulers' business, not this one's.
+  First contact: four accusations, four true — a range in this repo's own judge register
+  that no longer held what its sentence promised, one historical cite inside
+  `scripts/check_doc_drift.sh` that was written with live-pointer notation, and two in the
+  prose being written that minute. All four closed by re-pointing the number or by dropping
+  the backticks a stale cite never earned; no leg was exempted to get green.
+  Same pass, same kind of rot, different blind spot: nine `IdleTestsFrontier.gd` locators
+  (plus one elided bare range) across nine comment lines of
+  `tests/drop_band_content_test.gd` and `sources/idle/FarmZoneData.gd` were off by ~1300
+  lines, and no ruler could see it because none of those clauses names a declared symbol —
+  they name a local, or a file, or nothing. Re-pointed to the code each sentence promises;
+  the hole itself is registered, not papered over, because the honest fix for it is a
+  declaration index that covers locals, not a prose-rewriting machine.
+  Proof the arm bites, run every gate: three injected controls over an in-memory fixture —
+  a name at the wrong line accuses, the same name at the right line is silent, a name the
+  document never writes is silent — and the arm must have an opinion on exactly two of the
+  three, so a "0 accusations" verdict cannot mean "0 looks". Measured with the registers
+  above landed: 497 references checked line by line (134 of them prose outside `.md`), 122
+  clauses naming a code symbol, 3 prose line-targets judged, 0 accusations. The count moved
+  from 2 to 3 because the register describing this axis cites the very line it proves — the
+  ruler read the new sentence and judged it, which is the intended behavior, not a surprise.
+  The floor is 2, below the measured 3, so a paragraph being rewritten is not a gate failure
+  while the axis going mute still is; the number that proves the bite is the control, not
+  the floor.
+- The season that is actually running declares its own pass track. `s1` in
+  `data/conf/seasons.json` carries `pass_tiers` now — `max_level` 40, `bonus_start` 31,
+  `bonus_gems` 20, ten `free` levels and eighteen `premium` levels — written as the exact
+  mirror of `EconomyCatalog.PASS_FREE` / `PASS_PREMIUM` / `PASS_MAX_LEVEL` /
+  `PASS_BONUS_START` / `PASS_BONUS_GEMS`, so nothing a player receives changed: what
+  changed is where the track is *read from* (the file, through `PassService`'s existing
+  per-season lookup) and that the mirror is measured. `tests/season_liveops_test.gd`
+  compares the two level by level through the product's own reader (`PassTiers`, which
+  normalizes JSON's string keys to int and normalizes each reward), over the union of the
+  levels on either side, in both tracks, plus the three scalars; the harness closes at
+  180 checks with 0 failures.
+  The ruler bit on a one-field drift (`gems` 10 → 11 at level 3) by naming the level and
+  both sides, which is also the first version of the helper failing its own label — the
+  count in the message claimed 20 levels for a 10-level track until the level list became
+  a deduplicated union. `SeasonConfig._ValidatePassTiers` grew the two refusals that the
+  mirror exposed: a `pass_tiers` scalar that is present and not an integer (`_IntOf` hands
+  back the catalog default in silence, so `"max_level": "30"` would have been read as 40
+  and paid the track you thought you had replaced), and a `premium` level at or above
+  `bonus_start`, which `PassService._GrantPassRewardRaw` overwrites with the bonus gem row
+  — an award written, validated, and unreachable. Both bite: removing the 22 validator
+  lines takes exactly the three new legs red and leaves the control leg (a premium level
+  one below `bonus_start` validates clean) green, so the refusal is not always-on.
+- The pointer rulers read the prose embedded in data. `data/conf/*.json` describes its own
+  rules in `_note`, `_campos`, `_estado_atual` and siblings, and no corpus judged any of
+  it: the resolution sweep (`SuiteEvidencePointers`) walked `.md` plus comment lines of
+  `.gd/.py/.sh`, and section 23 of `scripts/check_doc_drift.sh` had no `.json` in `EXTS` —
+  and would have skipped it anyway, since a JSON line never starts with `#`. The census
+  measured on 2026-09-29: three pointers in that prose at HEAD, all three false; the
+  rewritten prose carries ten. Both corpora now read
+  the conf JSON, and the Godot side's input guard requires `res://data/conf/seasons.json`
+  to be in the list, because a `roots` that finds nothing returns "0 broken" for the worst
+  possible reason. Proven the way the house asks, in situ: repointing
+  `ChestCostGemsRef` at the neighbor row makes section 23 answer
+  `nomeia ['ChestCostGemsRef'] e aponta sources/economy/EconomyBaseCatalog.gd:220; o nome
+  mora em [199, 219]` — with the whole corpus at 239 named pointers, 478 checked line by
+  line, 0 accusations.
 - The doc-drift gate grew a third pointer ruler: **literal pinning** (section 25 of
   `scripts/check_doc_drift.sh`). Sections 23 and 24 ask "does the cited line hold the
   named identifier?" and "does the cited file exist?", and both stayed green on anchors

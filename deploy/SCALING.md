@@ -16,6 +16,31 @@ O servidor roda a 30 Hz: `const ServerMaxFPS : int = 30` em
 abaixo. O harness confere a paridade antes de medir (assert "tick do harness =
 tick de produção (30 Hz, budget 33.33 ms/passo)").
 
+### 1.1 O orçamento virou grandeza exportada (instrumento dentro do processo)
+
+Até aqui, "33,33 ms por passo" era régua de harness: nada no processo do server
+media o custo do próprio passo, e `/metrics` só exportava espera de mutex de SQL.
+O orçamento existe agora como instrumento do produto, cronometrado com
+`Time.get_ticks_usec()` em `_physics_process` de `sources/launcher/Launcher.gd`
+(um por processo, sempre ligado) e servido por `sources/system/MetricsServer.gd`:
+
+| série | o que é | janela/coverage confessa |
+|---|---|---|
+| `shambleta_step_period_seconds` (histograma) | parede entre duas fronteiras de física consecutivas, baldes em 16,67/33,33/50/100 ms + `_sum`/`_count`/`_max` | vale mesmo com instância parada; quando o engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê curta — o déficit acumulado é `shambleta_step_lost_total` |
+| `shambleta_step_work_seconds` (histograma) | só a bomba de políticas de ocioso que `sources/world/WorldInstance.gd` faz por passo | **não** é o passo inteiro: é o trabalho que esta base de código cronometra por dentro, declarado no HELP |
+| `shambleta_step_over_budget_total` (counter) | passos com período acima de orçamento + folga | a folga (`shambleta_step_budget_tolerance_seconds`) é o piso do throttle de 30 Hz, não uma margem de boa vontade |
+| `shambleta_step_lost_total` (counter) | pior déficit entre passos esperados e entregues | `increase()` lê "passos que deixaram de ser entregues", não "tempo perdido" |
+| `shambleta_steps_measured_total` (counter) | denominador de tudo acima | sem passo amostrado o bloco inteiro **não aparece** — ausência não é zero, e quem scrapeia vê ausência |
+
+O predícado de estouro estritamente `> orçamento + folga` tem controle negativo no
+harness da própria perna (`bash scripts/test.sh one step_budget_metric_test 300`), e
+os nomes citados por `deploy/alerts.rules.yml` (`PassoForaDoOrcamento`,
+`PassoPerdido`, `PassoSemMedida`) são cruzados com o que o servidor emite no mesmo
+predícado — regra apontando para série que ninguém serve vermelha ali, não no
+dashboard. A cauda por passo (p95 e máximos, não mediana) virou régua em
+`bash scripts/test.sh one multi_instance_tick_test 900` com `CheckCeiling`, pelo
+motivo escrito no próprio harness.
+
 ## 2. Tabela medida (mesma zona, players na mesma instância)
 
 Os números abaixo são UMA corrida de `tests/tick_capacity_test.gd` nesta máquina, não uma
@@ -96,7 +121,7 @@ Custo por player convivente, medido: <!-- DRIFT proc_marginal_us_per_player 221 
 340 µs — folga de +54% sobre o medido, escolhida acima do maior spread entre passadas
 e entre execuções que esta máquina mostrou. Passar dela é o gate vermelho.
 
-O teto, em degraus medidos: <!-- DRIFT proc_inside_rung_players 200 --> o último
+O teto, em degraus medidos: <!-- DRIFT proc_inside_rung_players 200 1 --> o último
 degrau **dentro do orçamento** foi 200 players (10 instâncias) num run com a máquina
 sob concorrência de outros agentes e 300 players (15) num run mais quieto; 400 players
 não coube em nenhum (**88,93 ms/passo, 20,52 Hz entregues** — aqui os três detectores
@@ -104,6 +129,14 @@ concordam: trabalho, período e passos-por-segundo de parede). O harness afirma
 `RÉGUA: >= 200 players conviventes dentro de 33,33 ms/passo` como fence e
 <!-- DRIFT proc_tick_ceiling_players 200 100 --> amarra o número da doc à medição com
 tolerância de ±100 players; regredir para 40/20 players fecha o gate.
+
+A âncora do degrau é **bilateral em degraus**, não em players: o segundo número do
+`DRIFT proc_inside_rung_players` é quantos degraus da escada o run pode ficar longe do
+que a doc afirma, nos **dois** sentidos. Um degrau é o spread que este parágrafo
+confessa (200 concorrido × 300 quieto). Dois degraus — 400, o dobro do prometido, ou
+40, uma quinta parte — são a doc errando o tamanho do servidor, e isso já passou verde
+quando a régua era só `medido >= afirmado`. A escada comparada é a que o próprio run
+andou, impressa na linha do gate; afrouxar a banda é editar este arquivo, e só.
 
 Extrapolação **declarada** (não é medição): a reta entre os dois degraus que cruzam o
 orçamento (10 e 15 instâncias, assumindo linearidade nesse trecho) cruza os 33,33 ms
@@ -122,19 +155,29 @@ compose — 5× acima do teto de tick, então quem vincula primeiro é o tick.
 
 Dois custos que a própria medição confessa: (i) o self-report da engine captura 68–85%
 da queima injetada de 4 ms/passo (por isso a fence de calibração é 60%, não 90%);
-(ii) `ERROR: Attempted to erase a variable of type 'int' into a TypedArray` impresso em
-`sources/actor/agent/variants/AIAgent.gd:64` acontece **dentro** do passo de física a
-cada ataque processado e está incluído nos custos acima — corrigi-lo só melhora o
-número, nunca piora, e o gate continua valendo porque é remedido.
+(ii) **histórico** — até 2026-09-28, `RemoveOldestAttacker` fazia `attackers.erase(0)`
+num `Array[Dictionary]`, e o `erase()` recebe VALOR, não índice: além de não remover
+nada, despejava um `ERROR: Attempted to erase a variable of type 'int' into a TypedArray`
+por ataque processado, **dentro** do passo de física. A tabela acima foi medida com essa
+queima dentro, e ela continua aqui de propósito: hoje o código é
+`attackers.pop_front()` depois da ordenação (`sources/actor/agent/variants/AIAgent.gd:62-68`,
+linhas 64-66 são o comentário que conta esta história), então o número publicado é
+**conservador** — remover a queima só barateou o passo, e o gate continua valendo porque
+é remedido a cada passada, não porque a correção foi credibilidade antecipada.
 
-Reproduz (a última linha é `== RESULT: 150 checks, 0 failures ==`):
+Reproduz com o runner sancionado:
 
 ```bash
-cd /mnt/dados/Projetos/shambleta
-mkdir -p /tmp/instmeasure/data /tmp/instmeasure/cache
-env XDG_DATA_HOME=/tmp/instmeasure/data XDG_CACHE_HOME=/tmp/instmeasure/cache \
-  stdbuf -oL -eL timeout 900 godot --headless --path . -s tests/multi_instance_tick_test.gd 2>&1 | tail -30
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/test.sh one multi_instance_tick_test
 ```
+
+Rodar o godot cru (`godot --headless --path . -s tests/multi_instance_tick_test.gd`) é
+exatamente o que o `boot_guard` de `scripts/test.sh` recusa: dois processos escrevendo
+no mesmo WAL é o SIGSEGV de 2026-09-28, e um verde obtido por atalho não é o verde do
+portão. A última linha do gate é o `== RESULT: <N> checks, <M> failures ==` do próprio
+harness; o `<N>` não é transcrito aqui de propósito — essa contagem vive na linha de
+resultado do harness e regravá-la neste arquivo é o número que mente no commit seguinte.
 
 
 ## 4. O que limita, no código
@@ -177,22 +220,22 @@ env XDG_DATA_HOME=/tmp/instmeasure/data XDG_CACHE_HOME=/tmp/instmeasure/cache \
 ## 5. Remedir
 
 ```bash
-cd /mnt/dados/Projetos/shambleta
-mkdir -p /tmp/scale-fix/.data /tmp/scale-fix/.cache
-env XDG_DATA_HOME=/tmp/scale-fix/.data XDG_CACHE_HOME=/tmp/scale-fix/.cache \
-  stdbuf -oL -eL timeout 300 godot --headless --path . -s tests/tick_capacity_test.gd 2>&1 | tail -20
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/test.sh one tick_capacity_test
 ```
 
-A última linha útil é `== RESULT: 32 checks, 0 failures ==`, precedida de
-`== TABELA (deploy/SCALING.md) ==` com as quatro linhas do §2 — copie-as para cá
-se re-meçar. O harness se auto-valida: falha se o tick não for 30 Hz, se a queima
+O runner sancionado existe porque godot cru sobre o mesmo WAL é justamente o processo
+estrangeiro que o `boot_guard` de `scripts/test.sh` recusa — e um verde obtido por
+atalho não é o verde do portão. A última linha é o `== RESULT: <N> checks, <M>
+failures ==` do harness (o `<N>` mora na linha de resultado dele, não neste arquivo),
+precedida de `== TABELA (deploy/SCALING.md) ==` com as quatro linhas do §2 — re-meçar é
+reescrever a tabela a partir do que aquele bloco imprime, nunca de memória. O harness se auto-valida: falha se o tick não for 30 Hz, se a queima
 injetada não aparecer no trabalho medido, se o período não reagir à sobrecarga
 injetada, se a série não for monotônica ou se o piso/instância-cheia não caberem
 no orçamento. Capacidade de instância (o cap de 20):
 
 ```bash
-env XDG_DATA_HOME=/tmp/scale-fix/.data XDG_CACHE_HOME=/tmp/scale-fix/.cache \
-  stdbuf -oL -eL timeout 300 godot --headless --path . -s tests/shard_capacity_test.gd 2>&1 | tail -5
+bash scripts/test.sh one shard_capacity_test
 ```
 
 ## 6. Pendentes, declarados
@@ -275,17 +318,29 @@ mesma zona): **uma statement por
 entra na curva de 0,206 ms/player/passo do §2. Para conferir com as próprias mãos:
 
 ```bash
-mkdir -p .test-home/presence/data .test-home/presence/cache
-env XDG_DATA_HOME="$PWD/.test-home/presence/data" XDG_CACHE_HOME="$PWD/.test-home/presence/cache" \
-  stdbuf -oL -eL timeout 300 godot --headless --path . -s tests/presence_fuzz.gd 2>&1 | tail -3
+cd "$(git rev-parse --show-toplevel)"
+bash scripts/test.sh one presence_fuzz
 ```
 
 O que **NÃO** mudou, declarado porque é exatamente o que este número não prova:
 
-- **Um escritor só.** Nada aqui distribui escrita: a `queryMutex` de
-  `sources/sql/SQL.gd:7` continua sendo o único funil de escrita, e o §12 da auditoria
-  falava de presença *compartilhada*, não de shard com dois escritores. A régua disso
-  está no harness: `presence_session` só pode aparecer em frases SQL de
+- **Um escritor só — com duas origens de valor.** A `queryMutex` de
+  `sources/sql/SQL.gd:7` continua sendo o único funil de *statement*: nada no repo
+  escreve sem passar por ela (`Query`, `QueryBindings`, `ExecuteBindings` e
+  `Transaction` são os quatro caminhos que a pegam; as escritas cruas de `db.*`
+  vivem atrás de `Transaction()`, e `scripts/check_write_funnel.sh` é a régua que
+  census isso com controles plantados). Mas `stat.gp` tem DUAS origens de valor, e
+  o texto anterior escondia isso atrás de "único funil": o agente carregado, cujo
+  ouro de farm só desce ao banco no passe de 600 s, e o kernel
+  (`EconomyKernel._MoveGoldLocked`), que grava direto para loja, forja, guilda,
+  copa, boss, streak, checkout e leilão. Enquanto o snapshot daquele passe foi
+  ABSOLUTO (`"gp" = stats.gp` em `SQL.UpdateStat`), a segunda origem era apagada
+  pela primeira: débito do vendor que volta a existir com o item no bolso, crédito
+  de grant que desaparece. Desde a WorkOrder #88 o `gp` saiu do dicionário absoluto
+  de `SQL.UpdateStat` e é gravado como DELTA por `SQL.FlushGoldDelta` — as duas
+  origens compõem. O §12 da auditoria falava de presença *compartilhada*, não de
+  shard com dois escritores. A régua de presença está no harness:
+  `presence_session` só pode aparecer em frases SQL de
   `sources/network/server/Presence.gd`, e os ganchos são contados nos fontes
   (`Server.gd` reporta 2× e esquece 1×, `World.gd` faz o tick, `SQL.gd` reclama o
   `server_id`).

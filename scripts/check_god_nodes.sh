@@ -59,10 +59,31 @@ RATCHET_SLACK=200
 # `pass.s2` precisa existir também no espelho `DEFAULT_CATALOG` deste monolito — o
 # boot recusa temporada cujo `premium_sku` não é cobrável nos quatro catálogos (pass
 # M3). Quatro linhas de catálogo, teto +150 pela mesma banda "medido + folga".
+# Exceção registrada: `sources/network/server/Server.gd` subiu de 1965 para 1971 em
+# 2026-09-29 (#86, cota de RPC no caminho de RECEBIMENTO). São SEIS linhas e cada uma é
+# um guard de uma linha na primeira linha do handler, chamando o módulo novo
+# `sources/network/server/RateLimit.gd` — não é código de limiter dentro do monolito
+# (o monolito paga só o ponto de chamada, e a cobertura é presa por régua em
+# tests/rpc_receive_budget_test.gd, que exige guard em todo handler com difusão ou
+# chamado com `DelayInstant`). O teto vai no valor exato medido: sem folga para
+# crescimento silencioso, e quem precisar de mais linha sobe o teto com o motivo aqui.
+# Exceção registrada: `sources/sql/SQL.gd` subiu de 1814 para 1842 em 2026-09-29
+# (ondas #81–#104, endurecimento server-authoritative) com 34 linhas de guards de
+# admissão/ledger no funil. São leitura de decisão, não crescimento silencioso: o teto
+# vai no valor exato medido.
+# Exceção registrada: `sources/economy/AuctionHouseService.gd` (1258) e
+# `sources/economy/CheckoutService.gd` (923) saíram debaixo do teto duro de 800 porque
+# as ondas #81–#104 acrescentaram os controles de wash do leilão (migration
+# `data/conf/migrations/063_ah_wash_controls.sql`) e o pré-autorizado do checkout
+# (coberto por `tests/preauth_ledger_test.gd`). São escritas sancionadas no funil, não
+# god-node novo; entram na allowlist com o teto no valor exato medido, e a próxima
+# passada que os encolher tem de baixar o teto pela mesma banda.
 declare -A RATCHET=(
-  ["sources/network/server/Server.gd"]=1965
+  ["sources/network/server/Server.gd"]=1971
   ["sources/world/WorldCommands.gd"]=1925
-  ["sources/sql/SQL.gd"]=1814
+  ["sources/sql/SQL.gd"]=1842
+  ["sources/economy/AuctionHouseService.gd"]=1258
+  ["sources/economy/CheckoutService.gd"]=923
   ["sources/network/client/Client.gd"]=1139
   ["sources/network/Network.gd"]=1277
   ["companion/server.py"]=2222

@@ -53,16 +53,18 @@ func DeleteAccount(peerID : int):
 	Network.AccountErased(peerID)
 	DisconnectAccount(peerID)
 
-# SOM-IDLE (1d) CDC art.49: reembolso de gem (dono logado). EconomyService decide
-# (janela 7d / gems não gastas / já reembolsado) e reverte o saldo + ledger.
+# SOM-IDLE (1d) CDC art.49: reembolso da compra à distância (dono logado), qualquer
+# SKU. EconomyService decide (janela 7d / gems não gastas / já reembolsado), reverte
+# o dinheiro na moeda do SKU e revoga o direito que a compra deu (VIP, premium do
+# passe, posse de cosmético) — work order #97.
 func RequestRefund(idempotencyKey : String, peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	if accountID == NetworkCommons.PeerUnknownID:
 		Network.RefundResult({"ok" = false, "reason" = "not_authenticated"}, peerID)
 		return
-	var result : Dictionary = Launcher.Economy.RequestGemRefund(accountID, idempotencyKey)
+	var result : Dictionary = Launcher.Economy.RequestPurchaseRefund(accountID, idempotencyKey)
 	if result.get("ok", false):
-		Util.PrintLog("Economy", "LGPD/CDC: refund granted account %d key %s amount %d" % [accountID, idempotencyKey, int(result.get("amount", 0))])
+		Util.PrintLog("Economy", "LGPD/CDC: refund granted account %d key %s amount %d revoked %s" % [accountID, idempotencyKey, int(result.get("amount", 0)), str(result.get("revoked", []))])
 	Network.RefundResult(result, peerID)
 
 func LoginWithPassword(accountName : String, password : String, rememberMe : bool, platform : int, peerID : int):
@@ -1606,6 +1608,7 @@ func SetClickPos(pos : Vector2, peerID : int):
 		player.WalkToward(pos)
 
 func SetMovePos(direction : Vector2, peerID : int):
+	if not RateLimit.Charge(peerID, "SetMovePos"): return	# #86: `DelayInstant` não é "sem cota"
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player and not player.ownScript:
 		IdlePolicyService.NoteActivity(player)
@@ -1618,6 +1621,7 @@ func ClearNavigation(peerID : int):
 		player.SetRelativeMode(false, Vector2.ZERO)
 
 func SetViewportSize(halfWidth : float, halfHeight : float, peerID : int):
+	if not RateLimit.Charge(peerID, "SetViewportSize"): return	# #86: recálculo de visibilidade também se compra
 	var agent : PlayerAgent = Peers.GetAgent(peerID)
 	if agent:
 		agent.visibilityHalfSize = Vector2(
@@ -1637,11 +1641,13 @@ func TriggerRespawn(peerID : int):
 		player.Respawn()
 
 func TriggerEmote(emoteID : int, peerID : int):
+	if not RateLimit.Charge(peerID, "TriggerEmote"): return	# #86: cota no recebimento, não no cliente
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player is PlayerAgent:
 		Network.NotifyNeighbours(player, "Emote", [player.get_rid().get_id(), emoteID])
 
 func TriggerChat(channelName : String, text : String, peerID : int):
+	if not RateLimit.Charge(peerID, "TriggerChat"): return null	# #86: difusão comprada no recebimento
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
 		# SOM-IDLE C1: o texto segue pelo caminho de disseminação (vizinhos,
@@ -1778,6 +1784,7 @@ func RetrieveCharacterInformation(peerID : int):
 
 # Commands
 func TriggerCommand(command : String, peerID : int):
+	if not RateLimit.Charge(peerID, "TriggerCommand"): return	# #86: comando é trabalho no servidor
 	var player : PlayerAgent = Peers.GetAgent(peerID)
 	if player:
 		CommandManager.Handle(player, command)
@@ -1816,6 +1823,7 @@ func DisconnectPeer(peerID : int):
 	FullyDisconnect(peerID)
 
 func FullyDisconnect(peerID : int):
+	RateLimit.Forget(peerID)	# #86: peerID é reciclado; a cota do antecessor não passa adiante
 	Util.PrintInfo("Server", "Peer disconnected: %d" % peerID)
 	var peer : Peers.Peer = Peers.GetPeer(peerID)
 	if peer and peer.accountID != NetworkCommons.PeerUnknownID:

@@ -67,9 +67,38 @@ jobs:
           mkdir -v -p ~/.config/
           cp -r /root/.config/godot ~/.config/godot
           cp -r /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-          echo "$DEBUG_KEYSTORE" | base64 -d > /root/debug.keystore
+
+      # Finding #84 (2026-09-29): os dois blocos abaixo assinavam o APK DE RELEASE
+      # com o par de chaves de DEBUG do Android — `/root/debug.keystore`, alias
+      # `androiddebugkey`, senha `android`. Essa chave é pública: está no AOSP e
+      # qualquer um que checar este repo regenera o mesmo keystore e assina o mesmo
+      # código. Não é "assinado por nós" — é assinado por ninguém, e a loja/Play
+      # App signing só esconde isso até alguém comparar as assinaturas.
+      # Desde então: o keystore vem de secret, o job FALHA quando o secret falta
+      # (recusar publicar é o comportamento correto; cair em debug é a doença), e
+      # `scripts/check_ci.sh` tem uma régua que reprovou este arquivo exato antes de
+      # ele ser consertado (canário M6 na saída do gate).
+      - name: Require the real release keystore (Android)
+        if: matrix.name == 'Android'
+        run: |
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ] || [ -z "$RELEASE_KEYSTORE_ALIAS" ] || [ -z "$RELEASE_KEYSTORE_PASSWORD" ]; then
+            echo "::error::keystore de release ausente nos secrets (SECRET_RELEASE_KEYSTORE_BASE64 + SECRET_ANDROID_KEYSTORE_ALIAS + SECRET_ANDROID_KEYSTORE_PASSWORD). Assinar release com a debug key do Android está recusado — ela é pública. Configure os três secrets ou tire Android da matrix de release."
+            exit 1
+          fi
+          KEYSTORE="$RUNNER_TEMP/shambleta-release.keystore"
+          # RUNNER_TEMP é escrita fora do container (HOME=/github/home é efêmera e o
+          # passo de export roda no mesmo job), com permissão só para o runner.
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          # Conferir o alias AQUI: sem isto o erro aparece seis minutos depois,
+          # dentro do `--export-release`, misturado com log de export.
+          keytool -list -keystore "$KEYSTORE" -storepass "$RELEASE_KEYSTORE_PASSWORD" -alias "$RELEASE_KEYSTORE_ALIAS" >/dev/null
+          echo "ANDROID_RELEASE_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "ANDROID_RELEASE_KEYSTORE_ALIAS=$RELEASE_KEYSTORE_ALIAS" >> "$GITHUB_ENV"
         env:
-          DEBUG_KEYSTORE: ${{ secrets.SECRET_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.SECRET_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_ALIAS: ${{ secrets.SECRET_ANDROID_KEYSTORE_ALIAS }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.SECRET_ANDROID_KEYSTORE_PASSWORD }}
 
       - name: Enable production feature
         run: |
@@ -104,9 +133,11 @@ jobs:
           cd "$PROJECT_PATH"
           godot --headless --export-release "${{ matrix.export_template }}" "build/${{ matrix.name }}/${{ matrix.outname }}.${{ matrix.ext }}"
         env:
-          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: /root/debug.keystore
-          GODOT_ANDROID_KEYSTORE_RELEASE_USER: androiddebugkey
-          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: android
+          # Os três valores vêm do passo acima, que só existe quando o secret existe
+          # e que falha o job quando não existe. Não há mais caminho de debug aqui.
+          GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ env.ANDROID_RELEASE_KEYSTORE }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ env.ANDROID_RELEASE_KEYSTORE_ALIAS }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.SECRET_ANDROID_KEYSTORE_PASSWORD }}
 
       - name: Upload Artifact - ${{ matrix.name }}
         uses: actions/upload-artifact@v5
@@ -114,9 +145,50 @@ jobs:
           name: ${{ matrix.name }}
           path: build/${{ matrix.name }}
 
+  # Finding #83 (2026-09-29): este workflow era disparado à mão e não tinha UM job
+  # de teste — `snap` publicava no canal `candidate` e `release` abria a GitHub
+  # Release com `needs: builds` como único antecedente, e `builds` só exporta. A
+  # régua antiga (scripts/check_ci.sh:190) chamava isso de gate porque aceitava
+  # QUALQUER `needs`. A de agora exige que o fecho transitivo de `needs` de todo job
+  # que publica contenha um job que rode testes de verdade — e este job é a porta
+  # deles: o MESMO `scripts/test.sh all` que roda localmente, contra o commit
+  # exato que virou release (`ref: github.sha` em todo checkout daqui).
+  tests:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.1
+    name: Tests for the released commit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          lfs: true
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y libfontconfig1 unzip
+
+      - name: Import assets
+        run: |
+          cd "$PROJECT_PATH"
+          godot --headless --editor --import --quit
+
+      - name: Run the whole gate on the commit being released
+        run: |
+          cd "$PROJECT_PATH"
+          # Nenhuma lista de gates copiada aqui: `all` chama structure_gates() +
+          # idle + rpc + backup + benchmarks + a suíte descoberta + companion, que é
+          # exatamente o que um humano roda antes de dizer "está verde". O veredito é
+          # a saída do test.sh, não um resumo escrito neste passo.
+          bash scripts/test.sh all
+
   snap:
     runs-on: ubuntu-latest
-    needs: builds
+    needs:
+      - builds
+      - tests
     name: Pack and Publish Snap
     steps:
       - name: Checkout
@@ -144,7 +216,9 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: builds
+    needs:
+      - builds
+      - tests
     name: Tag and Release
     steps:
       - name: Checkout

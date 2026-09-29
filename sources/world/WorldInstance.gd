@@ -25,9 +25,15 @@ func _physics_process(delta : float):
 	# decisions fired at wall-clock speed while combat starved with the steps).
 	# The real-time probe now measures kills/game-hour on ONE clock.
 	if Launcher.World != null and not idlePolicies.is_empty():
+		# Orçamento de passo (sources/launcher/Launcher.gd): o pump é cronometrado aqui
+		# porque este é o sítio onde o tick do server de fato gasta tempo com player
+		# dentro do processo. O tempo vai para o acumulador do processo e sai pelo
+		# /metrics — ver a declaração de cobertura em Launcher.gd.
+		var pumpedUs : int = Time.get_ticks_usec()
 		for policy in idlePolicies:
 			if policy and is_instance_valid(policy.agent):
 				policy.Tick(delta)
+		Launcher.AccumulateStepWork(Time.get_ticks_usec() - pumpedUs)
 
 # SOM-IDLE: F2 — register/unregister helpers for player policies
 func AttachIdlePolicy(policy : IdlePolicy):

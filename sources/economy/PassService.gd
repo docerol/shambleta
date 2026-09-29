@@ -25,11 +25,11 @@ class_name PassService
 # Semanais (3/semana). W3 conta qualquer sink de gems; W5 aceita level-up OU
 # 3 depósitos (sem vault de gold no jogo).
 #
-# OPS-2 (2026-09-27): as TRILHAS do passe deixaram de ser constants do código e
-# passaram a poder ser declaradas pela temporada vigente em
-# `data/conf/seasons.json` (`pass_tiers`). Nada aqui mudou de REGRA: quando o
-# arquivo não declara trilha para a temporada da linha, continua valendo o
-# `EconomyCatalog` (que é o que todas as linhas existentes no banco veem hoje). A
+# OPS-2 (2026-09-27): as TRILHAS do passe passaram a poder ser declaradas pela
+# temporada vigente em `data/conf/seasons.json` (`pass_tiers`); desde 2026-09-29
+# a S1 — a temporada que está no ar — declara a sua, espelhando o catálogo. Nada
+# aqui mudou de REGRA: sem trilha declarada para a temporada da linha vale o
+# `EconomyCatalog`, o default que a curva do passe sempre usou. A
 # curva de PT, o custo do skip e o valor das missões ficam no catálogo de
 # propósito — são uma regra só prometida no beta, e curva por temporada com uma
 # coluna `season_account_state.pt` compartilhada criaria duas escalas de nível

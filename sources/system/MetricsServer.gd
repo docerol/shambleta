@@ -258,6 +258,11 @@ func MetricsBody() -> String:
 	body += "# HELP shambleta_migration_last_failed_patch índice 0-based do patch travado; -1 = nenhum.\n"
 	body += "# TYPE shambleta_migration_last_failed_patch gauge\n"
 	body += "shambleta_migration_last_failed_patch %d\n" % migrationFailedPatch
+	# ORÇAMENTO DE PASSO: a grandeza que faltava. Até aqui este `/metrics` media
+	# espera de mutex e nada confessava o custo do passo do laço de 30 Hz — o
+	# alerta de "o servidor perdeu o tick" não podia existir porque o número não
+	# saía do processo (ver a declaração de cobertura em sources/launcher/Launcher.gd).
+	body += StepBudgetLines(Launcher.StepBudgetSnapshot())
 	# OPS-4: o funil diário e a agenda de live ops entram AQUI porque este é o
 	# único leitor dos dois dentro do processo de jogo. Uma métrica que nada serve
 	# é uma métrica que ninguém pagina — `FunnelDaily`/`FunnelGaugeLines` e
@@ -266,8 +271,75 @@ func MetricsBody() -> String:
 	# nomes do `tests/deploy_ops_test.gd` (que lê este corpo) não se move.
 	body += _funnelSection()
 	body += _liveOpsSection()
+	# CENSO de kinds (AUDITORIA rodada 3, analytics): todo kind que o fonte escreve
+	# tem que ter uma linha SERVIDA aqui, senão o leitor é código morto e o dashboard
+	# volta a achar que mede. É o mesmo motivo pelo qual `_funnelSection()` entrou:
+	# o corpo do /metrics é o único leitor dos dois dentro do processo de jogo.
+	# `tests/telemetry_census_test.gd` amarra os três lados (escritos × declarados ×
+	# servidos) e planta um kind sem consumidor para provar que a régua morde.
+	body += _telemetryKindSection()
 	metricsCache = body
 	metricsCacheAt = now
+	return body
+
+# Um histograma Prometheus: baldes CUMULATIVOS (`le`), soma e contagem. O par
+# soma+contagem é o que permite derivar a média; a média sozinha é exatamente o
+# que a régua recusa (um passo de 120 ms congelando o jogador desaparece numa
+# média de 8 ms), por isso o bloco vai junto do contador de estouro abaixo.
+static func _StepHistogramLines(prefix : String, help : String, boundsUs : Array,
+		buckets : Array, sumUs : int, count : int, maxUs : int) -> String:
+	var body : String = ""
+	body += "# HELP %s %s\n" % [prefix, help]
+	body += "# TYPE %s histogram\n" % prefix
+	for bound in boundsUs.size():
+		body += "%s_bucket{le=\"%.6f\"} %d\n" % [prefix, float(boundsUs[bound]) / 1000000.0, int(buckets[bound])]
+	body += "%s_bucket{le=\"+Inf\"} %d\n" % [prefix, count]
+	body += "%s_sum %.6f\n" % [prefix, float(sumUs) / 1000000.0]
+	body += "%s_count %d\n" % [prefix, count]
+	body += "# HELP %s_max segundos do passo mais longo amostrado desde o boot; os buckets dão a forma da cauda, este dá o pior caso real.\n" % prefix
+	body += "# TYPE %s_max gauge\n" % prefix
+	body += "%s_max %.6f\n" % [prefix, float(maxUs) / 1000000.0]
+	return body
+
+# As linhas do orçamento de passo. Pura (estado entra, texto sai) de propósito: é
+# o que permite a `tests/step_budget_metric_test.gd` conferir o balde, a ordem
+# cumulativa e o `+Inf` com passos sintéticos, sem depender da máquina estar
+# lenta no minuto do run.
+static func StepBudgetLines(state : Dictionary) -> String:
+	var steps : int = int(state.get("steps", 0))
+	# Indisponível NÃO é zero: um processo que ainda não fechou uma fronteira de
+	# física não tem o que confessar, e emitir `0 ms`/`0 passos` inventaria um verde
+	# para quem scrapeia (é a casa tratando ausência como ausência — mesmo motivo do
+	# `shambleta_reconcile_age_seconds = -1` e do funil que devolve "").
+	if steps <= 0:
+		return ""
+	var budgetUs : int = int(state.get("budgetUs", 0))
+	var boundsUs : Array = state.get("bucketUs", [])
+	var body : String = ""
+	body += _StepHistogramLines("shambleta_step_period_seconds",
+		"Período de parede entre duas fronteiras do laço de física deste processo, por passo. É a grandeza que responde \"o tick de 30 Hz foi cumprido\": vale também com o pump das instâncias desligado. Quando o engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê curta — o déficit acumulado é shambleta_step_lost_total, não esta série. Cobertura: do boot deste processo até agora, sem reset (reiniciar zera o counter). Média = _sum/_count; a cauda é o que a régua lê.",
+		boundsUs, state.get("periodBuckets", []), int(state.get("periodSumUs", 0)), steps, int(state.get("periodMaxUs", 0)))
+	body += _StepHistogramLines("shambleta_step_work_seconds",
+		"Tempo gasto pelo pump de idle policies das WorldInstance dentro de um passo (soma das instâncias do processo, Time.get_ticks_usec() no sítio do tick). NÃO é o passo inteiro: BaseAgent._physics_process, PhysicsServer2D e navegação ficam fora — é a fração que escala com player co-residente. Cobertura: mesmo processo, mesmo boot; sem instância com policy rodando o trabalho é 0 de verdade (o passo ainda é amostrado pela grandeza de período).",
+		boundsUs, state.get("workBuckets", []), int(state.get("workSumUs", 0)), steps, int(state.get("workMaxUs", 0)))
+	body += "# HELP shambleta_step_budget_seconds Orçamento de um passo de física deste processo (1/ServerMaxFPS), o número que as duas réguas abaixo comparam.\n"
+	body += "# TYPE shambleta_step_budget_seconds gauge\n"
+	body += "shambleta_step_budget_seconds %.6f\n" % (float(budgetUs) / 1000000.0)
+	# O par que a regra de alerta lê. Fração, não contagem absoluta: 3 passos de 40 ms
+	# numa janela não é incidente, 5% de TODOS os passos é — e é a cauda, nunca a
+	# média, que decide se o jogador sentiu.
+	body += "# HELP shambleta_step_over_budget_total Passos cujo período de parede passou do orçamento MAIS a folga do throttle (shambleta_step_budget_tolerance_seconds), contados desde o boot. Predícado medido, não escolhido: sem folga o próprio sleep do engine conta como estouro (piso ocioso mede 33,61 ms contra 33,33 ms de orçamento).\n"
+	body += "# TYPE shambleta_step_over_budget_total counter\n"
+	body += "shambleta_step_over_budget_total %d\n" % int(state.get("overBudget", 0))
+	body += "# HELP shambleta_step_lost_total Atraso acumulado, em passos de física, que este processo deixou de entregar desde o boot (Engine.get_physics_frames() contra o tempo de parede). Diferente de over_budget: aqui o tick não só estourou como não foi recuperado — é o número que confessa \"o mundo anda mais devagar que 30 Hz\".\n"
+	body += "# TYPE shambleta_step_lost_total counter\n"
+	body += "shambleta_step_lost_total %d\n" % int(state.get("lost", 0))
+	body += "# HELP shambleta_steps_measured_total Passos de física amostrados por este processo desde o boot; é o denominador da fração de estouro.\n"
+	body += "# TYPE shambleta_steps_measured_total counter\n"
+	body += "shambleta_steps_measured_total %d\n" % steps
+	body += "# HELP shambleta_step_budget_tolerance_seconds Folga do predícado de estouro, em segundos (PeriodToleranceMs medido em tests/tick_capacity_test.gd).\n"
+	body += "# TYPE shambleta_step_budget_tolerance_seconds gauge\n"
+	body += "shambleta_step_budget_tolerance_seconds %.6f\n" % (float(int(state.get("toleranceUs", 0))) / 1000000.0)
 	return body
 
 # O serviço de telemetria, com seam para harness (o autoload só é alcançável
@@ -293,6 +365,18 @@ func _funnelSection() -> String:
 		return ""
 	funnelSectionCalls += 1
 	return tele.FunnelGaugeLines(FunnelWindowDays)
+
+# Censo de kinds de `telemetry_event` na mesma janela do funil: um gauge por kind
+# declarado pelo leitor. Mesma trava do bloco acima — sem anexo, o cálculo de
+# `KindCoverageSummary` é código morto e o kind escrito sem consumidor segue
+# invisível. "" sem SQL pronto ou sem serviço: ausência visível no scrape.
+func _telemetryKindSection() -> String:
+	if Launcher.SQL == null or not Launcher.SQL.isInitialized:
+		return ""
+	var tele : TelemetryService = _telemetry()
+	if tele == null:
+		return ""
+	return tele.KindCoverageGaugeLines(FunnelWindowDays)
 
 # O estado da agenda declarativa de live ops (sources/ops/LiveOpsCalendar.gd).
 # Leitura pura de arquivo com cache de 60 s, sem banco: sempre responde, e o

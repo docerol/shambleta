@@ -369,7 +369,7 @@ func _suitePureClient() -> void:
 		return
 	Callable(panel, "SetLocalIDs").call(0, 0)
 	# B re-entra PELO SERVIDOR antes das pernas do painel. Não é enfeite: com um único
-	# membro, o `LeaveGuild` do produto DISSOLVE a guilda (`GuildService.gd:114`) e as
+	# membro, o `LeaveGuild` do produto DISSOLVE a guilda (`GuildService.gd:124`) e as
 	# quatro pernas seguintes estariam medindo um cadáver — reentrar numa guilda apagada
 	# dá `false` pelo motivo errado.
 	_openSession(acctB, charB, authPeer)
@@ -391,7 +391,7 @@ func _suitePureClient() -> void:
 	CheckEq(_memberRow(guildID, acctB), 1, "cliente puro: JoinGuildByID re-entra B na guild")
 	Check(int(eco.call("GetGuildForAccount", acctB)) == guildID, "e o service confirma a filiação no banco")
 	# Depósito e saque na pessoa do LÍDER: `WithdrawFromVault` exige `leader|officer`
-	# (`GuildService.gd:180`), e um member comum sacando aqui mediria a exceção de rank,
+	# (`GuildService.gd:196`), e um member comum sacando aqui mediria a exceção de rank,
 	# não a perna de escrita que este bloco promete.
 	_openSession(acctA, charA, authPeer)
 	suites.call("_SetInventory", sql, charA, apple, 40)

@@ -30,6 +30,13 @@
 #   M3 trocar a conclusão do `workflow_run` por `always()`-> 1 falha (deploy-staging)
 #   M4 preset inexistente na matrix (`"macOS"` -> `"macOS X"`) -> 1 falha
 #   M5 artefato baixado sem produtor no needs (`Linux` -> `LinuxX`) -> 1 falha
+# M6..M10 (findings #83/#84/#89, 2026-09-29) deixaram de ser mutação manual: os
+# canários C0..C10 no fim deste arquivo plantam a recaída numa CÓPIA dos workflows
+# (mktemp + `SHAMBLETA_WF_DIR`/`SHAMBLETA_DOCKERFILE`, com corte de recursão por
+# `SHAMBLETA_CI_NO_CANARY`) e rodam este mesmo script contra ela, exigindo falha
+# vermelha que nomeie a regra que pegou o mutante. C0 confere que o override não muda o veredito da árvore
+# real, e um `replace` cuja âncora sumiu é denunciado como canário cego — não como
+# verde.
 # M1 só passou a existir porque a primeira versão da regra procurava `exit 1` no
 # texto do step, e o comentário do step cita `exit 1`: o gate ficou VERDE com a
 # guarda arrancada. Régua lendo prosa não é régua — daí `code_of()` e o
@@ -41,7 +48,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PY="${PYTHON:-python3}"
-WDIR=".github/workflows"
+# Diretório de workflows e Dockerfile web são sobrescrevíveis SÓ para os canários
+# abaixo: uma régua de grafo que não pode ser apontada para uma cópia mutada não é
+# provável de estar viva, é só provável de estar verde. A árvore real nunca é
+# mutada por este script — os canários copiam, escrevem em $(mktemp -d) e cobram a
+# própria falha. Nada aqui muda o comportamento de quem roda sem o env.
+WDIR="${SHAMBLETA_WF_DIR:-.github/workflows}"
+SELF="$ROOT/scripts/check_ci.sh"
 
 [ -d "$WDIR" ] || { echo "[FAIL] não encontrei $WDIR"; echo "== CI GATE: 1 checks, 1 failures =="; exit 1; }
 $PY -c 'import yaml' 2>/dev/null || {
@@ -51,10 +64,11 @@ $PY -c 'import yaml' 2>/dev/null || {
 	exit 1
 }
 
-"$PY" - "$WDIR" <<'PYEOF'
-import os, re, sys, glob, yaml
+"$PY" - "$WDIR" "$SELF" <<'PYEOF'
+import os, re, sys, glob, yaml, subprocess, tempfile, shutil
 
 wdir = sys.argv[1]
+self_path = sys.argv[2] if len(sys.argv) > 2 else "scripts/check_ci.sh"
 checks = 0
 failures = 0
 
@@ -177,6 +191,77 @@ for path, doc in docs.items():
                   % (", ".join(sorted(producers.get(want, set()))) or "ninguém",
                      ", ".join(sorted(closure(doc, name))) or "ninguém"))
 
+# ---------------------------------------------------------------- o que é teste, o que é publicação
+# As duas classes abaixo decidem se um job pode ir ao ar, então as duas são lidas
+# do CÓDIGO EXECUTÁVEL do job (linhas de `run` descomentadas + `uses:`), nunca do
+# texto do workflow: a armadilha M1 deste arquivo é exatamente uma régua que achou
+# `exit 1` dentro do comentário que explicava o `exit 1` que tinha sido arrancado.
+def code_of(text):
+    # Régua que lê comentário é régua que acredita no que o autor escreveu: a
+    # primeira versão desta procurava `exit 1` no texto do step, e o rationale do
+    # próprio step cita `exit 1` — o gate ficou verde com a guarda arrancada
+    # (provado por mutação em 2026-09-27). Aqui só linha executável conta.
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+
+
+# Publicar = botar artefato fora do CI: store, release, registry, endpoint de
+# deploy. Detectado pelo `uses:`/comando do passo, não pelo nome do job (um job
+# chamado `snap` que só empacota não vai ao ar; um chamado `misc` que roda
+# `action-publish` vai).
+PUBLISH_RE = re.compile(r"(snapcore/action-publish|softprops/action-gh-release|actions/deploy-pages"
+                        r"|/api/v1/deploy|docker\s+push|aws\s+s3\s+cp|gh\s+release\s+create)")
+# Rodar teste = exercer a suíte, não exportar nem buildar. `scripts/test.sh` é a
+# porta local, `ci_gate_log.sh` o quádruplo de §24-8, `-s tests/` o harness de
+# Godot e `pytest`/`gate_py` as suítes do companion. Um job que só `--export-release`
+# não está aqui, e é exatamente por isso que `needs: builds` nunca foi gate.
+TEST_RE = re.compile(r"(scripts/test\.sh|ci_gate_log\.sh|godot[^\n]*\s-s\s+tests/|\bpytest\b|gate_py)")
+
+
+def job_code(doc, name):
+    job = (doc.get("jobs") or {}).get(name) or {}
+    parts = []
+    for step in job.get("steps") or []:
+        parts.append(code_of(str(step.get("run") or "")))
+        parts.append(str(step.get("uses") or ""))
+    return "\n".join(parts)
+
+
+def runs_tests(doc, name):
+    return bool(TEST_RE.search(job_code(doc, name)))
+
+
+def publishes(doc, name):
+    return bool(PUBLISH_RE.search(job_code(doc, name)))
+
+
+def tests_in_closure(doc, name):
+    """Jobs que RODAM TESTES dentro do fecho transitivo de `needs` de `name`."""
+    return sorted(j for j in closure(doc, name) if runs_tests(doc, j))
+
+
+# ---------------------------------------------------------------- finding #83: quem publica
+# precisa do fecho de needs de um job que roda teste de verdade
+# O defeito medido: `snap` (godot-ci.yml) publicava `release: edge` no push à master
+# com `needs: builds` — um job de export, sem um teste dentro — e a régua antiga
+# achava isso suficiente porque aceitava QUALQUER `needs` como gate. "Tem needs" não
+# é a pergunta; a pergunta é se o que tem antes de publicar MEDIR ALGO.
+for path, doc in docs.items():
+    for name in (doc.get("jobs") or {}):
+        if not publishes(doc, name):
+            continue
+        trig = triggers(doc)
+        raw = "\n".join(l for l in open(path).read().splitlines() if not l.lstrip().startswith("#"))
+        wf_guarded = ("workflow_run" in yaml.dump(trig)) and re.search(
+            r"workflow_run\.conclusion\s*==\s*'success'", raw)
+        tested = tests_in_closure(doc, name)
+        ok = bool(tested) or bool(wf_guarded)
+        check(ok,
+              "%s/%s: publica lá fora, então o fecho transitivo de `needs` tem de conter um job que rode testes"
+              % (os.path.basename(path), name),
+              "`needs:` (direto ou transitivo) apontando para um job com scripts/test.sh | ci_gate_log.sh | godot -s tests/ | pytest; ou workflow disparado por workflow_run com conclusão conferida",
+              "fecho=%s; jobs de teste no fecho=%s" % (", ".join(sorted(closure(doc, name))) or "vazio",
+                                                       ", ".join(tested) or "nenhum"))
+
 # ---------------------------------------------------------------- réguas externas: gate obrigatório
 CRED = re.compile(r"(COOLIFY_[A-Z_]*TOKEN|SNAPCRAFT_STORE_CREDENTIALS|STORE_CREDENTIALS)")
 for path, doc in docs.items():
@@ -187,16 +272,157 @@ for path, doc in docs.items():
         if not CRED.search(body):
             continue
         job_if = str((job or {}).get("if") or "")
-        gated = bool(needs_list(job or {})) or "success()" in job_if
+        # Finding #83, metade credencial: `bool(needs)` era a régua que deixava
+        # `snap: needs: builds` passar como "gated". Um segredo de store atrás de um
+        # needs sem teste é a mesma publicação com testes vermelhos, agora com
+        # credencial. A pergunta passa a ser a mesma de cima: o fecho roda teste?
+        tested = tests_in_closure(doc, name)
+        gated = bool(tested) or "success()" in job_if
         workflow_guarded = ("workflow_run" in yaml.dump(trig)) and re.search(
             r"workflow_run\.conclusion\s*==\s*'success'", raw)
         check(gated or bool(workflow_guarded),
-              "%s/%s: publica lá fora, então precisa de gate antes de rodar"
+              "%s/%s: usa credencial externa, então precisa de gate com teste antes de rodar"
               % (os.path.basename(path), name),
-              "`needs:` em job de teste, ou `if:` com success(), ou workflow disparado por workflow_run com conclusão conferida",
-              "needs=%s if=%r trigger=%s" % (needs_list(job or {}) or "-",
-                                             job_if or "-",
-                                             ",".join(k for k in (trig or {}) if k != "secrets") or "-"))
+              "`needs:` transitivo alcançando um job que roda testes, ou `if:` com success(), ou workflow disparado por workflow_run com conclusão conferida",
+              "needs=%s testes-no-fecho=%s if=%r trigger=%s" % (needs_list(job or {}) or "-",
+                                                                ", ".join(tested) or "nenhum",
+                                                                job_if or "-",
+                                                                ",".join(k for k in (trig or {}) if k != "secrets") or "-"))
+
+# ---------------------------------------------------------------- finding #84: release assinado
+# com a debug key do Android não é release assinado por nós
+# Medido em 2026-09-29: release.yml exportava o preset Android com `--export-release`
+# e apontava os três knobs de assinatura para `/root/debug.keystore`,
+# `androiddebugkey`, `android` — o par de chaves de debug do Android, que está no
+# AOSP e que qualquer pessoa que clone este repo regenera byte a byte. O APK sai
+# "de release" e é assinado por ninguém. A régua vale para todo job que roda
+# `--export-release` mexendo no Android; o job de `--export-debug` da godot-ci fica
+# de fora de propósito (ali debug é o que se pede, e não vai loja nenhuma).
+DEBUG_KEY_RE = re.compile(r"(debug\.keystore|androiddebugkey|storepass\s+android\b|keypass\s+android\b)")
+KS_KNOB_RE = re.compile(r"^GODOT_ANDROID_KEYSTORE_RELEASE_(PATH|USER|PASSWORD)$")
+KS_INLINE_RE = re.compile(r'GODOT_ANDROID_KEYSTORE_RELEASE_(PATH|USER|PASSWORD)=["\']?([^"\'\s;]*)')
+KS_GUARD_RE = re.compile(r'if \[ -z "\$\{?([A-Za-z0-9_]*KEYSTORE[A-Za-z0-9_]*)\}?"(.*?)\]; then(.*?)\n[ \t]*fi', re.S)
+
+for path, doc in docs.items():
+    for name, job in (doc.get("jobs") or {}).items():
+        code = job_code(doc, name)
+        if "--export-release" not in code:
+            continue
+        touches_android = ("GODOT_ANDROID_KEYSTORE_RELEASE" in code
+                           or "Android" in yaml.dump(job))
+        if not touches_android:
+            continue
+        label = "%s/%s: exporta RELEASE do Android" % (os.path.basename(path), name)
+        debug_hits = sorted({m.group(0) for m in DEBUG_KEY_RE.finditer(code)})
+        check(not debug_hits,
+              "%s: nenhuma referência à chave de debug do Android em linha executável" % label,
+              "nenhum `debug.keystore`/`androiddebugkey`/`storepass android` — a debug key é pública (AOSP) e assinar release com ela equivale a não assinar",
+              ", ".join(debug_hits))
+        # Os três knobs podem vir do `env:` de um step (dict, lido como dado) ou de
+        # uma atribuição inline no `run` (export). Um `env:` montado como texto teria
+        # o dict repr numa linha só e leria o valor do PATH como sobra de linha — é
+        # por isso que aqui o YAML parseado é consultado como estrutura.
+        ks_vals = {}
+        for s in (job or {}).get("steps") or []:
+            for k, v in ((s.get("env") or {}) or {}).items():
+                m = KS_KNOB_RE.match(str(k))
+                if m:
+                    ks_vals[m.group(1)] = str(v).strip()
+            for m in KS_INLINE_RE.finditer(code_of(str(s.get("run") or ""))):
+                ks_vals.setdefault(m.group(1), m.group(2))
+        for knob in ("PATH", "USER", "PASSWORD"):
+            val = ks_vals.get(knob)
+            if val is None:
+                # Sem o knob o Godot cai no default do preset; em release é
+                # exatamente o silêncio que gerou o defeito.
+                check(False, "%s: declara GODOT_ANDROID_KEYSTORE_RELEASE_%s" % (label, knob),
+                      "o knob declarado com valor vindo de secret/env", "ausente no job")
+                continue
+            from_expr = val.startswith("${{") and ("secrets." in val or "env." in val)
+            check(from_expr,
+                  "%s: GODOT_ANDROID_KEYSTORE_RELEASE_%s vem de secret (ou de um env escrito por um guarda), nunca de literal" % (label, knob),
+                  "`${{ secrets.… }}` ou `${{ env.… }}` exportado por um passo que falha sem o secret",
+                  "valor literal no workflow (%d caracteres, não impresso)" % len(val))
+        guards = [m for m in KS_GUARD_RE.finditer(code)]
+        armed = [m for m in guards if "exit 1" in m.group(3)]
+        check(bool(armed),
+              "%s: o job FALHA quando o secret do keystore falta (sem fallback)" % label,
+              "um `if [ -z \"$…KEYSTORE…\" ]; then … exit 1 … fi` em linha executável",
+              "guardas encontradas=%d, com exit 1=%d" % (len(guards), len(armed)))
+
+# ---------------------------------------------------------------- finding #89: o nginx.conf tem
+# de ser validado pelo nginx, em algum lugar que rode
+# O par defeito/mentira medido: `deploy/web/Dockerfile` fazia `COPY deploy/web/nginx.conf`
+# sem `nginx -t`, e `tests/nginx_hardening_test.gd:570-574`, quando não havia binário
+# no host, passava a GREPAR no próprio conf a frase que diz que a validação é de build.
+# Ou seja: o harness virou leitor de documentação, e o verde significava "o arquivo
+# afirma que alguém valida" — ninguém validava. O fecho tem duas metades, e as duas
+# são código:
+#   (a) o build da imagem roda `nginx -t` (uma imagem que existe foi validada);
+#   (b) a CI tem um job/step que roda `nginx -t` na IMAGEM BUILDADA, não no host —
+#       é a única parte que sobrevive a um runner sem nginx e é por isso que a
+#       ausência de binário local é SKIP NOMEADO, nunca `[ok]`.
+def command_code(code):
+    # Linha que só IMPRIME texto não executa nada. Sem este filtro, um passo cujo
+    # `echo "::error::…"` cite a própria commanda pelo nome engana a régua: foi o
+    # que aconteceu com a de `nginx -t` (a mensagem de erro do passo contém a
+    # frase) e o canário C6 ficou verde com o `-t` arrancado. O filtro é aplicado
+    # SÓ onde a frase é uma palavra de comando; a detecção de publicação/deploy lê
+    # inclusive URLs dentro de aspas (staging.yml), e por isso não passa por aqui.
+    return "\n".join(l for l in code.splitlines()
+                     if not re.match(r'^(echo|printf|print|console\.log)\b', l.strip()))
+
+
+DOCKERFILE_WEB = os.environ.get("SHAMBLETA_DOCKERFILE", "deploy/web/Dockerfile")
+df_text = open(DOCKERFILE_WEB).read() if os.path.exists(DOCKERFILE_WEB) else ""
+df_code = code_of(df_text)
+check(bool(df_text), "%s: existe para a régua de validação do nginx" % DOCKERFILE_WEB,
+      "arquivo presente", "ausente")
+check(bool(re.search(r"RUN[^\n]*\bnginx\b[^\n]*\s--?(t|test)\b", df_code)),
+      "%s: o build valida o conf com `nginx -t` (COPY sem validação = deploy que quebrar no boot)" % DOCKERFILE_WEB,
+      "uma linha `RUN nginx -t` executável", "nenhuma")
+nginx_validators = []
+for path, doc in docs.items():
+    for name in (doc.get("jobs") or {}):
+        code = command_code(job_code(doc, name))
+        # `-t` pode vir depois de argumentos (a imagem entra entre o binário e a
+        # flag: `nginx "shambleta/web:tag" -t`). Exigir o par nginx+flag NA LINHA
+        # do comando, não colados: foi a regex colada que deixou o passo real da
+        # CI invisível até o canário C6 denunciar o eco.
+        if re.search(r"\bnginx\b[^\n]*\s--?(t|test)\b", code):
+            nginx_validators.append((os.path.basename(path), name, "shambleta/web" in code))
+check(bool(nginx_validators),
+      "um job da CI roda `nginx -t` (linha executável, não prosa de doc)",
+      "job com step cujo `run` execute nginx -t", "nenhum job valida o nginx.conf")
+check(any(v[2] for v in nginx_validators),
+      "a validação `nginx -t` é feita DENTRO da imagem web buildada (shambleta/web), não no binário do host",
+      "um step referenciando a imagem `shambleta/web`",
+      "validadores: %s" % (", ".join("%s/%s" % (w, j) for w, j, _ in nginx_validators) or "nenhum"))
+# A mentira da metade (a): o harness não pode voltar a transformar o próprio conf em
+# prova. A régua lê o CÓDIGO do harness e recusa `_check(` cuja condição procure a
+# frase do doc — o que ficou no lugar é SKIP nomeado + a estrutura acima.
+hard_src = open("tests/nginx_hardening_test.gd").read() if os.path.exists("tests/nginx_hardening_test.gd") else ""
+hard_code = code_of(hard_src)
+
+
+def doc_grep_hits(code_text):
+    """O detector da mentira #89, em função própria para o canário poder exercitá-lo
+    sem que alguém precise committar um harness que mente de volta."""
+    return [l.strip() for l in code_text.splitlines()
+            if "_check(" in l and "VALIDADO ONDE" in l]
+
+
+def skip_accounted(code_text):
+    return ("[SKIP]" in code_text) and ("SKIPS" in code_text)
+
+
+check(not doc_grep_hits(hard_code),
+      "tests/nginx_hardening_test.gd: nenhum `_check(` valida o conf grepando a frase do próprio doc (#89)",
+      "nenhuma asserção dependendo de `VALIDADO ONDE`",
+      "linha(s): %s" % (doc_grep_hits(hard_code)[0][:80] if doc_grep_hits(hard_code) else "-"))
+check(skip_accounted(hard_code),
+      "tests/nginx_hardening_test.gd: skip de `nginx -t` é contabilizado por nome (não é [ok] silencioso)",
+      "um `[SKIP]` impresso e uma linha de contabilidade `SKIPS`", "nenhuma contabilidade de skip")
 
 # ---------------------------------------------------------------- presets de export x CI
 presets_cfg = open("export_presets.cfg").read() if os.path.exists("export_presets.cfg") else ""
@@ -264,14 +490,8 @@ for svc, ctx, df in builds:
           % (", ".join(sorted(compose_build_files)) or "nenhum"))
 
 # ---------------------------------------------------------------- budget tem de poder falhar
-# ---------------------------------------------------------------- budget tem de poder falhar
-def code_of(text):
-    # Régua que lê comentário é régua que acredita no que o autor escreveu: a
-    # primeira versão desta procurava `exit 1` no texto do step, e o rationale do
-    # próprio step cita `exit 1` — o gate ficou verde com a guarda arrancada
-    # (provado por mutação em 2026-09-27). Aqui só linha executável conta.
-    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
-
+# (`code_of` vive logo acima da seção #83: as duas réguas de grafo e esta leem o
+# mesmo texto executável, e cópia de função é a primeira fonte de divergência.)
 budget_step = None
 for path, doc in docs.items():
     for name, job in (doc.get("jobs") or {}).items():
@@ -485,6 +705,153 @@ check(not tagless,
       "todo job que roda `docker compose build|config` define SHAMBLETA_TAG (senão o artefato não tem nome)",
       "`env: SHAMBLETA_TAG: ...` no job/step, ou o knob no comando",
       "; ".join(tagless) if tagless else "-")
+
+# ------------------------------------------------- canários: régua que não morre num
+# mutante é régua que não existe
+# Zero falhas não prova que as réguas acima estão vivas — prova que nada foi mutado.
+# Este bloco copia os workflows para um diretório temporário, planta a recaída de
+# cada finding na CÓPIA, roda este mesmo script apontado para ela
+# (`SHAMBLETA_WF_DIR`, com `SHAMBLETA_CI_NO_CANARY=1` cortando a recursão) e exige
+# que o veredito do mutante seja VERMELHO nomeando a regra que o pegou. A árvore
+# real não é tocada: nada aqui escreve em `.github/`, e o canário de identidade
+# abaixo confere justamente que o run aninhado sem mutação devolve o MESMO número
+# deste run — se o env fizesse a régua ler outra coisa, ele denunciaria.
+if os.environ.get("SHAMBLETA_CI_NO_CANARY") != "1":
+    def gate_in(env_extra):
+        env = dict(os.environ)
+        env["SHAMBLETA_CI_NO_CANARY"] = "1"
+        env["PY"] = sys.executable
+        env.update(env_extra)
+        try:
+            p = subprocess.run(["bash", self_path], env=env,
+                               capture_output=True, text=True, timeout=300)
+        except Exception as err:
+            return "", (0, -2), -9
+        out = p.stdout + p.stderr
+        m = re.search(r"^== CI GATE: (\d+) checks, (\d+) failures ==$", out, re.M)
+        return out, ((int(m.group(1)), int(m.group(2))) if m else (0, -1)), p.returncode
+
+    # (C0) identidade: o override não muda o veredito da árvore real
+    _out, _cnt, _rc = gate_in({})
+    check(_cnt == (checks, failures),
+          "canário C0: o run aninhado sem mutação devolve o mesmo veredito (%d checks, %d falhas)"
+          % (checks, failures),
+          "verdict idêntico ao deste run", "aninhado=%s rc=%s" % (str(_cnt), _rc))
+
+    wf_files = {os.path.basename(p): raws[p] for p in raws}
+
+    def mutant(label, expect, wf_mut=None, dockerfile=None):
+        tmp = tempfile.mkdtemp(prefix="shambleta-ci-canary-")
+        try:
+            changed = False
+            for fname, txt in wf_files.items():
+                new = wf_mut(fname, txt) if wf_mut else txt
+                changed = changed or (new != txt)
+                with open(os.path.join(tmp, fname), "w") as fh:
+                    fh.write(new)
+            if dockerfile is not None:
+                changed = changed or (dockerfile != _df)
+            # Sem isto o canário morre mudo: um `replace` cuja âncora mudou de
+            # grafia deixa de mutar, o veredito do "mutante" fica verde e a régua
+            # é declarada morta por um texto que nunca existiu. A âncora é conferida
+            # antes de qualquer asserção sobre o veredito.
+            if not changed:
+                check(False, "canário %s: a mutação foi APLICADA" % label,
+                      "o texto do mutante diferir da árvore",
+                      "nenhuma âncora casou — o canário está cego")
+                return
+            env_extra = {}
+            if wf_mut:
+                env_extra["SHAMBLETA_WF_DIR"] = tmp
+            if dockerfile is not None:
+                dpath = os.path.join(tmp, "Dockerfile.web")
+                with open(dpath, "w") as fh:
+                    fh.write(dockerfile)
+                env_extra["SHAMBLETA_DOCKERFILE"] = dpath
+            out, cnt, rc = gate_in(env_extra)
+            caught = expect in out
+            check(cnt[1] > 0 and caught,
+                  "canário %s: o mutante é REPROVADO por uma falha vermelha" % label,
+                  "falhas>0 e a regra %r na saída" % expect,
+                  "falhas=%d rc=%s regra-o-denunciou=%s" % (cnt[1], rc, "sim" if caught else "NÃO"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _set_needs(base, old, new):
+        return base.replace(old, new, 1)
+
+    # (C1) #83: `snap` voltando a precisar só do export, com a prosa de teste ao lado
+    mutant(
+        "C1 (snap -> needs: builds, e um comentário citando scripts/test.sh no builds)",
+        "godot-ci.yml/snap: publica lá fora",
+        wf_mut=lambda f, t: (t.replace(
+            "    needs:\n      - builds\n      - test-gate\n", "    needs: builds\n", 1)
+            .replace("          apt-get install -y libfontconfig1 unzip",
+                     "          # scripts/test.sh all  <-- só prosa: não pode virar gate", 1)
+            if f == "godot-ci.yml" else t))
+    # (C2) #83: GitHub Release sem teste no fecho
+    mutant(
+        "C2 (release.yml/release -> needs: builds)",
+        "release.yml/release: publica lá fora",
+        wf_mut=lambda f, t: (t.replace(
+            "    needs:\n      - builds\n      - tests\n", "    needs: builds\n", 1)
+            if f == "release.yml" else t))
+    # (C3) #84: a debug key de volta no export de release
+    mutant(
+        "C3 (keystore de debug voltando no --export-release)",
+        "nenhuma referência à chave de debug do Android",
+        wf_mut=lambda f, t: (t.replace(
+            "GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ env.ANDROID_RELEASE_KEYSTORE }}",
+            "GODOT_ANDROID_KEYSTORE_RELEASE_PATH: /root/debug.keystore", 1).replace(
+            "GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ env.ANDROID_RELEASE_KEYSTORE_ALIAS }}",
+            "GODOT_ANDROID_KEYSTORE_RELEASE_USER: androiddebugkey", 1)
+            if f == "release.yml" else t))
+    # (C4) #84: guarda invertida — o job passa a FALHAR quando o secret existe
+    mutant(
+        "C4 (guarda `-z` virando `-n`: o exit 1 continua lá, a condição não)",
+        "o job FALHA quando o secret do keystore falta",
+        wf_mut=lambda f, t: (t.replace(
+            'if [ -z "$RELEASE_KEYSTORE_BASE64" ]', 'if [ -n "$RELEASE_KEYSTORE_BASE64" ]', 1)
+            if f == "release.yml" else t))
+    # (C5) #84: knob vindo de literal em vez de secret
+    mutant(
+        "C5 (GODOT_ANDROID_KEYSTORE_RELEASE_PATH literial)",
+        "vem de secret (ou de um env escrito por um guarda)",
+        wf_mut=lambda f, t: (t.replace(
+            "GODOT_ANDROID_KEYSTORE_RELEASE_PATH: ${{ env.ANDROID_RELEASE_KEYSTORE }}",
+            "GODOT_ANDROID_KEYSTORE_RELEASE_PATH: /tmp/keystore-release.keystore", 1)
+            if f == "release.yml" else t))
+    # (C6) #89: arrancar o `-t` do step que valida a imagem (o step continua lá,
+    # levantando nginx — é exatamente a forma de "smoke que não smoke-a")
+    mutant(
+        "C6 (step de validação presente mas sem `nginx -t`)",
+        "um job da CI roda `nginx -t`",
+        wf_mut=lambda f, t: (t.replace('" -t; then', '" ; then', 1)
+                             if f == "godot-ci.yml" else t))
+    # (C7) #89: Dockerfile voltando a ser COPY puro
+    _df = open("deploy/web/Dockerfile").read() if os.path.exists("deploy/web/Dockerfile") else ""
+    mutant(
+        "C7 (Dockerfile sem `RUN nginx -t`)",
+        "o build valida o conf com `nginx -t`",
+        dockerfile="\n".join(l for l in _df.splitlines() if l.strip() != "RUN nginx -t"))
+    # (C8) #89: o harness voltando a grepár a frase do próprio doc — em processo,
+    # porque a recaída mora no texto do harness e a árvore não pode ser mutada aqui.
+    _velho = '_check(text.contains("nginx -t") and text.contains("VALIDADO ONDE"),'
+    check(len(doc_grep_hits(_velho)) == 1 and not doc_grep_hits(hard_code),
+          "canário C8: o detector da doc-grep pega a linha velha (#89) e poupa o harness de hoje",
+          "1 hit no texto plantado, 0 no arquivo real",
+          "plantado=%d real=%d" % (len(doc_grep_hits(_velho)), len(doc_grep_hits(hard_code))))
+    check(skip_accounted(hard_code) and not skip_accounted('print("  [ok] nada medido")'),
+          "canário C9: a contabilidade de skip é exigida só quando há skip nomeado no código",
+          "verdadeiro no harness atual, falso num harness sem skip", "-")
+    # (C10) classificador de "roda teste" não lê prosa, e o de "publica" não dorme
+    _syn = {"jobs": {"comento": {"steps": [{"run": "# bash scripts/test.sh all\necho nada\n"}]},
+                     "rodo": {"steps": [{"run": "bash scripts/test.sh structure\n"}]},
+                     "publico": {"steps": [{"uses": "snapcore/action-publish@v1"}]}}}
+    check(not runs_tests(_syn, "comento") and runs_tests(_syn, "rodo")
+          and publishes(_syn, "publico") and not publishes(_syn, "rodo"),
+          "canário C10: TEST_RE/PUBLISH_RE só enxergam código executável (comentário citando test.sh não vira gate)",
+          "comento=False rodo=True publico=True rodo-publica=False", "classificador cego ou crédulo")
 
 print("== CI GATE: %d checks, %d failures ==" % (checks, failures))
 sys.exit(0 if failures == 0 else min(failures, 125))

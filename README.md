@@ -62,18 +62,18 @@ See [deploy/COOLIFY.md](deploy/COOLIFY.md) for the full deployment guide.
 3. Run the main scene (F5)
 
 The server starts automatically in debug builds. Keyboard bindings exist and are
-live: `Action.gd:176-199` dispatches the project's `ui_*` actions (declared in
+live: `_input()` in `Action.gd:176-200` dispatches the project's `ui_*` actions (declared in
 `project.godot`), so `F1` opens the menu, `F2`/`F4`/`F5` open the character hub,
 `F3` inventory, `F6` minimap, `F7` chat, `F8` emote, `F9` social, `F10` settings
 and `F11` fullscreen — the four game-state-only ones are gated on the same line
 they are read. `F12` is the exception: it is a raw key, not an action, because the
-`ui_f10` action it used to call never existed (`sources/gui/Gui.gd:428-434` explains
+`ui_f10` action it used to call never existed (`_input()` in `sources/gui/Gui.gd:428-434` explains
 why it moved off `F10`). None of these keys exist on web or mobile, so every window
-is also reachable by tap: the on-screen `Menu` indicator (`MenuIndicator.gd:63`)
+is also reachable by tap: the on-screen `Menu` indicator (`_on_button_pressed()` in `MenuIndicator.gd:63`)
 opens the 17 `WindowButton` icons declared in `presets/gui/Game.tscn` (Stat,
 Inventory, Skill, Minimap, Chat, Emote, Social, Settings, ZoneMap, Formation, AFK,
 Chests, Shop, Leaderboard, SeasonPass, Cosmetics, Boss), and the idle HUD that `F12`
-toggles got its own button because it had no other caller (`ManualHudBar.gd:84`).
+toggles got its own button because it had no other caller (`Build()` in `ManualHudBar.gd:84`).
 
 ## Architecture
 
@@ -103,9 +103,8 @@ lista — os nomes em `EXPLICIT_HARNESSES` mais todo `tests/*_test.gd` /
 `tests/*_fuzz.gd`, auto-inscrito por nome (`harnesses_extra()`), e o `preflight`
 imprime o total a cada run. Um harness novo entra no portão sozinho, sem edição de
 doc. CI roda o mesmo script em todo push — `idle-tests`, `backup-restore`,
-`benchmarks`, `companion-tests` e `code-health` (os nove gates de estrutura:
-god-node, doc drift, compose, secrets, CI, dead code, untracked, gate-log e
-boot-sandbox) — sempre através de `scripts/ci_gate_log.sh`: exit
+`benchmarks`, `companion-tests` e `code-health` (os 11 gates de estrutura: god-node, doc drift, compose, secrets, CI, dead code,
+untracked, gate-log, boot-sandbox, gate-marker e write-funnel) — sempre através de `scripts/ci_gate_log.sh`: exit
 code sozinho não aprova nada. A contagem não é decorativa: toda prosa que afirma
 quantos gates de estrutura existem é conferida contra `structure_gates()` pela
 régua de registro de `scripts/check_doc_drift.sh`. Ver

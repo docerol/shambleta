@@ -66,6 +66,16 @@ services:
       - SHAMBLETA_WEBHOOK_PROVIDER=shared
       - SHAMBLETA_ALLOW_DEV_WEBHOOK=1
       - SHAMBLETA_WEBHOOK_SECRET=${STAGING_WEBHOOK_SECRET:-}
+  alertmanager:
+    environment:
+      # #90, estado 2: "sem paguer, DECLARADO". Staging não tem escala de on-call
+      # humana — e é justamente essa frase que, escrita num arquivo, deixa de ser
+      # o silêncio que o achado descreve. O base traz `SHAMBLETA_ALERT_NO_PAGER_ACK`
+      # com default `0`, que faz o render do container recusar subir sem destino;
+      # aqui o valor é `1` literal (não `${...}`), porque a decisão é desta
+      # environment, não do `.env` de quem roda. O render continua imprimindo o
+      # aviso em TODO boot — declarado não é escondido.
+      - SHAMBLETA_ALERT_NO_PAGER_ACK=1
 volumes:
   game-data-staging:
   game-backups-staging:

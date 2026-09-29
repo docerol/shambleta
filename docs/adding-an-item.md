@@ -31,10 +31,22 @@ item_name_123,Item Name,Nome do Item
 item_desc_123,Item description,Descrição do item
 ```
 
-Gere os arquivos `.translation` com:
+O `.translation` que o `TranslationServer` lê não é gerado por script nenhum: é
+produzido pelo importador `csv_translation` do motor a partir do CSV. Depois de
+editar a tabela, reimporte e confira que as duas metades continuam dizendo a
+mesma coisa:
 
 ```bash
-python3 tools/i18n/extract_i18n.py
+godot --headless --editor --import --quit
+bash scripts/test.sh one i18n_catalog_test
+```
+
+Para saber o que falta traduzir, o extrator compara as fontes do cliente com o
+CSV e escreve o relatório em `data/i18n/coverage_report.md`; com `--write-gaps`
+ele acrescenta as chaves ausentes com `pt_BR` vazio para o tradutor preencher:
+
+```bash
+python3 tools/extract_i18n.py --write-gaps
 ```
 
 ## 3. Adicionar loot table (se aplicável)

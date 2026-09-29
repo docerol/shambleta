@@ -19,9 +19,23 @@ const BufferCap : int = 500
 # P1-6 (auditoria 2026-09-27): os dois eventos de REVERSO entram aqui. Sem eles a
 # receita só sabe somar, e um chargeback/art.49 continuaria contando como venda
 # para sempre — ARPU inflado é pior que ARPU ausente, porque decide preço.
+# CENSO (AUDITORIA rodada 3): esta lista é o GATE de `RecordFunnel`, e um kind que
+# um writer passa mas não está aqui não é "evento não medido" — é evento que nunca
+# existe. `ah_list_reject` estava nesse estado (dois call sites em
+# `sources/economy/AuctionHouseService.gd`, recusados em silêncio); entrou, e o
+# `tests/telemetry_census_test.gd` fica vermelho quando um writer anunciar um
+# kind que o gate não aceita.
+#
+# O censo achou mais quatro no MESMO estado, na mesma passada: `ah_bid`,
+# `ah_bid_fill`, `ah_bid_cancel`, `ah_expire` — todos anunciados por `_RecordAH`
+# (`sources/economy/AuctionHouseService.gd:407,1140,1164,1240`) e recusados por esta
+# lista, ou seja: o marketplace emitia quatro eventos que nunca caíram na tabela.
+# Entraram aqui e em `OperationalKinds` (aceito E lido), porque um evento de leilão
+# que o gate joga fora é indistinguível de um funil que nunca existiu.
 const FUNNEL_KINDS : Array[String] = ["onboarding_done", "first_boss", "first_chest", "d1_return",
 	"checkout_intent", "purchase", "refund", "chargeback",
-	"ah_list", "ah_buy", "ah_cancel", "trade", "rebirth", "pass_claim"]
+	"ah_list", "ah_list_reject", "ah_buy", "ah_cancel", "ah_bid", "ah_bid_fill", "ah_bid_cancel",
+	"ah_expire", "trade", "rebirth", "pass_claim"]
 
 var _buffer : Array[Dictionary] = []
 var _accum : float = 0.0
@@ -329,6 +343,85 @@ func FunnelWindowAccounts(sinceSec : int) -> Dictionary:
 		if FunnelDailyKinds.has(kind):
 			out[kind] = int(r.get("n", 0))
 	return out
+
+# ------------------------------------------------------------------ censo de kinds
+# AUDITORIA rodada 3 (analytics): `telemetry_event` não tinha censo. A tabela aceita
+# QUALQUER string no `kind` (`Record` não valida nada além do `FUNNEL_KINDS` do
+# `RecordFunnel`), então dava para escrever um kind que nenhum leitor consome e o
+# dashboard continuar achando que mede. O precedente que a casa já aceita é
+# `LiveOpsCalendar.ImplementedKinds`: kind declarado sem consumidor é recusado —
+# mesmo formato, outro objeto. Aqui o consumidor é a QUERY, e a régua que confere é
+# `tests/telemetry_census_test.gd`, que deriva os dois censos do fonte (nada de
+# lista de "kinds bons" escrita à mão na régua).
+#
+# Esta lista É o lado leitor do censo: todo kind que um writer do fonte anuncia tem
+# que estar aqui, senão o censo acusa. Ela não é um ornamento — os kinds nomeados
+# abaixo eram exatamente os que o fonte já escrevia e NINGUÉM lia: `flag_change`
+# (`sources/ops/OpsCommands.gd:104`), `fraud_metrics`
+# (`sources/economy/FraudeReview.gd`), os seis `sec_*`
+# (`sources/sql/SQLSecurity.gd:67-72`, escritos por `Server.gd` e lidos só por um
+# `CountSecurityEvents` (`sources/sql/SQLSecurity.gd:140`) sem nenhum chamador) e os quatro eventos de marketplace/passe
+# (`ah_list`, `ah_list_reject`, `ah_buy`, `ah_cancel`, `pass_claim`, `rebirth`).
+# `ah_list_reject` entrou em `FUNNEL_KINDS` junto: `RecordFunnel` o recusava em
+# silêncio, então a linha nunca chegava a cair na tabela — kind escrito sem
+# consumidor é a metade visível do defeito; kind escrito que o próprio emissor joga
+# fora é a outra metade. Os quatro eventos de lance/expiração do leilão
+# (`ah_bid`, `ah_bid_fill`, `ah_bid_cancel`, `ah_expire`) entraram nas duas listas
+# pela mesma razão, medidos pelo censo e não por memória.
+const OperationalKinds : Array[String] = ["login", "settle", "levelup", "shop_visit", "ad_view",
+	"flag_change", "fraud_metrics", "sec_login_lockout", "sec_login_ip_block", "sec_totp_throttle",
+	"sec_totp_replay", "sec_reset_exhausted", "sec_reset_request_limit", "ah_list", "ah_list_reject",
+	"ah_buy", "ah_cancel", "ah_bid", "ah_bid_fill", "ah_bid_cancel", "ah_expire",
+	"pass_claim", "rebirth"]
+
+# Censo declarativo dos dois lados: o que o emissor aceita (`FUNNEL_KINDS`, gate de
+# `RecordFunnel`) mais o que esta fileira lê (`OperationalKinds`). O harness confere
+# que todo kind escrito pelo fonte está na interseção — aceitável E lido.
+static func DeclaredKinds() -> Array[String]:
+	var out : Array[String] = []
+	for kind in FUNNEL_KINDS:
+		if not out.has(kind):
+			out.append(kind)
+	for kind in OperationalKinds:
+		if not out.has(kind):
+			out.append(kind)
+	return out
+
+# Eventos por kind na janela, numa única varredura. Índice:
+# `idx_telemetry_kind_time` (`data/conf/migrations/016_telemetry.sql:13`) cobre o
+# `kind IN (...)`; sem ele o censo seria um SCAN numa tabela append-only que cresce
+# para sempre. Leitura pura.
+func KindCoverageSummary(sinceSec : int = 0) -> Dictionary:
+	var out : Dictionary = {}
+	for kind in OperationalKinds:
+		out[kind] = 0
+	var bindings : Array = [sinceSec]
+	for kind in OperationalKinds:
+		bindings.append(kind)
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
+		"SELECT kind, COUNT(*) AS n FROM telemetry_event WHERE created_at >= ? AND kind IN ("
+		+ _Placeholders(OperationalKinds) + ") GROUP BY kind;", bindings)
+	for r in rows:
+		var kind : String = str(r.get("kind", ""))
+		if OperationalKinds.has(kind):
+			out[kind] = int(r.get("n", 0))
+	return out
+
+# O censo servido. Anexado por `MetricsServer._telemetryKindSection()`: sem o
+# anexo, a régua é código morto e o kind continua sem leitor de verdade (precedente
+# `FunnelGaugeLines`, que entrou no /metrics exatamente por isso).
+func KindCoverageGaugeLines(windowDays : int = 7) -> String:
+	var sinceSec : int = SQLCommons.Timestamp() - maxi(1, windowDays) * 86400
+	var counts : Dictionary = KindCoverageSummary(sinceSec)
+	var body : String = ""
+	body += "# HELP shambleta_telemetry_kind_events eventos de telemetry_event por kind na janela; kinds declarados pelo fonte, um por linha.\n"
+	body += "# TYPE shambleta_telemetry_kind_events gauge\n"
+	for kind in OperationalKinds:
+		body += "shambleta_telemetry_kind_events{kind=\"%s\"} %d\n" % [kind, int(counts.get(kind, 0))]
+	body += "# HELP shambleta_telemetry_declared_kinds quantos kinds o leitor declara (o denominador do censo; cai abaixo do total do fonte = kind sem consumidor).\n"
+	body += "# TYPE shambleta_telemetry_declared_kinds gauge\n"
+	body += "shambleta_telemetry_declared_kinds %d\n" % OperationalKinds.size()
+	return body
 
 # Texto Prometheus do funil diário. Quem anexa isto ao /metrics é
 # `MetricsServer._funnelSection()` (linha 156 do próprio arquivo): sem o

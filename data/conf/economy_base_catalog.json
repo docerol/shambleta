@@ -1,19 +1,21 @@
 {
-	"_note": "Botões base da economia, em dados (JUIZ ECONOMIA 2026-09-27). Eram consts: preço/cap do baú (EconomyCatalog.gd:64,67) e a fricção da troca direta (EconomyService.gd:208-212). Fonte validada fail-closed no boot por EconomyCatalog.ValidateBaseCatalog: chave desconhecida, número não-positivo e SKU fora do catálogo cobrável são erros de boot. O regime do NÚMERO mudou: cada knob traz sua faixa aceita em _knob_ranges e o validador cobra a faixa, não a igualdade contra o const (a antiga jaula 'representação, não rebalance' deixava este arquivo uma cópia dos consts, incapaz de mover um número). Dentro da banda um valor diferente do default é aceito — é o rebalance sem rebuild; fora dela, ou sem banda declarada, é erro de boot e nada do arquivo entra (o default do código fica de pé, com o desvio no log). Os valores em knobs são hoje os defaults do código e batem com a banda; trocá-los dentro dela já muda o jogo sem tocar GDScript. O companheiro de moeda paga é data/conf/paid_catalog.json.",
+	"_note": "Botões base da economia, em dados (JUIZ ECONOMIA 2026-09-27). Eram consts, hoje são os refs de `sources/economy/EconomyBaseCatalog.gd`: o preço do baú `ChestCostGemsRef` (`sources/economy/EconomyBaseCatalog.gd:199`), o cap por compra `MaxChestsPerPurchaseRef` (`sources/economy/EconomyBaseCatalog.gd:201`) e a fricção da troca direta `TradeCooldownSecRef` (`sources/economy/EconomyBaseCatalog.gd:208`), `TradeDailyCapRef` (`sources/economy/EconomyBaseCatalog.gd:210`), `TradeDailyCapVIPRef` (`sources/economy/EconomyBaseCatalog.gd:212`) e a elasticidade da taxa de forja contra a curva de renda da zona do personagem, em milésimos, `ForgeFeeZoneElasticityPermilleRef` (`sources/economy/EconomyBaseCatalog.gd:223`). Fonte validada fail-closed no boot por EconomyCatalog.ValidateBaseCatalog: chave desconhecida, número não-positivo e SKU fora do catálogo cobrável são erros de boot. O regime do NÚMERO mudou: cada knob traz sua faixa aceita em _knob_ranges e o validador cobra a faixa, não a igualdade contra o const (a antiga jaula 'representação, não rebalance' deixava este arquivo uma cópia dos consts, incapaz de mover um número). Dentro da banda um valor diferente do default é aceito — é o rebalance sem rebuild; fora dela, ou sem banda declarada, é erro de boot e nada do arquivo entra (o default do código fica de pé, com o desvio no log). Os valores em knobs são hoje os defaults do código e batem com a banda; trocá-los dentro dela já muda o jogo sem tocar GDScript. O companheiro de moeda paga é data/conf/paid_catalog.json.",
 	"_source": "EconomyCatalog.ShopCatalogRef (loja, ainda igualdade) + defaults EconomyCatalog.BASE_KNOBS_REF, com banda em _knob_ranges",
 	"_knob_ranges": {
 		"chest_cost_gems": {"min": 60, "max": 240},
 		"max_chests_per_purchase": {"min": 1, "max": 20},
 		"trade_cooldown_sec": {"min": 30, "max": 600},
 		"trade_daily_cap": {"min": 5, "max": 100},
-		"trade_daily_cap_vip": {"min": 10, "max": 200}
+		"trade_daily_cap_vip": {"min": 10, "max": 200},
+		"forge_fee_zone_elasticity_permille": {"min": 886, "max": 1099}
 	},
 	"knobs": {
 		"chest_cost_gems": 120,
 		"max_chests_per_purchase": 10,
 		"trade_cooldown_sec": 60,
 		"trade_daily_cap": 20,
-		"trade_daily_cap_vip": 40
+		"trade_daily_cap_vip": 40,
+		"forge_fee_zone_elasticity_permille": 886
 	},
 	"shop": [
 		{"sku": "gems.550", "label": "550 gems", "price": 19.90},

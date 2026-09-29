@@ -65,6 +65,10 @@ static func GetExploreFromData(charData : Dictionary) -> Destination:
 func SetCharacterInfo(charData : Dictionary, charID : int):
 	# Stats
 	stat.SetStats(charData)
+	# WorkOrder #88: o que o banco tem de ouro É o lastro do snapshot relativo
+	# (`SQL.UpdateStat`), então o que chegou aqui já está persistido — creditar de
+	# novo no próximo passe de 600 s seria mintar a própria carteira.
+	stat.gpFlushed = stat.gp
 	stat.ResetAttributesIfOverBudget()
 	# Inventory
 	var inventoryData : Array[Dictionary] = Launcher.SQL.GetStorage(charID, 0)

@@ -9,14 +9,24 @@ extends SceneTree
 #  `Content-Length` e aloca o buffer inteiro sem plafond (companion/server.py:1405
 #  e :1467). Ou seja: não havia NENHUM teto de alocação no caminho do dinheiro.
 #
-# ESCOPO DA VALIDAÇÃO (declarado, não implícito): esta máquina não tem o binário do
-# nginx, então nada aqui é `nginx -t`. O harness LÊ o arquivo, faz parse de
-# blocos/diretivas (comentário e aspas tratados) e assesta diretiva por diretiva —
+# ESCOPO DA VALIDAÇÃO (declarado, não implícito): o harness LÊ o arquivo, faz parse
+# de blocos/diretivas (comentário e aspas tratados) e assesta diretiva por diretiva —
 # inclusive qual `location` gana cada URI, na precedência real do nginx
 # (`=` > `^~` > regex > prefixo), porque endurecer duas rotas é exatamente o tipo
-# de edição que come a terceira. Se o binário EXISTIR no host, o mesmo harness roda
-# `nginx -t` num invólucro temporário e o veredito dele vira mais uma check.
-# Arquivo validado != servidor vivo, e a suíte E diz qual dos dois foi medido.
+# de edição que come a terceira. Além disso há `nginx -t`, e a suíte E diz QUAL dos
+# três estados ocorreu neste run:
+#   1. binário no host  -> `nginx -t` roda aqui, num invólucro temporário, e o
+#      veredito dele é uma check;
+#   2. binário ausente  -> nada é validado neste host e isto é dito por NOME
+#      (`[SKIP] nginx -t neste host` + a linha `== NGINX HARDENING SKIPS: … ==`),
+#      com a validação cobrada no build: `deploy/web/Dockerfile` tem de ter a linha
+#      executável `RUN nginx -t` (sem `|| true`). Faltar as duas coisas é VERMELHO,
+#      não "degradar para ler o próprio doc" — era isso a suíte E antes do #89;
+#   3. em CI            -> o job `container-images` roda `nginx -t` DENTRO da imagem
+#      web buildada; a presença desse step no grafo é o que scripts/check_ci.sh
+#      confere (com canário plantado), porque a régua que sobrevive num host sem
+#      nginx tem de ser estrutural, e não prosa.
+# Arquivo validado != servidor vivo, e a suíte E diz qual dos estados foi medido.
 #
 # Uso:
 #   XDG_DATA_HOME=/tmp/impl-sec/.data XDG_CACHE_HOME=/tmp/impl-sec/.cache \
@@ -33,6 +43,8 @@ var CONF : String = CONF_DEFAULT
 var checks : int = 0
 var failures : int = 0
 var suitesDone : int = 0
+var skips : int = 0
+var skipNames : PackedStringArray = PackedStringArray()
 var text : String = ""
 var stripped : String = ""
 var lines : PackedStringArray = []
@@ -565,13 +577,66 @@ func _nginxBinary() -> String:
 			return p
 	return ""
 
+func _dockerfileRunLines(text : String) -> PackedStringArray:
+	# Só linha executável de Dockerfile: comentário não builda nada. `RUN` é o
+	# degrau que executa no build; o que importa aqui é existir e não ser
+	# desarmado por `|| true` (smoke que não barra é o smoke que não existe).
+	var out : PackedStringArray = PackedStringArray()
+	for l in text.split("\n", false):
+		var s : String = l.strip_edges()
+		if s == "" or s.begins_with("#"):
+			continue
+		if s.begins_with("RUN "):
+			out.append(s)
+	return out
+
+
+func _skip(label : String) -> void:
+	# Skip com nome, impresso em toda passada e contabilizado na linha própria
+	# abaixo. `[ok]` silencioso é o defeito #89: um run que não mediu nada e disse
+	# que mediu é pior que um run vermelho, porque ninguém vai olhar.
+	skips += 1
+	skipNames.append(label)
+	print("[SKIP] " + label)
+
+
+func _buildSideValidation() -> bool:
+	# A metade de fora deste host: o `nginx -t` que valida o conf é o do BUILD da
+	# imagem. Prova disso é a linha `RUN nginx -t` do Dockerfile — código, não a
+	# frase de um README — e o job `container-images` da CI (com o step que roda
+	# `nginx -t` na imagem) é conferido por scripts/check_ci.sh, que tem canário
+	# plantado provando que a régua morre se o step for arrancado.
+	var df : String = _read("res://deploy/web/Dockerfile")
+	if df == "":
+		_check(false, "deploy/web/Dockerfile foi lido (sem ele não há validação de build nenhuma)")
+		return false
+	var found : bool = false
+	for run in _dockerfileRunLines(df):
+		if run.contains("nginx -t") or run.contains("nginx --test"):
+			found = true
+			_check(not run.contains("|| true"),
+				"o `RUN nginx -t` do build não está desarmado por `|| true` (%s)" % run.substr(0, 48))
+			break
+	_check(found, "deploy/web/Dockerfile roda `nginx -t` no build da imagem web")
+	return found
+
+
 func _suiteHonestScope() -> void:
 	print("-- E) o que este harness NÃO fez (e o arquivo não pode fingir que fez)")
 	var bin : String = _nginxBinary()
 	if bin == "":
-		_check(text.contains("nginx -t") and text.contains("VALIDADO ONDE"),
-			"nginx AUSENTE neste host: o conf declara que a validação é de diretiva, não de servidor vivo")
-		print("       (nada aqui foi validado por `nginx -t`; parse de arquivo apenas)")
+		# Finding #89: aqui morava o `_check(text.contains("nginx -t") and
+		# text.contains(…da doc…))` — o harness grepava no próprio nginx.conf a frase
+		# que declara que a validação é de build. Régua que lê a declaração do autor
+		# é régua que dá verde ao que ninguém mediu: o run estava verde com o conf
+		# quebrado e com o Dockerfile sem validação nenhuma. Agora: nada de doc. Sem
+		# binário, o skip é NOMEADO e a suíte cobra a validação de build como CÓDIGO
+		# (o `RUN nginx -t` do Dockerfile). Se nenhuma das duas existir, o veredito é
+		# VERMELHO — "não medimos" não pode ser lido como "está certo".
+		_skip("nginx -t neste host (binário ausente)")
+		if not _buildSideValidation():
+			_check(false,
+				"nenhuma validação `nginx -t` existe neste run: sem binário local e sem validação no build da imagem")
 	else:
 		# Saída única de propósito: com dois `return` no meio, a guarda de
 		# conclusão lá embaixo não rodava no ramo mais comum (nginx ausente) e
@@ -591,7 +656,16 @@ func _suiteHonestScope() -> void:
 			if code != 0:
 				for l in out:
 					print("       " + str(l))
+		# Com o binário presente a validação de build continua obrigatória: o host
+		# local não é o runner da CI nem o container que sobe em produção, e a
+		# régua que protege o deploy é a que roda no build da imagem.
+		_buildSideValidation()
 	suitesDone += 1
+	# Contabilidade impressa SEMPRE, inclusive em zero — a mesma doutrina das linhas
+	# `== FLAKES: none ==` e `== GATES COM RUÍDO: none ==` do scripts/test.sh: "ninguém
+	# marcou skip" e "nenhum skip" são frases diferentes, e só a segunda autoriza um
+	# lançamento. Quem lê o log vê o nome do que não foi medido neste host.
+	print("== NGINX HARDENING SKIPS: %d (%s) ==" % [skips, ", ".join(skipNames) if skips > 0 else "nenhum"])
 
 func _run() -> void:
 	var override : String = OS.get_environment("SHAMBLETA_NGX_CONF")

@@ -31,8 +31,8 @@ func GetGoldLedgerSum(accountID : int) -> int:
 # ------------------------------------------------------------------ ledger
 
 # Append-only ledger write; MUST be called inside the same transaction as the
-# state mutation it mirrors (see OfflineSettle._Apply). Uses db.* directly —
-# it runs inside SQL.Transaction() which already holds queryMutex.
+# state mutation it mirrors. O `db.*` cru só é sancionado porque TODO chamador
+# abre `SQL.Transaction()` antes — régua: scripts/check_write_funnel.sh.
 func LedgerAppend(charID : int, accountID : int, kind : String, amount : int, balanceAfter : int, reason : String = "") -> bool:
 	var dbNode : SQLite = Launcher.SQL.db
 	return dbNode.query_with_bindings(
@@ -50,9 +50,14 @@ func GrantItem(accountID : int, itemHash : int, count : int, reason : String = "
 		return false
 	var mutex : Mutex = _eco._get_settle_mutex(accountID)
 	mutex.lock()
-	var ok : bool = Launcher.SQL.db.query_with_bindings(
-		"INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, ?, ?, 0, ?, ?);",
-		[accountID, EconomyCatalog.LedgerKindItem, count, reason, SQLCommons.Timestamp()])
+	# WorkOrder #91: a linha do ledger nasce dentro de `SQL.Transaction()`, como
+	# toda escrita crua deste kernel. Fora dela, o `db.query_with_bindings` abaixo
+	# faria o próprio BEGIN/END do addon (ver o grito de auditoria A em
+	# `SQL.Transaction`) e o ledger comitaria separado do estado que ele espelha.
+	var ok : bool = Launcher.SQL.Transaction(func() -> bool:
+		return Launcher.SQL.db.query_with_bindings(
+			"INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at) VALUES (?, 0, ?, ?, 0, ?, ?);",
+			[accountID, EconomyCatalog.LedgerKindItem, count, reason, SQLCommons.Timestamp()]))
 	mutex.unlock()
 	return ok
 
@@ -120,7 +125,16 @@ func ApplyGoldMoves(moves : Dictionary) -> void:
 			continue
 		var agent : PlayerAgent = AgentForCharacter(int(charID))
 		if agent != null:
-			agent.stat.gp = maxi(0, agent.stat.gp + delta)
+			var before : int = agent.stat.gp
+			agent.stat.gp = maxi(0, before + delta)
+			# WorkOrder #88: o banco JÁ tem este delta — foi ele que
+			# `_MoveGoldLocked` gravou. O lastro do snapshot (`gpFlushed`) avança
+			# junto com a memória, senão `SQL.UpdateStat`, que agora escreve ouro
+			# em RELATIVO, creditaria o mesmo movimento uma segunda vez no fim do
+			# ciclo de 600 s. Só se mexe no lastro quando ele existe (>= 0): agente
+			# sem carga de banco não tem nada a espelhar.
+			if agent.stat.gpFlushed >= 0:
+				agent.stat.gpFlushed += agent.stat.gp - before
 	moves.clear()
 
 # Agente do personagem carregado no servidor (null = offline, e é o caso comum:
@@ -195,6 +209,187 @@ func ReconcileWalletDaily(nowSec : int = 0) -> Dictionary:
 	var gpCount : int = gpRows.size()
 	var gemsCount : int = gemsRows.size()
 	return {"gp": gpCount, "gems": gemsCount, "total": gpCount + gemsCount}
+
+# ------------------------------------------------------------------ censo de oferta (faucet x pia)
+# O que `ReconcileWalletDaily` NÃO pode ver — e por isso este censo existe: aquela
+# régua lê só a carteira ABAIXO do último `balance_after` do ledger. Um faucet que
+# escreve `stat.gp` E a linha de ledger juntos sobe as duas pernas e passa limpo por
+# construção (o controle negativo em `tests/faucet_census_test.gd` planta exatamente
+# esse par e mede `ReconcileWalletDaily` devolvendo `total = 0` nele). O censo mede
+# as duas direções e, acima delas, soma POR FAMÍLIA DE `reason` o que a oferta
+# expansionou e o que cada pia destruiu: "quanto dinheiro entrou no jogo hoje"
+# passa a ser uma conta, não uma intuição.
+# Família = `reason` até o primeiro `:` — a mesma convenção de `grant:<chave>`,
+# `clawback:<payment>` e `quest:<id>:gold` do funil. O catálogo abaixo é o que os
+# WRITERS do produto emitem; linha fora dele é `unattributed`, e `unattributed` é o
+# número que diz "existe um writer de dinheiro que ninguém enumerou", não um lixo
+# tolerado. `declared` é a lista do CHAMADOR (endowment de harness, import de
+# retenção): essas linhas continuam somadas em `created`/`destroyed` e listadas em
+# `families` — o censo não esconde nada, apenas não toca o alarme por elas.
+# O que o censo NÃO fecha, dito em vez de fingido: um writer cru que lava o dinheiro
+# sob uma família QUE JÁ EXISTE no catálogo (`offline_settle:<dia>`, por exemplo) fica
+# indistinguível do produto nesta camada — o `balance_after` da linha dele atesta a
+# carteira e a família é conhecida. Contra essa lavagem o que segura não é o censo, é a
+# régua do funil único (`scripts/check_write_funnel.sh`, que enumera quem pode escrever
+# `stat.gp`/`wallet`) somada à perna `unattested` deste censo, que pega o resto.
+const CensusFaucetFamilies : PackedStringArray = [
+	"offline_settle", "login_streak", "quest", "salvage", "grant", "achievement",
+	"pass_reward", "tournament_prize", "referral_bonus", "referral_welcome"]
+const CensusSinkFamilies : PackedStringArray = [
+	"vendor", "craft_submit_fee", "craft_approve", "cube_upcycle", "corrupt_fee",
+	"boss_key_buy", "guild_create", "guild_level", "guild_level_fast",
+	"guild_vault_slots", "tournament_entry", "chest_buy", "daily_offer",
+	"daily_reroll", "trade_fee", "pass_skip", "cosmetic", "vip1_purchase",
+	"vip2_purchase", "vip3_purchase", "ah_list_fee", "ah_slot", "ah_highlight_fee",
+	"salvage_burn", "rebirth_upgrade", "clawback", "refund", "revoke"]
+const CensusTransferFamilies : PackedStringArray = [
+	"ah_buy", "ah_sell", "ah_creator_fee", "ah_bid_escrow", "ah_bid_release",
+	"vault_deposit"]
+
+# `windowSec`/`nowSec` delimitam a figura do DIA (o ledger é append-only e cresce
+# para sempre); o censo "all" da mesma chamada é o de SEMPRE, porque uma pia que só
+# rodou uma vez por semana não pode sumir do total. `scopeChars`/`scopeAccounts`
+# delimitam a população — vazios = banco inteiro, sempre restrito a donos que o
+# ledger conhece (uma carteira sem linha de ledger não é oferta expansionada, é
+# estado anterior ao funil, e contá-la como divergência afogaria o sinal). A
+# atestação é o ÚLTIMO `balance_after` da série, nunca o MAX, e respeita
+# `created_timestamp` do dono pela mesma razão de `ReconcileWalletDaily`: id de
+# personagem/conta reciclado por purge LGPD não pode atestar saldo da vida anterior.
+func CensusSupply(windowSec : int = 86400, nowSec : int = 0, scopeChars : Array = [],
+		scopeAccounts : Array = [], declared : PackedStringArray = PackedStringArray()) -> Dictionary:
+	var sql : SQLService = Launcher.SQL
+	if sql == null or not sql.isInitialized:
+		return {"ok": false, "reason": "sql_unavailable"}
+	if nowSec <= 0:
+		nowSec = SQLCommons.Timestamp()
+	var window : int = maxi(1, windowSec)
+	var out : Dictionary = {"ok": true, "window_sec": window, "day_start": nowSec - window, "day_end": nowSec, "declared": Array(declared)}
+	out["gold"] = _CensusCurrency(sql, EconomyCatalog.LedgerKindGold, "stat", "char_id", "gp", "character", scopeChars, nowSec - window, nowSec, declared)
+	out["gems"] = _CensusCurrency(sql, EconomyCatalog.LedgerKindGems, "wallet", "account_id", "gems", "account", scopeAccounts, nowSec - window, nowSec, declared)
+	return out
+
+func _CensusFamilySql(whereExtra : String) -> String:
+	# `instr`/`substr` em SQL, não em GDScript: agrupar em GDScript teria que baixar
+	# o dia inteiro do ledger para o processo só para contar prefixos.
+	return "SELECT substr(reason, 1, CASE WHEN instr(reason, ':') > 0 THEN instr(reason, ':') - 1 ELSE length(reason) END) AS family," \
+		+ " COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0) AS created," \
+		+ " COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END),0) AS destroyed, COUNT(*) AS n" \
+		+ " FROM ledger_transaction WHERE kind = ?" + whereExtra + " GROUP BY family ORDER BY family;"
+
+# Devolve a lista de `?` do escopo e POVA `args` na ordem em que eles aparecem na
+# statement: o censo tem três statements e cada uma tem o seu lugar de escopo —
+# um off-by-one aqui lê o censo do kind errado e devolve verde.
+func _CensusScopeMarks(scope : Array, args : Array) -> String:
+	if scope.is_empty():
+		return ""
+	var marks : String = ""
+	for s in scope:
+		if not marks.is_empty():
+			marks += ","
+		marks += "?"
+		args.append(int(s))
+	return marks
+
+func _CensusCurrency(sql : SQLService, kind : String, walletTable : String, keyCol : String, balanceCol : String,
+		ownerTable : String, scope : Array, dayStart : int, dayEnd : int, declared : PackedStringArray) -> Dictionary:
+	# A borda de CIMA da janela é inclusiva de propósito: um censo diário que exclui
+	# o segundo em que roda fica cego exatamente para a janela em que um faucet live
+	# trabalha (o run do harness escreve e mede no mesmo segundo). A de baixo, `>=`.
+	var dayArgs : Array = [kind, dayStart, dayEnd]
+	var dayScope : String = ""
+	if not scope.is_empty():
+		dayScope = " AND %s IN (%s)" % [keyCol, _CensusScopeMarks(scope, dayArgs)]
+	var dayRows : Array[Dictionary] = sql.QueryBindings(
+		_CensusFamilySql(" AND created_at >= ? AND created_at <= ?" + dayScope), dayArgs)
+	var allArgs : Array = [kind]
+	var allScope : String = ""
+	if not scope.is_empty():
+		allScope = " AND %s IN (%s)" % [keyCol, _CensusScopeMarks(scope, allArgs)]
+	var allRows : Array[Dictionary] = sql.QueryBindings(_CensusFamilySql(allScope), allArgs)
+	# Banco x ledger, dono a dono: `unattested` soma o que EXISTE e o ledger não
+	# atesta (faucet cru) com o sinal trocado do que o ledger atesta e não existe
+	# (débito cru). Os dois moram no mesmo predicado, e é isso que faltava para a
+	# régua de uma direção só.
+	var popArgs : Array = [kind]
+	var where : String = ""
+	if not scope.is_empty():
+		where = " WHERE o.%s IN (%s)" % [keyCol, _CensusScopeMarks(scope, popArgs)]
+	else:
+		# Banco inteiro: só donos que o ledger conhece. Carteira sem linha de ledger
+		# é estado anterior ao funil, não oferta expansionada — contá-la como
+		# divergência afogaria o sinal no ruído do seed de boot.
+		popArgs.append(kind)
+		where = " WHERE o.%s IN (SELECT l2.%s FROM ledger_transaction l2 WHERE l2.kind = ?)" % [keyCol, keyCol]
+	var walletRows : Array[Dictionary] = sql.QueryBindings(
+		"SELECT o.%s AS owner, o.%s AS observed," % [keyCol, balanceCol]
+		+ " (SELECT l.balance_after FROM ledger_transaction l WHERE l.%s = o.%s AND l.kind = ? AND l.created_at >= w.created_timestamp ORDER BY l.id DESC LIMIT 1) AS attested" % [keyCol, keyCol]
+		+ " FROM %s o INNER JOIN %s w ON w.%s = o.%s%s;" % [walletTable, ownerTable, keyCol, keyCol, where],
+		popArgs)
+	var observed : int = 0
+	var attested : int = 0
+	var divergent : int = 0
+	var diverging : Array = []
+	for r in walletRows:
+		var rec : Dictionary = r as Dictionary
+		var obs : int = int(rec.get("observed", 0))
+		var att : int = int(rec.get("attested", 0)) if rec.get("attested", null) != null else 0
+		observed += obs
+		attested += att
+		if obs != att:
+			divergent += 1
+			diverging.append({"owner" = int(rec.get("owner", 0)), "observed" = obs, "attested" = att, "delta" = obs - att})
+	return {"kind" = kind, "day" = _CensusBucket(dayRows, declared), "all" = _CensusBucket(allRows, declared),
+		"owners" = walletRows.size(), "observed" = observed, "attested" = attested,
+		"unattested" = observed - attested, "divergent" = divergent, "diverging" = diverging}
+
+# Bucket = a soma por família, classificada. `transfers` sai de `created`/`destroyed`
+# de propósito: uma linha de leilão aparece com sinal + numa carteira e − em outra,
+# e contá-la dos dois lados diria que o mercado cria dinheiro.
+func _CensusBucket(rows : Array[Dictionary], declared : PackedStringArray) -> Dictionary:
+	var created : int = 0
+	var destroyed : int = 0
+	var transfers : int = 0
+	var families : Dictionary = {}
+	var unattributed : Dictionary = {}
+	var sinks : Dictionary = {}
+	var faucets : Dictionary = {}
+	for r in rows:
+		var rec : Dictionary = r as Dictionary
+		var family : String = str(rec.get("family", ""))
+		var cr : int = int(rec.get("created", 0))
+		var dr : int = int(rec.get("destroyed", 0))
+		var n : int = int(rec.get("n", 0))
+		var entry : Dictionary = {"created" = cr, "destroyed" = dr, "rows" = n}
+		families[family] = entry
+		if declared.has(family):
+			created += cr
+			destroyed += dr
+			continue
+		if CensusTransferFamilies.has(family):
+			transfers += cr + dr
+			continue
+		if CensusFaucetFamilies.has(family) or CensusSinkFamilies.has(family):
+			created += cr
+			destroyed += dr
+			if dr > 0:
+				sinks[family] = dr
+			if cr > 0:
+				faucets[family] = cr
+			continue
+		unattributed[family] = entry
+		created += cr
+		destroyed += dr
+	return {"created" = created, "destroyed" = destroyed, "net" = created - destroyed,
+		"transfers" = transfers, "families" = families, "sinks" = sinks, "faucets" = faucets,
+		"unattributed" = unattributed, "unattributed_rows" = _CensusSumKey(unattributed, "rows"),
+		"unattributed_created" = _CensusSumKey(unattributed, "created"),
+		"unattributed_destroyed" = _CensusSumKey(unattributed, "destroyed")}
+
+func _CensusSumKey(buckets : Dictionary, field : String) -> int:
+	var total : int = 0
+	for k in buckets:
+		total += int((buckets[k] as Dictionary).get(field, 0))
+	return total
 
 # Diagnóstico das DUAS pernas de carteira: quem está abaixo do atestado e por
 # quanto. `/metrics` só expõe o contador; quem abre o incidente precisa do par

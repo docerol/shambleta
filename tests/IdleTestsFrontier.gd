@@ -407,10 +407,38 @@ static func _SeriesSpanVerdict(src : PackedStringArray, serie : String, from : i
 			return "dentro"
 	return "fora"
 
+# O ponteiro foi escrito com o alvo ou com o enfeite de linha? `cited` chega limpo da
+# varredura ("docs/x.md" no exemplo) e com âncora dos controles ("probe_lie.md:5"), e
+# `get_extension()` de "probe_lie.md:5" é "md:5" — sem tirar a âncora, o controle e a
+# doc seguiriam caminhos diferentes da régua.
+static func _IsProseTarget(cited : String) -> bool:
+	return String(cited).split(":")[0].get_extension().to_lower() == "md"
+
+# Alvo de PROSA: não há declaração para tocar, então o índice de símbolos vem vazio de
+# propósito e o braço (b) da identidade, que confere o nome contra o ARQUIVO INTEIRO,
+# perdoa a linha errada por construção. O achado de 2026-09-29, ao escrever o registro
+# da #107: a linha 115 de `docs/development/testing.md` é onde `companion_gates()`
+# mora, e a frase que o localizava apontava para a 99 — nenhuma régua reclamava, porque
+# nenhuma olhava a LINHA de um alvo `.md`. Três locadores assim já estavam tortos. Aqui a
+# unidade de prova é a LINHA: se o doc escreve o nome em algum lugar mas não no
+# intervalo citado, a frase aponta para o arquivo certo e a janela errada. As três
+# saídas são as da régua de série, inclusive o SILÊNCIO de "muda" quando o nome não
+# está no arquivo: uma frase pode nomear um símbolo de código ao citar o parágrafo que
+# descreve a mesma coisa em português, e acusar isso é máquina de reescrever prosa.
+static func _ProseTargetVerdict(src : PackedStringArray, symName : String, from : int, to : int) -> String:
+	if symName == "" or src.is_empty():
+		return "muda"
+	if not _MentionsWord(String("\n").join(src), symName):
+		return "muda"
+	for j in range(maxi(from, 1), mini(to, src.size()) + 1):
+		if _MentionsWord(String(src[j - 1]), symName):
+			return "dentro"
+	return "fora"
+
 # Casa única do veredito de identidade (regra 6): laço da varredura e controles
 # injetados em memória chamam este mesmo corpo, então uma mentira inventada mede a
 # régua exata com que a doc real é medida — não uma cópia dela.
-# Os três braços, e só eles:
+# Os quatro braços, e só eles:
 # (a) o nome É declarado no arquivo -> o intervalo tem que tocar o span (ou a linha
 #     citada tem que mostrar o nome, que é o caso do call site honesto);
 # (b) o nome não é declarado mas tem FORMA de declaração e o arquivo inteiro não tem
@@ -419,11 +447,22 @@ static func _SeriesSpanVerdict(src : PackedStringArray, serie : String, from : i
 #     afirma que ali está `Foo()` quando o arquivo nunca viu esse nome. Sem este
 #     braço a identidade só mordida onde já havia declaração, e ponteiro para corpo
 #     alheio com nome inexistente continuava "conferido";
-# (c) o nome não é declarado, tem outra grafia no arquivo -> caixa não é identidade.
+# (c) o nome não é declarado, tem outra grafia no arquivo -> caixa não é identidade;
+# (d) o ALVO é prosa (`.md`) -> não há span, e o que julga é a linha citada
+#     (`_ProseTargetVerdict`). `opinion` recebe o total que teve opinião, porque um
+#     eixo novo verde por não achar com o que comparar não é régua.
 static func _IdentityVerdict(spans : Dictionary, src : PackedStringArray, symName : String,
-		shape : String, from : int, to : int, cited : String) -> String:
+		shape : String, from : int, to : int, cited : String, opinion : Dictionary = {}) -> String:
 	if symName == "":
 		return ""
+	if _IsProseTarget(cited):
+		var prose : String = _ProseTargetVerdict(src, symName, from, to)
+		if prose == "muda":
+			return ""
+		opinion["prose"] = int(opinion.get("prose", 0)) + 1
+		if prose == "dentro":
+			return ""
+		return "%d-%d cita `%s` como evidência e o nome não está nessa linha de `%s` — está em outra, e abrir no número citado não mostra o que a frase jura" % [from, to, symName, cited]
 	if spans.has(symName):
 		return _IdentityDrift(spans, src, symName, from, to)
 	if _SpanHasDefShape(shape):
@@ -457,7 +496,7 @@ static func _IdentityJudgeCorpus(docLines : PackedStringArray, src : PackedStrin
 			if served.is_empty():
 				continue
 			tally["judged"] = int(tally.get("judged", 0)) + 1
-			var verdict : String = _IdentityVerdict(symSpans, src, String(served[1]), String(served[0]), from, to, tag)
+			var verdict : String = _IdentityVerdict(symSpans, src, String(served[1]), String(served[0]), from, to, tag, tally)
 			if verdict != "":
 				out.append("%s → %s" % [tag, verdict])
 	return out
@@ -474,14 +513,14 @@ static func _IdentityJudgeCorpus(docLines : PackedStringArray, src : PackedStrin
 # de 140 caracteres não distingue os dois casos porque eles estão realmente perto; o
 # que os distingue é que a frase de `_init()` já fechou antes do ponteiro começar.
 static func _ServedName(docLines : PackedStringArray, symRx : RegEx, recs : Array,
-		ptrLine : int, m : RegExMatch, isMd : bool) -> Array:
+		ptrLine : int, m : RegExMatch, wholeProse : bool) -> Array:
 	var best : Array = []
 	var bestGap : int = 1000000000
 	for wl in range(maxi(0, ptrLine - 2), mini(docLines.size(), ptrLine + 3)):
 		var wLine : String = String(docLines[wl])
-		# A janela de um `.md` é prosa inteira; em arquivo de código só o comentário fala
-		# de evidência, e o corpo da função nomeia coisas que ninguém escreveu como citação.
-		if not isMd and not wLine.strip_edges().begins_with("#"):
+		# `.md` e JSON de conf são prosa inteira, porque JSON não tem marcador de comentário; em
+		# código só o comentário fala de evidência, e o corpo da função nomeia coisas não citadas.
+		if not wholeProse and not wLine.strip_edges().begins_with("#"):
 			continue
 		for sm in symRx.search_all(wLine):
 			var shape : String = String(sm.get_string(1))
@@ -718,17 +757,17 @@ static func _MdFilesAll() -> Array[String]:
 	return found
 
 # Os mesmos ponteiros de evidência moram também em comentário de código, e até
-# esta passada a varredura lia só `.md`. O custo de ler isso provado na própria
-# rodada: `EconomyBaseCatalog.gd` apontava os knobs de troca para
-# `EconomyService.gd:208/209/212` quando o assento estava em `:174/175/178` havia
-# um fatiamento, e `Peers.gd` se autodata em linhas que o próprio corte tinha
-# apagado. Nenhum portão disse nada porque nenhum portão olhava comentário de
-# código. Varredura ampliada para os quatro diretórios mantidos, e só linha de
-# comentário — corpo de função não é prosa de evidência.
-static func _CommentFilesAll() -> Array[String]:
+# esta passada a varredura lia só `.md`. O custo é provado na própria rodada: os
+# knobs de troca eram apontados para linhas que um fatiamento tinha movido, e
+# `Peers.gd` se autodata em linhas que o próprio corte apagou. Nenhum portão disse
+# nada porque nenhum olhava comentário. Varredura ampliada para as quatro raízes
+# de código mantidas, e só linha de comentário — corpo de função não é evidência. Em
+# 2026-09-29 entrou `res://data`: JSON é prosa sem marcador (`_note`, `_campos` e
+# `_estado_atual` juram número), e ali morriam falsos os três ponteiros do censo.
+static func _CodeAndDataProseAll() -> Array[String]:
 	var skipped : Array[String] = ["addons", "archive", "graphify-out"]
-	var exts : Array[String] = [".gd", ".py", ".sh"]
-	var roots : Array[String] = ["res://sources", "res://tests", "res://scripts", "res://companion"]
+	var exts : Array[String] = [".gd", ".py", ".sh", ".json"]
+	var roots : Array[String] = ["res://sources", "res://tests", "res://scripts", "res://companion", "res://data"]
 	var found : Array[String] = []
 	var stack : Array[String] = roots.duplicate()
 	while not stack.is_empty():
@@ -819,15 +858,15 @@ func SuiteEvidencePointers() -> void:
 	# A varredura ampliada tem o mesmo guard da lista de `.md`: uma régua que para
 	# de achar arquivo de código passa a dizer "0 falhas" por não olhar nada, que é
 	# o defeito que este suite existe para denunciar. O número é baixo de propósito
-	# — são os quatro diretórios mantidos; folga para um fatiamento não virar falha
-	# de régua, e um `roots` errado continua sendo falha.
-	var codeDocs : Array[String] = _CommentFilesAll()
-	if not Check(codeDocs.size() >= 100,
-			"varredura acha os arquivos de código cujo comentário a régua ampliada promete ler: %d" % codeDocs.size()):
+	# — são os cinco diretórios de prosa (quatro de código mais `res://data`), e o
+	# JSON tem que estar na lista: sem ele, um `roots` mudo devolveria verde.
+	var proseDocs : Array[String] = _CodeAndDataProseAll()
+	if not Check(proseDocs.size() >= 100 and proseDocs.has("res://data/conf/seasons.json"),
+			"varredura acha o comentário de código e o JSON de conf que promete ler: %d arquivos" % proseDocs.size()):
 		return
 	var sweep : Array[String] = []
 	sweep.append_array(docs)
-	sweep.append_array(codeDocs)
+	sweep.append_array(proseDocs)
 	var lineCache : Dictionary = {}
 	var spanCache : Dictionary = {}
 	var symCache : Dictionary = {}
@@ -843,8 +882,12 @@ func SuiteEvidencePointers() -> void:
 	var comMensagem : int = 0
 	var comSuite : int = 0
 	var comIdentidade : int = 0
+	# Quantas citações a linha de `.md` o eixo de prosa teve OPINIÃO (o nome está no
+	# arquivo, então há linha certa ou errada a julgar). É o número que prova que o
+	# braço (d) está olhando, e não verde por não ter com o que comparar.
+	var proseOpinion : Dictionary = {}
 	# Nome de suíte em backticks NA MESMA LINHA do ponteiro: é a forma como a prosa deste repo
-	# amarra as duas coisas ("`SuiteRefund` (`tests/IdleTests.gd:7686-7758`)"). Olhar a linha e
+	# amarra as duas coisas ("`SuiteRefund` (`tests/IdleTests.gd:7729`)"). Olhar a linha e
 	# não a janela evita puxar nome de um parágrafo vizinho.
 	var suiteRx : RegEx = RegEx.new()
 	suiteRx.compile("`Suite[A-Za-z0-9_]+`")
@@ -863,7 +906,7 @@ func SuiteEvidencePointers() -> void:
 		Check(false, "o padrão de série de métrica compila")
 		return
 	for docPath in sweep:
-		var isMd : bool = String(docPath).get_extension().to_lower() == "md"
+		var wholeProse : bool = ["md", "json"].has(String(docPath).get_extension().to_lower())
 		var docRaw : String = _RepoFile(docPath)
 		if not Check(docRaw != "", "evidência: %s existe e lê" % docPath):
 			continue
@@ -875,15 +918,15 @@ func SuiteEvidencePointers() -> void:
 		var ptrRecs : Array = []
 		for p in docLines.size():
 			var pLine : String = String(docLines[p])
-			if not isMd and not pLine.strip_edges().begins_with("#"):
+			if not wholeProse and not pLine.strip_edges().begins_with("#"):
 				continue
 			for pm in ptrRx.search_all(pLine):
 				ptrRecs.append([p, pm.get_start(), pm.get_end()])
 		for i in docLines.size():
 			var ptrLine : String = String(docLines[i])
-			# Em arquivo de código só comentário é prosa de evidência: o corpo da
-			# função pode conter um shape `x.gd:12` que ninguém escreveu como prova.
-			if not isMd and not ptrLine.strip_edges().begins_with("#"):
+			# Em código só o comentário é prosa de evidência; em JSON toda linha é, porque não
+			# existe marcador de comentário ali. Corpo de função pode conter um shape `x.gd:12`.
+			if not wholeProse and not ptrLine.strip_edges().begins_with("#"):
 				continue
 			var matches : Array[RegExMatch] = ptrRx.search_all(ptrLine)
 			if matches.is_empty():
@@ -907,7 +950,7 @@ func SuiteEvidencePointers() -> void:
 				if to < from:
 					to = from
 				conferidos += 1
-				if not isMd:
+				if not wholeProse:
 					conferidosCode += 1
 				if from > src.size() or to > src.size():
 					quebrados.append("%s: %s:%d (%s tem %d linhas)" % [site, cited, to, resPath, src.size()])
@@ -931,24 +974,29 @@ func SuiteEvidencePointers() -> void:
 					if drift != "":
 						deslocados.append("%s: %s → %s" % [site, cited, drift])
 				# (6) IDENTIDADE: o símbolo que a cláusula deste ponteiro serve tem que estar
-				# declarado no arquivo citado e o intervalo citado tem que tocar o span dele.
+				# declarado no arquivo citado e o intervalo citado tem que tocar o span dele
+				# — ou, quando o alvo é prosa, o nome tem que estar na própria linha citada.
 				# O vínculo é feito em duas metades: `_OwnerPtr` diz a quem um nome pertence
 				# (direção da prosa, teto de cláusula em caracteres, nenhum ponteiro no meio)
 				# e `_ServedName` devolve, dentre os nomes daquele ponteiro, o mais perto dele
 				# — um número localiza UM símbolo, e o nome dito a 60 caracteres de distância
 				# quando o vizinho está a 8 não é o que a frase estava procurando.
 				var symExt : String = String(resPath).get_extension().to_lower()
-				if symExt == "gd" or symExt == "sh" or symExt == "py":
+				var proseTarget : bool = symExt == "md"
+				if proseTarget or symExt == "gd" or symExt == "sh" or symExt == "py":
 					if not symCache.has(resPath):
 						symCache[resPath] = _SymbolSpans(src, symExt)
 					var symSpans : Dictionary = symCache[resPath]
-					if not symSpans.is_empty():
-						var served : Array = _ServedName(docLines, symRx, ptrRecs, i, m, isMd)
+					# Em `.md` o índice é vazio DE PROPÓSITO (prosa não declara), e o que
+					# julga é a linha citada; o gate de `is_empty()` só vale para código,
+					# onde sem span não há régua nenhuma a chamar.
+					if proseTarget or not symSpans.is_empty():
+						var served : Array = _ServedName(docLines, symRx, ptrRecs, i, m, wholeProse)
 						if not served.is_empty():
 							var symName : String = String(served[1])
 							if symSpans.has(symName):
 								comIdentidade += 1
-							var idrift : String = _IdentityVerdict(symSpans, src, symName, String(served[0]), from, to, cited)
+							var idrift : String = _IdentityVerdict(symSpans, src, symName, String(served[0]), from, to, cited, proseOpinion)
 							if idrift != "":
 								identes.append("%s: %s → %s" % [site, cited, idrift])
 				# (7) SÉRIE NOMEADA × ARQUIVO QUE A EMITE. Um ponteiro pode jurar que a
@@ -983,6 +1031,27 @@ func SuiteEvidencePointers() -> void:
 					var msg : String = String(msgMatch.get_string(1))
 					if msg.find("/") >= 0 or msg.find("res://") >= 0:
 						continue
+					# Posse, pela MESMA casa da régua de métrica acima (`_OwnerPtr`): a
+					# janela é de ±2 linhas, e numa tabela em que cada linha é uma cadeira
+					# com os seus ponteiros, a mensagem dita na linha 188 era julgada contra
+					# os ponteiros das linhas 186 e 187 — e o ponteiro de 188 que NÃO carrya
+					# a frase (o da confissão do `AIAgent.gd`) era acusado por ela. Sem
+					# vínculo, a régua julga menção como citação, que é exatamente o defeito
+					# que a casa `_OwnerPtr` existe para impedir. A posição da mensagem é
+					# devolvida para a linha/coluna da doc (a janela é um texto só), e só
+					# então perguntamos a quem ela pertence.
+					var msgWinCol : int = int(msgMatch.get_start())
+					var msgLine : int = maxi(0, i - 2)
+					var msgAcc : int = 0
+					for wl in range(maxi(0, i - 2), mini(docLines.size(), i + 3)):
+						var wlen : int = String(docLines[wl]).length() + 1
+						if msgAcc + wlen > msgWinCol:
+							msgLine = wl
+							break
+						msgAcc += wlen
+					var ownMsg : Array = _OwnerPtr(ptrRecs, docLines, msgLine, msgWinCol - msgAcc)
+					if ownMsg.is_empty() or int(ownMsg[1]) != int(m.get_start()):
+						continue
 					# A regra só vale para citação de *mensagem de check*: em arquivo de código, o
 					# hit tem que ser uma linha de `Check…` com a frase no posto do RÓTULO (o último
 					# literal da linha). Sem o rótulo, a janela ampliada confunde identificador com
@@ -1007,18 +1076,18 @@ func SuiteEvidencePointers() -> void:
 	CheckEq(vazios.size(), 0, "ponteiros: nenhuma das %d referências cai em linha em branco — ponteiro em branco não mostra nada para quem abre no número citado (%s)" % [conferidos, " | ".join(vazios)])
 	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])
 	CheckEq(deslocados.size(), 0, "ponteiros: %d citações que nomeiam uma suíte e dão o número caem dentro do span dela (%s)" % [comSuite, " | ".join(deslocados)])
-	CheckEq(identes.size(), 0, "ponteiros: %d citações que nomeiam um símbolo caem no span daquele símbolo (ou numa linha que o usa) — e não no corpo de um vizinho (%s)" % [comIdentidade, " | ".join(identes)])
+	CheckEq(identes.size(), 0, "ponteiros: %d citações que nomeiam um símbolo caem no span daquele símbolo (ou numa linha que o usa) — e não no corpo de um vizinho — e %d alvos de arquivo de prosa tiveram o nome julgado contra a LINHA citada (%s)" % [comIdentidade, int(proseOpinion.get("prose", 0)), " | ".join(identes)])
 	# A régua nova só vale se estiver de fato olhando: quatro é o mínimo dos ponteiros que
 	# hoje nomeiam suíte (handoff da vitrine, e os três do documento de auditoria do beta).
 	# Com `comSuite` em zero o comparador estaria verde por não achar com o que comparar.
 	Check(comSuite >= 4, "ponteiros: %d citações com nome de suíte na mesma linha do número foram julgadas pelo span" % comSuite)
-	# A ampliação para comentário de código só vale se ela estiver de fato olhando
-	# alguma coisa: um `_CommentFilesAll()` mudo, ou um filtro de `#` que não casa
-	# com os quatro diretórios, devolve "0 quebrados" pelo pior motivo possível. O
+	# A ampliação para fora de `.md` só vale se ela estiver de fato olhando
+	# alguma coisa: um `_CodeAndDataProseAll()` mudo, ou uma `exts` que não casa com
+	# as cinco raízes, devolve "0 quebrados" pelo pior motivo possível. O
 	# comparador em si já tem prova de que morde (nove ponteiros apodrecidos foi o
 	# que ele achou na doc na rodada em que entrou); o que é novo aqui é a entrada,
 	# então é a entrada que este check mede.
-	Check(conferidosCode >= 20, "ponteiros: %d de %d referências vieram de comentário de código, não só de `.md` — a varredura ampliada está olhando" % [conferidosCode, conferidos])
+	Check(conferidosCode >= 20, "ponteiros: %d de %d referências vieram de prosa fora de `.md` (comentário e JSON de conf) — a varredura ampliada está olhando" % [conferidosCode, conferidos])
 	# Prova de que as duas réguas novas mordem, no mesmo formato do guard de entrada (uma
 	# comparação que nunca viu o caso que descreve é uma comparação que pode estar errada em
 	# silêncio). Usado dado do repo, não fixture inventado: a linha 3 de `LauncherCommons.gd`
@@ -1269,6 +1338,43 @@ func SuiteEvidencePointers() -> void:
 	Check(eOne.size() == 1 and eOne[0].contains("Beta"),
 			"dos dois nomes da mesma cláusula, o mais perto do número é o SERVIDO, e o outro fica fora: %s" % " | ".join(eOne))
 	CheckEq(eTruth.size(), 0, "a mesma forma, dita verdadeira, não acusa (E): %s" % " | ".join(eTruth))
+	# Classe F — ALVO DE PROSA. Um ponteiro para dentro de `.md` não tem declaração para
+	# tocar, e o braço que confere o nome contra o ARQUIVO INTEIRO perdoa a linha errada:
+	# foi assim que a linha 115 de `docs/development/testing.md`, onde `companion_gates()`
+	# mora, deixou de ser o número que a frase citava: ela apontava para a 99, e continuava
+	# verde. O fixture é um `.md` de cinco
+	# linhas e o que muda entre a mentira e a verdade é SÓ o número. A terceira perna é o
+	# silêncio: nomear um símbolo de código ao citar a linha do doc que descreve a mesma
+	# coisa sem escrever aquele símbolo não é acusação — é máquina de reescrever prosa.
+	var mdSrc : PackedStringArray = PackedStringArray([
+		"# Prosa de prova",										# 1
+		"",														# 2
+		"O gate `companion_gates()` roda no runner.",			# 3
+		"",														# 4
+		"Outra linha fala de `harness_marker()`.",				# 5
+	])
+	var fTally : Dictionary = {}
+	var fLie : Array[String] = _IdentityJudgeCorpus(PackedStringArray([
+		"`companion_gates()` está na tabela (`probe_lie.md:5`).",
+	]), mdSrc, _SymbolSpans(mdSrc, "md"), "probe_lie.md:5", fTally)
+	var fTruth : Array[String] = _IdentityJudgeCorpus(PackedStringArray([
+		"`companion_gates()` está na tabela (`probe_lie.md:3`).",
+	]), mdSrc, _SymbolSpans(mdSrc, "md"), "probe_lie.md:3", fTally)
+	var fMuda : Array[String] = _IdentityJudgeCorpus(PackedStringArray([
+		"`ZetaLocked()` é o teto (`probe_lie.md:3`).",
+	]), mdSrc, _SymbolSpans(mdSrc, "md"), "probe_lie.md:3", fTally)
+	Check(_PtrResolve("probe_lie.md") == "",
+			"a mentira de prosa nunca toca o disco: `probe_lie.md` não resolve em `%s`" % _PtrResolve("probe_lie.md"))
+	CheckEq(fLie.size(), 1, "mentira injetada F (nome no `.md`, linha errada) produz [FAIL] na régua: %s" % " | ".join(fLie))
+	CheckEq(fTruth.size(), 0, "o mesmo nome com o número certo silencia (F): %s" % " | ".join(fTruth))
+	CheckEq(fMuda.size(), 0, "nome que o `.md` não escreve em lugar nenhum não é julgado (F): %s" % " | ".join(fMuda))
+	Check(fLie.size() == 1 and fLie[0].contains("companion_gates") and fLie[0].contains("5"),
+			"mentira F é detectada pelo símbolo e pela linha: %s" % " | ".join(fLie))
+	# O piso de opinião do eixo: `muda` não conta, então dos três controles acima exatamente
+	# dois têm linha certa ou errada a julgar. É o mesmo número que a varredura soma em
+	# `proseOpinion`, por isso a casa é a MESMA decisão e não uma contagem à parte.
+	CheckEq(int(fTally.get("prose", 0)), 2,
+			"o braço de prosa teve opinião sobre %d dos três controles F — sem isso ele estaria verde por não olhar nada" % int(fTally.get("prose", 0)))
 	# A acusação é mecânica: nomeia o símbolo e o número, não descreve o humor da régua.
 	Check(aLie.size() == 1 and aLie[0].contains("ZetaLocked") and aLie[0].contains("5"),
 			"mentira A é detectada pelo símbolo e pela linha: %s" % " | ".join(aLie))
@@ -1301,7 +1407,16 @@ func SuiteEvidencePointers() -> void:
 			"ponteiros: %d de %d referências tiveram um símbolo nomeado julgado pela régua de identidade — sem isso, \"0 acusações\" pode significar só que a doc não nomeou nada" % [comIdentidade, conferidos])
 	Check(comIdentidade * 5 >= conferidos,
 			"ponteiros: %d de %d referências julgadas pela régua de identidade é pelo menos um quinto do que ela olha — abaixo disso a mordida medida é do tamanho do que a prosa deixou dizer" % [comIdentidade, conferidos])
-	print("  [info] ponteiros: %d referências arquivo:linha (%d em comentário de código), %d com mensagem de check na prosa, %d com suíte nomeada na mesma linha, %d com símbolo nomeado na cláusula, %d nomes de suíte, %d pares (série, intervalo) julgados" % [conferidos, conferidosCode, comMensagem, comSuite, comIdentidade, citadas.size(), metricos])
+	# O braço (d) nasceu nesta rodada, então o piso é o MEDIDO com margem, não o desejado: a
+	# varredura de hoje julga três citações a linha de `.md` com o símbolo nomeado na mesma
+	# cláusula, e uma delas é o registro desta própria régua citando a linha que ele prova —
+	# o número mexe quando a prosa mexe, por isso o piso é queda-para-baixo e a mordida é
+	# provada pelo controle F (opinião sobre exatamente 2 dos 3 casos injetados, com a
+	# mentira acusando). O piso só impede que a doc enmudeça e "0 acusações" signifique "0 olhares".
+	var comProse : int = int(proseOpinion.get("prose", 0))
+	Check(comProse >= 2,
+			"ponteiros: %d citações a linha de `.md` tiveram o nome julgado contra a própria linha — sem isso o eixo novo está verde por não olhar nada" % comProse)
+	print("  [info] ponteiros: %d referências arquivo:linha (%d em prosa fora de `.md`), %d com mensagem de check na prosa, %d com suíte nomeada na mesma linha, %d com símbolo nomeado na cláusula, %d nomes de suíte, %d pares (série, intervalo) julgados, %d alvos de `.md` julgados por linha" % [conferidos, conferidosCode, comMensagem, comSuite, comIdentidade, citadas.size(), metricos, comProse])
 
 	# ---------------------------------------------------------------- régua de série (7)
 	# O veredito do que a régua achou na doc do beta, e o piso do que ela julgou: "0
@@ -1328,6 +1443,37 @@ func SuiteEvidencePointers() -> void:
 			"controle: o mesmo par, com o intervalo cortando uma linha antes, é acusado")
 	Check(_SeriesSpanVerdict(witness, "shambleta_serie_que_nenhum_arquivo_emite", 1, witness.size()) == "muda",
 			"controle: série que o arquivo não emite em lugar nenhum não é julgada — é a trava que impede acusar prosa inocente")
+
+# Casa única do predicado de fantasma de harness. Um `tests/<nome>.gd` citado é
+# fantasma quando NEM `tests/` o lista NEM algum `scripts/*.sh` o escreve.
+#
+# Por que a segunda metade existe, e por que é DERIVADA: `check_gate_markers.sh`
+# planta os fixtures com que julga o próprio contrato de marcador escrevendo-os no
+# scratch do run (`cat > "$WORK/tests/probe_ok.gd"`, `printf … > "$WORK/tests/probe_mixed.gd"`),
+# nunca commitando um `tests/probe_ok.gd`. O nome é real (o gate o cria e o cobra) e o
+# arquivo não existe entre uma passada e outra — uma allowlist digitada desses nomes
+# apodreceria no dia em que o gate ganha um probe novo ou troca o diretório do scratch,
+# que é exatamente a doença que esta suíte existe para denunciar. Então a exceção é lida
+# da escrita: `SuiteHarnessCitations` varre `scripts/*.sh` pelo padrão `> …tests/<nome>.gd`
+# e o que um script escreve existe. Quem nenhum script escreve continua acusado, e é o
+# que o par de controles abaixo prova — inclusive contra a própria exceção: o nome
+# plantado tem forma de probe e NÃO está na derivação, logo tem que morder.
+static func _HarnessGhost(base : String, realFiles : Dictionary, scratch : Dictionary) -> bool:
+	return not realFiles.has(base) and not scratch.has(base)
+
+# As mesmas duas metades, aplicadas a um texto de prosa: devolve os nomes citados que
+# a régua acusaria. A varredura e os controles chamam este corpo, então o controle
+# mede a régua real — não uma cópia dela que poderia esquecer a cláusula `scratch`.
+static func _HarnessGhosts(text : String, realFiles : Dictionary, scratch : Dictionary) -> Array[String]:
+	var out : Array[String] = []
+	var rx : RegEx = RegEx.new()
+	if rx.compile("tests/([A-Za-z0-9_]+\\.gd)") != OK:
+		return out
+	for m : RegExMatch in rx.search_all(text):
+		var base : String = String(m.get_string(1))
+		if _HarnessGhost(base, realFiles, scratch):
+			out.append(base)
+	return out
 
 # Régua de citação de harness — audita o PAR doc↔gate nos dois sentidos.
 #
@@ -1453,23 +1599,50 @@ func SuiteHarnessCitations() -> void:
 
 	# (6) Metade (b) na prosa: toda citação `tests/<nome>.gd` fora de `archive/` nomeia
 	#     arquivo que existe. `archive/` está fora por construção do `_MdFilesAll()` e do
-	#     `_CommentFilesAll()` — lá dentro a frase descreve o que ERA (o próprio registro
+	#     `_CodeAndDataProseAll()` — lá dentro a frase descreve o que ERA (o registro
 	#     do `gut_runner` apagado mora ali), e confundi-la com mentira seria apagar o
 	#     histórico para calar a régua.
 	var sweep : Array[String] = []
 	sweep.append_array(_MdFilesAll())
-	sweep.append_array(_CommentFilesAll())
-	if not Check(sweep.size() >= 180, "a varredura de prosa lê %d arquivos — a régua julga a doc e o comentário, não só uma tabela" % sweep.size()):
+	sweep.append_array(_CodeAndDataProseAll())
+	if not Check(sweep.size() >= 180, "a varredura de prosa lê %d arquivos — a régua julga a doc, o comentário e o JSON de conf, não só uma tabela" % sweep.size()):
 		return
+	# Derivado, não redigitado: um gate que PLANTA probes em `tests/` dentro do seu
+	# scratch (`cat > "$WORK/tests/probe_ok.gd"`, é o que `check_gate_markers.sh` faz
+	# para julgar o próprio contrato de marcador) nomeia na sua fonte um arquivo que
+	# só existe enquanto o gate roda. A exceção não é uma lista digitada de nomes que
+	# convém: ela é lida de todos os `scripts/*.sh`, no padrão de escrita, e acompanha
+	# o gate se ele trocar o nome do probe ou o diretório do scratch. Quem citar um
+	# `tests/<nome>.gd` que nenhum script escreve nem lista continua acusado pelo
+	# predicado `_HarnessGhost` (a casa única que a varredura e o controle (7) chamam)
+	# — inclusive o probe plantado no próprio controle, que tem a forma e não está na
+	# derivação.
+	var writeRx : RegEx = RegEx.new()
+	if writeRx.compile(">{1,2}[[:space:]]*\"?[^\"'[:space:]]*tests/([A-Za-z0-9_]+\\.gd)") != OK:
+		Check(false, "o padrão de escrita de probe temporário compila")
+		return
+	var scratch : Dictionary = {}
+	var sdir : DirAccess = DirAccess.open("res://scripts")
+	if not Check(sdir != null, "`res://scripts` abre para derivar os probes que um gate planta"):
+		return
+	sdir.list_dir_begin()
+	var sname : String = sdir.get_next()
+	while sname != "":
+		if sname.ends_with(".sh"):
+			for m : RegExMatch in writeRx.search_all(_RepoFile("res://scripts/" + sname)):
+				scratch[String(m.get_string(1))] = true
+		sname = sdir.get_next()
+	sdir.list_dir_end()
+	Check(scratch.size() >= 1,
+			"a derivação lê os probes que um gate planta no scratch: %d nome(s) — zero aqui é varredura muda, não inocência" % scratch.size())
 	var citados : Dictionary = {}
 	var fantasmas : Array[String] = []
 	for path in sweep:
 		var src : String = _RepoFile(String(path))
 		for m : RegExMatch in citeRx.search_all(src):
-			var base : String = String(m.get_string(1))
-			citados[base] = true
-			if not realFiles.has(base):
-				fantasmas.append("%s → tests/%s" % [String(path).trim_prefix("res://"), base])
+			citados[String(m.get_string(1))] = true
+		for ghost : String in _HarnessGhosts(src, realFiles, scratch):
+			fantasmas.append("%s → tests/%s" % [String(path).trim_prefix("res://"), ghost])
 	fantasmas.sort()
 	Check(citados.size() >= 40, "a prosa cita %d harnesses diferentes — censo baixo demais para a acusação de fantasma significar algo" % citados.size())
 	CheckEq(fantasmas.size(), 0, "nenhuma citação de harness na prosa nomeia arquivo inexistente (%s)" % " | ".join(fantasmas))
@@ -1479,25 +1652,47 @@ func SuiteHarnessCitations() -> void:
 	#     para denunciar, e a rodada cega de 2026-09-28 já viu régua com esse formato.
 	#     Cada controle vem em par: o nome falso tem que ser acusado e um nome verdadeiro
 	#     tem que sair limpo, senão "acusou" pode ser só um predicado que acusa tudo.
+	# E o par agora tem TRÊS lados, porque a régua ganhou uma cláusula de exceção (o
+	# probe que um gate planta no scratch): um predicado com exceção só está provado
+	# quando se mostra que ela poupa o que tem que poupar E continua mordendo o resto.
 	var plantado : String = "harness_que_nao_existe_gd.gd"
 	var verdadeiro : String = "reason_toast_test.gd"
+	# Nome com a MESMA forma dos probes do gate, que nenhum script escreve: se a exceção
+	# fosse uma regra de caixa (`probe_*`) ou uma lista batida à mão, este nome passaria
+	# limpo. Ele é o que prova que salva o probe é a derivação, não o prefixo.
+	var probeFalso : String = "probe_que_nenhum_gate_escreve.gd"
 	Check(not realFiles.has(plantado), "controle: o nome plantado realmente não existe em `tests/`")
+	Check(not realFiles.has(probeFalso) and not scratch.has(probeFalso),
+			"controle: o probe falso plantado não está em `tests/` nem na derivação de scratch — é o caso que a exceção não pode cobrir")
 	Check(realFiles.has(verdadeiro), "controle: o nome verdadeiro do par existe em `tests/` (senão o par abaixo não significa nada)")
-	var acusouFalso : bool = false
-	var acusouVerdadeiro : bool = false
-	for m : RegExMatch in citeRx.search_all("ver `tests/" + plantado + "` e `tests/" + verdadeiro + "`"):
-		var citedBase : String = String(m.get_string(1))
-		# O PREDICADO de acusão é `not realFiles.has(...)`. Um controle que marca
-		# "acusado" só porque o nome apareceu no texto julga menção, não a régua — e
-		# aí o par falso/verdadeiro perde o sentido (o nome verdadeiro "acusaria"
-		# sempre, e o controle viraria a própria falha que denuncia).
-		var acusado : bool = not realFiles.has(citedBase)
-		if acusado and citedBase == plantado:
-			acusouFalso = true
-		if acusado and citedBase == verdadeiro:
-			acusouVerdadeiro = true
-	Check(acusouFalso, "controle de fantasma: o mesmo predicado acusa o nome plantado")
-	Check(not acusouVerdadeiro, "controle de fantasma: o mesmo predicado NÃO acusa um harness que existe — a régua varre %d harnesses reais e os trata como existentes" % realFiles.size())
+	var chavesScratch : Array[String] = []
+	for k : String in scratch:
+		chavesScratch.append(k)
+	chavesScratch.sort()
+	var probeDerivado : String = "" if chavesScratch.is_empty() else String(chavesScratch[0])
+	Check(probeDerivado != "" and not realFiles.has(probeDerivado),
+			"controle: o probe derivado (%s) não existe em `tests/` — é a exceção trabalhando, não um arquivo que passaria de todo jeito" % probeDerivado)
+	# O plantio vai EM CIMA da prosa de um doc real (`docs/development/testing.md`, a mesma
+	# já lida e guardada no bloco (4)): o controle exerce a régua sobre texto que a
+	# varredura consome de verdade, e não sobre uma frase órfã. Se um dia a doc for
+	# filtrada para fora da varredura, o controle perde o sentido — e é isto que ele denuncia.
+	# O predicado julgado é `_HarnessGhost`, a MESMA casa que a varredura usa: um controle
+	# que marca "acusado" só porque o nome apareceu no texto julga menção, não a régua — e
+	# aí o par falso/verdadeiro perde o sentido (o nome verdadeiro "acusaria" sempre, e o
+	# controle viraria a própria falha que denuncia).
+	var prosaBase : String = testingSrc
+	var prosaPlantada : String = prosaBase + "\nVer `tests/" + plantado + "`,"
+	prosaPlantada += " `tests/" + probeFalso + "`, `tests/" + probeDerivado
+	prosaPlantada += "` e `tests/" + verdadeiro + "`, todos na mesma frase.\n"
+	Check(_HarnessGhosts(prosaBase, realFiles, scratch).is_empty(),
+			"controle: a doc real sem plantio sai limpa — o que acusa no par abaixo foi o plantio, não a base")
+	var fantasmasPlantados : Array[String] = _HarnessGhosts(prosaPlantada, realFiles, scratch)
+	Check(fantasmasPlantados.has(plantado), "controle de fantasma: a mesma régua acusa o nome plantado na prosa de um doc real")
+	Check(fantasmasPlantados.has(probeFalso), "controle de fantasma: a mesma régua acusa um nome com forma de probe que nenhum script escreve")
+	Check(not fantasmasPlantados.has(probeDerivado),
+			"controle de probe: a mesma régua NÃO acusa o probe que um gate planta no scratch (%d nome(s) derivado(s) de `scripts/*.sh`)" % chavesScratch.size())
+	Check(not fantasmasPlantados.has(verdadeiro),
+			"controle de fantasma: o mesmo predicado NÃO acusa um harness que existe — a régua varre %d harnesses reais e os trata como existentes" % realFiles.size())
 	Check(rowRx.search_all("| `" + plantado.trim_suffix(".gd") + "` | x |\n").size() == 1,
 			"controle de linha: o mesmo predicado lê uma linha plantada na tabela")
 	Check(not alcancados.has(plantado.trim_suffix(".gd")),
@@ -1894,7 +2089,7 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 	# Compressão é sampler de política, não regime de produto. Vem primeiro porque
 	# `_SimRun` toma a instância da zona e libera o agente no fim — nada daqui pode
 	# segurar referência de antes dela.
-	var snapshot : Dictionary = await _SimRun(charID, 972, 180, 1.0, 1, false)
+	var snapshot : Dictionary = await _SimRun(charID, 972, 180, 1.0, 1, false, -1.0, true)
 	var simKills : int = int(snapshot.get("kills", 0))
 	var lootTicks : int = int(snapshot.get("loot_ticks", 0))
 	var picks : int = int(snapshot.get("drops_picked", 0))
@@ -1903,6 +2098,12 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 		simKills, lootTicks, picks, potions, int(snapshot.get("deaths", 0))])
 	Check(simKills > 0, "loot: sessão produtiva (kills=%d)" % simKills)
 	Check(lootTicks > 0, "loot: a policy entrou em State.LOOT (loot_ticks=%d)" % lootTicks)
+	# A régua é de GRANDEZA de coleta, com a precondição declarada no `_SimRun`
+	# (mochila com espaço — ver `_FreeCarriedSlots`), e a conservação do chão é
+	# julgada à parte em (4b). Ela continuava existindo só por determinismo de
+	# identidade enquanto o settle pagava um hash replicado; desde #95 o que se
+	# afirma aqui é "o farmer tira itens do chão e eles chegam a ele", que é o
+	# que importa e que pega se o elo quebrar.
 	Check(picks >= 2, "loot: o farmer tirou item do chão (drops_picked=%d ≥ 2)" % picks)
 	# `potions_used` da sessão NÃO é régua: medido no gate de 2026-09-28, o farmer
 	# que chega com o nível/equipamento das suítes anteriores coleta 16 e bebe 0,
@@ -1912,8 +2113,41 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 	var agent : PlayerAgent = await _SpawnSimAgent(charID, 971, 1)
 	if not Check(agent != null, "loot: agente na zona 1"):
 		return
+	# Medido, não afirmado: quantos slots o load do MESMO char traz ocupados antes de
+	# a precondição abrir espaço. É o número que a #95 moveu (o settle offline paga
+	# agora uma identidade por rolagem, e `AddItemToCharacter` empilha uma linha por
+	# identidade sem olhar o teto de `InventorySize`, enquanto `ImportInventory` chama
+	# `PushItem` e descarta o que não cabe) — com a mochila no teto, `PushItem` recusa
+	# e as réguas de chão→inventário caem juntas por estado de fixture.
+	print("LOOTPIPE: mochila do char %d chegou com %d/%d slots" % [charID, agent.inventory.itemCount, ActorCommons.InventorySize])
 	var inst : WorldInstance = IdlePolicyService.GetFarmInstance(1)
 	if not Check(inst != null, "loot: instância da zona 1"):
+		WorldAgent.RemoveAgent(agent)
+		return
+	# Mesma precondição do elo dirigido abaixo (1b) e das réguas de pilha (4)/(5):
+	# sem slot livre, `PushItem` recusa tudo e as quatro réguas caem juntas por
+	# motivo de fixture, não de produto.
+	_FreeCarriedSlots(agent)
+	# E a precondição do CHÃO: `PickupDrop`/`DropItem` resolvem a instância por
+	# `WorldAgent.GetInstanceFromAgent`, que é `get_parent()`, enquanto
+	# `WorldAgent.PushAgent` anexa com `call_deferred` — o farmer recém-spawnado está
+	# LISTADO na zona com o pai ainda nulo. Julgar guarda de chão sem a anexação é
+	# a cadeia devolvendo false antes de olhar a mochila: as asserções de recusa
+	# passam VAZIAS. Espera-se a anexação e cobra-se a instância; sem ela a régua
+	# acusa, em vez de degradar para um ramo mais fraco.
+	var attachFrames : int = 0
+	while attachFrames < 60 and WorldAgent.GetInstanceFromAgent(agent) == null:
+		await Launcher.get_tree().physics_frame
+		attachFrames += 1
+	if not Check(WorldAgent.GetInstanceFromAgent(agent) as WorldInstance == inst,
+			"loot: o farmer está anexado à instância que tem o chão (frames=%d)" % attachFrames):
+		WorldAgent.RemoveAgent(agent)
+		return
+	# Vida cheia de volta antes de (1b): nos frames de espera o farmer fica parado
+	# apanhando da zona, e um farmer morto não bebe — a régua da bebereira acusaria o
+	# fixture. Quem afunda o HP de propósito é a própria (1b), duas linhas abaixo.
+	agent.stat.health = agent.stat.current.maxHealth
+	if not Check(ActorCommons.IsAlive(agent), "loot: farmer vivo depois de anexar à zona (frames=%d)" % attachFrames):
 		WorldAgent.RemoveAgent(agent)
 		return
 
@@ -1995,10 +2229,10 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 	# (4) Elo do chão, pelo caminho do inventário: `PushItem` empilha na memória e
 	# `DropItem` devolve ao mundo. `Inventory.DropItem` tem guarda — só consome a
 	# pilha quando o agente TEM instância e o mapa não é NO_DROP; sem ela o item
-	# sumiria do dono sem nunca aparecer no chão. O farmer recém-spawnado aqui pode
-	# não ter instância (a do sim é desmontada no fim de `_SimRun`), então cada lado
-	# entra na régua do ramo que de fato exercita, e o consumo completo é medido no
-	# mob, que está num instance vivo.
+	# sumiria do dono sem nunca aparecer no chão. A anexação é precondição cobrada
+	# antes de (1b), então aqui se julga sempre o ramo forte: sai da pilha E cai no
+	# chão da mesma instância que (4b) vai varrer. O consumo completo do outro lado
+	# é medido no mob, logo abaixo, que está num instance vivo por construção.
 	var apple : ItemCell = DB.GetItem(DB.GetCellHash("Apple"), "")
 	if not Check(apple != null, "loot: célula Apple resolve"):
 		WorldAgent.RemoveAgent(agent)
@@ -2013,17 +2247,82 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 		# Apple e o fixture pode chegar com pilha do settle — quem fecha com a
 		# quantidade pedida é a soma, não o total da célula.
 		CheckEq(int(agent.inventory.items[idx].count), seedCount + 2, "loot: a pilha em memória fecha com a quantidade pedida (+2 sobre %d)" % seedCount)
-		var playerInst : WorldInstance = WorldAgent.GetInstanceFromAgent(agent)
 		var pBefore : int = inst.drops.size()
 		agent.inventory.DropItem(apple, 1, idx)
 		var leftIdx : int = agent.inventory.FindItemIndex(apple)
 		var leftCount : int = int(agent.inventory.items[leftIdx].count) if leftIdx >= 0 else -1
-		if playerInst != null:
-			CheckEq(leftCount, seedCount + 1, "loot: DropItem do player tira da pilha exatamente o que pede (sobrou %d de %d)" % [leftCount, seedCount + 2])
-			CheckEq(inst.drops.size() - pBefore, 1, "loot: o drop do player cai na instância")
-		else:
-			CheckEq(leftCount, seedCount + 2, "loot: sem instância o DropItem não consome a pilha (item nem some nem duplica)")
-			CheckEq(inst.drops.size() - pBefore, 0, "loot: sem instância nada vai para o chão")
+		CheckEq(leftCount, seedCount + 1, "loot: DropItem do player tira da pilha exatamente o que pede (sobrou %d de %d)" % [leftCount, seedCount + 2])
+		CheckEq(inst.drops.size() - pBefore, 1, "loot: o drop do player cai na instância")
+
+	# (4b) Guarda do chão cheio — conservação, não tamanho. `WorldDrop.PickupDrop`
+	# dava `PopDrop` ANTES de saber se o item cabia: com a mochila no teto o drop
+	# saía do mundo sem nunca entrar em inventário nenhum, e o `drops_picked` do
+	# farmer ficava em zero enquanto o chão esvaziava (é o P0 de loot que derrubou
+	# esta esteira no gate de 2026-09-28). A régua abaixo é o lado que a grandeza
+	# sozinha não julga: o que não coube CONTINUA no chão, ninguém é creditado por
+	# ele, o MESMO item sai do chão quando há onde guardá-lo e as unidades dele
+	# APARECEM na mochila. Inverter a ordem pega aqui de qualquer lado. A anexação
+	# que faz este chão ser o do agente foi cobrada antes de (1b), junto com a
+	# mochila despejada — sem elas a recusa seria atribuída a outra coisa.
+	if not Check(WorldAgent.GetInstanceFromAgent(agent) as WorldInstance == inst, "loot: o farmer continua na instância que tem o chão"):
+		WorldAgent.RemoveAgent(agent)
+		return
+	var guardID : int = -1
+	var guardUnits : int = 0
+	# O chão desta guarda é um drop que a SUÍTE plantou, não "o primeiro que o
+	# dicionário entrega": desde #95 a mesa rola identidade por kill, e varrer
+	# `inst.drops` podia devolver uma célula que `DB.GetItem` não resolve ou uma
+	# não-empilhável com mais unidades que o teto da mochila — a coleta recusaria
+	# por um motivo que não é nada do que esta guarda caça (e a recusa anterior
+	# passava VAZIA, porque vazio e correto têm o mesmo veredito). Planta-se uma
+	# maçã de uma unidade e o id dela é o delta do dicionário.
+	var plantBefore : Dictionary = {}
+	for pid in inst.drops:
+		plantBefore[pid] = true
+	var plantIdx : int = agent.inventory.FindItemIndex(apple)
+	if Check(plantIdx >= 0, "loot: a guarda tem uma maçã na pilha para plantar"):
+		agent.inventory.DropItem(apple, 1, plantIdx)
+		for nid in inst.drops:
+			if plantBefore.has(nid):
+				continue
+			var nd : Drop = inst.drops[nid]
+			if nd != null and is_instance_valid(nd) and nd.item != null:
+				guardID = int(nid)
+				guardUnits = int(nd.item.count)
+				agent.position = nd.position
+				break
+	# Os outros elos da cadeia não podem ser a causa da recusa, senão a régua julga
+	# a árvore em vez da mochila: vida cheia — (1b) deixa o HP no chão e os mobs
+	# apanham do farmer parado nos frames de espera — e mochila sem nenhuma célula
+	# que mescle com a do drop: `CanHold` espelha `PushItem`, que aceita pilha
+	# existente mesmo no teto, então só com a bolsa despejada a recusa é do teto.
+	agent.stat.health = agent.stat.current.maxHealth
+	if not Check(ActorCommons.IsAlive(agent) and agent.inventory != null, "loot: farmer vivo e com inventário para a guarda"):
+		WorldAgent.RemoveAgent(agent)
+		return
+	if Check(guardID != -1 and guardUnits > 0, "loot: há um drop no chão para a guarda do chão cheio (unidades=%d)" % guardUnits):
+		_FreeCarriedSlots(agent)
+		var slotsBefore : int = agent.inventory.itemCount
+		agent.inventory.itemCount = ActorCommons.InventorySize	# mochila no teto, só em memória
+		var refused : bool = WorldDrop.PickupDrop(guardID, agent)
+		var unitsMid : int = 0
+		for it in agent.inventory.items:
+			if it != null:
+				unitsMid += it.count
+		Check(not refused, "loot: com a mochila no teto a coleta recusa (coletou=%s)" % str(refused))
+		Check(inst.drops.has(guardID), "loot: o item que não coube continua no chão (nada é apagado antes de caber)")
+		CheckEq(unitsMid, 0, "loot: recusa não credita unidade em ninguém (%d no agente, 0 esperado)" % unitsMid)
+		agent.inventory.itemCount = slotsBefore
+		var took : bool = WorldDrop.PickupDrop(guardID, agent)
+		Check(took and not inst.drops.has(guardID), "loot: o MESMO drop sai do chão para o inventário quando há slot (took=%s)" % str(took))
+		# O outro lado da conservação: sair do chão e não entrar em ninguém é o
+		# MESMO P0, visto de cima. Só a mudança de folga da mochila separa a recusa
+		# do sucesso — controle negativo pelo mesmo predicado, sem mutar produto.
+		var unitsAfter : int = 0
+		for it in agent.inventory.items:
+			if it != null:
+				unitsAfter += it.count
+		CheckEq(unitsAfter, guardUnits, "loot: o que saiu do chão chega ao inventário (%d vs %d)" % [unitsAfter, guardUnits])
 
 	var mobLink : MonsterAgent = null
 	for mob in inst.mobs:

@@ -261,6 +261,28 @@ static func _ValidatePassTiers(tiers : Variant, idx : int, seasonID : String, er
 				errors.append("seasons[%d/%s]: pass_tiers.%s nível \"%s\" fora de 1..%d" % [idx, seasonID, track, lk, maxLevel])
 				continue
 			_ValidateReward(table[levelKey], idx, seasonID, "%s nível %d" % [track, level], errors)
+	# Os três escalares têm o mesmo destino silencioso: `_IntOf` devolve o default
+	# do catálogo quando o valor não é inteiro, então `"max_level": "30"` é lido
+	# como 40 e a temporada paga exatamente a trilha que você acha que trocou.
+	# Presente e não inteiro é erro; `bonus_gems` ainda tem de ser um número de gemas.
+	for scalarKey : String in ["max_level", "bonus_start", "bonus_gems"]:
+		if tiersDict.has(scalarKey) and not _IsInteger(tiersDict[scalarKey]):
+			errors.append("seasons[%d/%s]: pass_tiers.%s precisa ser inteiro (%s)" % [idx, seasonID, scalarKey, str(tiersDict[scalarKey])])
+	if tiersDict.has("bonus_gems") and _IsInteger(tiersDict["bonus_gems"]) and int(tiersDict["bonus_gems"]) < 0:
+		errors.append("seasons[%d/%s]: pass_tiers.bonus_gems %d é negativo" % [idx, seasonID, int(tiersDict["bonus_gems"])])
+	# O bônus SUBSTITUI a tabela a partir de `bonus_start`, então um nível premium
+	# declarado ali ou depois é um prêmio escrito, validado e inalcançável. Isso era
+	# só prosa do arquivo; vira recusa porque o resto do validador já trata o
+	# silencioso como defeito (nível acima do próprio teto, cosmético fora do
+	# catálogo, chave com typo).
+	if typeof(tiersDict.get("premium")) == TYPE_DICTIONARY:
+		for swallowedKey in (tiersDict["premium"] as Dictionary).keys():
+			var swallowed : String = str(swallowedKey)
+			if swallowed.begins_with("_"):
+				continue
+			var bonusLevel : int = swallowed.to_int()
+			if str(bonusLevel) == swallowed and bonusLevel >= bonusStart and bonusLevel <= maxLevel:
+				errors.append("seasons[%d/%s]: pass_tiers.premium nível %d nunca paga, porque o bônus começa em %d e substitui a tabela" % [idx, seasonID, bonusLevel, bonusStart])
 
 static func _ValidateReward(reward : Variant, idx : int, seasonID : String, label : String, errors : PackedStringArray) -> void:
 	if typeof(reward) != TYPE_DICTIONARY:

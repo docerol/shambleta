@@ -70,6 +70,12 @@ func ShowSeason(data : Dictionary):
 		return
 	var daysLeft : int = ceili((int(data.get("ends_at", 0)) - Time.get_unix_time_from_system()) / 86400.0)
 	seasonLabel.text = "Season #%d — ends in %d day(s)" % [int(data.get("season_id", 0)), maxi(daysLeft, 0)]
+	# Desde a migration 064 o placar é diferença contra o marco zero gravado na
+	# abertura. Uma linha anterior a ela não tem marco e o número é o estado
+	# corrente do personagem — a etiqueta fala qual dos dois o jogador está
+	# olhando, em vez de ele descobrir quando não reconhecer o próprio power score.
+	if str(data.get("scoring", "delta")) != "delta":
+		seasonLabel.text += " · scores below are lifetime, not this season"
 	_FillBoard(seasonList, "Season power", data.get("power", []))
 	_FillBoard(seasonList, "Season spend (gems)", data.get("spend", []))
 	_FillBoard(seasonList, "Season boss kills", data.get("boss_kills", []))

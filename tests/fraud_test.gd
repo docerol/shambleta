@@ -28,6 +28,11 @@ extends SceneTree
 #      FlagMultiAccount, BanAccount/BanIPRange, escrita automática de
 #      referral_hold) — padrão de guard do SuiteOpsA2 (IdleTests), aqui só
 #      LEITURA do IdleTests, sem tocar nele.
+#  S-I wash no LEILÃO (#93.2): o ciclo A anuncia → B compra → B anuncia → A compra
+#      (mesmo item, 7d) abre fila média nos DOIS lados do par, lendo o namespace
+#      VIVO do AH (ah_list:/ah_in: em ledger + ah_price_history). Fornecedor
+#      regular que só vende para o mesmo cliente NÃO é casado; recompra do próprio
+#      anúncio é estruturalmente impossível.
 #
 # Uso: XDG_DATA_HOME=/tmp/fraud/data XDG_CACHE_HOME=/tmp/fraud/cache \
 #        timeout 300 godot --headless --path . -s tests/fraud_test.gd
@@ -39,6 +44,11 @@ extends SceneTree
 
 const FixDay : int = 86400
 const FixHour : int = 3600
+# Ouro de bolso dos personagens que compram no leilão (suíte I). Ask do fixture =
+# 1000/unidade; 20000 cobre as duas rodadas do ciclo e as três compras do par
+# legítimo sem encostar em nenhum teto. Não é cap de produto, é endowment de mesa:
+# sem ouro `BuyListing` nem abre a transação (`AuctionHouseService.gd:983`).
+const AhPurse : int = 20000
 
 var checks : int = 0
 var failures : int = 0
@@ -116,6 +126,7 @@ func _run() -> void:
 	_suiteReferral()
 	_suiteMetrics()
 	_suiteChargebackClawback()
+	_suiteAHWashPair()
 	_suitePunitiveAutomationSweep()
 
 	_finish()
@@ -540,6 +551,158 @@ func _suiteChargebackClawback() -> void:
 	_check(_flagRow(c, token).is_empty(), "H-5: sem rombo, sem flag (a fila não chora menino)")
 	var cleanRow : Array[Dictionary] = _sql.QueryBindings("SELECT error FROM grant_queue WHERE idempotency_key = ?;", [pay3 + ":chargeback"])
 	_check(not cleanRow.is_empty() and str(cleanRow[0]["error"]) == "", "H-5: linha coberta fica sem motivo de rombo")
+
+# ------------------------------------------------------------------ S-I wash no leilão
+# #93.2 — a cadeira de Marketplace mediu que o AH era INVISÍVEL por construção para
+# o detector: `flip_trade`/`trade_burst` liam `trade_out:`/`trade_in:`, namespace que
+# o leilão deixou de escrever na #26 (mudança deliberada: era ela que armava o
+# cooldown de troca direta em quem simplesmente COMPRARA no mercado). Consequência:
+# A anuncia → B compra → B anuncia → A compra o mesmo item, e nenhuma fila abre.
+#
+# A perna nova NÃO pode recriar aquele falso-positivo, então o alvo aqui é o PAR de
+# contas, nunca a conta sozinha: exige as duas DIREÇÕES do fluxo no mesmo item e as
+# duas pernas do namespace vivo do AH (anúncio `ah_list:` de quem pôs na vitrine,
+# compra `ah_in:` de quem tirou). Uma conta recomprando o próprio item não é nem
+# representável — `_SettleListingLocked` recusa `buyerAccount == sellerAccount`.
+func _suiteAHWashPair() -> void:
+	print("[suite I] #93.2: ciclo A<->B no LEILÃO abre fila nos dois lados (antes: invisível)")
+	var item : int = str("frd_wash").hash()
+	var a : int = _mkAccount("wa", 60, true)
+	var b : int = _mkAccount("wb", 60, true)
+	var supplier : int = _mkAccount("ws", 60, true)
+	var client : int = _mkAccount("wc", 60, true)
+	if not _check(a > 0 and b > 0 and supplier > 0 and client > 0, "contas do ciclo de leilão criadas"):
+		return
+	var charA : int = _ahChar(a, "frd_wa1", AhPurse)
+	var charB : int = _ahChar(b, "frd_wb1", AhPurse)
+	var charS : int = _ahChar(supplier, "frd_ws1", AhPurse)
+	var charC : int = _ahChar(client, "frd_wc1", AhPurse)
+	if not _check(charA > 0 and charB > 0 and charS > 0 and charC > 0, "personagens do ciclo criados"):
+		return
+	_ahCleanFixture(item, [a, b, supplier, client])
+	# Régua do FIXTURE, não do produto: quem compra no leilão paga com OURO do próprio
+	# personagem e `BuyListing` recusa ANTES de abrir a transação quando a carteira é
+	# menor que `price_gold` (`AuctionHouseService.gd:983`,
+	# `_CharGoldRaw(buyerChar) < listing.price_gold`). Sem esta linha o fixture sem
+	# ouro se apresentava como "o detector não vê o ciclo" — as 20 falhas desta suíte
+	# eram uma régua sem mercadoria. Cortar o endowment deixa esta VERMELHA.
+	_check(int(_eco.call("_CharGoldRaw", charB)) >= 1000, "comprador B tem ouro para o preço do ask (senão nada liquida e a suíte mede o nada)")
+	_check(int(_eco.call("_CharGoldRaw", charC)) >= 1000, "e o cliente do fornecedor também")
+
+	# (1) a matriz, antes de rodar: peso, severidade e o PORQUÊ que o operador lê.
+	_checkEq(int(_fs.call("WeightOf", "ah_wash_pair")), 2, "ah_wash_pair pesa 2 (média, paridade com flip_trade)")
+	_checkEq(str(_fs.call("SeverityOfKinds", ["ah_wash_pair"])), "medium", "lavagem no leilão abre fila MÉDIA, nunca crítica")
+	_check(str(_fs.call("WhyOf", "ah_wash_pair")).to_lower().contains("leil"), "o porquê da fila nomeia o LEILÃO (não a troca direta)")
+
+	# (2) NEGATIVO do lado VERDE: duas rodadas do ciclo A->B->A no mesmo item.
+	# Uma unidade só circula: quem comprou é quem anuncia em seguida, e o estoque
+	# inicial é o único grant do fixture. Preço fixo em 1000/unidade — a segunda
+	# rodada é ancorada na primeira venda (mediana 1000 → banda 250..10000), então
+	# o ciclo também prova que a banda de #93.1 não cega o detector.
+	_sql.call("AddItemToCharacter", charA, item, 1, "frd_seed")
+	for round in 2:
+		var askA : int = int(_eco.call("ListItemForSale", charA, item, 1, 1000))
+		_check(askA > 0, "rodada %d: A anuncia (escreve ah_list:<item> na conta A)" % (round + 1))
+		_check(bool(_eco.call("BuyListing", charB, askA)), "rodada %d: B compra (escreve ah_in:<item>:lot na conta B)" % (round + 1))
+		var askB : int = int(_eco.call("ListItemForSale", charB, item, 1, 1000))
+		_check(askB > 0, "rodada %d: B anuncia o mesmo item de volta" % (round + 1))
+		_check(bool(_eco.call("BuyListing", charA, askB)), "rodada %d: A recompra — o ciclo fechou" % (round + 1))
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ? AND buyer_account = ?;", [item, a, b])[0]["n"]), 2,
+		"fluxo A->B registrado duas vezes no histórico de preço")
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ? AND buyer_account = ?;", [item, b, a])[0]["n"]), 2,
+		"e o fluxo de volta B->A também (é isto que faz ser PAR, não mercado)")
+
+	# (3) controle do falso-positivo histórico: fornecedor regular vende três vezes
+	# para o MESMO cliente e nunca recebe nada de volta. Volume igual, direção só.
+	_sql.call("AddItemToCharacter", charS, item, 3, "frd_seed")
+	for i in 3:
+		var askS : int = int(_eco.call("ListItemForSale", charS, item, 1, 1000))
+		_check(askS > 0, "fornecedor: anúncio %d do dia posto na vitrine" % (i + 1))
+		_check(bool(_eco.call("BuyListing", charC, askS)), "cliente: compra %d liquidada" % (i + 1))
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ?;", [item, supplier])[0]["n"]), 3,
+		"três vendas na MESMA direção (sem caminho de volta)")
+
+	# (4) a auto-compra, que era o falso-positivo da #26, não é nem reproduzível.
+	var ownAsk : int = int(_eco.call("ListItemForSale", charA, item, 1, 1000))
+	_check(ownAsk > 0, "anúncio próprio plantado para a tentativa de recompra")
+	_check(not bool(_eco.call("BuyListing", charA, ownAsk)), "NEGATIVO estrutural: a conta NÃO recompra o próprio anúncio")
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE seller_account = buyer_account;", [])[0]["n"]), 0,
+		"nenhuma linha de histórico com vendedor == comprador (a perna nova não tem com o que sonhar)")
+	_check(bool(_eco.call("CancelListing", charA, ownAsk)), "e o anúncio próprio é cancelado (não suja a vitrine)")
+
+	# (5) a passada do detector, com o ciclo E o par legítimo já no banco: um scan
+	# só, para a flag falsa do fornecedor ser impossível de atribuir a outra passada.
+	var scan : Dictionary = _fraud.call("Scan", baseNow)
+	_check(int(scan.get("scanned", -1)) >= 0 or not scan.is_empty(), "Scan rodou com o mercado no banco")
+	var flagA : Dictionary = _flagRow(a, "ah_wash_pair")
+	var flagB : Dictionary = _flagRow(b, "ah_wash_pair")
+	_check(not flagA.is_empty(), "NEGATIVO #93.2: o lado A do ciclo tem fila (antes: nada, o leilão era invisível)")
+	_check(not flagB.is_empty(), "e o lado B do MESMO par também (flag nos dois lados)")
+	_checkEq(str(flagA.get("severity", "")), "medium", "severidade média: revisão humana, não punição")
+	_check(str(flagA.get("detail", "")).contains("ah_cycle"), "o detail nomeia o ciclo do leilão")
+	_check(str(flagA.get("detail", "")).contains(str(b)), "e cita quem é o outro lado do par (B=%d)" % b)
+	_check(not _flagKinds(supplier).has("ah_wash_pair"), "CONTROLE DE FALSO-POSITIVO: fornecedor regular (3 vendas, uma direção) fica SEM fila")
+	_check(not _flagKinds(client).has("ah_wash_pair"), "e o cliente dele também: falta o caminho de volta")
+	# O ciclo do leilão não pode acender as pernas da troca direta nem o cooldown.
+	_check(not _flagKinds(a).has("flip_trade") and not _flagKinds(b).has("flip_trade"),
+		"as contas do ciclo não herdaram flip_trade (o namespace morto da #26 continua morto)")
+	_check(not _ledgerHas(a, "trade_out") and not _ledgerHas(b, "trade_out"),
+		"e o AH jamais escreveu trade_out: para elas (causa raiz do falso-positivo)")
+
+	# (6) régua estrutural: o detector lê o namespace VIVO e a perna está no laço.
+	var src : String = _stripComments(_repoFile("res://sources/economy/FraudeReview.gd"))
+	_check(src.contains("_CollectAHWashPairs(now, signals, details)"),
+		"a perna do leilão é chamada por _CollectMediumHeuristics (cortar isto deixa a suíte vermelha)")
+	var leg : String = _functionBody(src, "_CollectAHWashPairs") + _functionBody(src, "_AHLedgerLeg")
+	_check(not leg.is_empty(), "as duas funções da perna nova existem no detector")
+	_check(leg.contains("ah_price_history"), "e a fonte de fluxo é o histórico de preço realizado (059), não projeção de cliente")
+	_check(leg.contains("seller_account != buyer_account"), "o PAR é exigido na própria query: uma conta sozinha não fecha ciclo")
+	_check(leg.contains("ah_list:") and leg.contains("ah_in:"), "as duas pontas são corroboradas no namespace vivo do AH")
+	_check(not leg.contains("trade_out") and not leg.contains("trade_in"),
+		"NEM UMA LINHA da perna nova lê o namespace da troca direta (o falso-positivo da #26 não volta)")
+	_check(not leg.contains("LastTradeTimestamp") and not leg.contains("TradeCooldown"),
+		"nem o cooldown de troca direta — comprar no leilão não arma pena em quem comprou")
+
+# Personagem da mesa de leilão: nível 5 (para os sinais de velocity de outras
+# suítes não casarem por acaso) e OURO no bolso. O ouro é o que falta entre o
+# anúncio existir e a venda liquidar — `BuyListing` lê `_CharGoldRaw` antes de
+# abrir a transação (`AuctionHouseService.gd:983`) e o `MoveGold` do kernel é o
+# único caminho que grava `stat.gp` com a linha de ledger que o atesta
+# (`EconomyKernel.gd:156`). Sem endowment o ciclo A<->B nunca acontece e o
+# detector não tem o que ver: é a régua que fica cega, não o produto.
+func _ahChar(accountID : int, nick : String, gold : int) -> int:
+	_charWithLevel(accountID, nick, 5)
+	var charID : int = int(_sql.GetCharacterID(accountID, nick))
+	if charID > 0 and gold > 0:
+		_eco.call("MoveGold", charID, gold, "frd_ah_mint")
+	return charID
+
+# Ledger de uma conta por PREFIXO de reason — é literalmente a forma que `flip_trade`
+# lê (`trade_out:%`), então esta é a régua que prova que o AH não voltou a escrevê-la.
+func _ledgerHas(accountID : int, prefix : String) -> bool:
+	return not _sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason LIKE ? LIMIT 1;", [accountID, prefix + "%"]).is_empty()
+
+# Corpo de uma função do fonte, para as réguas estruturais lerem SÓ o que aquela
+# perna faz (e não o comentário de cima, que explica o que a perna não pode fazer).
+func _functionBody(src : String, name : String) -> String:
+	var at : int = src.find("func " + name + "(")
+	if at < 0:
+		return ""
+	var rest : String = src.substr(at)
+	var next : int = rest.find("\nfunc ", 5)
+	return rest if next < 0 else rest.substr(0, next)
+
+# Fixture idempotente: `ah_price_history` é append-only DE PROPÓSITO, mas as linhas
+# deste item são dado de harness, e rerun não pode herdar um ciclo da vida anterior
+# (nem o cap diário do #93.3 já queimado). Gems e gold são a fricção do AH: sem
+# taxa paga o anúncio não nasce.
+func _ahCleanFixture(item : int, accounts : Array) -> void:
+	_sql.db.query("DELETE FROM ah_price_history WHERE item_id = %d;" % item)
+	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d AND status <> 'sold';" % item)
+	_sql.db.query("DELETE FROM ah_escrow_lot WHERE listing_id NOT IN (SELECT id FROM auction_listing);")
+	for acct in accounts:
+		_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % int(acct))
+		_eco.call("AddGems", int(acct), 200, "frd_ah_gems")
 
 # ------------------------------------------------------------------ S-G varredura
 # O guard do SuiteOpsA2 (IdleTests.gd ~5220) para automação punitiva: varre os

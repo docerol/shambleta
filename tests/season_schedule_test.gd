@@ -315,7 +315,14 @@ func _suiteSecondSeasonPath(entries : Array, s1 : Dictionary, s2 : Dictionary):
 	_checkEq(int(_cfg.call("PassMaxLevel", s2)), int(s2["pass_tiers"]["max_level"]), "teto de nível da sucessora vem da trilha embarcada")
 	_check(int(_cfg.call("PassBonusStart", s2)) > 1 and int(_cfg.call("PassBonusStart", s2)) <= int(_cfg.call("PassMaxLevel", s2)) + 1, "bônus da sucessora começa dentro do próprio teto")
 	_checkEq((_cfg.call("PassTiers", s2, "premium") as Dictionary).size(), 4, "a trilha premium embarcada chega inteira ao PassService")
-	_checkEq(int(_cfg.call("PassMaxLevel", s1)), int(_catalog.get("PASS_MAX_LEVEL")), "a rotação sem trilha declarada continua nos defaults do catálogo")
+	# A rotação — a temporada que está no ar HOJE — também declara a trilha no
+	# arquivo desde 2026-09-29, e é ela que o passe resolve. O espelho nível a nível
+	# contra o catálogo é de `tests/season_liveops_test.gd`; o que esta perna amarra
+	# é a agenda: nenhum `{}` separa o jogador da temporada que ele está jogando.
+	_check(s1.has("pass_tiers"), "a rotação embarcada declara a própria trilha (o `{}` que só existia em código fechou)")
+	if s1.has("pass_tiers"):
+		_checkEq(int(_cfg.call("PassMaxLevel", s1)), int((s1["pass_tiers"] as Dictionary)["max_level"]),
+			"teto da rotação vem da trilha embarcada, não do default de código")
 
 func _contains(hay : String, needle : String, label : String) -> bool:
 	return _check(hay.contains(needle), "%s (faltou \"%s\")" % [label, needle])

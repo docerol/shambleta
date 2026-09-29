@@ -48,6 +48,10 @@ var _itemPage : int = 0
 var _itemHist : int = 0
 var _itemBid : int = 0
 var _itemInv : int = 0
+var _itemWash : int = 0
+var _itemLine : int = 0
+var _itemAge : int = 0
+var _itemCross : int = 0
 var _tag : int = 0
 var _nick : Dictionary = {}
 var _account : Dictionary = {}
@@ -105,12 +109,20 @@ func _run():
 	_itemHist = str("mdx_hist").hash()
 	_itemBid = str("mdx_bid").hash()
 	_itemInv = str("mdx_inv").hash()
+	_itemWash = str("mdx_wash").hash()
+	_itemLine = str("mdx_line").hash()
+	_itemAge = str("mdx_age").hash()
+	_itemCross = str("mdx_cross").hash()
 	_tag = int(Time.get_unix_time_from_system())
 
 	_suitePaging()
 	_suitePriceHistory()
 	_suiteBuyOrders()
 	_suiteSettlementInvariants()
+	_suitePriceBand()
+	_suiteEscrowLineage()
+	_listingExpiry()
+	_suiteReCrossBoot()
 	_dropAll()
 	_finish()
 
@@ -145,13 +157,19 @@ func _makeChar(label : String, gold : int) -> int:
 	return charID
 
 func _dropAll() -> void:
-	var items : String = _inItems([_itemPage, _itemHist, _itemBid, _itemInv])
+	var items : String = _inItems([_itemPage, _itemHist, _itemBid, _itemInv, _itemWash, _itemLine, _itemAge, _itemCross])
 	for user in _account:
 		var accountID : int = int(_account[user])
 		_sql.call("UpdateRowsRaw", "ah_buy_order", "buyer_account = %d AND status = 'open'" % accountID,
 			{"status" = "cancelled", "escrow_gold" = 0})
 		_sql.db.query("UPDATE auction_listing SET status = 'cancelled' WHERE seller_account = %d AND status = 'open';" % accountID)
+		# O cap diário é por (conta, dia UTC): sem esta limpeza a segunda execução
+		# do harness no mesmo dia começaria com a cota queimada.
+		_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % accountID)
 	_sql.db.query("DELETE FROM auction_listing WHERE item_id IN (%s) AND status <> 'sold';" % items)
+	# Teardown de fixture: o snapshot de escrow só existe para anúncio aberto; sem
+	# esta linha o `DELETE` acima deixaria órfão em ah_escrow_lot.
+	_sql.db.query("DELETE FROM ah_escrow_lot WHERE listing_id NOT IN (SELECT id FROM auction_listing);")
 	for user in _account:
 		_sql.db.delete_rows("character", "nickname = '%s'" % str(_nick[user]))
 	_sql.db.query("DELETE FROM ah_price_history WHERE item_id IN (%s);" % items)
@@ -210,6 +228,12 @@ func _orderRow(orderID : int) -> Dictionary:
 # servidor, e o caminho real de listagem (com fee de gem e cap de slot) é a
 # suíte (a) que exercita. Preço determinístico e id crescente, então as réguas
 # de ordem são checáveis.
+#
+# `expires_at` em 2100 é obrigatório desde a #93.4: o sweep de ciclo de vida roda
+# no `_process` do servidor e ADOTA linha com `expires_at = 0` (`created_at + TTL`).
+# Estas fixtures têm `created_at` de 2023 — sem prazo explícito elas seriam
+# expiradas no meio da suíte de paginação, e o `total` do SELECT paginado passaria
+# a depender de quantos ticks o harness levou.
 func _seedCorpus(sellerChar : int, count : int) -> void:
 	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d;" % _itemPage)
 	var accountID : int = int(_sql.call("GetAccountIDForCharacter", sellerChar))
@@ -218,7 +242,8 @@ func _seedCorpus(sellerChar : int, count : int) -> void:
 			"seller_char" = sellerChar, "seller_account" = accountID,
 			"item_id" = _itemPage, "count" = 1, "price_gold" = 100 + i,
 			"escrow_uids" = "%d" % (900000 + i), "creator_account_id" = 0,
-			"highlight" = 0, "status" = "open", "created_at" = 1700000000 + i})
+			"highlight" = 0, "status" = "open", "created_at" = 1700000000 + i,
+			"expires_at" = 4102444800})
 
 # ------------------------------------------------------------------ (b) página
 
@@ -366,7 +391,12 @@ func _suitePriceHistory() -> void:
 	_checkEq(int(emptySummary.get("avg_unit", -1)), 0, "e média zero, não lixo")
 	# Recusa atômica: sem saldo não há venda nem linha de histórico.
 	var poor : int = _makeChar("h_poor", 5)
-	var listing4 : int = int(_eco.call("ListItemForSale", seller, _itemHist, 1, 900))
+	# 2500/unidade e não 900: desde a #93.1 o ask é limitado pela BANDA ancorada no
+	# mercado, e a mediana deste item neste ponto é 3500 (3000 e 4000 realizados) →
+	# piso de 875. 900 passaria por 25 gold e a régua estaria a um arredondamento de
+	# virar falsa. 2500 está dentro da faixa por construção e a asserção continua
+	# medindo o que pretende: recusa por SALDO, não por preço.
+	var listing4 : int = int(_eco.call("ListItemForSale", seller, _itemHist, 1, 2500))
 	if listing4 > 0:
 		_check(not bool(_eco.call("BuyListing", poor, listing4)), "compra sem saldo é recusada")
 		_checkEq(_count("SELECT COUNT(*) AS n FROM ah_price_history WHERE listing_id = ?;", [listing4]), 0,
@@ -661,3 +691,340 @@ func _panelConnectsResolve() -> bool:
 			print("  [detalhe] connect órfão em " + ident)
 		at = src.find(".connect(", at + 1)
 	return ok
+
+# ================================================================== #93/#94/#100
+# As três suítes abaixo existem porque a cadeira de Marketplace (rodada 3, 7,0/7,6)
+# mediu o seguinte: o leilão aceitava QUALQUER preço positivo, o cancelamento
+# RE-MINTAVA o item (apagando a linhagem que o detector de lavagem precisaria ler),
+# e o cruzamento anúncio×ordem acontecia uma única vez, na cauda de
+# `ListItemForSale`. Cada suíte planta o NEGATIVO correspondente: uma asserção que
+# é VERMELHA sem o conserto e VERDE com ele.
+
+func _ahScript() -> GDScript:
+	return load("res://sources/economy/AuctionHouseService.gd")
+
+func _ahConst(name : String) -> int:
+	return int(_ahScript().get_script_constant_map().get(name, 0))
+
+func _clearItem(itemID : int) -> void:
+	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d;" % itemID)
+	_sql.db.query("DELETE FROM ah_price_history WHERE item_id = %d;" % itemID)
+	_sql.db.query("DELETE FROM ah_escrow_lot WHERE listing_id NOT IN (SELECT id FROM auction_listing);")
+
+func _lotUIDs(charID : int, itemID : int) -> Array:
+	var uids : Array = []
+	for row in _rows("SELECT uid FROM item_instance WHERE char_id = ? AND item_id = ? AND storage = 0 ORDER BY uid;", [charID, itemID]):
+		uids.append(int((row as Dictionary).get("uid", 0)))
+	return uids
+
+# ------------------------------------------------------------------ #93.1/#93.3
+func _suitePriceBand() -> void:
+	print("[suite] #93: banda de ask ancorada no mercado + cap diário por conta")
+	var ah : Object = _eco.get("ahService")
+	if not _check(ah != null, "o serviço de leilão está montado na fachada"):
+		return
+	_clearItem(_itemWash)
+	# Rótulo de mesa é CHAVE DE E-MAIL: `_makeChar` monta `mdx<tag>_<label>` e
+	# `SQL.AddAccount` recusa duplicata (`SQL.gd:204` `if email.is_empty() or
+	# HasEmail(email): return false`). `b_*` já pertence a `_suiteBuyOrders`
+	# (linhas 425-427); reusar aqui devolvia 0, "fixtures da banda criadas"
+	# morria no `_check` e a suíte inteira (#93.1 e #93.3) não rodava um só
+	# passo. Nome por suíte, não por hábito.
+	var seller : int = _makeChar("p_seller", 0)
+	var buyer : int = _makeChar("p_buyer", 200000)
+	var capped : int = _makeChar("p_capped", 200000)
+	if not _check(seller != 0 and buyer != 0 and capped != 0, "fixtures da banda criadas"):
+		return
+	var sellerAccount : int = int(_sql.call("GetAccountIDForCharacter", seller))
+	var buyerAccount : int = int(_sql.call("GetAccountIDForCharacter", buyer))
+	_eco.call("AddGems", sellerAccount, 500, "mdx_gems")
+	var cappedAccount : int = int(_sql.call("GetAccountIDForCharacter", capped))
+	_eco.call("AddGems", cappedAccount, 500, "mdx_gems")
+	_sql.call("AddItemToCharacter", seller, _itemWash, 8, "mdx_grant")
+	# Mercadoria da conta-capada: sem estoque a 51ª recusa seria `not_enough_items`
+	# em vez de `list_day_cap` (a porta de volume vem antes do consumo —
+	# `AuctionHouseService.gd:753` vs `:756`) e a liberação no dia limpo não
+	# aconteceria. Uma unidade: o passo (6) anuncia 1, é recusado pelo cap, limpa
+	# o contador e anuncia a MESMA unidade de novo.
+	_sql.call("AddItemToCharacter", capped, _itemWash, 1, "mdx_grant")
+	var maxPct : int = _ahConst("AHBandMaxPct")
+	var minPct : int = _ahConst("AHBandMinPct")
+	var maxLists : int = _ahConst("AHMaxListingsPerDay")
+	var maxBuys : int = _ahConst("AHMaxBuysPerDay")
+	# (1) mercadoria sem histórico e sem vendor: SEM banda. Recusar aqui seria
+	# impedir o preço de existir — é a primeira venda que cria a âncora.
+	var seedAsk : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 1, 999999)
+	_check(int(seedAsk.get("id", 0)) > 0, "ask sem âncora de mercado é listado (item novo cria a própria referência)")
+	_checkStrEq(str(seedAsk.get("reason", "")), "ok", "e o veredito diz ok, não 'rejected' genérico")
+	# A régua lê a MESMA função que o funil de anúncio usa para julgar o preço
+	# (`AuctionHouseService.gd:729` chama `AHPriceBand(itemID, unit)`), no instante em
+	# que o anúncio foi julgado. `ListItemForSaleChecked` ecoa `band` só nas recusas
+	# Early (`:712/:730` devolvem `result`, que tem a chave); o caminho de sucesso
+	# devolve `out` (`:738`, `:844`), que nunca teve `band` — buscar a chave no
+	# veredito aceito era `null as Dictionary` e derrubava a suíte inteira com
+	# SCRIPT ERROR. Não é afrouxamento: `no_anchor` continua exigido por nome, e se o
+	# produto passar a ancorar item sem histórico esta linha fecha vermelha.
+	var seedBand : Dictionary = ah.call("AHPriceBand", _itemWash, 999999)
+	_checkStrEq(str(seedBand.get("reason", "")), "no_anchor", "com o motivo da ausência nomeado")
+	_check(bool(seedBand.get("ok", false)), "e a ausência de âncora NÃO é recusa: item novo cria a própria referência")
+	# (2) âncora real: uma venda a 500/unidade.
+	var anchorListing : int = int(_eco.call("ListItemForSale", seller, _itemWash, 1, 500))
+	_check(anchorListing > 0, "anúncio-âncora criado")
+	_check(bool(_eco.call("BuyListing", buyer, anchorListing)), "âncora liquidada (500/unidade realizada)")
+	# (3) TETO: 6000 = 12× a mediana (500). Máximo = 500 × maxPct%.
+	var band : Dictionary = ah.call("AHPriceBand", _itemWash, 6000)
+	_checkEq(int(band.get("anchor", -1)), 500, "a âncora lida é a mediana realizada (500)")
+	_checkEq(int(band.get("max", -1)), int(round(500.0 * float(maxPct) / 100.0)), "teto = âncora × AHBandMaxPct")
+	var tooHigh : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 1, 6000)
+	_checkEq(int(tooHigh.get("id", -1)), 0, "NEGATIVO #93.1: ask 12× o mercado NÃO nasce")
+	_checkStrEq(str(tooHigh.get("reason", "")), "price_above_band", "e a recusa vem com o motivo, não com 0 mudo")
+	# recusa não cobra nada: nem gem, nem escrow, nem linha na mesa.
+	_checkEq(_count("SELECT COUNT(*) AS n FROM auction_listing WHERE item_id = %d AND count = 1 AND price_gold = 6000;" % _itemWash), 0,
+		"a recusa não deixou anúncio na mesa")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = %d AND reason = 'ah_list_fee';" % sellerAccount),
+		2, "recusa por preço não queimou a taxa de anúncio (2 taxas = seed + âncora)")
+	# (4) PISO: 100 = 20% da mediana, abaixo de minPct%.
+	var tooLow : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 1, 100)
+	_checkStrEq(str(tooLow.get("reason", "")), "price_below_band", "ask simbólico (1/5 do mercado) também é recusado")
+	# (5) a banda é POR UNIDADE: 5×12 = 60 total, que é o ask de 12/unidade disfarçado.
+	var unitTrap : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 5, 60)
+	_checkStrEq(str(unitTrap.get("reason", "")), "price_below_band",
+		"5 unidades por 60 gold é lido como 12/unidade, não como 60 (armadilha total×unidade fechada)")
+	var inside : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 1, 2500)
+	_check(int(inside.get("id", 0)) > 0, "dentro da faixa (2500 de 500) o anúncio nasce")
+	_check(ah.call("CancelListing", seller, int(inside.get("id", 0))), "e o cancelamento devolve o escrow")
+	# (6) cap diário de ANÚNCIOS por conta.
+	var day : int = int(_catalog.call("ShopDay", int(Time.get_unix_time_from_system())))
+	_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % cappedAccount)
+	_sql.ExecuteBindings("INSERT INTO ah_activity (account_id, day, lists, buys) VALUES (?, ?, ?, 0);", [cappedAccount, day, maxLists])
+	var cappedAsk : Dictionary = ah.call("ListItemForSaleChecked", capped, _itemWash, 1, 2500)
+	_checkEq(int(cappedAsk.get("id", -1)), 0, "NEGATIVO #93.3: a 51ª anunciar do dia é recusado")
+	_checkStrEq(str(cappedAsk.get("reason", "")), "list_day_cap", "com o motivo do cap na resposta")
+	_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % cappedAccount)
+	var freedAsk : Dictionary = ah.call("ListItemForSaleChecked", capped, _itemWash, 1, 2500)
+	_check(int(freedAsk.get("id", 0)) > 0, "no dia seguinte (contador limpo) a mesma conta anuncia")
+	if int(freedAsk.get("id", 0)) > 0:
+		ah.call("CancelListing", capped, int(freedAsk.get("id", 0)))
+	# (7) cap diário de COMPRAS: o cap mora no funil único, então vale para ask e bid.
+	var buyListing : int = int(_eco.call("ListItemForSale", seller, _itemWash, 1, 500))
+	# Higiene de fixture, não número: `ah_activity` tem PRIMARY KEY (account_id, day)
+	# (migração 063), e a compra da âncora no passo (2) JÁ deixou a linha do dia com
+	# buys = 1. Sem limpar, o INSERT abaixo bate no conflito, não escreve, e o
+	# plantado fica em 1 — o cap diário passaria a ser testado contra uma carteira
+	# de compras que não existe. Mesmo trato dado a `cappedAccount` no passo (6).
+	_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % buyerAccount)
+	_sql.ExecuteBindings("INSERT INTO ah_activity (account_id, day, lists, buys) VALUES (?, ?, 0, ?);", [buyerAccount, day, maxBuys])
+	_check(not bool(_eco.call("BuyListing", buyer, buyListing)), "NEGATIVO #93.3: compra além do teto diário do comprador é recusada")
+	_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = %d;" % buyListing).get("status", "")), "open",
+		"e o anúncio continua vendável (recusa não quebrou a mesa)")
+	_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % buyerAccount)
+	_check(bool(_eco.call("BuyListing", buyer, buyListing)), "sem o cap, a mesma compra liquidada")
+	# (8) o cap é DURÁVEL: vive numa tabela, não na memória do processo.
+	_checkEq(_count("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'ah_activity';"), 1,
+		"ah_activity existe (cap sobrevive ao boot)")
+	_check(ah.call("_AHBumpActivityLocked", _sql, sellerAccount, 1, 1), "e o contador é escrito dentro da transação")
+	_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % sellerAccount)
+
+# ------------------------------------------------------------------ #94
+func _suiteEscrowLineage() -> void:
+	print("[suite] #94: escrow com identidade — pais por uid e cancelamento que devolve o MESMO lote")
+	var ah : Object = _eco.get("ahService")
+	_clearItem(_itemLine)
+	var seller : int = _makeChar("l_seller", 0)
+	var buyer : int = _makeChar("l_buyer", 200000)
+	if not _check(seller != 0 and buyer != 0, "fixtures de linhagem criadas"):
+		return
+	var sellerAccount : int = int(_sql.call("GetAccountIDForCharacter", seller))
+	_eco.call("AddGems", sellerAccount, 500, "mdx_gems")
+	# Três CONCESSÕES separadas = três lotes com uid próprio. É exatamente o caso
+	# que o `split(",")[0]` antigo truncava: a pilha de 3 tinha um pai, e dois uid
+	# sumiam do grafo.
+	_sql.call("AddItemToCharacter", seller, _itemLine, 1, "mdx_lot1")
+	_sql.call("AddItemToCharacter", seller, _itemLine, 1, "mdx_lot2")
+	_sql.call("AddItemToCharacter", seller, _itemLine, 1, "mdx_lot3")
+	var lots : Array = _lotUIDs(seller, _itemLine)
+	_checkEq(lots.size(), 3, "vendedor tem três lotes de uid distinto")
+	var listing : int = int(_eco.call("ListItemForSale", seller, _itemLine, 3, 1500))
+	_check(listing > 0, "anúncio dos três lotes criado")
+	var snaps : Array = _rows("SELECT uid, count FROM ah_escrow_lot WHERE listing_id = ? ORDER BY uid;", [listing])
+	_checkEq(snaps.size(), 3, "NEGATIVO #94: o escrow guarda uma linha POR LOTE (antes: zero)")
+	var escrowSum : int = 0
+	for s in snaps:
+		escrowSum += int((s as Dictionary).get("count", 0))
+	_checkEq(escrowSum, 3, "e a soma das unidades do snapshot é exatamente o anunciado")
+	_check(bool(_eco.call("BuyListing", buyer, listing)), "compra liquidada")
+	var parents : Array = _rows("SELECT DISTINCT parent_uid FROM item_instance WHERE char_id = ? AND item_id = ? AND parent_uid > 0;", [buyer, _itemLine])
+	_checkEq(parents.size(), 3, "NEGATIVO #94: três pais distintos no lote do comprador (antes: um)")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM item_instance WHERE char_id = ? AND item_id = ?;", [buyer, _itemLine]), 3,
+		"uma concessão por uid de origem")
+	# Invariante declarada de `ah_escrow_lot`: só anúncio ABERTO tem linha.
+	_checkEq(_count("SELECT COUNT(*) AS n FROM ah_escrow_lot JOIN auction_listing ON auction_listing.id = ah_escrow_lot.listing_id WHERE auction_listing.status <> 'open';"), 0,
+		"nenhum snapshot sobra em anúncio já liquidado/cancelado")
+	# list → cancel → re-list → buy: a linhagem NÃO reseta.
+	_sql.call("AddItemToCharacter", seller, _itemLine, 1, "mdx_lot4")
+	var single : Array = _rows("SELECT uid, created_at FROM item_instance WHERE char_id = ? AND item_id = ? ORDER BY uid DESC LIMIT 1;", [seller, _itemLine])
+	_checkEq(single.size(), 1, "quarto lote disponível")
+	var lotUID : int = int((single[0] as Dictionary).get("uid", 0))
+	var lotBorn : int = int((single[0] as Dictionary).get("created_at", 0))
+	var toCancel : int = int(_eco.call("ListItemForSale", seller, _itemLine, 1, 500))
+	_check(toCancel > 0, "anúncio do lote único criado")
+	_check(bool(_eco.call("CancelListing", seller, toCancel)), "cancelado")
+	var back : Dictionary = _one("SELECT uid, count, created_at, char_id FROM item_instance WHERE uid = ?;", [lotUID])
+	_check(not back.is_empty(), "NEGATIVO #94: o MESMO uid voltou (antes o cancelamento mintava um uid novo)")
+	_checkEq(int(back.get("count", 0)), 1, "com as mesmas unidades")
+	_checkEq(int(back.get("created_at", -1)), lotBorn, "e o mesmo created_at (nada foi re-mintado agora)")
+	var relisted : int = int(_eco.call("ListItemForSale", seller, _itemLine, 1, 500))
+	_checkEq(_count("SELECT COUNT(*) AS n FROM ah_escrow_lot WHERE listing_id = %d AND uid = %d;" % [relisted, lotUID]), 1,
+		"re-listado, o escrow aponta para o uid original de novo")
+	_check(bool(_eco.call("BuyListing", buyer, relisted)), "vendido")
+	var soldLot : Dictionary = _one("SELECT uid FROM item_instance WHERE char_id = ? AND item_id = ? AND parent_uid = %d ORDER BY uid DESC LIMIT 1;" % lotUID, [buyer, _itemLine])
+	_check(int(soldLot.get("uid", 0)) > 0,
+		"NEGATIVO #94: o lote liquidado carrega o uid original como pai (antes: split(\",\")[0] só do topo da pilha)")
+	# Agora a CADEIA de dois saltos. A régua anterior media `LotHistory(lote do
+	# comprador).size() == 2` logo depois desta liquidação — e isso é insatisfazível
+	# por construção, não por defeito do produto: anunciar consome o lote de origem e
+	# `ConsumeItemLotsRaw` APAGA a linha quando leva o lote inteiro
+	# (`SQL.gd:847-849`, `take >= have` → `DeleteRowsRaw`), sendo que o lote de
+	# origem aqui tinha exatamente 1 unidade. `LotHistory` só anexa um salto quando
+	# `GetItemLot` acha a linha (`SQL.gd:441-443`) e para no pai apagado; o uid
+	# original sobrevive no `parent_uid` do comprador (a linha acima) e em
+	# `ah_escrow_lot` até a liquidação, que é o que a invariante da migração 063
+	# declara. O número 2, portanto, não tinha mordida nenhuma: o código pré-#94
+	# também devolvia 1. A cadeia é medida no cenário em que ELA PODE existir —
+	# origem com DUAS unidades, anúncio de UMA: o consumo cai no ramo de UPDATE
+	# (`SQL.gd:850`), a linha de origem fica viva com `count = 1`, e a liquidação dá
+	# ao comprador um pai que ainda está na tabela. Cortar o endowment de 2 unidades
+	# ou anunciar as 2 deixa esta régua VERMELHA de novo — é a diferença que está
+	# sendo medida.
+	_sql.call("AddItemToCharacter", seller, _itemLine, 2, "mdx_grant")
+	var origin : Dictionary = _one("SELECT uid, count FROM item_instance WHERE char_id = %d AND item_id = %d ORDER BY uid DESC LIMIT 1;" % [seller, _itemLine])
+	var originUID : int = int(origin.get("uid", 0))
+	_checkEq(int(origin.get("count", 0)), 2, "origem de duas unidades para o teste de cadeia")
+	var partial : int = int(_eco.call("ListItemForSale", seller, _itemLine, 1, 500))
+	_check(partial > 0, "anúncio de UMA unidade da pilha de duas")
+	_checkEq(int(_one("SELECT count FROM item_instance WHERE uid = %d;" % originUID).get("count", -1)), 1,
+		"a linha de origem sobrevive parcialmente consumida (é isso que faz a cadeia existir)")
+	_check(bool(_eco.call("BuyListing", buyer, partial)), "e a venda dessa unidade liquida")
+	var chainUID : int = int(_one("SELECT uid FROM item_instance WHERE char_id = ? AND item_id = ? AND parent_uid = %d ORDER BY uid DESC LIMIT 1;" % originUID, [buyer, _itemLine]).get("uid", 0))
+	var chain : Array = _sql.call("LotHistory", chainUID)
+	_checkEq(chain.size(), 2, "LotHistory do comprador chega ao lote de origem (cadeia intacta)")
+	if chain.size() >= 2:
+		_checkEq(int((chain[0] as Dictionary).get("uid", 0)), chainUID, "a cadeia começa no lote do comprador")
+		_checkEq(int((chain[1] as Dictionary).get("uid", 0)), originUID, "e o pai é o uid que sobreviveu ao cancelamento")
+
+# ------------------------------------------------------------------ #93.4
+func _listingExpiry() -> void:
+	print("[suite] #93.4: anúncio vence e o escrow volta POR LINHAGEM (reaper, não re-mint)")
+	var ah : Object = _eco.get("ahService")
+	_clearItem(_itemAge)
+	var now : int = int(Time.get_unix_time_from_system())
+	var ttl : int = _ahConst("AHListingTtlSec")
+	var seller : int = _makeChar("a_seller", 0)
+	if not _check(seller != 0, "fixture de expiração criada"):
+		return
+	var sellerAccount : int = int(_sql.call("GetAccountIDForCharacter", seller))
+	_eco.call("AddGems", sellerAccount, 500, "mdx_gems")
+	_sql.call("AddItemToCharacter", seller, _itemAge, 1, "mdx_age1")
+	_sql.call("AddItemToCharacter", seller, _itemAge, 1, "mdx_age2")
+	var before : Array = _lotUIDs(seller, _itemAge)
+	_checkEq(before.size(), 2, "dois lotes antes de anunciar")
+	var listing : int = int(_eco.call("ListItemForSale", seller, _itemAge, 2, 1000))
+	_check(listing > 0, "anúncio de 2 unidades criado")
+	_checkEq(int(_one("SELECT expires_at FROM auction_listing WHERE id = %d;" % listing).get("expires_at", 0)) - now, ttl,
+		"o anúncio nasce com prazo = AHListingTtlSec (não espera o comprador para sempre)")
+	_checkEq(_eco.call("_ItemCountRaw", seller, _itemAge), 0, "com o prazo, a mercadoria saiu do inventário")
+	_sql.db.query("UPDATE auction_listing SET expires_at = %d WHERE id = %d;" % [now - 1, listing])
+	var reap : Dictionary = ah.call("ReapExpiredListings", now, 50)
+	_check(int(reap.get("reaped", 0)) >= 1, "NEGATIVO #93.4: o reaper colheu o anúncio vencido (antes não existia reaper)")
+	_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = %d;" % listing).get("status", "")), "expired",
+		"e o anúncio saiu da vitrine com status próprio")
+	var after : Array = _lotUIDs(seller, _itemAge)
+	_checkEq(after.size(), 2, "os DOIS uids escrowed voltaram para o dono")
+	var same : int = 0
+	for uid in before:
+		if after.has(uid):
+			same += 1
+	_checkEq(same, 2, "NEGATIVO #93.4: são os MESMOS uid, não lotes novos (linhagem preservada)")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM ah_escrow_lot WHERE listing_id = %d;" % listing), 0,
+		"e o snapshot foi consumido: nada devolvido duas vezes")
+	_check(_ledgerRows(sellerAccount, "ah_expire:") >= 1, "a devolução tem perna de ledger (ah_expire:)")
+	# Anúncio pré-063 (sem snapshot): o reaper ADOTA o prazo a partir do created_at
+	# real e, não havendo como reconstruir o count por uid, devolve pelo caminho
+	# antigo. É limitation declarada — e medida, não uma linha de código morta.
+	_sql.db.query("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at, expires_at) VALUES (%d, %d, %d, 1, 100, '777001', 0, 'open', %d, 0);" % [seller, sellerAccount, _itemAge, now - 4 * 86400])
+	var legacyID : int = int(_one("SELECT id FROM auction_listing WHERE item_id = %d AND status = 'open' AND expires_at = 0 ORDER BY id DESC LIMIT 1;" % _itemAge).get("id", 0))
+	_check(legacyID > 0, "anúncio legítimo pré-063 plantado (expires_at = 0)")
+	var adopt : Dictionary = ah.call("ReapExpiredListings", now, 50)
+	_check(int(adopt.get("adopted", -1)) >= 1, "a primeira passada dá prazo a quem não tinha (adoção limitada, em lote)")
+	_checkEq(int(_one("SELECT expires_at FROM auction_listing WHERE id = %d;" % legacyID).get("expires_at", -1)), now - 4 * 86400 + ttl,
+		"o prazo adotado nasce do created_at REAL da linha, não do relógio do boot")
+	_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = %d;" % legacyID).get("status", "")), "expired",
+		"e como já estava vencido, foi colhido na mesma passada")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM item_instance WHERE char_id = %d AND item_id = %d AND parent_uid = 777001;" % [seller, _itemAge]), 1,
+		"sem snapshot a devolução é o caminho antigo declarado (re-mint com parent no uid do escrow)")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM auction_listing WHERE status = 'open' AND expires_at = 0 AND item_id = %d;" % _itemAge), 0,
+		"nenhum anúncio aberto do item ficou sem prazo depois de uma passada")
+
+# ------------------------------------------------------------------ #100
+func _suiteReCrossBoot() -> void:
+	print("[suite] #100: ordem aberta + anúncio que não passou pelo funil inline cruzam no BOOT, sem evento de client")
+	var ah : Object = _eco.get("ahService")
+	_clearItem(_itemCross)
+	var buyer : int = _makeChar("c_buyer", 100000)
+	var seller : int = _makeChar("c_seller", 0)
+	if not _check(buyer != 0 and seller != 0, "fixtures do re-cruzamento criadas"):
+		return
+	var buyerAccount : int = int(_sql.call("GetAccountIDForCharacter", buyer))
+	var sellerAccount : int = int(_sql.call("GetAccountIDForCharacter", seller))
+	_eco.call("AddGems", sellerAccount, 500, "mdx_gems")
+	var now : int = int(Time.get_unix_time_from_system())
+	var order : int = int(_eco.call("PlaceBuyOrder", buyer, _itemCross, 1, 700))
+	_check(order > 0, "ordem de compra depositada (1×700) sem nada na vitrine")
+	_checkStrEq(str(_one("SELECT status FROM ah_buy_order WHERE id = %d;" % order).get("status", "")), "open",
+		"e ela fica aberta: demanda sem oferta")
+	# O anúncio chega por um caminho que NÃO chama o cruzamento inline: é exatamente
+	# a forma do seed de bot (`EnsureAuctionBots`) e de qualquer linha pré-063. Sem
+	# o sweep de boot, ordem e anúncio coexistem para sempre.
+	_sql.db.query("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at, expires_at) VALUES (%d, %d, %d, 1, 700, '880001', 0, 'open', %d, %d);" % [seller, sellerAccount, _itemCross, now, now + _ahConst("AHListingTtlSec")])
+	var listing : int = int(_one("SELECT id FROM auction_listing WHERE item_id = %d AND status = 'open' ORDER BY id DESC LIMIT 1;" % _itemCross).get("id", 0))
+	_check(listing > 0, "anúncio compatível com a ordem existe (mesmo item, preço, quantidade)")
+	var sellerGold : int = _gold(seller)
+	_checkEq(_count("SELECT COUNT(*) AS n FROM item_instance WHERE char_id = %d AND item_id = %d;" % [buyer, _itemCross]), 0,
+		"NEGATIVO #100 (estado antes do conserto): nada cruzou, o comprador não tem o item")
+	# Um PROCESSO NOVO: instância nova do serviço tem `_ahLifecycleDone = false`, e o
+	# único chamado é o tick de ciclo de vida. Nenhum RPC, nenhum evento de client.
+	var fresh : RefCounted = _ahScript().new()
+	fresh.set("_eco", _eco)
+	var boot : Dictionary = fresh.call("TickAHLifecycle", now)
+	_check(bool(boot.get("boot", false)), "a instância nova se comporta como boot (passada única e completa)")
+	_checkEq(int(boot.get("matched", 0)), 1, "NEGATIVO #100: a varredura de boot cruzou exatamente o anúncio parado")
+	_check(int(boot.get("swept", 0)) >= 1, "e varreu a vitrine pelo cursor, não por OFFSET")
+	_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = %d;" % listing).get("status", "")), "sold",
+		"o anúncio virou sold")
+	_checkStrEq(str(_one("SELECT status FROM ah_buy_order WHERE id = %d;" % order).get("status", "")), "filled",
+		"a ordem virou filled")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM item_instance WHERE char_id = %d AND item_id = %d;" % [buyer, _itemCross]), 1,
+		"o comprador recebeu o item")
+	_checkEq(_gold(seller), sellerGold + 700, "o vendedor recebeu o gold pelo mesmo caminho de sempre")
+	_check(_ledgerRows(buyerAccount, "ah_in:") >= 1, "a perna de item do comprador foi ledgerada")
+	_checkEq(_count("SELECT COUNT(*) AS n FROM ah_price_history WHERE listing_id = %d;" % listing), 1,
+		"e o preço realizado é UM, escrito pela liquidação")
+	# A régua estrutural: o sweep reusa o funil único. `_TryMatchListing` tem a
+	# definição + o cruzamento inline + o sweep = 3 ocorrências, e
+	# `_SettleListingLocked(sql` é chamada por exatamente dois caminhos (ask e bid) —
+	# nenhum terceiro assentamento foi criado.
+	var src : String = _fileText("res://sources/economy/AuctionHouseService.gd")
+	# A agulha é `_SettleListingLocked(sql,` (com vírgula): a DEFINIÇÃO escreve
+	# `_SettleListingLocked(sql : SQLService`, então o que se conta aqui são só os
+	# CHAMADORES — exatamente dois, o do ask e o do bid. Um terceiro assentamento
+	# teria que chamar o mesmo funil, e é isso que a régua não permite sumir.
+	_checkEq(_occurrences(src, "_SettleListingLocked(sql,"), 2, "nenhuma segunda rota de settlement foi aberta (ask + bid)")
+	# `_TryMatchListing(` = definição + cruzamento inline + sweep = 3 ocorrências.
+	_checkEq(_occurrences(src, "_TryMatchListing("), 3, "uma única função de cruzamento, chamada pelo inline e pelo sweep")
+	_check(_occurrences(src, "idx_auction_open") >= 1 or _occurrences(src, "status = 'open' AND id > ?") >= 1,
+		"e o sweep anda pelo keyset de idx_auction_open(status, id), não pela tabela inteira")
+	# O tick periódico não repete o trabalho de boot: segunda chamada no mesmo
+	# instante é uma comparação de relógio e nada mais.
+	var second : Dictionary = fresh.call("TickAHLifecycle", now)
+	_checkEq(int(second.get("swept", -1)), 0, "sem o relógio do tick, a mesma instância não re-varre (custo O(1) por frame)")
+	_checkEq(int(second.get("reaped", -1)), 0, "e não re-colhe")

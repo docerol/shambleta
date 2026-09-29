@@ -296,16 +296,16 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		# operador lê como `d1_strict`. Errava nos dois sentidos:
 		#  - falso negativo, e é o caso que a régua QUER: conta criada ontem que loga HOJE
 		#    pela primeira vez tem 0 dias-distintos no banco neste instante — o login de
-		#    estreia ainda está no buffer (`TelemetryService.gd:45-55`) — então a
+		#    estreia ainda está no buffer (`TelemetryService.gd:40-59`) — então a
 		#    heurística dava 0 != 1 e não emitia. O funil saía sistematicamente baixo.
 		#  - falso positivo: re-login de conta antiga (dia-zero há mais de um dia) tem 1
 		#    dia-distinto, a heurística emitia e `IsD1Return` não.
 		# Agora não há pré-filtro nem predicado local: `RecordFunnel` é o único caminho e
-		# o gate `IsD1Return` dentro dele (`TelemetryService.gd:82`) é a autoridade única
+		# o gate `IsD1Return` dentro dele (`TelemetryService.gd:97`) é a autoridade única
 		# dos dois lados — emissor e métrica não têm como divergir. A consulta removida
 		# era SELECT puro, sem efeito colateral a realocar, e o guard `Launcher.SQL != null`
 		# caiu junto porque `IsD1Return` já fecha em false sem banco
-		# (`TelemetryService.gd:284`). Prova: `tests/d1_return_metric_test.gd`, que dirige
+		# (`TelemetryService.gd:295`). Prova: `tests/d1_return_metric_test.gd`, que dirige
 		# este emissor real e confere o veredito contra `IsD1Return` na mesma base, para
 		# além da suíte B de `tests/ops_fix_test.gd`.
 		if Launcher.Telemetry.has_method("RecordFunnel"):

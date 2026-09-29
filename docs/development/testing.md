@@ -22,8 +22,9 @@ Dois grupos de harness, e a diferença entre eles é mecânica, não de nome:
   `backup_full_restore_test.gd` em 2026-09-27, e o primeiro run isolado dele já
   morreu num `player[0]` fora de índice — ver a linha da tabela acima).
 
-Medido em 2026-09-28 com `bash ./scripts/test.sh preflight` — 63 harnesses no
-preflight, sendo os 61 das linhas abaixo (a tabela omite `IdleTests.gd` e
+Contagem derivada do registro em `scripts/test.sh` (`EXPLICIT_HARNESSES` + o globo de
+`tests/`) e conferida a cada passada pelo portão de doc
+— 75 harnesses no preflight, sendo os 73 das linhas abaixo (a tabela omite `IdleTests.gd` e
 `IdleTestsFrontier.gd`, que não são gates próprios: `run_idle_tests` carrega a
 folha, e a folha herda o kernel). A tabela não grava quantos checks cada
 harness roda, de propósito: essa contagem vive na linha de resultado do próprio
@@ -36,8 +37,11 @@ que voltar a trazer contagem de checks:
 |---|---|
 | `run_idle_tests` | as suítes do kernel `IdleTests.gd` mais as da folha `IdleTestsFrontier.gd` — jogo, economia, rede, docs, ponteiros de evidência |
 | `economy_invariant_fuzz` | fuzzer de invariantes da fronteira do dinheiro (marker `== FUZZ:`): pares de operações legalmente individuais que intercaladas somam errado |
+| `faucet_census_test` | censo de torneira e pia (gold sink) medido do ledger e do estado do banco por `EconomyKernel.CensusSupply`: funil conservado (para a população limpa `Σ amount == último balance_after == carteira`, dono a dono, e `unattested == 0`), censo não-vazio com as pias do catálogo somando valor MEDIDO, mundo fechado (o catálogo cobre os escritores de `sources/`, conferido lendo o fonte) e controles negativos plantados (faucet cru sem e COM ledger, pia crua sem ledger, faucet cru de gemas) que mordem pelo mesmo predicado da perna conservada |
+| `gold_sink_scale_test` | a taxa de forja lê a zona do personagem (achado #107 — `base × tier²` era cega ao mapa e a pia encolhia onde a torneira explode): monotonicidade medida na curva real do `FarmZoneData`, zona a zona e tier a tier, zona 1 bit-for-bit igual a `EconomyCatalog.CORRUPT_FEE_BASE × tier²` e `CraftCatalog.SubmitFee(tier)` conferida pelo caminho do produto (o `stat.gp` que sai), a banda declarada — uma ação de forja de tier 9 custa entre 60 e 180 minutos de fazenda par em todo par (zona, tier) alcançável — com a tabela antes/depois das 27 zonas e o pior caso impressos, mais a prova de que a banda é justa nas duas arestas, medida pelo mesmo predicado: 886 é o MENOR inteiro que passa porque 885 já fura o piso, 1099 é o MAIOR porque 1100 estoura o teto, e os dois furam exatamente UM par — zona 27, tier 9 — que é a célula que decide as duas arestas; o knob lido do arquivo por `EconomyCatalog.ApplyBaseCatalog` (valor novo dentro da banda muda a taxa cobrada, valor fora é recusado com o erro do próprio validador e não entra no estado), fail-closed em knob ausente/não-inteiro/zero, ledger de gold fechando depois de pagar a taxa escalada (`kind = gold`, débito negativo, reason `corrupt_fee:<item>` e `craft_submit_fee:tier<slot>` preservados, `balance_after` encadeado e origem + Σ == carteira) e o controle negativo plantado que roda o MESMO predicado contra a fórmula sem fator de zona e volta vermelho nomeando o par |
+| `step_budget_metric_test` | o orçamento de passo do server existe como grandeza EXPORTADA e a régua que o pagina aponta para o nome que o processo serve: `Launcher.StepBudgetRecord` conferida por mesa com passos sintéticos (sequência dentro do orçamento devolve `overBudget == 0`, predícado estritamente `>` orçamento+folga — controle negativo da cauda), `MetricsServer.StepBudgetLines` conferida como texto Prometheus puro (baldes cumulativos e monótonos, `+Inf == count`, `_sum`/`_count` batendo com amostras, estado sem passo renderiza AUSENCIA não zero), todo nome `shambleta_*` de `deploy/alerts.rules.yml` precisa ser emitido pelo servidor, e uma emenda de parede com `Burn` de 40 ms/passo real move o contador e o bucket |
 | `spend_confirm_test` | os gastos irreversíveis só falam com a rede depois do `ConfirmPending()` |
-| `season_liveops_test` | temporada, passe, calendário de live ops |
+| `season_liveops_test` | temporada, passe e calendário de live ops lidos pelo caminho do produto (`LiveOpsCalendar.CurrentRaw`/`Entries`/`ActiveEntriesAt`): a agenda embarcada valida limpa, arquivo quebrado é fail-closed (nenhum evento no ar), janela `[start, end)` com fim exclusivo, multiplicador resolvido por timestamp; e a suite E do Achado #98 — há campanha no ar NO INSTANTE do run e acima do neutro, nenhum vão de cobertura passa da cadência de uma copa (`EconomyCatalog.TOURNAMENT_DAYS`, lido do fonte), todo dia de temporada agendada tem algum kind no ar, o horizonte da agenda não abandona temporada em serviço, nenhuma janela paga o neutro, e o controle negativo retira o eixo da copa para medir o vão que o arquivo tinha antes; e o espelho da trilha — a S1, a temporada que está no ar, declara `pass_tiers` no arquivo, e a régua compara nível a nível pelos dois sentidos, usando o leitor do produto (`PassTiers`), mais os três escalares, contra o catálogo que o jogador já recebia |
 | `season_schedule_test` | a AGENDA de temporada no arquivo real do repo, lida pelo caminho do produto (`CurrentRaw` → `ValidateSeasons` → `Entries`): duas temporadas declaradas com `id` único, sucessora com janela futura (piso 2026-12-01 UTC, para não reescrever a régua de 30 dias do beta), `duration_days` batendo com a janela, `premium_sku` que resolve no catálogo que a loja cobra nos dois sentidos, `race` conhecida por `EconomyCatalog.SEASON_KINDS`, e a rotação com preempt+`rules_frozen` exercitada com os dados embarcados; cópias mutadas em memória (janela divergente, SKU inexistente, `id` repetido, corrida fora do catálogo, typo de chave) são RECUSADAS com `Entries()` vazio — o controle negativo de que "0 failures" não é a régua relendo um arquivo que não sabe falhar |
 | `season_campaign_alignment_test` | o CASAMENTO entre os dois arquivos de agenda, lidos pelos caminhos reais do produto (`SeasonConfig.CurrentRaw`/`Entries` + `LiveOpsCalendar.CurrentRaw`/`Entries`): cada temporada com janela futura tem campanha cuja janela `[start_unix, end_unix)` intercepta os primeiros 7 dias dela, o marco em si abre com algum kind no ar e nenhum dia da abertura fica em branco; os `value` estão na banda que o próprio validador cobra (faixa lida das constantes `MinBonusValue`/`MaxBonusValue` e `MinPoolMod`/`MaxPoolMod`, não redigitada na régua); o multiplicador que o calendário resolve é o que os consumidores pagam no marco (`OfflineSettle.LiveOpsXpMods`/`LiveOpsChestMods`, `TournamentArenaService.PrizePoolMod`); nenhum `double_xp` cobre o instante do run (`SuiteSettleGolden` continua em mods 1.0); e controles negativos em memória acusam tudo que a agenda pode fazer de errado — campanha jogada para depois do fim da temporada, calendário reduzido às linhas que não servem abertura nenhuma (o estado anterior a esta régua), `value` acima do teto RECUSADO com `Entries()` vazio, janelas sobrepostas do MESMO kind acusadas e nunca compostas, cauda de campanha antiga terminando dentro da abertura, copa com `value` fora da banda do consumidor — com o estado embarcado lendo limpo de novo no fim |
 | `pass_season_alignment_test` | o PASSE QUE A TEMPORADA VENDE, amarrado entre as duas linguagens (`== PASS SEASON:`): cada entrada do calendário embarcado resolve o próprio `premium_sku` pela ordem de autoridade (congelado na linha → entrada do calendário → default do catálogo); a vitrine filtra por temporada e não inventa botão para SKU fantasma; `companion/server.py` e `SeasonConfig.gd` partilham o MESMO literal de default e resolvem o mesmo passe para a MESMA linha congelada, inclusive a legada `{}` e os congelados ilegíveis (`null`, número, texto vazio, JSON quebrado), que são recusa nos dois lados; e nenhum literal de passe sobra no transporte do botão (`Server.BuyPass` / `CheckoutService.GetPassCheckoutIntent`), que é como a S2 no ar acabou vendendo o passe da S1 |
@@ -52,7 +56,7 @@ que voltar a trazer contagem de checks:
 | `economy_design_fix_test` | cap offline, forge, moeda, passe |
 | `economy_knob_range_test` | o catálogo base virou dado de rebalance: cada knob de `data/conf/economy_base_catalog.json` traz uma FAIXA (`_knob_ranges`) e `ValidateBaseCatalog` cobra a faixa, não a igualdade com o const — número diferente do default dentro da banda passa (o rebalance que a jaula proibia), fora dela é recusa, knob sem banda é fail-closed, e o JSON do repo valida limpo. O const passou a ser o default documentado, usado só quando o arquivo não entra |
 | `gameplay_fix_test` | prioridade de skill, elemental, escada de boss |
-| `doc_facts_test` | fatos de doc cuja única fonte é o runtime: enum de diretório de backup, colunas depois de todas as migrations, autoload registrado |
+| `doc_facts_test` | fatos de doc cuja única fonte é o runtime: enum de diretório de backup, colunas depois de todas as migrations, autoload registrado, e a contagem de janelas por kind que a prosa embarcada do próprio `liveops_calendar.json` afirma — medida contra `Entries()` e conferida em algarismo OU por extenso, com controle que troca o numeral |
 | `hud_wiring_test` | cadeia botão HUD → handler `Gui` → painel e o portão de gasto |
 | `social_fix_test` | guilda, chat, lista de online |
 | `social_graph_test` | o grafo social autoritativo da migration 061, medido no runtime: amizade como par simétrico, auto-relacionamento recusado, bloqueio unilateral, o teto na borda (amigos e bloqueios), cada token de recusa com exatamente uma frase no `PlayerReasons`, `EXPLAIN QUERY PLAN` do hot path saindo `SEARCH` no índice e nunca `SCAN`, custo da checagem por linha, a DIREÇÃO da entrega numa sessão viva (quem manda recebe o que?), e `/friend`, `/unfriend`, `/ignore`, `/unignore`, `/social` executados no `WorldCommands` real (`== SOCIAL GRAPH:`) |
@@ -84,7 +88,10 @@ que voltar a trazer contagem de checks:
 | `guild_governance_test` | governança de guilda no SERVIDOR: promote/demote/kick decididos pelo `account` autenticado e pelo rank LIDO DO BANCO (nunca por role declarado pelo cliente), cada ação aceita deixando rastro append-only em `guild_governance_log` (migration 062) na forma do `guild_vault_log`, promote por não-líder recusado SEM rastro, alvo inexistente e ator de fora caindo em `not_member`/`not_leader`, ninguém se chuta, `RemoveMember` não apaga o líder, e o teto de roster mora em UM constante (`GuildRoster.MaxMembers`) que o service não redeclara — cheio até o teto, o (N+1)-ésimo join é recusado com `roster_full` sem estourar a contagem |
 | `hud_decision_fit_test` | os widgets de DECISÃO cabem num telefone: a moldura (390×844 CSS px) e o piso de área de toque (48 px, o maior entre `GuiUiScale.TouchTarget`/`TouchTargetFloor`) são lidos do PRODUTO por `get_script_constant_map()`, não redigitados no teste, e para cada controle visível de confirmar/cancelar/escolher o harness mede no runtime que o retângulo global intersecta e cabe na área visível (ou está atrás de `ScrollContainer` no eixo que estoura), que é maior que o piso declarado, e que nenhum outro controle lhe rouba o toque (caminhada de pintura com `z_index` acumulado achando o topo sobre o centro). Foi ele que achou o `MessageBox` — o diálogo global de confirmar/cancelar — com o botão primário a 665 px numa tela de 390, fora do radar do `panel_fit_test` porque não herda de `WindowPanel`. Morder: um `global_position.x += 1200` injetado em cópia de scratch derruba os três botões pelo nome |
 | `map_load_test` | a CORRENTE de carga do mapa, elo por elo e em todos os mapas do `MapsDB` (o censo é lido do banco, não digitado aqui): a instância nasce, a franja `Fringe` é achada por uma varredura INDEPENDENTE do nó e comparada ao `currentFringe` do serviço (é assim que se prova que `RefreshTileMap()` rodou, e não que o serviço concorda consigo mesmo), o nó entra NA ÁRVORE sob `Launcher`, fica visível, `currentMapID` acompanha o mapa em pé e `MapLoaded` dispara exatamente uma vez — o sinal único do `Camera`, que é quem define a fronteira. Mais idempotência do `not force`, recarga com `force` sem deixar segundo nó, troca de mapa sem empilhar cena, e a metade NEGATIVA: um id inexistente não empurra nada, não grava id, não emite sucesso e deixa o `pool` SEM chave fantasma, porque é o sentinela `DB.UnknownHash` que destrava o retry do warp seguinte. Foi ele que achou o `MapPool.LoadMapLayers` guardando `null` no pool — `RefreshPool` decide adjacente por `not in pool` (o mapa que falhou uma vez nunca mais tentava) e `ClearUnused` conta a chave no tamanho mas não consegue apagá-la (teto do pool estourado para sempre). Morder (medido, não afirmado): trocar o `Launcher.add_child` por `pass` derruba quatro afirmações por mapa percorrido — árvore, pai, visibilidade e o nó único depois do `force` — mais as duas da troca e do retry, e o exit code do harness É a conta das falhas; voltar a guardar `null` no `MapPool` derruba exatamente as duas afirmações que nomeiam a chave fantasma e a drenagem |
-| `migration_atomicity_test` | o carimbo de migration é conseqüência do que o banco aceitou, não do que o loop tentou: cada patch vira transação e só anda a versão se o `Query` devolveu sucesso (o `Query()` antigo devolvia `Array` e jogava o bit de erro fora, então um patch que estourava no boot era marcado como aplicado e nunca rodava de novo — com as tabelas do dinheiro no meio), a falha PARA sem avançar e é exposta (contagem, índice e arquivo do patch travado, `stalled`), a causa corrigida reaplica o patch falho e os enfileirados atrás, arquivo vazio/ilegível não é aplicado nem carimbado, os guardas `uptodate`/`empty`/`stale` continuam de pé e agora são observáveis, e as 61 patches reais do boot viram a versão 61 com `PRAGMA integrity_check = ok` — a prova de que embrulhar em transação não quebrou as migrations que já trazem o próprio `BEGIN TRANSACTION`. A série do `/metrics` e a alerta que pagina por ela são conferidas no mesmo harness |
+| `migration_atomicity_test` | o carimbo de migration é conseqüência do que o banco aceitou, não do que o loop tentou: cada patch vira transação e só anda a versão se o `Query` devolveu sucesso (o `Query()` antigo devolvia `Array` e jogava o bit de erro fora, então um patch que estourava no boot era marcado como aplicado e nunca rodava de novo — com as tabelas do dinheiro no meio), a falha PARA sem avançar e é exposta (contagem, índice e arquivo do patch travado, `stalled`), a causa corrigida reaplica o patch falho e os enfileirados atrás, arquivo vazio/ilegível não é aplicado nem carimbado, os guardas `uptodate`/`empty`/`stale` continuam de pé e agora são observáveis, e cada patch do diretório anda o carimbo — a versão final é o
+número de patches, conferido no próprio harness com `PRAGMA integrity_check = ok` — a
+prova de que embrulhar em transação não quebrou as migrations que já trazem o próprio
+`BEGIN TRANSACTION`. A série do `/metrics` e a alerta que pagina por ela são conferidas no mesmo harness |
 
 | `multi_instance_tick_test` | a escada medida de instâncias × players no MESMO processo: cada degrau (piso 0, 1, 20, 40, 100, 200, 300, 400) é medido três vezes, a linha do meio é a mediana das medianas, e a convergência entre passadas é três réguas (maioria dentro de ±25% da mediana, a PIOR passada ainda dentro do orçamento, e spread total abaixo de um período de frame — sem isso um GC de 360 ms virava "teto", e com a régua antiga de `max−mín` um degrau são vermelhava por um tiro de um monitor de média móvel); o custo marginal por player co-residente é aferido contra um spin injetado de 4 ms — o que o monitor do motor capture (68–85%) é medido e declarado, não escondido num verde; os três relógios (trabalho, período, Hz entregue) têm de concordar antes de um degrau ser chamado de estouro; fd e threads por instância e o `RLIMIT_NOFILE`/`RLIMIT_NPROC` lidos de `/proc/self/limits` dizem o que NÃO limita; e os números que vão para `deploy/SCALING.md` são âncoras `<!-- DRIFT ... -->` conferidas contra a medição, no mesmo mecanismo do portão de doc |
 | `nginx_hardening_test` | cerca do proxy da fronteira do dinheiro: faz parse de `deploy/web/nginx.conf` e confere diretiva por diretiva rate-limit, teto de corpo, CSP, X-Frame-Options e `server_tokens off` nas quatro rotas proxied — `/checkout/`, `/webhooks/`, a leitura exata `GET /push/vapid` e a leitura exata `GET /catalog` (suíte G, que lê `companion/server.py` para conferir que a vitrine chama o MESMO gate de temporada do checkout), respeitando a precedência real de `location`; roda `nginx -t` se o binário existir no host |
@@ -95,8 +102,17 @@ que voltar a trazer contagem de checks:
 | `repo_layout_test` | forma do repo: sonda rastreada na raiz que não compila/não emite marcador `== ...:`/`quit()` é falsa, e gate de estrutura escrito sem chamador no portão é pego |
 | `shard_capacity_test` | lotação de shard pelo caminho real: `WorldAgent.CreateAgent` distribui cheio-na-ordem e nenhuma instância da família passa de `MAX_PLAYERS_PER_INSTANCE`, e a espera na `queryMutex` deixa de ser invisível |
 | `tick_capacity_test` | capacidade de tick medida, não estimada: quantos players por zona o processo aguenta, cada nível numa zona isolada (instância dedicada por zona), e a tabela que vai transcrita no runbook de escalabilidade. A monotonia da escada re-mede o degrau anterior antes de acusar (zona diferente tem conteúdo diferente, e ruído só pode encarecer uma janela) e declara a troca no gancho de ruído |
+| `core_loop_cycle_test` | ande um personagem pelo ciclo real numa sessão só (ganhar → liquidar → gastar → subir de zona → afundar → renascer) e emende as pontas que os testes de serviço deixavam soltas: nenhuma transição do ciclo existia como asserção antes |
+| `gate_marker_control_test` | controle plantado do `harness_marker()`: um harness com marcador mixed-case, um com marcador tardio e um sem marcador, para a classe "verde lido como vermelho por ordem textual" (#81) não voltar sem portão |
+| `guild_roster_race_test` | corrida no roster da guilda: promote/kick e teto de roster disputados pela porta real, com o texto velho que permitia a corrida conservado como controle |
+| `i18n_coverage_test` | cobertura de i18n lida do fonte: toda chave usada por código/conteúdo tem texto nos idiomas declarados em `project.godot`, com o censo do que falta por arquivo |
+| `preauth_ledger_test` | a cesta pré-auth de `Admission` é podada e tem teto por endereço: spray de IPs distintos deixa de comprar uma entrada de dicionário para sempre dentro do processo que segura o mundo (#85) |
+| `refund_revocation_test` | estorno e chargeback de SKU não-gem revogam o direito, não só o dinheiro: `pass.*` derruba `premium`, `vip.*` corta `vip_until`/`vip_tier`, cosmético sai da posse e do equip; idempotência nos três sentidos, regra TOTAL (não pro-rata) decidida em código, e o controle negativo planta a remoção da revogação |
+| `season_race_delta_test` | placar de temporada apura a JANELA, não a vida: a abertura grava o marco zero das três corridas lidas de contador corrente (`power_score`, `bosses_beaten`, `guild.points`) na MESMA transação do `INSERT` de `season`, e o congelado é diferença contra ele — quem nasce depois da abertura entra pelo total, quem cai dentro da janela congela em zero e sai do placar, o teto `limit` é ordenado pelo delta (um absoluto alto não desaloja um delta alto), o prêmio segue a ordem do delta, e o controle negativo planta uma temporada anterior à 064, sem carimbo, para a vitrine confessar `scoring = "current"` em vez de vender a vida do personagem como temporada — os dois regimes do mesmo campo amarrados, porque só o legado deixaria passar uma facade que devolvesse `current` para todo mundo; a perna S9 tira `season_score_baseline` do banco pela hora (renomeada, não fingida) para a abertura falhar pelo caminho real de um banco pré-064 e exige `0` de volta, census de `season` inalterado e, com a tabela de volta, a MESMA abertura cometendo — porque "devolve 0" também é verdade de uma facade morta |
+| `rpc_receive_budget_test` | orçamento de RPC na porta do servidor, não na vontade do chamador: chat e fan-out global cobrados por cota no handler, com o intervalo mínimo do cliente rebaçado a intervalo e não a permissão |
+| `telemetry_census_test` | censo de `telemetry_event`: todo `kind` escrito por fonte é lido por alguém, a tabela é podada por janela declarada, e a lista de órfãos é medida do diretório em vez de transcrita |
 | `benchmarks` | orçamentos de performance (linha de resultado própria) |
-| companion (python) | a fronteira do dinheiro em python e a régua de definição do painel: toda `companion/test_*.py` nomeada por `companion_gates()` (`scripts/test.sh:355-378`); a cobertura é conferida ANTES de rodar, então uma suíte sem `gate_py` derruba o portão em vez de viver verde e invisível. `test_retention` é a que prende o D1 servido pelo `/metrics` à mesma view `cohort_retention` do servidor, e recalcula a régua velha de janela móvel como sombra para acusar quem a reimplantar; `test_season_offer` é a que prende o passe à temporada que o congela — aplica a migration 018 real, recusa o passe da temporada encerrada com `season_mismatch` (e a sombra da régua antiga, que o vendia), trata congelado ilegível como `season_rules_unreadable` nos dois sentidos, confere nas três portas de cobrança que a recusa vem antes de qualquer 200, e no bloco 11 prende o corpo de `GET /catalog` ao MESMO gate (marca `season_eligible`, nunca filtra) e proíbe literal de temporada na cópia embarcada — com a lista de arquivos derivada do `deploy/web/Dockerfile`, não escrita à mão |
+| companion (python) | a fronteira do dinheiro em python e a régua de definição do painel: toda `companion/test_*.py` nomeada por `companion_gates()` (`scripts/test.sh:379-402`); a cobertura é conferida ANTES de rodar, então uma suíte sem `gate_py` derruba o portão em vez de viver verde e invisível. `test_retention` é a que prende o D1 servido pelo `/metrics` à mesma view `cohort_retention` do servidor, e recalcula a régua velha de janela móvel como sombra para acusar quem a reimplantar; `test_season_offer` é a que prende o passe à temporada que o congela — aplica a migration 018 real, recusa o passe da temporada encerrada com `season_mismatch` (e a sombra da régua antiga, que o vendia), trata congelado ilegível como `season_rules_unreadable` nos dois sentidos, confere nas três portas de cobrança que a recusa vem antes de qualquer 200, e no bloco 11 prende o corpo de `GET /catalog` ao MESMO gate (marca `season_eligible`, nunca filtra) e proíbe literal de temporada na cópia embarcada — com a lista de arquivos derivada do `deploy/web/Dockerfile`, não escrita à mão |
 | structure | os gates que medem o repo sem rodar jogo: `check_boot_sandbox.sh`, `check_compose.sh`, `check_dead_code.sh`, `check_doc_drift.sh`, `check_gate_log.sh`, `check_god_nodes.sh`, `check_secrets.sh`, `check_ci.sh`, `check_untracked.sh` — cada um imprime a própria contagem na sua linha de resultado, então o total é o do run, não uma promessa |
 
 Todos passam pelo mesmo
@@ -130,7 +146,7 @@ harness em vez de propriedade da carga da máquina. Antes de rodar qualquer harn
 o **preflight de compilação** de todos os harnesses: `godot --check-only --script` em
 cada arquivo (um processo `--check-only` por arquivo, então o tempo cresce com a
 tabela — é por isso que esta seção não grava segundos). O motivo é um defeito que custou três execuções do
-portão: `run_idle_tests.gd:81` faz `load("res://tests/IdleTestsFrontier.gd")` e chama
+portão: `_run_tests()` em `run_idle_tests.gd:81` faz `load("res://tests/IdleTestsFrontier.gd")` e chama
 `.new()` — se o arquivo não compila (um `CheckEq` recebendo `String` onde a
 assinatura é `(int, int, String)`), nenhuma suíte roda, `== RESULT:` nunca
 aparece e o gate descobre isso só no timeout de 1200 s. A régua é ancorada no
@@ -157,7 +173,7 @@ Antes de 2026-09-24 o companion era o
 `python3` direto e o `test.sh all` local não o rodava nenhum — hoje os dois chamam
 `./scripts/test.sh companion`. `test_e2e_implementation.gd` estava
 no repositório sem job nenhum até 2026-09-24 — é a tabela chamador→método entre
-arquivos que teria pego `Gui.gd:286` chamando `Settings.get_sessionfirstlogin`,
+arquivos que teria pego `Gui.gd:286` (`_show_char_menu`) chamando `Settings.get_sessionfirstlogin`,
 um método que nunca existiu em nenhuma revisão (a chamada abortava o primeiro
 login e o tour de onboarding não abria para ninguém). `test_backup_restore.gd`
 saiu do mesmo jeito: ele terminava em `quit(0)` sem contagem, então o job
@@ -178,9 +194,13 @@ REPROVA linha de harness que voltar a trazer contagem de checks.
 
 Uma linha de doc que aponta para `arquivo:linha` é a única parte deste repo que envelhece
 em silêncio: o código muda de linha e o texto continua parecendo verdadeiro até alguém
-abrir o arquivo citado. `scripts/check_doc_drift.sh` confere as âncoras em três camadas,
-e cada uma traz o próprio self-test — controles que têm de morder, porque um zero sem
-controles não é verde, é cegueira:
+abrir o arquivo citado. `scripts/check_doc_drift.sh` confere as âncoras em três camadas
+sobre ponteiro — identidade, nome de arquivo e literal — e o que é caminho em duas: a de
+prosa (seção 24) e a de comando (seção 27). O corpo julgado é a doc `.md`, o comentário de
+`.gd/.py/.sh` e, desde 2026-09-29, o JSON de `data/conf`: lá a régua mora no valor de
+`_note`/`_campos`/`_estado_atual`, que é prosa sem marcador de comentário, e o censo do dia
+achou três ponteiros e os três eram falsos. Cada régua traz o próprio self-test, controles
+que têm de morder, porque um zero sem controles não é verde, é cegueira:
 
 - **identidade (seção 23)**: se a frase nomeia um identificador, o nome tem de morar na
   linha citada. Roda em dois cortes (`narrow` e `wide`) porque um corte que só existe num
@@ -206,6 +226,14 @@ controles não é verde, é cegueira:
   continuou citando a raiz. exceção só com motivo em `scripts/dead_paths.txt`, e caminho
   registrado que volta a existir é acusado — senão o registro vira licença para citar
   fantasma.
+- **caminho de comando (seção 27)**: a régua de cima lê prosa e só julga `.md`, porque
+  estender aquele corpo a `.py` e `.sh` foi medido e devolveu ruído. Um comando dentro de
+  bloco de código não é citação, é instrução: quem cola a linha no terminal recebe "No
+  such file or directory". Esta camada cobre os docs que alguém executa — inclusive as
+  receitas de `docs/`, que nenhuma outra régua de caminho lia — e achou na primeira
+  passada uma receita mandando gerar os `.translation` com um script que não existe; o
+  `.translation` vem do importador `csv_translation` do motor, e a ferramenta real está
+  noutro caminho.
 - **literal (seção 25)**: se a frase PROMETE um trecho entre backticks, o trecho tem de
   existir uma vez no arquivo-alvo e estar na linha citada, no mesmo quinhão delimitado
   por linha em branco, ou com todas as palavras dele no span. É a camada que faltava: as
@@ -216,7 +244,8 @@ Medido no run de 2026-09-28: 218 ponteiros nomeados em cada corte, 126 caminhos 
 54 ponteiros com literal único, tudo zero acusação, com 34, 18 e 19 controles mordendo
 respectivamente. Os pisos (`IDENT_MIN`, `LIT_MIN`) são queda-para-baixo, não meta: uma
 régua que passa a enxergar menos é uma régua quebrada, e o gate diz isso em vez de ficar
-mudo.
+mudo. A régua de comando entrou em 2026-09-29 medindo 76 caminhos em 19 docs de
+receita, zero acusação depois de consertada a receita, com 8 controles mordendo.
 
 ### A régua de registro (seção 26)
 
@@ -243,6 +272,30 @@ mordendo. A mordida foi conferida na árvore de verdade — o README plantado di
 devolve `[FAIL] registro:` e um failure no laudo. `REG_MIN` é queda-para-baixo como os
 outros pisos: prosa de contagem que suma do repo é a régua ficando muda, não a honestidade
 chegando.
+
+### O eixo de linha dentro de `.md` (a suíte dos ponteiros de evidência)
+
+As camadas acima conferem âncora no portão barato. O mesmo corpo é conferido de novo, linha
+por linha, por `SuiteEvidencePointers`, e ali havia um buraco recortado por construção: a
+régua de identidade pergunta se o símbolo nomeado pela cláusula mora na linha citada, e num
+alvo `.md` não existe declaração nenhuma para indexar — o índice chega vazio de propósito, e
+o braço que responde pelo arquivo inteiro devolvia "o nome está neste documento" e calava
+sobre o número. Foi assim que a frase plantando `companion_gates()` em testing.md na linha 99
+ficava verde enquanto a linha que o nomeia é a 115.
+
+O quarto braço é `_ProseTargetVerdict` (`tests/IdleTestsFrontier.gd:428`), escolhido por
+`_IsProseTarget` (`tests/IdleTestsFrontier.gd:414`), e troca o arquivo inteiro pela JANELA
+citada: se o documento escreve o nome em algum lugar mas fora do intervalo, a acusação nomeia
+o símbolo e o número; se não o escreve em lugar nenhum, vale o mesmo silêncio da régua de
+série — um nome que a prosa não soletra é caso do caminho e do literal, não daqui.
+
+A mordida é conferida a cada gate com três controles sobre um fixture de prosa montado em
+memória (nome na linha errada acusa, na certa cala, ausente cala) e a exigência de que o braço
+tenha opinião sobre exatamente dois dos três; o piso da varredura é o número medido no corpo
+de hoje, recalibrado quando o corpo muda, e nunca uma meta. O que fica fora, registrado: um
+ponteiro para arquivo de código cuja cláusula não nomeia símbolo declarado — um local, um
+arquivo, ou nada — não tem span a conferir, e foi por essa fresta que nove locadores de
+`IdleTestsFrontier.gd` apodreceram ~1300 linhas sem uma reclamação.
 
 ## Execução
 

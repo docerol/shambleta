@@ -60,6 +60,13 @@ class SettleReport:
 	var bossKeysEarned : int = 0
 	var essenceEarned : int = 0
 	var lastSettledAt : int = 0
+	# Anchor VELHO da coleta (o `last_settled_at` que limitou esta janela, lido antes
+	# de qualquer escrita). É a base da semente de drop: `BuildReport` (preview) e
+	# `SettlePending` (aplicação) desenham o MESMO multiset porque os dois leem este
+	# valor, e duas coletas seguidas não repetem o desenho porque o anchor avança a
+	# cada liquidação. Fica fora de `to_dictionary()` de propósito: é estado do
+	# cálculo do próprio settle, não parte do contrato do AFK report na rede.
+	var anchorTs : int = 0
 	var mods : float = 1.0
 	# `doubled` = o ×2 do tier 2 foi aplicado a esta liquidação. Só XP/ouro/drops
 	# dobram — baús, chaves e favores nunca (MONETIZATION §2.5/§0.1).
@@ -125,6 +132,7 @@ static func BuildReport(charID : int, now : int = 0) -> SettleReport:
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = _statInt(char, "farm_zone", 0)
 	report.lastSettledAt = _statInt(char, "last_settled_at", 0)
+	report.anchorTs = report.lastSettledAt
 	# Cap do PERSONAGEM: o que a compra da conta dá (`BaseCapHours` no F2P, 24h no
 	# VIP) mais o que este personagem assistiu desde a última coleta. O anchor entra
 	# no corte porque hora já liquidada não pode ser vendida de novo.
@@ -157,6 +165,7 @@ static func SettlePending(charID : int) -> Dictionary:
 	report.accountID = _statInt(char, "account_id", 0)
 	report.zoneID = zoneID
 	report.lastSettledAt = now
+	report.anchorTs = lastSettled
 	# O corte das horas compradas é o anchor VELHO (lastSettled), não
 	# report.lastSettledAt: este já é `now` e filtraria toda view da própria
 	# janela que estamos liquidando.
@@ -268,6 +277,27 @@ static func LiveOpsXpMods(now : int) -> float:
 static func LiveOpsChestMods(now : int) -> float:
 	return LiveOpsCalendar.BonusMod(LiveOpsCalendar.KindChestBonus, now)
 
+# Base da semente de drop da coleta. Mistura a IDENTIDADE (char + zona, o termo
+# histórico do pick único) com o ANCHOR da coleta, que só anda quando o jogador
+# liquida: é isso que dá variância entre coletas sem introduzir RNG (o caminho
+# golden continua sem `randf`, e a mesma janela continua reproduzindo o mesmo
+# multiset — replay/revisão de faucet depende disso).
+static func DropSeedBase(charID : int, zoneID : int, anchorTs : int) -> int:
+	return (charID * 1000003) + (zoneID * 4099) + (anchorTs * 31)
+
+# Liquida `dropCount` drops com UMA rolagem por drop (`GetDropForRoll` responde
+# identidade: um item por roll, nunca quantidade — FarmZoneData.gd:513). O
+# retorno é o multiset hash -> contagem; a soma das contagens é exatamente
+# `dropCount`, então este eixo não cria item nem ouro novos, só redistribui.
+# Pura e exposta para a régua de distribuição (tests/balance_test.gd) poder
+# conferir a cobertura da banda sem duplicar a fórmula do settle.
+static func RollDrops(zoneID : int, seedBase : int, dropCount : int) -> Dictionary[int, int]:
+	var rolled : Dictionary[int, int] = {}
+	for i in dropCount:
+		var itemHash : int = FarmZoneData.GetDropForRoll(zoneID, seedBase + i)
+		rolled[itemHash] = int(rolled.get(itemHash, 0)) + 1
+	return rolled
+
 static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int = 1):
 	var zone : FarmZoneData = FarmZoneData.GetZone(report.zoneID)
 	if zone == null:
@@ -331,9 +361,15 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 		dropCount += 1
 	dropCount *= adMult
 	if dropCount > 0:
-		# SOM-IDLE: F3 — tier-banded drop pool (deterministic pick per char+zone)
-		var itemHash : int = FarmZoneData.GetDropForRoll(report.zoneID, report.charID + report.zoneID)
-		report.drops[itemHash] = dropCount
+		# #95 (Economia): uma rolagem POR drop liquidado, com a semente avançando a
+		# cada rolagem. Antes existia UMA escolha determinística (`charID + zoneID`)
+		# replicada `dropCount` vezes: a taxa estava certa e a distribuição errada —
+		# toda coleta entregava o mesmo hash (zero variância), a banda de tier da
+		# zona nunca era percorrida pelo AFK e o pool de craft nunca se diversificava
+		# para quem joga por liquidação. A soma continua sendo exatamente `dropCount`
+		# (nenhum item novo, nenhum gold novo — o faucet é inalterado; só muda o
+		# formato). A base é o anchor da coleta, então preview e grant concordam.
+		report.drops = RollDrops(report.zoneID, DropSeedBase(report.charID, report.zoneID, report.anchorTs), dropCount)
 
 	# Baús: 1 a cada 4h liquidadas, no máx. MaxChests por coleta. Com o baseline
 	# de 8h o floor() já paga 2 por coleta cheia; o piso de 1 baú continua para

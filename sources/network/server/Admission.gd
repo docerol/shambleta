@@ -38,6 +38,13 @@ class_name Admission
 #    do teto (banco sem as tabelas daquela versão não tem o que oferecer), e o motivo
 #    tem contador próprio — medido em S5 de tests/admission_gate_test.gd, que confere
 #    os dois lados do flag e a fiação viva em `Server._ValidateAuth`.
+# 5) CESTA COM TETO (#85, auditoria 2026-09-29). `windows` é escrita ANTES de
+#    qualquer credencial e um endereço novo entra sem custo nenhum para quem o
+#    apresenta: spray de endereços distintos fazia o dicionário crescer 1 entrada por
+#    endereço, sem teto, dentro do processo que já segura o mundo. Agora a cesta é
+#    podada por idade (varrida quando o balde vira) e por teto duro, com histerese,
+#    e o LRU é tocado a cada tentativa — quem evapora é quem parou de bater, nunca o
+#    agressor ativo. Régua e números medidos em tests/preauth_ledger_test.gd.
 #
 # Relógio: `ClockOverride` é o seam do harness, no mesmo formato de
 # `EmailService.nowOverride` — 0 = relógio real, >0 = segundo fixo. Nada aqui lê
@@ -66,10 +73,40 @@ var Ceiling : int						= 0
 var PerAddress : int					= 0
 var WindowSec : int						= NetworkCommons.PreAuthWindowSec
 
+# TETO DURO da cesta pré-auth (#85), em ENTRADAS, e a conta dele em números:
+#
+#   - âncora de orçamento: `deploy/docker-compose.yml:123` dá `mem_limit: 1536M` ao
+#     serviço `game`, que é o processo onde esta cesta vive;
+#   - a régua admite no pior caso 1/256 desse teto para a cesta: 6 MiB;
+#   - custo por entrada, MEDIDO (não estimado) por tests/preauth_ledger_test.gd em
+#     `OS.get_static_memory_usage()`: chave String (endereço IPv6/hostname) + Array
+#     [bucket, count] + slot do dicionário. O harness confere 4096 × 512 B = 2 MiB
+#     <= 6 MiB com o número medido de verdade (a folga de 512 B por entrada é o teto
+#     que a medição tem de respeitar para o gate continuar verde);
+#   - porque 4096 e não 64: 4096 = 32 × `NetworkCommons.ConnectionCeiling()` (128).
+#     Abaixo disso a poda começaria a esquecer endereços legítimos num servidor no
+#     teto de sessões; acima, o spray paga em RAM antes de pagar em autenticação.
+#
+# A poda nunca solta o agressor ativo: `windows` é tocada (erase + set) a cada
+# tentativa, então a ordem do dicionário é LRU de VERDADE e quem sai pela frente é
+# quem parou de bater. Endereço ocioso que volta com balde novo não perde nada que
+# a semântica da janela já não perdesse (`state[0] != bucket` reinicia a contagem).
+const MaxAddressWindows : int			= 4096
+# Histerese da poda em lote: ao estourar o teto, desce até `teto - PruneEvictBatch`
+# em uma única varredura. Sem isso, cada inserção acima do teto pagaria um `keys()`
+# O(N) — o antídoto viraria o segundo DoS (CPU) que a poda existe para evitar.
+const PruneEvictBatch : int				= 1024
+
 var Attempts : int						= 0
 var Admissions : int					= 0
 var Refusals : Dictionary				= {}
-var windows : Dictionary				= {}	# address -> [bucket, count]
+var windows : Dictionary				= {}	# address -> [bucket, count], ordem = LRU
+# Contadores da cesta (#85): quantas entradas saíram por idade, quantas pelo teto, e
+# em que balde foi a última varrida. Teste lê, log não é evidência.
+var PrunedByAge : int					= 0
+var PrunedByCeiling : int				= 0
+var PrunePasses : int					= 0
+var LastPruneBucket : int				= -1
 
 func NowSec() -> int:
 	return ClockOverride if ClockOverride > 0 else int(Time.get_unix_time_from_system())
@@ -126,6 +163,41 @@ func AttemptsFor(address : String) -> int:
 	var state : Array = windows.get(address, [0, 0])
 	return int(state[1])
 
+# Tamanho vivo da cesta — o número que a régua de #85 confere contra o teto.
+func WindowsSize() -> int:
+	return windows.size()
+
+# Poda da cesta (#85). Duas réguas, uma varredura:
+#   1) IDADE: toda entrada cujo balde não é o corrente já valeria 0 na próxima
+#      tentativa (`state[0] != bucket` reinicia), então apagá-la não perde informação
+#      nenhuma — é a mesma semântica, só com a memória devolvida. Roda no máximo uma
+#      vez por balde (o `LastPruneBucket` abaixo), custo O(N) por janela.
+#   2) TETO DURO: se mesmo assim a cesta passa de `MaxAddressWindows` (spray de
+#      endereços DISTINTOS dentro da mesma janela), saem os `excess + batch` mais
+#      antigos na ordem LRU, de uma vez. A histerese é o que torna o custo O(1)
+#      amortizado por tentativa em vez de O(N) por tentativa.
+#      O(N) por tentativa. Os contadores `PrunedByAge`/`PrunedByCeiling` são o que o
+#      harness lê — a função não devolve nada porque cobrar no caminho quente um valor
+#      que ninguém usa é warning, e warning aqui é erro.
+# Nunca é chamada por fora do caminho de escrita:
+# a cesta só cresce por `Verdict`, então é ali que ela é limitada.
+func PruneWindows(bucket : int) -> void:
+	PrunePasses += 1
+	var stale : Array = []
+	for address in windows:
+		if int((windows[address] as Array)[0]) != bucket:
+			stale.append(address)
+	for address in stale:
+		windows.erase(address)
+	PrunedByAge += stale.size()
+	if windows.size() > MaxAddressWindows:
+		var excess : int = windows.size() - MaxAddressWindows + PruneEvictBatch
+		var keys : Array = windows.keys()
+		for i in range(mini(excess, keys.size())):
+			windows.erase(keys[i])
+		PrunedByCeiling += excess
+	LastPruneBucket = bucket
+
 func RefusalCount(reason : String) -> int:
 	return int(Refusals.get(reason, 0))
 
@@ -138,7 +210,17 @@ func Verdict(address : String, liveSessions : int, protocol : int, nowSec : int,
 	if int(state[0]) != bucket:
 		state = [bucket, 0]
 	state[1] = int(state[1]) + 1
+	# LRU de verdade (#85): apaga antes de reescrever para a entrada migrar para o
+	# FIM da ordem do dicionário. Sem o toque, "evict oldest" evictaria por ordem de
+	# CHEGADA e o agressor que bate sem parar seria o primeiro a sair — e ao sair
+	# levava o próprio contador junto, ou seja, a poda financiaría o spray.
+	windows.erase(address)
 	windows[address] = state
+	# Idade: varrida quando o balde virou desde a última vez. Teto: varrida quando a
+	# cesta estourou. As duas conditions são o que mantém o custo fora do caminho
+	# quente (nada de O(N) por tentativa).
+	if bucket != LastPruneBucket or windows.size() > MaxAddressWindows:
+		PruneWindows(bucket)
 
 	var verdict : String = ReasonAdmitted
 	if schemaBlocked:

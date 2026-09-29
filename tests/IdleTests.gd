@@ -303,11 +303,19 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	CheckEq(int(report["xp_earned"]), expectedXp, "xp golden")
 	CheckEq(int(report["gold_earned"]), expectedGold, "gold golden")
 	CheckEq(int(report["gold_taxed"]), expectedTax, "death tax golden")
-	var dropped5 : int = int(report.get("drops", {}).get(FarmZoneData.GetDropForRoll(5, charID + 5), 0))
-	CheckEq(dropped5, expectedDrop, "drop count golden (z5/12h/0,8 → %.1f kills equiv × ppm)" % expectedKills)
-	Check(dropped5 > 0, "drop: 12h de zona 5 pagam ao menos um item (foi %d)" % dropped5)
+	var dropsByKind : Dictionary = report.get("drops", {})
+	var droppedTotal : int = 0
+	for _kind in dropsByKind:
+		droppedTotal += int(dropsByKind[_kind])
+	# Identidade do roll âncora não é régua desde #95 — quem fecha é a soma abaixo.
+	# O golden amarra a GRANDEZA (itens liquidados na janela), não a identidade de um item:
+	# desde #95 o roll offline tem variância e espalha `expectedDrop` pela pool da zona,
+	# então somar por chave é o que preserva o sentido da régua original.
+	CheckEq(droppedTotal, expectedDrop, "drop count golden (z5/12h/0,8 → %.1f kills equiv × ppm)" % expectedKills)
+	Check(droppedTotal > 0, "drop: 12h de zona 5 pagam ao menos um item (foram %d)" % droppedTotal)
+	Check(dropsByKind.size() > 1, "drop offline paga mais de uma identidade na janela (%d) — variância zero é o defeito #95)" % dropsByKind.size())
 	Check(dropExp <= expectedKills + 0.001, "drop: a pia nunca paga mais que um item por kill equivalente (%.2f ≤ %.2f)" % [dropExp, expectedKills])
-	Check(dropped5 <= int(expectedKills), "drop: itens liquidados cabem nos kills da janela (%d ≤ %d)" % [dropped5, int(expectedKills)])
+	Check(droppedTotal <= int(expectedKills), "drop: itens liquidados cabem nos kills da janela (%d ≤ %d)" % [droppedTotal, int(expectedKills)])
 	CheckEq(int(report["chests"]), 3, "chests = min(3, floor(12/4))")
 
 	# SOM-IDLE: chaves de boss acumulam offline com o mesmo ppm do drop ao vivo.
@@ -586,16 +594,34 @@ func SuiteIdlePolicySim(charID : int) -> void:
 		# only. The binding par gate is SuiteIdlePolicyRealTime.
 		print("SIM SNAPSHOT (compressed-scale, non-binding): avg %.0f kills/h vs design par %.0f/h (%+.1f%%)" % [avgRate, designPar, parDeltaPct])
 
+# Precondição da esteira de loot, NÃO fraqueza da régua. A mochila do fixture
+# chega no teto de `ActorCommons.InventorySize`: as liquidações offline concedem
+# unidades de equipamento (uma unidade = um slot, ver `Inventory.PushItem` e
+# `HasSpace`) e o load leva só o que cabe — medido no gate de 2026-09-28, o
+# farmer do `SuiteIdleLootPipeline` chegava com 100/100 slots, não cabia nada, e
+# todas as réguas de chão→inventário desabavam juntas (drops_picked=0, maçã
+# recusada, poção recusada, pilha do banco em 0). Farmer com mochila cheia e drop
+# no chão é estado LEGÍTIMO de produto: desde a guarda de `PickupDrop` +
+# `CanHold` o item fica no chão (não é apagado), então a régua que quer medir o
+# CAMINHO precisa abrir espaço no chão de jogo. Espaço aberto AQUI, na memória do
+# agente de sim: nenhum `item` row, nenhum lote, nenhuma conta de faucet se mexe.
+func _FreeCarriedSlots(agent : PlayerAgent) -> void:
+	agent.inventory.items.clear()
+	agent.inventory.itemCount = 0
+	agent.stat.weight = Formula.GetWeight(agent.inventory)
+
 # One seeded farm run; returns the snapshot dictionary.
 # killAtGameSec >= 0 mata o farmer de propósito nesse instante de tempo de jogo
 # (via BaseAgent.Kill(), o MESMO caminho de produção: Stats.SetHealth → Killed →
 # ActorCommons.State.DEATH) e devolve no snapshot o que a política fez depois.
-func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zoneID : int = 1, dumpMatchup : bool = false, killAtGameSec : float = -1.0) -> Dictionary:
+func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zoneID : int = 1, dumpMatchup : bool = false, killAtGameSec : float = -1.0, clearCarried : bool = false) -> Dictionary:
 	var snapshot : Dictionary = {"run": runIdx, "kills": 0, "kills_per_hour": 0.0, "deaths": 0, "efficiency": 0.0, "gold_gained": 0, "levels_gained": 0}
 
 	var agent : PlayerAgent = await _SpawnSimAgent(charID, runIdx, zoneID)
 	if agent == null:
 		return snapshot
+	if clearCarried:
+		_FreeCarriedSlots(agent)
 
 	# Start the session (instance warm → attaches the policy synchronously; the
 	# warp is skipped because the agent is already entering the farm instance)
@@ -1102,6 +1128,20 @@ func SuiteGuiPanels() -> void:
 			if int(headers[header]) > 1:
 				dupes += 1
 		CheckEq(dupes, 0, "nenhuma corrida do placar aparece duas vezes")
+		# A etiqueta é a única parte do marco zero (064) que o jogador lê. O dicionário
+		# acima não traz `scoring`, e o default do produto é o regime com marco: se a
+		# confissão de "lifetime" sumir do `ShowSeason`, uma temporada antiga volta a
+		# se vender como da janela e só esta perna percebe — as de cima são cegas a ela.
+		var seasonLbl : Label = lbWin.get_node("Layout/SeasonLabel") as Label
+		if Check(seasonLbl != null, "placar da temporada tem o rótulo que confessa o regime"):
+			var markedText : String = seasonLbl.text
+			seasonData["scoring"] = "current"
+			lbWin.ShowSeason(seasonData)
+			var legacyText : String = seasonLbl.text
+			Check(not markedText.contains("lifetime"),
+				"placar com marco zero não anuncia placar de vida (%s)" % markedText)
+			Check(legacyText.length() > markedText.length() and legacyText.contains("lifetime"),
+				"placar sem marco zero confessa na tela que o número é da vida (%s)" % legacyText)
 	# Checkout: a segunda porta do dinheiro. A janela não está no scene — o Shop a cria
 	# em runtime (`Shop.gd:265`: `new()` + `add_child` no GUI), então o exame faz o mesmo
 	# e por isso é obrigado a chamar `_show_payment_url` em vez de `_open_payment_url`:
@@ -4941,15 +4981,18 @@ func SuiteSeasonPayout(sql : SQLService) -> void:
 		return
 	var acctA : int = sql.GetAccountIDForCharacter(charA)
 	var acctB : int = sql.GetAccountIDForCharacter(charB)
-	# garante topo determinístico do placar de power (snapshot lê power_score global)
-	sql.UpdateRowsRaw("character", "char_id = %d" % charA, {"power_score" = 100000})
-	sql.UpdateRowsRaw("character", "char_id = %d" % charB, {"power_score" = 99999})
-
 	CheckEq(economy.GetGems(acctA), 0, "payout: fresh wallet zero gems")
 	Check(str(economy.SettleSeasonPrizes(999999).get("reason", "")) == "not_found", "payout: unknown season")
 
 	var seasonID : int = economy.CreateSeason(1)
 	Check(seasonID > 0, "payout: season created (#%d)" % seasonID)
+	# O topo determinístico do placar de power passou a ser a SUBIDA na janela: desde
+	# a migration 064 a abertura grava o marco zero e `SnapshotSeasonPower` congela a
+	# diferença. Escrever `power_score` antes do `CreateSeason` — como esta suíte
+	# fazia — não pontua mais nada, e foi assim que ela quebrou: o prêmio estava
+	# indo para quem chegou grande, não para quem jogou na temporada.
+	sql.UpdateRowsRaw("character", "char_id = %d" % charA, {"power_score" = 100000})
+	sql.UpdateRowsRaw("character", "char_id = %d" % charB, {"power_score" = 99999})
 	# ainda ativa → recusa liquidar
 	Check(not bool(economy.SettleSeasonPrizes(seasonID).get("ok", false)), "payout: refuses while active")
 	Check(str(economy.SettleSeasonPrizes(seasonID).get("reason", "")) == "not_closed", "payout: not_closed reason")
@@ -6015,7 +6058,7 @@ func SuiteOpsA2(sql : SQLService) -> void:
 					gateNames.append(base)
 			gateNames.sort()
 		# A régua era "três gates de script vivem em scripts/" e mediu 4 quando
-		# `check_secrets.sh` entrou no runner (`scripts/test.sh:532`). O tamanho nunca foi o
+		# `check_secrets.sh` entrou no runner (`scripts/test.sh:589`). O tamanho nunca foi o
 		# contrato — era só o sintoma móvel de um conjunto que precisa ser conhecido e
 		# prestado contas, e é isso que continua cobrado nas duas pontas: (a) cada
 		# `check_*.sh` no disco é chamado pelo runner, que é o laço `orphanGates` logo

@@ -173,13 +173,59 @@ done
 #     frase, quebra de linha no meio, e nenhuma âncora o protegia. Não adianta pedir
 #     âncora aqui: a régua é "se o texto conta, o texto acerta". Junta as linhas antes
 #     de casar justamente porque o número e a palavra caem em linhas diferentes.
+#
+#     A régua original casava só o substantivo `migrations` e por isso era cega à
+#     sinonímia: `docs/development/testing.md` escreveu "as 61 patches reais do boot"
+#     com 62 `.sql` no disco, e o portão passou verde sobre a mentira porque a palavra
+#     era outra. A classe não é "a palavra migrations" — é "o artefato do diretório de
+#     boot contado em prosa", e o artefato tem sinônimos. A tabela abaixo declara a
+#     classe com suas formas; o `case` de controle no fim desta seção prova que cada
+#     sinônimo morde, porque régua de sinônimo sem controle plantado é régua que um
+#     dia volta a ser uma palavra só.
+#
+#     O que fica de fora, declarado: um sinônimo novo (`N scripts de boot`, por
+#     exemplo) só é julgado se entrar na tabela. A alternativa — acusar qualquer
+#     substantivo plural contado — foi medida na régua de cláusula e virou ruído.
+MIG_SYNONYMS='migrations|migration|migracoes|migrações|patches|patch|sql'
+MIG_PROSE_PAT="[0-9]+[[:space:]]+(versioned[[:space:]]+|avaliadas[[:space:]]+|de[[:space:]]+|reais[[:space:]]+do[[:space:]]+boot[[:space:]]+)?(${MIG_SYNONYMS})\b"
+mig_prose() {
+	tr '\n' ' ' < "$1" |
+		grep -oiE "$MIG_PROSE_PAT" |
+		grep -oE '^[0-9]+' | sort -u
+}
 for doc in $LIVE_DOCS; do
-	for stated in $(tr '\n' ' ' < "$doc" |
-			grep -oiE '[0-9]+([[:space:]]+(versioned|avaliadas|de)[[:space:]]+)?migrations' |
-			grep -oE '^[0-9]+' | sort -u); do
-		expect "$doc diz \"$stated migrations\"" "$stated" "$mig_count"
+	for stated in $(mig_prose "$doc"); do
+		expect "$doc diz \"$stated\" patches/migrations" "$stated" "$mig_count"
 	done
 done
+
+# 3c) Controle plantado da régua de sinônimo: cada forma da tabela tem de devolver o
+#     numeral quando o texto o chama pelo segundo nome. Se um sinônimo sair da tabela
+#     (ou o recorte quebrar), o controle fica vermelho na mesma passada em que a doc
+#     voltaria a mentir — nada é escrito em disco, a mordida é julgada em memória.
+for forma in 'migrations' 'patches' 'sql'; do
+	checks=$((checks + 1))
+	probe="$(printf 'as 61 %s reais do boot\n' "$forma" |
+		tr '\n' ' ' |
+		grep -oiE "$MIG_PROSE_PAT" |
+		grep -oE '^[0-9]+')"
+	if [ "$probe" != "61" ]; then
+		fail "controle da régua de registro: o sinônimo \`$forma\` não é julgado (recorte devolveu '${probe:-vazio}', esperava 61)"
+	fi
+done
+checks=$((checks + 1))
+if printf 'as 61 calendars do boot' | tr '\n' ' ' |
+	grep -qiE "$MIG_PROSE_PAT"; then
+	fail "controle da régua de registro: substantivo fora da classe (\`calendars\`) foi julgado — a tabela virou peneira"
+fi
+# A borda `\b` existe por um motivo: `sql` é um nome da classe e "sqlite" começa com
+# ele. Sem borda, "as 28 tabelas sqlite" seria lido como contagem de patch e a régua
+# acusaria uma frase honesta. O controle abaixo morde se alguém perder a borda.
+checks=$((checks + 1))
+if printf 'as 28 tabelas sqlite do boot' | tr '\n' ' ' |
+	grep -qiE "$MIG_PROSE_PAT"; then
+	fail "controle da régua de registro: \`sqlite\` foi julgado como contagem de patch — falta a borda de palavra na classe"
+fi
 
 # ---------------------------------------------------------------------------
 # 4) Caminho citado em code span tem que existir. Exceções declaradas em
@@ -492,7 +538,8 @@ done <<< "$autoload_wordnum"
 #     tratada. A régua nasceu assim e continuou certa por um motivo que ela não
 #     media: neste projeto tecla não se trata só com `KEY_F<n>` cru — o caminho
 #     dominante é o `InputMap` (`project.godot [input]`) ligar a tecla a uma ação
-#     `ui_*`/`gp_*` e `sources/input/Action.gd:176-199` despachar essa ação. Ler
+#     `ui_*`/`gp_*` e a faixa 176-200 de `sources/input/Action.gd` despachar essa
+#     ação. Ler
 #     apenas `KEY_F` no código contava uma tecla (F12) e chamava de verdade, o que
 #     deixava VERDE a mentira oposta: "não existe binding de F1–F11", quando F1
 #     abre o menu e F2 abre o hub de personagem. Então a tecla é tratada quando
@@ -629,6 +676,118 @@ if [ "$LIVE_HARNESS_LIST" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 19b) Receita em bloco de código de doc viva não pode mandar rodar pelo atalho um
+#      harness que o portão corre (`godot … -s tests/<nome>.gd`). O motivo é o
+#      veredito, não a estética: `one` existe (scripts/test.sh, ramo `one`) porque a
+#      alternativa de quem depura ou de um juiz é justamente esse comando cru, e ele é
+#      o processo estrangeiro que o `boot_guard` recusa — dois boots no mesmo WAL
+#      foram o SIGSEGV de 2026-09-28. Doc que ensina o atalho fabrica verde que ninguém
+#      reproduz do jeito que o gate roda.
+#
+#      A exceção é estrutural e derivada do registro, não de lista decorada: só pode
+#      ser chamado cru o que o portão NÃO corre (sonda `_probe_*`, diagnóstico
+#      `diag_pacing`). A régua pergunta ao registro de `scripts/test.sh` — se o nome
+#      está lá, a receita é vermelha. Prosa que NOMEA o comando proibido entre backticks
+#      fora de bloco de código não é receita, e por isso não é julgada.
+# ---------------------------------------------------------------------------
+fenced_recipe_names() {
+	[ -f "$1" ] || return 0
+	awk '/^```/{f = !f; next} f' "$1" |
+		grep -oE -- '-s[[:space:]]+tests/[A-Za-z0-9_]+\.gd' |
+		sed 's#-s[[:space:]]*##; s#tests/##; s#\.gd$##' | sort -u
+}
+
+recipe_offends() {
+	for n in $1; do
+		case " $gate_scripts " in *" $n "*) printf '%s\n' "$n" ;; esac
+	done
+}
+
+for doc in $LIVE_DOCS; do
+	off="$(recipe_offends "$(fenced_recipe_names "$doc")")"
+	[ -z "$off" ] && continue
+	checks=$((checks + 1))
+	fail "$doc receita de atalho para harness que o portão corre:$(printf ' %s' $off) — o jeito de reproduzir é \`bash scripts/test.sh one <nome>\`; godot cru sobre o mesmo WAL é o processo estrangeiro que o boot_guard recusa"
+done
+
+checks=$((checks + 1))
+ctrl_off="$(recipe_offends "tick_capacity_test")"
+if [ "$ctrl_off" != "tick_capacity_test" ]; then
+	fail "controle da régua de receita: harness de gate chamado cru (\`tick_capacity_test\`) não foi acusado — ou o registro mudou, ou a régua virou no-op (devolveu '${ctrl_off:-vazio}')"
+fi
+checks=$((checks + 1))
+ctrl_ok="$(recipe_offends "_probe_readonly diag_pacing")"
+if [ -n "$ctrl_ok" ]; then
+	fail "controle da régua de receita: diagnóstico chamado à mão ($ctrl_ok) foi acusado — a exceção deixou de ser 'o que o portão não corre'"
+fi
+checks=$((checks + 1))
+if printf '```bash\ngodot --headless --path . -s tests/tick_capacity_test.gd\n```\n' |
+	awk '/^```/{f = !f; next} f' |
+	grep -qE -- '-s[[:space:]]+tests/[A-Za-z0-9_]+\.gd'; then
+	:
+else
+	fail "controle da régua de receita: o recorte de bloco de código não enxerga \`-s tests/…\` dentro de fence — a régua julgaria doc nenhuma"
+fi
+
+# ---------------------------------------------------------------------------
+# 19c) A página pública afirma a engine do build que ela entrega. `index.html` é
+#      embarcado no mesmo job que exporta o Web com o `GODOT_VERSION` do workflow,
+#      então a frase "Engine: Godot X" do landing é uma afirmação sobre o pin de CI,
+#      não sobre a máquina de quem edita. Medido em 2026-09-29: o landing dizia 4.7.2
+#      enquanto os dois workflows pinam 4.7.1 — um juiz leu a página, leu o workflow e
+#      chamou de mentira, com razão. O `README.md:9-13` já declara a regra: o pin é o
+#      do CI; runbook que diz 4.7.2 está falando do run local.
+#      A régua lê os dois lados e não tolera ausência de nenhum dos dois: lado que não
+#      parseia é vermelho, porque uma régua que passa quando não encontra o padrão é a
+#      que dorme no dia em que o HTML muda de classe CSS.
+# ---------------------------------------------------------------------------
+engine_claim_verdict() { # <pin-ci> <landing> -> vazio = confere; texto = a acusação
+	local pin="$1" landing="$2"
+	if [ -z "$pin" ]; then
+		printf 'pin de engine não foi lido de .github/workflows/ (GODOT_VERSION) — a régua da landing não tem com que conferir'
+		return 0
+	fi
+	if [ -z "$landing" ]; then
+		printf 'a landing não declara mais a engine no formato `Engine:</strong> Godot X.Y.Z` — ou a frase mudou, ou sumiu; a régua acima dela precisa ser ajustada junto'
+		return 0
+	fi
+	if [ "$landing" != "$pin" ]; then
+		printf 'deploy/web/landing/index.html entrega ao público engine %s, e o CI builda com %s — quem joga no browser recebe o build do pin, não o da máquina de quem edita' "$landing" "$pin"
+		return 0
+	fi
+	printf ''
+}
+
+ci_pin="$(grep -hoE '^ *GODOT_VERSION: *[0-9]+\.[0-9]+\.[0-9]+' .github/workflows/godot-ci.yml .github/workflows/release.yml 2>/dev/null |
+	 grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+landing_engine="$(grep -ohE 'Engine:</strong> Godot [0-9]+\.[0-9]+\.[0-9]+' deploy/web/landing/index.html 2>/dev/null |
+	grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
+checks=$((checks + 1))
+engine_bad="$(engine_claim_verdict "$ci_pin" "$landing_engine")"
+if [ -n "$engine_bad" ]; then
+	fail "$engine_bad"
+else
+	echo "[ok] landing e CI na mesma engine: $ci_pin"
+fi
+
+# Controles plantados da régua acima: os três ramos passam pelo mesmo predicado que
+# julga o repo, e cada um morre se a régua virar no-op.
+for par in 'ok|4.7.1|4.7.1' 'mude|4.7.1|4.7.2' 'mude|4.7.2|4.7.1' 'sem-pin||4.7.1' 'sem-landing|4.7.1|'; do
+	espera="${par%%|*}"; resto="${par#*|}"; p1="${resto%%|*}"; p2="${resto##*|}"
+	checks=$((checks + 1))
+	got="$(engine_claim_verdict "$p1" "$p2")"
+	if [ "$espera" = "ok" ] && [ -n "$got" ]; then
+		fail "controle da régua de engine: pin=$p1 landing=$p2 foi acusado ($got) — a régua não aceita o estado que o repo tem hoje"
+	elif [ "$espera" = "mude" ] && [ -z "$got" ]; then
+		fail "controle da régua de engine: pin=$p1 landing=$p2 passou verde — desigualdade não é julgada"
+	elif [ "$espera" = "sem-pin" ] && [ -z "$got" ]; then
+		fail "controle da régua de engine: pin ausente passou verde — a régua dorme quando não lê o workflow"
+	elif [ "$espera" = "sem-landing" ] && [ -z "$got" ]; then
+		fail "controle da régua de engine: landing ausente passou verde — a régua dorme quando o HTML muda de formato"
+	fi
+done
+
+# ---------------------------------------------------------------------------
 # 20) Corpo do aceite afirmativo: quantas categorias o jogador lê e aceita.
 # `LAUNCH_HANDOFF.md` afirma o tamanho do texto porque o texto está em inglês num
 # jogo cujo fonte de língua é PT-BR — e o que a frase precisa é da grandeza, não do
@@ -733,8 +892,10 @@ fi
 #    vira dois "nomes"), e o candidato precisa EXISTIR EM ALGUM LUGAR do arquivo alvo
 #    (senão rótulo de prosa como `game` acusa um ponteiro que não nomeia nada).
 #  - veredito: as BORDAS do intervalo têm de ter texto (linha em branco não mostra
-#    nada para quem abre o arquivo no número citado), e algum candidato aparece no
-#    span citado => passa; nenhum => acusa com as linhas onde o nome realmente mora.
+#    nada para quem abre o arquivo no número citado), a faixa tem de SELAR o
+#    construto que nomeia (se a linha seguinte à última citada começa com `elif`,
+#    `else`, `}`, `,`..., a cadeia continua fora do span), e algum candidato aparece
+#    no span citado => passa; nenhum => acusa com as linhas onde o nome realmente mora.
 #
 # A borda veio depois, e veio medida: a linha 53 de `ROADMAP_COMERCIAL.md` citava o
 # intervalo 503-509 de `sources/economy/EconomyService.gd`, o topo era linha em branco,
@@ -745,9 +906,20 @@ fi
 # caro é a mesma coisa que não existir no commit; o checking barato é o que muda
 # comportamento de quem edita.
 #
-# Mordida antes de confiança: o self-test roda doze controles em memória (nada escrito
-# em disco) nos DOIS cortes, e a seção só pode reportar zero acusações se os 24 casos
-# mordarem — mentira acusada, verdade aprovada, ponteiro sem nome não julgado, nome
+# O selo veio pela mesma porta e com o mesmo formato de mentira: `README.md:65` dizia
+# que a faixa 176-199 de `sources/input/Action.gd` despacha os `ui_*` do projeto e
+# enumerava F11
+# na frase — F11 é `ui_fullscreen`, linha 200. Span com as duas bordas cheias, nome
+# dentro, e a cadeia cortada um `elif` antes do fim. Medido antes de escrever: das 64
+# faixas citadas nos docs vivos, essa era a única truncada; a variante por família de
+# prefixo, também medida, acusava 6 spans honestos de `deploy/ROLLBACK.md` e não achava
+# nada falso a mais. Por isso o critério é o token de continuação, não a semântica.
+#
+# Mordida antes de confiança: o self-test roda seus controles em memória (nada escrito
+# em disco) nos DOIS cortes, e a seção só pode reportar zero acusações se TODOS os casos
+# mordarem — a contagem é lida do próprio array, porque "doze" gravado aqui apodreceria
+# no controle que alguém acrescentasse. Mentira acusada, verdade aprovada, ponteiro sem
+# nome não julgado, nome
 # minúsculo julgado, rótulo que não existe no arquivo ignorado, caminho com `://`
 # ignorado, span de faixa aceito, e as três bordas em branco (início, fim, ponteiro
 # solto) acusadas mesmo quando o nome está no span. E um piso de ponteiros julgados:
@@ -760,7 +932,7 @@ fi
 # linha de cima, número na de baixo) e ela foi rejeitada — em prosa de runbook o
 # parágrafo carrega nomes de três ponteiros diferentes, e o corte produziu 16
 # acusações das quais boa parte era atribuição errada da régua, não mentira do doc
-# (`OPS_RUNBOOK.md:17` cobrando `cloudflared` na linha do resolver, por exemplo).
+# (OPS_RUNBOOK.md:17 cobrando cloudflared na linha do resolver, por exemplo).
 # Régua que precisa do autor do doc para decidir quem mente é ruído, e ruído em gate
 # de doc é o que mata o gate. As três mentiras reais que o experimento achou
 # (`SCALING.md` com faixa de mutex apontando para players, `STAGING.md` com
@@ -827,7 +999,7 @@ import sys
 
 MIN_CHECKS = 120
 KEEP = {".git", ".godot", ".test-home", "__pycache__", "node_modules", ".venv", "graphify-out"}
-EXTS = (".md", ".gd", ".py", ".sh", ".mjs", ".yml", ".yaml", ".conf", ".html")
+EXTS = (".md", ".gd", ".py", ".sh", ".mjs", ".yml", ".yaml", ".conf", ".html", ".json")
 # Registros datados: prose de quando o numero era outro. Cobrar deles a verdade de
 # hoje seria reescrever historico.
 SKIP_NAMES = {"CHANGELOG.md", "progress.md", "ROADMAP_COMERCIAL.md", "BLIND_JUDGE_PROTOCOL.md"}
@@ -1060,6 +1232,40 @@ def mentions(word, text):
     return re.search(r"(?<![A-Za-z0-9_])" + re.escape(word) + r"(?![A-Za-z0-9_])", text) is not None
 
 
+# Token de continuação: linha que começa assim é linha que PERTENCE ao construto
+# aberto antes dela — `elif`, `else`, `}`, `,`, `||`... Não é lista de palavras de
+# doc, é lista de palavras da GRAMÁTICA dos nove arquivos que o portão lê (gd, py,
+# sh, conf, yml, json, md, html, mjs). Por isso julga faixa sem julgar prosa.
+CONT = re.compile(r"^(elif\b|else\b|,|\||&&|\|\||::|default:|- *default:)")
+
+
+def sealed(target_lines, a, b):
+    """(selada, linha_acusada): a faixa `a-b` termina onde o construto termina?
+
+    Foi a classe que sobrou depois da régua de nome e da de borda em branco: um
+    intervalo válido, com as duas bordas cheias e o nome dentro, que corta a cadeia
+    no meio. Medido em 2026-09-29 antes de escrever — das 64 faixas citadas nos docs
+    vivos, uma única mentia assim, e era o `README.md:65` dizendo que a faixa
+    176-199 de `Action.gd` despacha os `ui_*` quando a linha 200 é
+    `elif ... "ui_fullscreen"`, o F11 que a própria frase enumera. A variante de
+    família de prefixo foi medida e rejeitada: acusava 6 spans honestos de
+    `deploy/ROLLBACK.md` (cada métrica cita o próprio bloco HELP/TYPE/valor dentro de
+    uma sequência de irmãos) e deixava de fora nada de falso — régua que precisa do
+    autor para decidir quem mente é a ruído que esta casa já enterrou uma vez.
+
+    O lado de início não entrou: medido, zero acusações nos docs vivos, e régua sem
+    caso medido é régua que ninguém sabe se morde.
+    """
+    nxt = ""
+    for k in range(b, min(b + 3, len(target_lines))):
+        if target_lines[k].strip():
+            nxt = target_lines[k].strip()
+            break
+    if CONT.match(nxt):
+        return False, b + 1
+    return True, None
+
+
 def verdict(clause, ptr, target_lines, wide):
     """(ok, candidatos, onde_mora, motivo). `clause` e o texto da frase ANTES deste ponteiro."""
     a, b = int(ptr.group(2)), ptr.group(3)
@@ -1074,6 +1280,12 @@ def verdict(clause, ptr, target_lines, wide):
     for edge in (a, last):
         if 1 <= edge <= len(target_lines) and not target_lines[edge - 1].strip():
             return False, [], [edge], "branco"
+    # A faixa tem de selar o construto que nomeia (ver `sealed` acima). Só julga
+    # faixa: `arquivo:NN` solto não promete fim de nada.
+    if b:
+        tight, cut = sealed(target_lines, a, int(b))
+        if not tight:
+            return False, [], [cut], "faixa"
     span = "\n".join(target_lines[max(0, a - 1):min(len(target_lines), int(b) if b else a)])
     joined = "\n".join(target_lines)
     # Nome de arquivo citado pelo nome: perdoa a linha exata se o nome mora no mesmo
@@ -1179,6 +1391,15 @@ ALVO = ["# cabecalho", "const Betamax : int = 1", "func Beta() -> void:", "\tgat
 ALVO2 = ["# EXPOSE 8901 e o que o compose nomeia", "", "func Beta() -> void:",
          "\tgate.run()", "\tgate.run()", "", "\tgate.run()", "chamada EXPOSE com porta",
          "const Storefront : int = 1"]
+# ALVO4 é o terreno da régua de SELO de faixa, no formato do caso real
+# (`sources/input/Action.gd:176-200`, um `elif` por linha): a cadeia vai da 2 à 5 e a
+# 6 em branco existe para que o controle selado olhe a 7 (`pass`, não continuação) em
+# vez de parar na borda vazia. Cortar em 3 ou 4 deixa o `elif` seguinte do lado de
+# fora — é a mentira que a régua de nome aprova porque o símbolo está no span.
+ALVO4 = ["# cabecalho", "func Beta() -> void:",
+         "\tif TryJustPressed(\"ui_close\"):\tClose()",
+         "\telif TryJustPressed(\"ui_menu\"):\tMenu()",
+         "\telif TryJustPressed(\"ui_full\"):\tFull()", "", "pass"]
 # ALVO3 é o terreno da régua de NOME DE ARQUIVO: `check_alpha.sh` mora em dois blocos
 # separados por linha em branco (2 e 4), `check_beta.sh` só no segundo (5). Linha 8 em
 # branco é o que fecha o quinhão de cima — sem ela o bloco 4..9 seria um só e o
@@ -1218,6 +1439,16 @@ CONTROLES = [
      "o `check_gamma.sh` entrou (`x.gd:6`)", True, True, ALVO3),
     ("arquivo: caminho com barra nao entra na regua nova",
      "o `scripts/check_alpha.sh` entrou (`x.gd:9`)", True, True, ALVO3),
+    # Selo de faixa: o caso que a régua de nome aprova e a leitura desmente. Os três
+    # primeiros têm `Beta` no span — se caíem, é o selo que morde, não o nome.
+    ("faixa: cadeia selada — a última linha citada é a última do construto",
+     "roda em `Beta` (`x.gd:2-5`)", True, True, ALVO4),
+    ("faixa: corta a cadeia antes do `elif` final e é acusado",
+     "roda em `Beta` (`x.gd:2-4`)", False, False, ALVO4),
+    ("faixa: corta a cadeia no segundo membro, idem",
+     "roda em `Beta` (`x.gd:2-3`)", False, False, ALVO4),
+    ("faixa: ponteiro solto não promete fim de nada e passa",
+     "roda em `Beta` (`x.gd:2`)", True, True, ALVO4),
 ]
 LIT_CONTROLES = [
     ("positivo: literal único exatamente na linha citada", "o `func Beta() -> void:` mora em x.gd:3", True, True),
@@ -1322,10 +1553,16 @@ def scan(root, wide, reg):
             if src is None:
                 continue
             is_doc = fn.endswith(".md")
+            # JSON nao tem marcador de comentario: a prosa embarcada no dado
+            # (`_note`, `_campos`, `_estado_atual`) e linha como qualquer outra, e ela
+            # vinha apodrecendo exatamente porque nenhum corpo deste script a lia. O
+            # censo medido em 2026-09-29: 3 ponteiros em data/conf/*.json no HEAD, e os
+            # tres eram falsos; reescrita a prosa, o corpo hoje julga 10.
+            is_json = fn.endswith(".json")
             for n, line in enumerate(src, 1):
                 # Em codigo, so comentario: o corpo de uma funcao nao e prosa nomeando
                 # a linha de outra pessoa.
-                if not is_doc and not line.lstrip().startswith(("#", "//")):
+                if not is_doc and not is_json and not line.lstrip().startswith(("#", "//")):
                     continue
                 prev_end = 0
                 for m in PTR.finditer(line):
@@ -1347,6 +1584,10 @@ def scan(root, wide, reg):
                     if motivo == "branco":
                         print("[FAIL] branco: %s:%d aponta %s e a linha %s está em branco — quem abre no número citado não vê nada"
                               % (rel, n, m.group(0), where[0]))
+                    elif motivo == "faixa":
+                        print("[FAIL] faixa: %s:%d cita %s e o construto continua na linha %s (%s) — a faixa termina no meio da cadeia que a frase nomeia"
+                              % (rel, n, m.group(0), where[0],
+                                 (tl[where[0] - 1].strip()[:70] if where[0] <= len(tl) else "")))
                     elif motivo == "arquivo":
                         print("[FAIL] arquivo: %s:%d nomeia %s e aponta %s:%s; o nome mora em %s — a linha citada é texto cheio de outra coisa"
                               % (rel, n, cands[:3], target, m.group(2), where or "lugar nenhum"))
@@ -1791,11 +2032,197 @@ fi
 
 
 # ---------------------------------------------------------------------------
+# 27) CAMINHO DE COMANDO: o que se cola num terminal tem que existir na árvore.
+#
+# A seção 24 lê a PROSA e só julga `.md`, porque estender aquele corpo a `.py` e
+# `.sh` gerou ruído (caminho absoluto de container, basename que a própria prosa
+# declara morto). Um comando dentro de bloco ``` é outra coisa: não é citação, é
+# instrução, e quem cola a linha no terminal recebe "No such file or directory".
+# Foi exatamente o que a passada achou em `docs/adding-an-item.md`, um doc que
+# nenhuma régua de caminho lia porque não está no corpo das specs vivas: a receita
+# manda gerar os `.translation` com `python3 tools/i18n/extract_i18n.py`, e a
+# ferramenta está em `tools/extract_i18n.py`.
+#
+# O que é julgado: token com barra e extensão de arquivo, DENTRO de bloco de
+# código, nos docs que alguém executa (README, `docs/*.md`, `docs/development/*.md`,
+# `deploy/*.md`). Três filtros, cada um com controle no self-test: caminho
+# absoluto (`/app/server.py` — o token existe, mas não é relativo à raiz), `res://`
+# (caminho de engine, não de disco) e o que está fora de bloco de código (prosa é
+# trabalho da seção 24, e sobrepor as duas é duplicar veredito).
+#
+# Piso de volume: 40 com 76 medidos nesta passada (19 docs de receita). O corpo é
+# pequeno de propósito, então o piso existe só para uma coisa: um walk que parou de
+# ler os docs devolve zero acusações tão bem quanto uma régua que acha tudo.
+# ---------------------------------------------------------------------------
+CODE_DOCS=""
+for f in README.md docs/*.md docs/development/*.md deploy/*.md; do
+	[ -f "$f" ] && CODE_DOCS="$CODE_DOCS $f"
+done
+CODE_MIN=40
+if [ -z "$CODE_DOCS" ]; then
+	checks=$((checks + 1))
+	fail "nenhum doc de receita foi lido pela régua de caminho de comando — ela virou no-op"
+elif ! command -v "$PY" >/dev/null 2>&1; then
+	checks=$((checks + 1))
+	fail "python3 indisponível (PYTHON=$PY) — a régua de caminho de comando não rodou; ausência conta como falha, não como pulo"
+else
+	code_out="$(CODE_MIN="$CODE_MIN" "$PY" - "$PWD" $CODE_DOCS <<'PYEOF' 2>&1
+
+# -*- coding: utf-8 -*-
+"""Caminho dentro de bloco de codigo: o que se cola no terminal tem que existir.
+
+Secao 27 de scripts/check_doc_drift.sh.
+"""
+import os
+import re
+import sys
+
+# O piso é um só, e mora no shell (`CODE_MIN`): duas metades da mesma régua com o
+# mesmo número escrito à mão é a fresta pela qual uma delas apodrece.
+MIN_JUDGED = int(os.environ.get("CODE_MIN", "0"))
+
+EXT = r"(?:py|sh|mjs|js|ts|gd|json|sql|ya?ml|csv|toml|ini|conf|txt|env|html|css)"
+# Um ou mais segmentos seguidos do nome com extensao. O `(?:.../)+` e obrigatorio:
+# com so um segmento o `tools/i18n/extract_i18n.py` da receita escapa inteiro da
+# regula, que e justamente o caminho morto que a secao veio caçar. O lookbehind
+# deixa de fora caminho absoluto (`/app/server.py`) e `res://` — nem um nem outro
+# sao relativos à raiz.
+TOKEN = re.compile(r"(?<![\w/.-])((?:\./)?(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\." + EXT + r")\b")
+FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+def extract(line):
+    """Os caminhos de arquivo que a linha de comando cita."""
+    out = []
+    for match in TOKEN.finditer(line):
+        tok = match.group(1)
+        if "://" in tok or "*" in tok or "<" in tok or ">" in tok:
+            continue
+        out.append(tok)
+    return out
+
+
+def accuse(tok, exists):
+    """Verdadeiro quando o caminho citado nao esta na arvore."""
+    if exists(tok):
+        return False
+    if tok.startswith("./"):
+        return not exists(tok[2:])
+    return True
+
+
+def scan(root, files):
+    def exists(path):
+        return os.path.isfile(os.path.join(root, path[2:] if path.startswith("./") else path))
+
+    judged = 0
+    accused = 0
+    for fn in files:
+        inside = False
+        with open(fn, encoding="utf-8", errors="replace") as handle:
+            for n, line in enumerate(handle.read().split("\n"), 1):
+                if FENCE.match(line):
+                    inside = not inside
+                    continue
+                if not inside:
+                    continue
+                for tok in extract(line):
+                    judged += 1
+                    if accuse(tok, exists):
+                        accused += 1
+                        print("[FAIL] caminho de comando: %s:%d cita `%s` - nao existe na arvore"
+                              % (fn, n, tok))
+    return judged, accused
+
+
+def selftest():
+    """Cada filtro e o veredito tem que poder falhar; senao o zero nao e noticia."""
+    have = {"scripts/test.sh", "tools/extract_i18n.py", "tests/run_idle_tests.gd"}
+
+    def exists(path):
+        return path in have
+
+    # (rotulo, linha, caminhos que a extracao tem que enxergar, algum deles e morto?)
+    cases = [
+        ("caminho morto dentro de bloco e acusado",
+         "python3 tools/i18n/extract_i18n.py", ["tools/i18n/extract_i18n.py"], True),
+        ("caminho vivo passa", "bash scripts/test.sh all", ["scripts/test.sh"], False),
+        ("./ e so ruido de shell, nao muda o veredito",
+         "./scripts/test.sh idle", ["./scripts/test.sh"], False),
+        ("caminho absoluto de container nao e da raiz",
+         "COPY /app/server.py /srv/", [], False),
+        ("res:// e caminho de engine, nao de disco",
+         'load("res://sources/x.gd")', [], False),
+        ("glob de receita nao e caminho", "cat docs/adding-a-*.md", [], False),
+        ("placeholder <nome>.py nao e caminho", "python3 tools/<nome>.py", [], False),
+        ("comando com argumentos nao inventa caminho",
+         "godot --headless -s tests/run_idle_tests.gd",
+         ["tests/run_idle_tests.gd"], False),
+    ]
+    biting = 0
+    for label, line, want, expect_dead in cases:
+        got = extract(line)
+        good = got == want
+        if good and want:
+            good = any(accuse(tok, exists) for tok in want) == expect_dead
+        if not good:
+            print("[FAIL] self-test do comando: %s (extraiu %r, veredito esperado %s)"
+                  % (label, got, "morto" if expect_dead else "vivo"))
+        else:
+            biting += 1
+    return biting, len(cases)
+
+
+def main():
+    root = sys.argv[1]
+    files = sys.argv[2:]
+    biting, cases = selftest()
+    present = [f for f in files if os.path.isfile(f)]
+    judged, accused = scan(root, present)
+    print("caminhos de comando: %d em %d docs de receita, %d acusacoes, self-test %d/%d mordendo"
+          % (judged, len(present), accused, biting, cases))
+    print("CODEPATHS %d %d %d %d" % (judged, accused, cases, biting))
+    if biting != cases or accused or judged < MIN_JUDGED:
+        return 1
+    return 0
+
+
+sys.exit(main())
+PYEOF
+)"
+	code_code=$?
+	printf '%s\n' "$code_out" | grep -v '^CODEPATHS '
+	code_stats="$(printf '%s\n' "$code_out" | grep '^CODEPATHS ' | tail -n 1)"
+	checks=$((checks + 1))
+	if [ -z "$code_stats" ]; then
+		fail "a régua de caminho de comando não devolveu a linha \`CODEPATHS\` (código $code_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
+	else
+		code_judged=0
+		code_accused=0
+		code_cases=0
+		code_biting=0
+		read -r _lab code_judged code_accused code_cases code_biting <<< "$code_stats"
+		checks=$((checks + code_judged))
+		failures=$((failures + code_accused))
+		if [ "$code_biting" -ne "$code_cases" ]; then
+			fail "self-test do caminho de comando mordeu $code_biting de $code_cases controles — com a régua cega, o zero de acusações não vale nada"
+		fi
+		if [ "$code_judged" -lt "$CODE_MIN" ]; then
+			fail "caminho de comando julgou pouco ($code_judged com piso $CODE_MIN) — um walk que parou de ler os docs também devolve zero acusações"
+		fi
+		if [ "$code_accused" -eq 0 ] && [ "$code_biting" -eq "$code_cases" ] && [ "$code_judged" -ge "$CODE_MIN" ]; then
+			echo "[ok] ${code_judged} caminhos de comando conferidos contra a árvore, com os ${code_cases} controles do self-test mordendo"
+		fi
+	fi
+fi
+
+
+# ---------------------------------------------------------------------------
 # 26) NUMERAL DE REGISTRO: a contagem que a prosa afirma é lida do fonte.
 #
 # As três réguas acima conferem ponteiros: o que mora na linha, o nome citado, o
 # caminho existindo. Nenhuma delas vê a frase que não cita arquivo nenhum e mesmo
-# assim afirma um fato de código — "os nove gates de estrutura". Esta classe nasceu
+# assim afirma um fato de código — "os 11 gates de estrutura". Esta classe nasceu
 # da própria passada: `structure_gates()` ganhou gate-log e boot-sandbox e quatro
 # lugares continuaram dizendo sete, três e dois. Um juiz que escrevesse "uma
 # afirmação que nenhum portão lê" acharia que este repo não lê contagem nenhuma.

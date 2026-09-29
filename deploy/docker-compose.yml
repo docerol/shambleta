@@ -405,10 +405,17 @@ services:
       # Os dois destinos humanos do `severity: page`. Vindos de env porque a URL de
       # webhook é credencial e o repositório é open source; o render da imagem os
       # materializa no config no boot (deploy/monitoring/render-alertmanager-config.sh).
-      # Sem as duas, o stack sobe e o alerta não acorda ninguém — o caso é chamado
-      # pelo nome em scripts/check_compose.sh e em deploy/OPS_RUNBOOK.md §2.1.
+      # Sem o destino do page E sem o ack abaixo, o render sai != 0 e SÓ ESTE
+      # container não sobe — nada nesta stack tem `depends_on: alertmanager`, então
+      # o jogo, o companion e o prometheus continuam de pé. O caso tem nome e os
+      # três estados (destino / sem pager declarado / sem pager silencioso) são
+      # conferidos rodando este script de fato por scripts/check_compose.sh (bloco
+      # "TRÊS ESTADOS DO PAGER"). A decisão está no header do render, não num doc.
       SHAMBLETA_ALERT_PAGE_WEBHOOK_URL: ${SHAMBLETA_ALERT_PAGE_WEBHOOK_URL:-}
       SHAMBLETA_ALERT_TICKET_WEBHOOK_URL: ${SHAMBLETA_ALERT_TICKET_WEBHOOK_URL:-}
+      # "Este ambiente não tem on-call humano, e alguém decidiu isso". Só o valor
+      # exato `1` declara; o default `0` mantém o estado silencioso impossível.
+      SHAMBLETA_ALERT_NO_PAGER_ACK: ${SHAMBLETA_ALERT_NO_PAGER_ACK:-0}
     volumes:
       - alertmanager-data:/alertmanager
     depends_on:

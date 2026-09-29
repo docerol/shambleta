@@ -306,8 +306,8 @@ Isso dá ao operador três coisas que a frase "o número está certo" nunca deu:
    desta alavanca o probe media só o processo de pé, e um boot parado num patch ficava
    verde: o cliente autenticava e morria na primeira RPC que tocasse a tabela ausente.
    Hoje a mesma flag fecha a porta de entrada antes do teto de conexões — o motivo é
-   `schema_blocked` (`sources/network/server/Admission.gd:48`), entregue à porta por
-   `_ValidateAuth()` (`sources/network/server/Server.gd:1949-1953`), que lê
+   `schema_blocked` (`sources/network/server/Admission.gd:55`), entregue à porta por
+   `_ValidateAuth()` (`sources/network/server/Server.gd:1957`), que lê
    `MigrationBlocked()` (`sources/sql/SQL.gd:80`). Os dois lados do flag, a precedência
    sobre o teto e essa fiação viva são medidos em S5 (`tests/admission_gate_test.gd:658-763`),
    sobre WebSocket de verdade. O que o probe continua sem dizer é QUAL patch falhou e

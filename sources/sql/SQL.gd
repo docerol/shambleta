@@ -1149,17 +1149,17 @@ func SetGemsRaw(accountID : int, gems : int) -> bool:
 func UpdateStat(charID : int, stats : ActorStats) -> bool:
 	if stats == null:
 		return false
-
 	var data : Dictionary = {
 		"level" = stats.level,
 		"experience" = stats.experience,
-		"gp" = stats.gp,
 		"health" = max(1, stats.health),
 		"mana" = stats.mana,
 		"stamina" = stats.stamina,
 		"karma" = stats.karma
 	}
-	return db.update_rows("stat", "char_id = %d" % charID, data)
+	# WorkOrder #88: `gp` saiu deste dicionário — ouro é gravado em RELATIVO por
+	# `FlushGoldDelta` (fim do arquivo); snapshot absoluto apagaria escrita do kernel.
+	return db.update_rows("stat", "char_id = %d" % charID, data) and FlushGoldDelta(charID, stats)
 
 # Inventory
 func GetItem(charID : int, itemID : int, customfield : String, storageType : int = 0) -> Dictionary:
@@ -1806,3 +1806,37 @@ func Wipe():
 	db.delete_rows("sqlite_sequence", "")
 	db.delete_rows("stat", "")
 	db.delete_rows("trait", "")
+
+# ------------------------------------------------------------------ WorkOrder #88
+# Mora no fim do arquivo de propósito: `scripts/test.sh structure` e a régua de
+# ponteiros de evidência (`IdleTests.SuiteEvidencePointers`) amarram a prosa de
+# `deploy/`/`README.md` a linhas nomeadas deste arquivo (`SQL.gd:1545-1553`,
+# `SQL.gd:1581`, `SQL.gd:1584`, `SQL.gd:1771-1778`), e inserir no meio das
+# seções de cima deslocaria todas elas.
+#
+# O ouro do personagem tem DOIS escritores do mesmo `stat.gp`: o agente carregado
+# (faucet de farm, que vive na memória e só desce para o banco aqui) e o kernel
+# (`_MoveGoldLocked`, que grava no banco direto para loja, forja, guilda, copa,
+# boss, streak, checkout e leilão). Enquanto `UpdateStat` era snapshot ABSOLUTO do
+# agente, o passe de 600 s do `World.BackupPlayers` apagava a segunda origem: o
+# débito do vendor voltava a existir no comprador com o item no bolso (ouro
+# infinito) e o crédito do checkout desaparecia do contemplado. Agora a memória
+# entrega só o DELTA que ganhou desde o último flush — as duas origens compõem em
+# vez de uma apagar a outra.
+#
+# Lastro (`gpFlushed`): posto com o valor do banco na carga do personagem
+# (`PlayerAgent.SetCharacterInfo`) e avançado junto com a memória pelo kernel
+# (`EconomyKernel.ApplyGoldMoves`), porque o que o kernel grava já está no banco.
+# `-1` = agente nunca carregado do banco, e aí não se credita nada às cegas. O
+# piso 0 é o único teto: um lastro errado nunca pode mintar ouro, e quem gasta
+# passa pelo kernel, que recusa carteira negativa.
+func FlushGoldDelta(charID : int, stats : ActorStats) -> bool:
+	if stats == null or stats.gpFlushed < 0:
+		return true
+	var delta : int = stats.gp - stats.gpFlushed
+	if delta == 0:
+		return true
+	if not ExecuteBindings("UPDATE stat SET gp = MAX(0, gp + ?) WHERE char_id = ?;", [delta, charID]):
+		return false
+	stats.gpFlushed = stats.gp
+	return true

@@ -175,24 +175,24 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 |---|---|---|---|---|---|---|
 | Core Gameplay | 8,3 | — | 8,4 | 8,5 | 8,3 | R3A+R3B: nenhum harness afirma a curva morte→eficiência→revive nem "sessão de 300 s na zona 1 com ≤2 mortes"; o L1 nu não tem a maçã do `autoPotionItemHash` (`IdlePolicy.gd:81`) e a política convive com ~8 mortes declaradas em comentário (`FarmZoneData.gd:45-47`) |
 | Core Loop | 8,7 | — | 8,5 | 6,5 | **6,5** | R3B (conferido pelo orquestrador): nove escritores crus de `stat.gp` + snapshot absoluto (`SQL.gd:1156`) revertem o débito do vendor em ≤600 s para personagem conectado, e o detector do kernel só enxerga a perna de baixo (`EconomyKernel.gd:187`). R3A: nenhuma régua emenda o ciclo (logar→farmar→liquidar→gastar→subir zona→renascer na mesma sessão) |
-| Meta Game | 8,5 | — | 7,6 | 7,5 | 7,5 | R3A+R3B: `pass_tiers` é `{}` na S1 — a única temporada no ar corre por default de código (`SeasonConfig.gd:244` valida a faixa, `PassService.gd:84` leria o arquivo se existisse) — e as `races` power/spend não têm produtor rastreado; o ranking de temporada pontua estado acumulado, não o delta da janela (`SeasonService.gd:174-207`) |
-| Game Design | 8,6 | — | 8,0 | 7,0 | 7,0 | R3A+R3B: nenhum sumiouro de gold escala com a torneira (z27 paga ~3,77 M gold/h contra guild L10 a 10 M e teto de vendor ~29 k/dia), a trilha gratuita soma 100 gemas por temporada contra 120 por baú (`EconomyCatalog.gd:447,529`) — o F2P nunca alcança um baú — e `Experience.gd:9-10` afirma "3 semanas"/"satura na zona 24" contra a curva de 27 zonas |
+| Meta Game | 8,5 | — | 7,6 | 7,5 | 7,5 | R3A+R3B: `pass_tiers` é `{}` na S1 — a única temporada no ar corre por default de código (`SeasonConfig.gd:244` valida a faixa, `PassService.gd:84` leria o arquivo se existisse — fechado em 2026-09-29: a S1 declara a trilha no arquivo, e o espelho nível a nível do catálogo é amarrado por `tests/season_liveops_test.gd`) — e as `races` power/spend não têm produtor rastreado; o ranking de temporada pontua estado acumulado, não o delta da janela (`SeasonService.gd:223-261` — lacuna verdadeira como escrita em 2026-09-28 e fechada pela migration 064 em 2026-09-29; o número citado é o de hoje, que já subtrai o marco zero) |
+| Game Design | 8,6 | — | 8,0 | 7,0 | 7,0 | R3A+R3B: nenhum sumiouro de gold escala com a torneira (z27 paga ~3,77 M gold/h contra guild L10 a 10 M e teto de vendor ~29 k/dia) — **fechado em 2026-09-29**: a taxa de forja lê a zona do personagem (`ForgeFeeForZone` em `sources/economy/ItemForgeService.gd:496`), o tier 9 da zona 27 passou de 40 500 para 3 786 686 gold = 60,23 min de fazenda par, e a banda `[886, 1099]` ‰ é justa nas duas arestas (885 fura o piso em 59,93 min, 1100 estoura o teto em 180,24, cada um em exatamente um par — o mesmo par), medido por `tests/gold_sink_scale_test.gd` com 159 checks e 0 falhas em 2026-09-29; o "teto de vendor ~29 k/dia" continua não re-medido, porque `tests/faucet_census_test.gd` enumera o vendor como pia mas nenhum número diário em gold. A segunda afirmação do juiz era meia-verdade e corrige-se aqui: os 100 gemas da trilha gratuita contra 120 por baú batem (`PASS_FREE` em `sources/economy/EconomyCatalog.gd:447`, preço do baú na linha 170 do mesmo arquivo), mas "o F2P nunca alcança um baú" não — a própria trilha grátis distribui 4 baús nas linhas 448 a 450 (L5 = 1, L16 = 1, L24 = 2). Terceira: `Experience.gd:9-10` afirmava "3 semanas"/"satura na zona 24" contra a curva de 27 zonas — o cabeçalho foi reescrito na #104 e hoje calcula da curva sem prometer pacing |
 | Retenção | 7,8 | — | 7,2 | 8,3 | **7,2** | R3A (medido por ele: `one balance_test` → `== RESULT: 875 checks, 0 failures ==` e `test_retention.py` → 21): o gancho não paga o suficiente para ser razão de volta — o ciclo de 7 dias soma 3.250 de ouro contra ~108.000 de UMA liquidação F2P de 8 h (~3%), e o `same_day` de `StreakService.gd:158` devolve `reward = 0` dentro da mesma transação que paga a escada (`:179-191`); o que puxa o retorno é o cap de offline (`OfflineSettle.gd:132`), não a escada. **E não há nada vivo agora**: `data/conf/liveops_calendar.json` tem 1 campanha encerrada, 2 em novembro/2026 e 3 na abertura da S2, nenhuma cobrindo hoje, e `data/conf/seasons.json` declara `s1` com `start_unix: 0, end_unix: 0`. R3B: `LossOnBreak` devolve 0 exatamente no dia 7 (`:76-80`) |
 | Economia | 9,4 | — | 7,6 | 8,4 | **7,6** | R3A (conferido pelo orquestrador): o fuzzer **confessa o próprio buraco** — `economy_invariant_fuzz.gd:641` registra "`IG2 (`paid <= gems`) é deliberadamente NÃO-asserto nestas contas: a taxa de anúncio gasta gemas pagas por fora do gate de origem, então `paid > wallet` é estado legal do leilão" — e é exatamente essa coluna que o clawback limita (`CheckoutService.gd:368`) e que o `not_paid` do art.49 cobra (`:552`). E não existe censo de pia: `ReconcileWalletDaily` (`EconomyKernel.gd:160-169,187`) só enxerga a carteira **abaixo** do que o ledger atesta, então um faucet que escreva `stat.gp` e ledger juntos é invisível por construção, e nada soma a expansão líquida diária de oferta contra as pias enumeráveis (forja, vendor, guilda, chave de boss, taxa de torneio, death tax 5%, `ah_list_fee`). R3B: distribuição offline de variância zero (`OfflineSettle.gd:335`). *A favor, medido por R3A:* `one balance_test` → `== RESULT: 875 checks, 0 failures ==` com `:231` asserindo gold/XP online ≥ offline por nível 1..40 contra o `BuildReport` real; `_MoveGoldLocked` recusando `next < 0` (`:103`) e espelhando DELTA pós-commit (`:116-124`)  Ainda de R3B, a favor: `equivKills` gera os dois faucet numa régua só e o drop foi recalibrado de ppm-de-segundos para ppm-de-kills contra a taxa online medida (`OfflineSettle.gd:319-331`), os knobs do `economy_base_catalog.json` são cobertos por FAIXA (`economy_knob_range_test.gd`) e o fuzzer trata verde por inércia como falha (`:369-373`). |
 | Monetização | 9,4 | — | 7,9 | 8,5 | **7,9** | R3A (conferido pelo orquestrador, e é o P0 novo da rodada): a reversão de dinheiro só conhece **gemas**. `Server.gd:58 RequestRefund` → `EconomyService.gd:377 RequestGemRefund` → `CheckoutService.gd:523-526` consulta `ledger_transaction WHERE kind = LedgerKindGems AND reason = 'grant:<key>'` e devolve `not_found` para qualquer outro kind. Dos 11 SKUs de `data/conf/paid_catalog.json`, **8 não são gems** (`vip.1mo`, `vip.3mo`, `pass.s1`, `pass.s1.deluxe`, `pass.s2`, `donate.support`, `starter.pack`, `founder.pack`); e não existe caminho de revogação — `grep premium = 0` não devolve nada no repo, `vip_until` só é escrito para frente (`CheckoutService.gd:403`, `SQL.gd:1055`) e `season_account_state.premium = 1` (`:438`) nunca volta a 0. Um chargeback ou um art.49 de passe/VIP devolve as gemas e **deixa o passe ativo**. *A favor, medido por ele:* `SetGemsRaw` drena `gems_paid` primeiro e clampa em `[0, gems]` (`SQL.gd:1144`), fila reivindicada e relida no mesmo commit (`CheckoutService.gd:268-270`), idempotência por conta (`:168-174`), e rodou `test_security` (63), `test_refund_cli` (12), `test_ad_ssv` (68), `test_season_offer` (125). R3B: o grant `kind == "gold"` escreve `stat.gp` cru (`:392→:396`), mas nenhum SKU pago é `gold` hoje |
 | Marketplace | 8,5 | — | 7,0 | 7,6 | **7,0** | R3A+R3B (conferido pelo orquestrador): **a oferta não tem teto e o detector não enxerga o leilão.** `ListItemForSale:269` e o RPC `Server.gd:1365 AuctionList` só rejeitam `priceGold <= 0`, enquanto a demanda é limitada por `AHMaxBidUnitPrice = 100000000` / `AHMaxBuyOrderGold = 1000000000` (`EconomyCatalog.gd:144,146`) — assimetria de um lado só; `FraudeReview.gd:328,340,345` casa `trade_out:`/`trade_in:` e o AH escreve `ah_list:`/`ah_in:` (`:96,:323,:400`); `auction_listing` não tem `expires_at` (DDL `migrations/018`) e não há reaper. Somam-se os dois: A-anuncia → B-compra → B-anuncia → A-compra entre alts move ouro arbitrário, a preço livre, para sempre, sem filação. R3A acrescenta o **cruzamento sem rede**: `_TryMatchListing` tem UM chamador (`:332`, depois do commit e com o lock solto de propósito) e não existe varredura de re-cruzamento no boot — um restart entre o anúncio e a matching deixa ordens em pé sem parceiro até o próximo evento. *A favor:* auto-negócio barrado no funil (`:354`) **e** repetido nas duas direções em SQL (`:630 seller_account !=`, `:681 buyer_account !=`); `marketplace_depth_test.gd:533,535,537,596` varre o banco inteiro assinando escrow == quantity×price e riqueza = carteira + escrow. Nenhum harness GD rodou para nenhum dos dois juízes (`GATE SERIALIZADO`)  Somam-se a isso o cancelamento que re-minta lote novo (`:460`) embora `escrow_uids` esteja gravado (`:94,:318`) e lido só em `:375` — pelo primeiro uid, mesmo em anúncio com `count > 1` (#94) — e a ausência das três fricções da troca direta (`TradeChestService.gd:38-49`: e-mail verificado, cooldown, cap diário), restando `AHListFeeGems = 5` e `AHMaxOpenPerAccount = 5` (`EconomyCatalog.gd:488,491`) como única atrito. |
 | Analytics | 8,0 | — | 8,5 | 7,5 | 8,0 | R3A+R3B: o D1 é honesto sobre a própria janela nas duas pontas (`TelemetryService.gd:83,281`, `companion/server.py:466-476` com `window_closed`, migration 045) e os 14 `FUNNEL_KINDS` têm emissor real — mas `telemetry_event` não tem poda temporal alguma (retenção de 90 dias é só do ledger, `SQLRetention.gd:30`; o único delete é LGPD em `SQL.gd:326`), e `FunnelDaily`/`/metrics` fazem `GROUP BY` numa tabela que cresce para sempre com feature flag como única proteção |
 | Live Ops | 9,2 | — | 6,0 | 6,8 | **6,0** | R3A+R3B: `deploy/alertmanager.yml:60-64` materializa os dois receivers como `webhook_configs: []` — por default do repo o `severity: page` não acorda ninguém; nenhum dashboard versionado; rotação de temporada/campanha é PULL com TTL de 60 s (`LiveOpsCalendar.gd:108`) e não há cron versionado (`deploy/STAGING.md:136`), então a transição depende de trocar arquivo no host. *A favor, medido por R3B:* as dez séries de `alerts.rules.yml` resolvem em `MetricsServer.gd:190-244` e o orçamento do drain tem controle negativo que morde (`check_compose.sh`) |
-| Arquitetura | 8,5 | — | 7,0 | 8,9 | **7,0** | R3A+R3B: `EconomyKernel.GrantItem` (`:44-55`) insere em `ledger_transaction` por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex`, **fora** de `SQL.Transaction()` — ao contrário de `LedgerAppend` (`:33-41`), que declara o contrário no comentário — enquanto `:20-28` lê a mesma tabela pelo funil; e `deploy/SCALING.md:285-286` afirma que "a `queryMutex` de `SQL.gd:7` continua sendo o único funil de escrita" contra 30 escritores `.db.` crus em `sources/` (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`, `CheckoutService.gd:490`), sem nenhum gate de censo. R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
+| Arquitetura | 8,5 | — | 7,0 | 8,9 | **7,0** | R3A+R3B: `EconomyKernel.GrantItem` (`:44-55`) insere em `ledger_transaction` por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex`, **fora** de `SQL.Transaction()` — ao contrário de `LedgerAppend` (`:33-41`), que declara o contrário no comentário — enquanto `:20-28` lê a mesma tabela pelo funil; e `deploy/SCALING.md:327-328` afirma que "a `queryMutex` de `SQL.gd:7` continua sendo o único funil de escrita" contra 30 escritores `.db.` crus em `sources/` (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`, `CheckoutService.gd:490`), sem nenhum gate de censo. R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
 | Performance | 8,5 | — | 8,0 | 8,7 | **8,0** | R3A: mediu `one benchmarks` sob contenção de outro juiz e o p99 normalizado ficou a ~10% do teto (budget 2.076 µs, 1.881 µs) — a régua aperta, mas `max 549.622 µs` com 3 hitches >50 ms não tem causa confirmada; e **não existe detector do orçamento de passo em produção**: `grep -rn -e TIME_PHYSICS_PROCESS -e get_frames_per_second sources` devolve só `ServerDisplay.gd:13` (painel de dev legível por humano) e o que sai por `/metrics` é espera de mutex (`MetricsServer.gd:173-178`), não ms/passo. R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms e nenhuma harness compara a cauda com o orçamento |
-| Escalabilidade | 7,4 | — | 7,2 | 7,9 | **7,2** | R3A+R3B: o teto horizontal continua `[NÃO MEDIDO]` e o doc confessa (`SCALING.md:285-295`: "Dois servidores em duas máquinas não foi medido", contenção entre processos no mesmo WAL em `:225-227`) — o "~200 players conviventes" é teto **por processo único**, e ninguém rodou dois escritores com `SHAMBLETA_SERVER_ID` distintos sobre o mesmo arquivo; a âncora do degrau é unilateral (±100 sobre 200 deixa passar um erro de 2× e só pega queda, não inflação). `deploy/SCALING.md:125-127` afirma um erro por-passo em `AIAgent.gd:64` que o código já não tem; o recipe de `:136` usa `godot --headless -s` cru, classe que o próprio `boot_guard` do `test.sh` recusa |
-| Código | 8,2 | — | 7,3 | 8,6 | **7,3** | R3A+R3B: `harness_marker()` (`scripts/test.sh:437`) só casa `"== [A-Z]+[A-Z ]*:`, então `one benchmarks` (marcador real `== Benchmarks:` em `benchmarks.gd:397`) e `one test_backup_restore` devolvem `GATE VERMELHO` com `godot exit=0` e produto verde — reproduzido pelo R3A em shell para os 7 harnesses explícitos; e `reason_toast_test` é julgado certo **por acidente de ordem textual** (a regex casa o `"== RESULT:` de `_finish` em `:57` antes do `== REASON:` de `_initialize` em `:61` — mover `_finish` para o fim troca o marcador do gate). A superfície também mente: `scripts/test.sh:15` anuncia `gate <log> <marker> <script>` como interface, mas `gate` é função interna — os cases são `all`, `quick`, `idle`, `backup`, `benchmarks`, `rpc`, `companion`, `fixation`, `preflight`, `structure`, `one`, `diag`, `clean`. *A favor, medido por R3A:* 1 TODO/real em 330 `.gd`, e `check_god_nodes.sh` limpo com folgas vivas (`Server.gd 1963/1965`) |
+| Escalabilidade | 7,4 | — | 7,2 | 7,9 | **7,2** | R3A+R3B: o teto horizontal continua `[NÃO MEDIDO]` e o doc confessa (`SCALING.md:347`: "Dois servidores em duas máquinas não foi medido", contenção entre processos no mesmo WAL em `:225-227`) — o "~200 players conviventes" é teto **por processo único**, e ninguém rodou dois escritores com `SHAMBLETA_SERVER_ID` distintos sobre o mesmo arquivo; a âncora do degrau é unilateral (±100 sobre 200 deixa passar um erro de 2× e só pega queda, não inflação). `deploy/SCALING.md:159-162` afirma um erro por-passo em `AIAgent.gd:64` que o código já não tem; o recipe de `:175` usa `godot --headless -s` cru, classe que o próprio `boot_guard` do `test.sh` recusa |
+| Código | 8,2 | — | 7,3 | 8,6 | **7,3** | R3A+R3B: `harness_marker()` (`scripts/test.sh:459`) só casa `"== [A-Z]+[A-Z ]*:`, então `one benchmarks` (marcador real `== Benchmarks:` em `benchmarks.gd:397`) e `one test_backup_restore` devolvem `GATE VERMELHO` com `godot exit=0` e produto verde — reproduzido pelo R3A em shell para os 7 harnesses explícitos; e `reason_toast_test` é julgado certo **por acidente de ordem textual** (a regex casa o `"== RESULT:` de `_finish` em `:57` antes do `== REASON:` de `_initialize` em `:61` — mover `_finish` para o fim troca o marcador do gate). A superfície também mente: `scripts/test.sh:22` anuncia `gate <log> <marker> <script>` como interface, mas `gate` é função interna — os cases são `all`, `quick`, `idle`, `backup`, `benchmarks`, `rpc`, `companion`, `fixation`, `preflight`, `structure`, `one`, `diag`, `clean`. *A favor, medido por R3A:* 1 TODO/real em 330 `.gd`, e `check_god_nodes.sh` limpo com folgas vivas (`Server.gd 1963/1965`) |
 | Testes | 8,2 | — | 7,8 | 8,2 | **7,8** | R3A: ~419 de 4.290 linhas de `Check*` casam TEXTO do fonte; `check_ci.sh:190` aceita `needs` de build como portão. R3B: `tests/nginx_hardening_test.gd:570-574` DEGRADA para ler a doc quando não há nginx no host e `deploy/web/Dockerfile:30` só `COPY`a o `nginx.conf` sem `nginx -t` — um proxy que o nginx recusa passa em todos os gates e chega ao prod |
 | UX/UI | 7,5 | — | 7,0 | 7,5 | **7,0** | R3A+R3B: a passada de telefone do `hud_decision_fit_test` (verde medido por R3B: `== RESULT: 68 checks, 0 failures ==` sobre 390x844 com piso de 48 px) só amarra os 7 painéis que vivem no boot — guilda/leilão/forja/vault, que nascem por ação, estão fora da régua; e 66 chaves de conteúdo NPC seguem sem `pt_BR` (`data/i18n/coverage_report.md`) |
-| Social | 5,5 | 9,0 | 8,0 | 6,5 | **5,5** | R3A+R3B: `GuildService.gd:94-97` é read-then-write sem transação nem lock (`JoinReason` conta por `SELECT COUNT(*)` em `GuildRoster.gd:105-108` e o `INSERT` vem solto, ao contrário de `LeaveGuild` logo abaixo) — o próprio código nomeia o buraco em `GuildRoster.gd:82-85` e a PK de `guild_member` impede double-join mas não o teto estourado; falta transação/`CHECK` durável + N joins simultâneos asseridos |
-| Segurança | 8,7 | 6,8 | 7,2 | 7,5 | 6,8 | R3A+R3B: a cota existe só ANTES da credencial (`Admission.gd:67`, `NetworkCommons.gd:63`) — varredura por `MsgPerSec`, `PerPeer`, `Throttle`, `RateLimit` não acha janela pós-auth — então `TriggerChat` (`Server.gd:1644-1671`) amplifica 1→N sem taxa por peer; cesta pré-auth nunca podada; APK de release com debug keystore (`release.yml:107-109`) |
-| DevOps | 8,9 | 8,8 | 6,3 | 7,0 | **6,3** | R3A+R3B: `snap`/`release` com `needs: builds` publicam com teste vermelho; `deploy/ROLLBACK.md:26-33` declara que não há registry e `pull_policy: never` (`docker-compose.yml:50,102,211,319,374`), então o `SHAMBLETA_TAG` do job `container-images` morre no runner efêmero; smoke de compose roda 0 containers e nenhum `up` existe no caminho |
-| Documentação | 8,6 | 7,5 | 8,5 | 6,5 | **6,5** | R3A: taxa de erro falsa medida por ele = 0/5 (`DOC DRIFT: 1391 checks, 0 failures`), mas nenhuma afirmação de COMPORTAMENTO é coberta — números de `SCALING.md`/`OPS_RUNBOOK.md`/`WEB_SLIM.md` e o "4.7.2" de `deploy/web/landing/index.html:118`, construído em 4.7.1; e `tests/panel_fit_test.gd:6-7` aponta `WindowPanel.gd:235-237` para código que está em :238-239 sem acusação. R3B: duas afirmações falsas conferidas por mim passam — `docs/development/testing.md:87` diz "as 61 patches reais do boot viram a versão 61" contra 62 `.sql` em `data/conf/migrations/` (001..062), e a régua de numeral (`check_doc_drift.sh:178`) só morde quando o substantivo é "migrations", nunca "patches"; `README.md:65` aponta `Action.gd:176-199` para a cadeia `ui_*` que vai até 200, com `ui_fullscreen` FORA do intervalo citado, sem acusação |
+| Social | 5,5 | 9,0 | 8,0 | 6,5 | **5,5** | R3A+R3B: `GuildService.gd:94-97` é read-then-write sem transação nem lock (`JoinReason` conta por `SELECT COUNT(*)` em `GuildRoster.gd:105-107` e o `INSERT` vem solto, ao contrário de `LeaveGuild` logo abaixo) — o próprio código nomeia o buraco em `GuildRoster.gd:82-85` e a PK de `guild_member` impede double-join mas não o teto estourado; falta transação/`CHECK` durável + N joins simultâneos asseridos |
+| Segurança | 8,7 | 6,8 | 7,2 | 7,5 | 6,8 | R3A+R3B: a cota existe só ANTES da credencial (`Admission.gd:67`, `NetworkCommons.gd:63`) — varredura por `MsgPerSec`, `PerPeer`, `Throttle`, `RateLimit` não acha janela pós-auth — então `TriggerChat` (`Server.gd:1649-1687`) amplifica 1→N sem taxa por peer; cesta pré-auth nunca podada; APK de release com debug keystore (`release.yml:72-74`) |
+| DevOps | 8,9 | 8,8 | 6,3 | 7,0 | **6,3** | R3A+R3B: `snap`/`release` com `needs: builds` publicam com teste vermelho; `deploy/ROLLBACK.md:24-26` declara que não há registry e `pull_policy: never` (`deploy/docker-compose.yml:50,102,211,319,374`). O `SHAMBLETA_TAG` do job `container-images` morre no runner efêmero; smoke de compose roda 0 containers e nenhum `up` existe no caminho |
+| Documentação | 8,6 | 7,5 | 8,5 | 6,5 | **6,5** | R3A: taxa de erro falsa medida por ele = 0/5 (`DOC DRIFT: 1391 checks, 0 failures`), mas nenhuma afirmação de COMPORTAMENTO é coberta — números de `SCALING.md`/`OPS_RUNBOOK.md`/`WEB_SLIM.md` e o "4.7.2" de `deploy/web/landing/index.html:118`, construído em 4.7.1; e `tests/panel_fit_test.gd:6-7` aponta `WindowPanel.gd:238-240` para código que está em :238-239 sem acusação. R3B: duas afirmações falsas conferidas por mim passam — `docs/development/testing.md:87` diz "as 61 patches reais do boot viram a versão 61" contra 62 `.sql` em `data/conf/migrations/` (001..062), e a régua de numeral (`check_doc_drift.sh:178`) só morde quando o substantivo é "migrations", nunca "patches"; `README.md:65` aponta `Action.gd:176-199` para a cadeia `ui_*` que vai até 200, com `ui_fullscreen` FORA do intervalo citado, sem acusação — as três conferidas em 2026-09-29: o README hoje cita `Action.gd:176-200` e `ui_fullscreen` está na linha 200; a linha da tabela que falava em "61 patches" não afirma número algum desde a #25 ("a versão final é o número de patches, conferido no próprio harness"); e a régua de numeral conheceu a sinonímia patch/migration, que é justamente o que a linha 178 de `scripts/check_doc_drift.sh` registra hoje. O método estava aberto e fechou em 2026-09-29: `SuiteEvidencePointers` ganhou um quarto braço que julga o **alvo linha** de um ponteiro que aponta para dentro de `.md` — nome escrito fora do intervalo citado acusa pelo símbolo e pelo número, nome que o documento não soletra silencia — e na primeira passada acusou quatro frases, as quatro verdadeiras, inclusive uma deste próprio registro. O que continua aberto, agora com nome: um ponteiro para arquivo de código cuja cláusula não nomeia símbolo declarado (um local, um arquivo, ou nada) segue sem span a conferir — foi por essa fresta que nove locadores de `IdleTestsFrontier.gd` apodreceram ~1300 linhas sem reclamação |
 
 Cadeiras entregues: **10 de 10** — produto A+B, engenharia A+B, entrega A+B,
 experiência A+B, dinheiro A+B. A rodada 3 fechou em 2026-09-29: cada uma das 20
@@ -235,7 +235,7 @@ grep puro o defeito de marcador e confirmou código-vs-doc uma afirmação falsa
 - **Escalabilidade 7,9.** `one multi_instance_tick_test` (198 checks) chega a 300 players
   (15×20) com 25,80 ms dentro do orçamento e estoura a 400 (20×20): 90,12 ms de trabalho,
   período 53,37 ms, CPU ~1,00 core — consistente com a linha do doc (88,93 ms / 20,52 Hz).
-  As âncoras `DRIFT proc_*` estão vivas e conferem. *Contra:* `deploy/SCALING.md:125-127`
+  As âncoras `DRIFT proc_*` estão vivas e conferem. *Contra:* `deploy/SCALING.md:159-162`
   afirma que o `ERROR: Attempted to erase a variable of type 'int' into a TypedArray` em
   `sources/actor/agent/variants/AIAgent.gd:64` acontece dentro do passo de física e está
   incluído nos custos medidos — hoje a linha 64 é COMENTÁRIO e a 68 usa `pop_front()`; o
@@ -244,8 +244,8 @@ grep puro o defeito de marcador e confirmou código-vs-doc uma afirmação falsa
   portuguesa "todo", zero marcadores reais; guard-clause e autoridade do par em
   `sources/network/server/Server.gd` derivando de `Peers.GetAccount/GetCharacter` do peer
   de transporte; idempotência do grant com as duas guardas. *Contra, defeito concreto:*
-  `harness_marker()` em `scripts/test.sh:435-440` casa só `"== [A-Z]+[A-Z ]*:`, mas
-  `tests/benchmarks.gd:397` imprime `== Benchmarks:` e `tests/test_backup_restore.gd:28`
+  `harness_marker()` em `scripts/test.sh:459` casa só `"== [A-Z]+[A-Z ]*:`, mas
+  `tests/benchmarks.gd:397` imprime `== Benchmarks:` e `tests/test_backup_restore.gd:30`
   imprime `== Backup Restore Probe:` e nenhum dos dois imprime `== RESULT:`; o fallback
   faz `one benchmarks` e `one test_backup_restore` voltar VERMELHO pelo
   `scripts/ci_gate_log.sh` com `godot exit=0` e zero falhas. O `all` disfarça porque fixa
@@ -265,7 +265,7 @@ ele. Isso é tratado como HIPÓTESE de nota, não como veredito medido — mas a
 Loop foi conferida pelo orquestrador no fonte e é real (ver §"P0 do dual-write" abaixo).
 
 - **Core Gameplay 8,5.** O produtor e o consumidor de `State.DEAD` existem:
-  `sources/idle/IdlePolicy.gd:191` e `:522-535` (`_tickDead` → `Revive()`, `State.SEEK`,
+  `sources/idle/IdlePolicy.gd:210` e `:522-535` (`_tickDead` → `Revive()`, `State.SEEK`,
   `sessionDeaths`/`sessionDowntimeSecs`), com substep fixo `TickInterval = 0.25` e
   `MaxCatchUpSeconds = 2.0` (`:163-166`). Aggro com cap cobrado no runtime e dano agregado
   por atacante (`sources/actor/agent/variants/AIAgent.gd:37-68`); drop nasce no evento de
@@ -274,23 +274,24 @@ Loop foi conferida pelo orquestrador no fonte e é real (ver §"P0 do dual-write
   razão do texto de `FarmZoneData.gd:45-47`; não confirmou se char novo tem Apple nem se o
   `CactusPotion` do vendor (`EconomyCatalog.gd:201`) entra no auto-use.
 - **Core Loop 6,5.** A porta de capacidade fecha no servidor (`FarmZoneData.gd:266` cobrado em
-  `Server.gd:612`, `WorldCommands.gd:1125`, `IdlePolicyService.gd:66,259`) e o anel de
+  `Server.gd:614`, `WorldCommands.gd:1125`, `IdlePolicyService.gd:66,259`) e o anel de
   prestígio é lido no faucet (`OfflineSettle.gd:290-296`; essência em `Stats.gd:241`).
   *Contra, o defeito:* dez escritores crus de `stat.gp` fora do kernel, com o contrato do
   kernel em `EconomyKernel.gd:85-96` dizendo que escrever `stat.gp` sem mexer no agente é
   escrever valor que sobrevive até o próximo snapshot — e o snapshot é absoluto
-  (`SQL.gd:1156`, `SQL.gd:533-544`, `World.gd:206`, `SQLCommons.gd:11`). O detector
+  (`SQL.gd:1156`, `SQL.gd:533-543`, `World.gd:206`, `SQLCommons.gd:11`). O detector
   (`EconomyKernel.gd:187`) só flagge `s.gp < balance_after`, então a perna do estouro é cega.
 - **Meta Game 7,5.** Temporada é dado + estado: `data/conf/seasons.json` (`s1` rotativa, `s2`
   1799971200–1802563200, `premium_sku pass.s2`) com recusa explícita de vigência inválida
-  (`SeasonService.gd:150-171`, `:158`, `:163`) e relê por relógio (`SQLBackups.gd:142`).
+  (`SeasonService.gd:191-212`, `:199`, `:204`) e relê por relógio (`SQLBackups.gd:142`).
   Missão do passe resolvida por `COUNT(*)` de telemetria e ledger reais
   (`PassService.gd:130-178`) e entrega escrevendo wallet+ledger, baú, VIP e cosmético
   (`:315-352`). Governança autoritativa com rastro (`GuildService.gd:263,278,294,313`,
   migration 062) e buff de guilda consumido no settle (`OfflineSettle.gd:230-233`).
   *Hipótese/lacuna:* `SnapshotSeasonPower`/`SnapshotSeasonBossKills` pontuam estado
-  acumulado, não o delta da janela (`SeasonService.gd:174-207`; só `spend` é janelado), e
-  `pass_tiers` é `{}` nas duas entradas — a tabela vem dos defaults de código.
+  acumulado, não o delta da janela (`SeasonService.gd:223-261`; só `spend` era janelado quando
+  a nota foi dada — a 064 de 2026-09-29 janela as outras três), e
+  `pass_tiers` é `{}` nas duas entradas era verdade só para a S1, que fechou em 2026-09-29: ela declara no arquivo o espelho nível a nível do catálogo (`tests/season_liveops_test.gd`), e a S2 já tinha trilha própria.
 - **Game Design 7,0.** Curva calculada por ele sobre `Experience.gd:14-16` e
   `FarmZoneData.gd:263-270`: zona 27 dá `xp/kill 397.047`, `par/h 76`, `offline xp/h
   18.105.343`, `h to L60 250.1h = 10.4d`; zona 24 dá `458.3h = 19.1d`; total
@@ -319,17 +320,17 @@ mais e a锁 voltou a girar; o achado operacional é o próprio órfão segurar o
 - **Core Loop 8,5.** A perna earn existe em código (`OfflineSettle.gd:302,308`, kills
   alimentando drop e chave em `:319,:326,:362`); spend real com débito + ledger
   `vendor:<offer>` na mesma transação (`ShopService.gd:297-299`) e gemas queimando em
-  `:33-35`; cadeado de capacidade por `Formula.GetPowerScore` (`Server.gd:612`) e essência
+  `:33-35`; cadeado de capacidade por `Formula.GetPowerScore` (`Server.gd:614`) e essência
   nascendo no level (`OfflineSettle.gd:417`). *Lacuna:* nenhum harness emenda o ciclo
   inteiro — cada transição é verde isolada. *Hipótese declarada:* não rodou o
   `economy_invariant_fuzz`, não leu o kernel do reset.
 - **Meta Game 7,6.** `SeasonConfig.gd:244` valida `pass_tiers.max_level` contra o produto e
-  `PassService.gd:84` lê a trilha do arquivo; `SeasonService.gd:169` abre a temporada do JSON
-  e congela as regras, com preempt da S2 agendada em `:249`; o meta entra na torneira real
+  `PassService.gd:84` lê a trilha do arquivo; `SeasonService.gd:210` abre a temporada do JSON
+  e congela as regras, com preempt da S2 agendada em `:303`; o meta entra na torneira real
   (`OfflineSettle.gd:233,269`). *Contra:* em `data/conf/liveops_calendar.json` nenhuma janela
-  está no ar hoje (uma encerrada 20–21/09, o resto em nov/2026 e jan/2027), `pass_tiers` é `{}`
-  na S1 — que é a temporada que corre — e das quatro `races` só tracei `guild_points` e
-  `boss_kills`.
+  está no ar hoje (uma encerrada 20–21/09, o resto em nov/2026 e jan/2027) e das quatro `races` só
+  tracei `guild_points` e `boss_kills`. O `pass_tiers` é `{}` na S1 era verdade como escrito em 2026-09-28
+  e fechou em 2026-09-29: a S1 declara no arquivo o espelho nível a nível do catálogo, amarrado por `tests/season_liveops_test.gd`.
 - **Game Design 8,0.** Curva calculada por ele: `z1 xp/h=180000`, `z24 xp/h=16466328`,
   `z27 xp/h=30175572`, `hours at z27 = 183.1 (7.6 days); at z24 = 335.5`, e a última linha
   `offline z1: 8h*0.6*eff1 xp= 864000  xp needed L1->2= 9760`. `economy_base_catalog.json`
@@ -337,6 +338,13 @@ mais e a锁 voltou a girar; o achado operacional é o próprio órfão segurar o
   não igualdade — rebalance sem rebuild). *Contra:* trilha gratuita soma 100 gemas por
   temporada contra 120 por baú (`EconomyCatalog.gd:447,529`), com `REFERRAL_BONUS_GEMS = 200`
   como única torneira social; guild L10 a 10 M de gold é ~2,6 h de farm na zona 27.
+  *Conferido pelo orquestrador em 2026-09-29:* a aritmética dos 100 contra os 120 é verdadeira
+  (`PASS_FREE` soma 10+10+15+15+20+30), mas a conclusão que ele escreveu na planilha — "o F2P
+  nunca alcança um baú" — não é: a própria trilha gratuita distribui 4 baús, um no nível 5, um
+  no 16 e dois no 24, nas linhas 448 a 450 do mesmo arquivo. O par de linhas citado também
+  estava torto: `:529` é o `REFERRAL_BONUS_GEMS` que ele nomeia na cláusula seguinte, e o preço
+  do baú mora na linha 170 (`deal_chest1`, `cost: 120`). A pia que ele media aqui — forja sem
+  fator de zona — fechou no mesmo dia: `tests/gold_sink_scale_test.gd`, 159 checks, 0 falhas.
 
 
 
@@ -355,14 +363,14 @@ encontrado credencial viva em arquivo rastreado.
   como portão, e `.github/workflows/godot-ci.yml:415` dá `needs: builds` ao job que publica;
   `structure` verde com `== CI GATE: 97 checks, 0 failures ==` passa por cima do próprio
   buraco. *Hipótese:* ~93 suítes do kernel ficaram não conferidas nesta passada.
-- **Segurança 7,2.** `sources/network/server/Admission.gd:72` declara `windows` e escreve em
+- **Segurança 7,2.** `sources/network/server/Admission.gd:103` declara `windows` e escreve em
   `:141`; nenhum `erase`/`clear` no repo — cesta pré-auth cresce sem teto por endereço.
   Caminho de ataque que o código não barra: o limitador por RPC vive em
   `sources/network/Network.gd:1146`, dentro de `CallServer`, que roda no processo do
   CHAMADOR; no servidor `Peers.Footprint` só aparece em `Server.gd:629` e `:1085`, e
-  `TriggerChat` (`Server.gd:1644`) corta tamanho, cobra mute, faz
+  `TriggerChat` (`Server.gd:1649`) corta tamanho, cobra mute, faz
   `Network.NotifyGlobal("ChatPlayer", ...)` sem cobrar taxa — quem pular `CallServer` e
-  emitir o `@rpc` direto inunda o fan-out. `.github/workflows/release.yml:107-109` assina o
+  emitir o `@rpc` direto inunda o fan-out. `.github/workflows/release.yml:72-74` assina o
   APK de release com `/root/debug.keystore`, `androiddebugkey`/`android`. *Hipótese:*
   superfície SQL sem injeção encontrada (concatenações em `SQL.gd:825,836` e
   `FraudeReview.gd:248` montam cláusulas internas e passam valores por bindings).
@@ -392,11 +400,11 @@ Chegou 2026-09-29 (39 chamadas, assento relançado com teto). Rodou `one benchma
 mesmo, sob contenção de outro juiz, e refez em shell a deriva do marcador para os 7
 harnesses explícitos. Conferi por mim, antes de gravar: os dois funis de
 `ledger_transaction` em `EconomyKernel.gd` (`:20-28` lê, `:44-55` escreve fora de
-transação), a afirmação de `SCALING.md:285-286`, os 30 sites `.db.` crus, a ausência de
+transação), a afirmação de `SCALING.md:327-328`, os 30 sites `.db.` crus, a ausência de
 métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gate` que
-`scripts/test.sh:15` anuncia e não existe como case.
+`scripts/test.sh:22` anuncia e não existe como case.
 
-- **Arquitetura 7,0.** A favor: identidade nunca vem do pacote — `Server.gd:600`
+- **Arquitetura 7,0.** A favor: identidade nunca vem do pacote — `Server.gd:602`
   (`Peers.GetCharacter(peerID)`, repetido em `:625/:639/:654/:730`) com a régua que morde
   em `tests/run_rpc_identity_test.gd:147`, dois WebSockets reais em que A declara ser B e
   o servidor devolve o `AuthPeerID` de A. Leitura fail-closed em `SQLReadRules.gd:14-19`
@@ -406,7 +414,7 @@ métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gat
   por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex(accountID)` — não
   sob `queryMutex` e não dentro de `SQL.Transaction()`, ao contrário do que o comentário de
   `LedgerAppend` (`:33-41`) exige — enquanto `:20-28` lê a mesma tabela pelo funil.
-  `SCALING.md:286` afirma que a `queryMutex` "continua sendo o único funil de escrita"; a
+  `SCALING.md:327-328` afirma que a `queryMutex` "continua sendo o único funil de escrita"; a
   varredura do juiz devolve 30 sites `.db.` crus em `sources/`, inclusive caminhos de
   dinheiro (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`,
   `CheckoutService.gd:490`). Nenhum gate faz censo desses sites, embora o repo já tenha a
@@ -450,7 +458,7 @@ métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gat
 - **Código 7,3.** O defeito que ele mais gosta: `one benchmarks` devolve
   `::error::o run não terminou: faltou a linha "== RESULT:" (crash ou timeout)` e
   `GATE VERMELHO: benchmarks` com `godot exit=0` e `== Benchmarks: 0 failures ==` no
-  produto. Causa determinística, apurada em estático: `scripts/test.sh:437` casa só
+  produto. Causa determinística, apurada em estático: `scripts/test.sh:459` casa só
   `"== [A-Z]+[A-Z ]*:` e cai no default `== RESULT:`, que `tests/benchmarks.gd:397`
   (`== Benchmarks:`) não emite — só o case hardcoded `:604` conhece o marcador real. Mesmo
   defeito em `test_backup_restore` (emite `== Backup Restore Probe:`). E `reason_toast_test`
@@ -531,7 +539,7 @@ antes de gravar, as quatro afirmações que baixam a nota: o `LossOnBreak` de to
   além dele:* `auction_listing` não tem `expires_at` (DDL em `data/conf/migrations/018`, com
   `status`/`created_at` e índices por `status`) e nenhuma referência a expiry/reaper em
   `sources/` — o ask espera a alt o tempo que for, com o item travado fora do inventário.
-- **Economia 8,4.** Escritor único de ouro com carteira nunca negativa (`EconomyKernel.gd:100-110`),
+- **Economia 8,4.** Escritor único de ouro com carteira nunca negativa (`EconomyKernel.gd:121`),
   `ApplyGoldMoves` aplicando DELTA e não valor absoluto para não apagar receita ganha durante a
   transação (`:116-124`); fuzzer assere I1..I6 (`economy_invariant_fuzz.gd:309-324,336,342`) e
   trata verde por inércia como falha (`:369-373`); uma única régua `equivKills` gera os dois
@@ -574,7 +582,7 @@ revogação de `premium`/`vip_until`, e a linha do fuzzer que confessa IG2 não-
 - **Monetização 7,9 — e o achado é o P0 que nenhuma rodada anterior nomeou.** O caminho de gemas
   está fechado e ele mediu: `SetGemsRaw` drena `gems_paid` primeiro e clampa em `[0, gems]`
   (`SQL.gd:1144`), a fila é reivindicada para `processing` e **relida** antes do crédito no mesmo
-  commit (`CheckoutService.gd:268-270`), `EnqueueGrant` só devolve `true` na reentrega se o dono da
+  commit (`CheckoutService.gd:170`), `EnqueueGrant` só devolve `true` na reentrega se o dono da
   chave é a mesma conta (`:168-174`), clawback limitado a `gems_paid` com rombo virando fila de
   revisão (`:368-375`). **Contra:** a reversão só conhece gemas. `Server.gd:58 RequestRefund` chama
   `EconomyService.gd:377 RequestGemRefund`, que cai em `CheckoutService.gd:523-526` consultando
@@ -609,7 +617,7 @@ revogação de `premium`/`vip_until`, e a linha do fuzzer que confessa IG2 não-
   nestas contas: a taxa de anúncio gasta gemas pagas por fora do gate de origem, então
   `paid > wallet` é estado legal do leilão, não buraco", e é essa coluna que limita o clawback e
   fundamenta o `not_paid` do art.49. E não há censo de pia: `ReconcileWalletDaily`
-  (`EconomyKernel.gd:160-169`) só enxerga a carteira **abaixo** do atestado do ledger, então um
+  (`EconomyKernel.gd:184`) só enxerga a carteira **abaixo** do atestado do ledger, então um
   faucet que escreva `stat.gp` e ledger juntos é invisível por construção; as pias são
   enumeráveis (forja, vendor, guilda, chave de boss, taxa de torneio, death tax 5%, `ah_list_fee`)
   e as fontes também, mas nada soma a expansão líquida diária de oferta de moeda.
@@ -666,3 +674,37 @@ debug, #85 cesta pré-auth, #86 rate limit no cliente, #87 gate de segredo, #89 
 já nomeadas) e **produto** (o ciclo, o meta e o sumiouro que R3A/R3B descreveram por último). Depois de cada onda, os
 gates cobertos; no fim, `all` verde, commit, e uma rodada 4 com assentos novos — juiz que
 não sabe o resultado anterior, porque é a única régua que ainda não foi comprada.
+
+## Rodada 4 — assentos novos, depois do portão completo verde
+
+A rodada 3 fechou com média 7,12 e nenhuma categoria acima de 9. Vinte ordens (#81–#104)
+foram abertas a partir dos gaps nomeados e aterrissaram em quatro ondas: **dinheiro**
+(#97, #88, #91, #93, #94, #100, #95, #96, #98), **entrega** (#83, #84, #85, #86, #87, #89,
+#90, #81, #82), **experiência** (#101, #102, #103) e **produto** (#104, #99). Julgar de
+novo é a única forma de a nota valer o estado atual: o que está na tabela das rodadas
+anteriores é memória do que o repo era.
+
+O que muda em relação à rodada 3 é mudança de protocolo, não do projeto:
+
+- **Levas de até seis assentos, não dez em paralelo.** O lock de boot serializa harness
+  GD; com dez assentos simultâneos nenhum dos dez rodou `marketplace_depth_test` nem
+  `economy_invariant_fuzz` até o fim, e as categorias do dinheiro foram julgadas lidas de
+  código.
+- **Teto de 40 chamadas de ferramenta por assento**, com obrigação explícita: quem julga
+  dinheiro, marketplace, economia ou código tem que **rodar** ao menos um harness GD da
+  categoria e citar a última linha (`== RESULT: N checks, M failures ==`). Ler código sem
+  rodar continua valendo, mas não sustenta nota acima de 9 sozinho.
+- **Nada de `monitor`, `run_in_background` nem deixar processo vivo**: o assento que
+  deixa um boot pendurado envenena o run do próximo — é a mesma razão do `flock` do runner.
+- Assento não escreve no repo e não lê `BLIND_JUDGE_PROTOCOL.md`, as auditorias
+  anteriores, `CHANGELOG.md`, `progress.md`, nenhum `archive/*.md` datado e nenhum `/tmp`
+  começado por `gate-`, `judge-`, `blind-verdicts`, `shambleta-`, `red-`, `rerun-`,
+  `drift-`, `qoder-`, `gateverdict`, `cleanall`.
+- Harness é `bash scripts/test.sh one <harness> <timeout>`, nunca `godot --headless -s`
+  cru: o atalho não aplica `flock`, o sandbox `.test-home/` nem `ci_gate_log.sh`, então o
+  verde obtido por atalho não é o verde do portão.
+
+Nota da categoria = mínima entre os dois juízes da rodada 4 e a mínima já registrada,
+**a menos** que o juiz afirme que o gap que gerou aquela mínima fechou e cite a prova —
+aí a mínima antiga é substituída pelo estado atual. Gap que fecha sem régua cuja falha
+depende de a correção existir não conta como fechado.

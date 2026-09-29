@@ -252,10 +252,10 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   banco aqui é o `python3` do companion, que monta o mesmo `game-data`):
   `docker compose -f deploy/docker-compose.yml run --rm --no-deps --entrypoint python3 companion -c 'import sqlite3;c=sqlite3.connect("file:/data/.local/share/Shambleta/live.db?mode=ro",uri=True);print(c.execute("SELECT version FROM migration").fetchone()[0])'`
   devolvendo o número de patches de `data/conf/migrations/` — âncora
-  <!-- DRIFT migration_max 062 --> (hoje 62), derivada do diretório por
-  `scripts/check_doc_drift.sh`: se cair um patch novo e esta linha não for lida, o
-  portão fica vermelho em CI, então o número aqui é âncora conferida, não memória de
-  doc. Não é segunda verdade: o laço que aplica os patches em `SQL.ApplyMigration()`
+  <!-- DRIFT migration_max derivado de data/conf/migrations/ — o gate resolve o máximo; a doc não grava número -->,
+  derivada do diretório por
+  `scripts/check_doc_drift.sh`: o portão resolve o máximo e não há dígito para apodrecer
+  no commit seguinte. Não é segunda verdade: o laço que aplica os patches em `SQL.ApplyMigration()`
   endereça `patches[currentVersion]` por posição (o arquivo é citado por nome, sem número
   de linha, porque ele se move a cada migração e linha aqui apodrece), e a sequência
   001..N contínua é régua do mesmo gate. Número MENOR que a âncora no primeiro boot é
@@ -393,8 +393,8 @@ commitada e no remoto — `6277671` ("Beta entra no índice: a passada da audito
 num commit só"), push `da2531c..6277671` em `origin/master`, com **148 caminhos** no
 commit (98 `M`, 31 `D`, 18 `A` e 1 `R` — o rename que o git detectou sozinho foi
 `companion/catalog.json` → `data/conf/paid_catalog.json`, 54% de similaridade). A árvore
-ficou limpa e `HEAD` passou a conter as 46 migrations e cada módulo que antes só existia
-solto. Autorização do dono obtida antes de commitar e enviar, como este parágrafo exigia.
+ficou limpa e `HEAD` passou a conter as migrations do diretório — a última delas era
+`046_age_gate.sql` — e cada módulo que antes só existia solto. Autorização do dono obtida antes de commitar e enviar, como este parágrafo exigia.
 A régua foi re-medida **antes** do commit, aqui: os nove gates com as mesmas contagens do
 parágrafo abaixo, e o pacote Web re-produzido do zero nesta máquina fechou o QA de
 navegador em `== RESULT: 10 checks, 0 failures ==` (boot do engine no Chromium,

@@ -90,7 +90,7 @@ const DropTierBandSize : int = 2
 # existem (Bone, Salt, SnakeSkin, MaggotSlime, SulphurPowder): primeiro, elas são
 # o conteúdo das tabelas `_drops` medidas dos mobs — virar matéria-prima as tira
 # do leilão e do escambo (`CellCommons.IsMaterial` é porta de trade) e muda a
-# identidade do drop que `IdleTestsFrontier.gd:896-897` confere contra o ppm; segundo,
+# identidade do drop que `IdleTestsFrontier.gd:2205-2208` confere contra o ppm; segundo,
 # as cinco são tier 1, então tiers 2..9 continuariam sem piso nenhum, que é
 # exatamente a meia-lua que o juiz apontou. O arquivo .tres não leva comentário:
 # nenhum preset deste repo leva (`presets/**/*.tres`), e a razão de existir de cada
@@ -140,7 +140,7 @@ const DefaultDropItemHash : int = 215387671		# Apple
 # `OfflineSettle` tratar os dois faucets pelo mesmo eixo. 700000 não é escolha de
 # gabinete: é a probabilidade por kill que a mesa viva derruba — `SuiteIdleLootPipeline`
 # mediu os mobs da zona 1 e a soma das tabelas `_drops` por kill saiu 0,70, que é a
-# linha que `IdleTestsFrontier.gd:1349-1538` trava contra este número. O offline liquida
+# linha que `IdleTestsFrontier.gd:2175-2208` trava contra este número. O offline liquida
 # `parKillsPerHour × horas × eff × OfflineFactor × mods` kills (`OfflineSettle.gd:319`)
 # e multiplica esta taxa por aquele valor, então a pia de drop sai da mesma régua do
 # XP/ouro, não de uma contagem de segundos.
@@ -151,7 +151,7 @@ const DefaultDropItemHash : int = 215387671		# Apple
 # por 3600. As réguas da época (`IdleTests` "drop count golden", `balance_test`)
 # refaziam a mesma expressão do settle e por isso eram verdes ao defeito. Hoje são
 # três, cada uma de um lado: `balance_test` trava a GRANDEZA do que o offline paga,
-# `IdleTestsFrontier.gd:896-897` amarra este ppm à probabilidade medida nas tabelas
+# `IdleTestsFrontier.gd:2205-2208` amarra este ppm à probabilidade medida nas tabelas
 # `_drops` dos mobs, e tests/drop_band_content_test.gd amarra o CONTRÁRIO — que o
 # conteúdo que as faixas ganharam não entra em mesa de mob nenhuma, e por isso
 # encher faixa não tem como mover esta linha.

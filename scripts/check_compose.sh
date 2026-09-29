@@ -1003,8 +1003,13 @@ else:
         "avalia, entra no /api/v2/alerts do alertmanager e morre lá sem acordar ninguém. O repositório não pode "
         "conter o valor (URL de webhook é credencial e o repo é open source), então a medição honesta é no host: "
         "`docker compose exec alertmanager sh -c 'grep -c \"      - url:\" /etc/alertmanager/alertmanager.yml'` — "
-        "zero é stack sem pager. A escolha registrada em deploy/OPS_RUNBOOK.md §2.1 é (b): a régua acusa, o "
-        "`docker compose up` não recusa subir. Ausente no ambiente deste gate: %s" % (" ".join(sem_valor) or "-")))
+        "zero é stack sem pager. Desde #90 esse zero deixou de ser aceitável em silêncio: o render sai != 0 e só o "
+        "container do alertmanager não sobe, a menos que o operador DECLARE o ambiente sem on-call com "
+        "SHAMBLETA_ALERT_NO_PAGER_ACK=1 (a decisão, com o custo dos dois lados, está no header de "
+        "deploy/monitoring/render-alertmanager-config.sh; deploy/OPS_RUNBOOK.md não tem a §2.1 que arquivos desta "
+        "área citavam — pendência pedida ao dono do doc). Os três estados são conferidos rodando o render de fato, "
+        "no bloco 'TRÊS ESTADOS DO PAGER'. "
+        "Ausente no ambiente deste gate: %s" % (" ".join(sem_valor) or "-")))
 
 # -------------- (11) ENV DE CREDENCIAL interpolada precisa estar DECLARADA -------
 # `${VAR:-}` num compose é um pedido de credencial que ninguém fez: o stack sobe

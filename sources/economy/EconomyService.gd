@@ -374,8 +374,13 @@ func EnqueueGrant(accountID : int, kind : String, amount : int, idempotencyKey :
 func ProcessPendingGrants(limit : int = 50) -> Dictionary:
 	return checkoutService.ProcessPendingGrants(limit)
 
+func RequestPurchaseRefund(accountID : int, idempotencyKey : String) -> Dictionary:
+	return checkoutService.RequestPurchaseRefund(accountID, idempotencyKey)
+
+# Alias histórico (work order #97): a reversão deixou de conhecer só gemas, mas o
+# nome continua o portão citado no handoff e na suíte — um só caminho por baixo.
 func RequestGemRefund(accountID : int, idempotencyKey : String) -> Dictionary:
-	return checkoutService.RequestGemRefund(accountID, idempotencyKey)
+	return checkoutService.RequestPurchaseRefund(accountID, idempotencyKey)
 
 # ------------------------------------------------------------------ E1: guilds (Fatia 2 → GuildService.gd)
 # Wrappers de delegação: callers (Server.gd, WorldCommands.gd, Client, testes)

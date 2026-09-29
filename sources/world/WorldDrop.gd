@@ -44,8 +44,14 @@ static func PickupDrop(dropID : int, agent : BaseAgent) -> bool:
 			var drop : Drop = inst.drops[dropID]
 			if drop and drop.item:
 				var cell : ItemCell = DB.GetItem(drop.item.cellID, drop.item.cellCustomfield)
+				# A ordem É afirmação, não estilo: `PopDrop` antes de `AddItem` apagava o
+				# drop do mundo e só depois descobria que a mochila não tinha onde guardar
+				# — o item sumia sem nunca chegar ao jogador (P0 de loot). `CanHold` é o
+				# `PushItem` consultado antes, então o item só sai do chão quando entra no
+				# inventário.
 				if cell and \
 				agent.position.distance_squared_to(drop.position) < ActorCommons.PickupSquaredDistance \
+				and agent.inventory.CanHold(cell, drop.item.count) \
 				and PopDrop(dropID, inst) \
 				and agent.inventory.AddItem(cell, drop.item.count):
 					return true

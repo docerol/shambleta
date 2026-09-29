@@ -105,7 +105,7 @@ func _run() -> void:
 		return
 
 	_map = _launcher.get("Map")
-	# `Map` NÃO está na árvore e isso é projeto, não acidente: `Launcher.gd:95` registra
+	# `Map` NÃO está na árvore e isso é projeto, não acidente: `Launcher.gd:205` registra
 	# que só `Action` é add_child'ado em `Client()`. O que tem que estar na árvore é o Nó
 	# do mapa, que `LoadMapNode` pendura em `Launcher`. Exigir árvore no serviço seria
 	# acusar o desenho; aceitar um serviço nulo seria não exigir nada.

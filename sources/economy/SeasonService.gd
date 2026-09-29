@@ -25,7 +25,7 @@ var _eco : EconomyService = null
 # ------------------------------------------------------------------ E2: seasons (corridas power + spend; premiação automática no ciclo de vida — fecha e liquida)
 
 func ActiveSeason() -> Dictionary:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT season_id, starts_at, ends_at, rules_frozen, status FROM season WHERE status = 'active' ORDER BY season_id DESC LIMIT 1;", [])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT season_id, starts_at, ends_at, rules_frozen, status, baselines_at FROM season WHERE status = 'active' ORDER BY season_id DESC LIMIT 1;", [])
 	return {} if rows.is_empty() else rows[0]
 
 # A linha ativa resolvida na entrada do arquivo (OPS-2). `{}` = "o banco tem uma
@@ -89,16 +89,50 @@ func _CreateSeasonWindow(startsAt : int, endsAt : int, rules : String) -> int:
 	if endsAt <= startsAt:
 		return 0
 	var out : Dictionary = {"id" = 0}
+	var created : int = 0
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
 		if not sql.db.query_with_bindings("INSERT INTO season (starts_at, ends_at, rules_frozen, status) VALUES (?, ?, ?, 'active');", [startsAt, endsAt, rules]):
 			return false
 		out["id"] = sql.LastInsertRowIDRaw()
-		return int(out["id"]) > 0):
-		pass
+		if int(out["id"]) <= 0:
+			return false
+		return _StampRaceBaselines(sql, int(out["id"]), startsAt)):
+		# O id só é do mundo se o COMMIT saiu. Ler `out["id"]` fora daqui era o
+		# caminho do fantasma: com o marco falhando, o ROLLBACK levava a linha
+		# `season` e a função devolvia o número de uma temporada que não existe —
+		# `EnsureSeason` ainda a anunciava no log como aberta.
+		created = int(out["id"])
 	_eco.settleMutex.unlock()
-	return int(out["id"])
+	return created
+
+# As três corridas lidas de estado corrente (`power`, `boss_kills`,
+# `guild_points`) ganham aqui o marco zero que a migration 064 nomeia: uma cópia
+# do valor vigente no instante da abertura, gravada NA MESMA transação do INSERT
+# da temporada. O que a transação amarra é a discordância entre as duas metades,
+# porque elas têm leitores diferentes: `baselines_at` é só a etiqueta que a
+# vitrine mostra, e quem subtrai é o `LEFT JOIN` sobre `season_score_baseline`,
+# que não olha a etiqueta. Uma temporada gravada fora desta transação poderia
+# jurar `delta` sem marco nenhum — `COALESCE(b.value, 0)` devolve o absoluto e o
+# prêmio paga trabalho feito antes da janela — ou jurar `current` tendo marco
+# parcial, que é o mesmo número subtraindo escondido. Os dois são exatamente o que
+# a 064 existe para impedir, e nenhum dos dois é alcançável enquanto as linhas de
+# marco e a etiqueta cometem juntos.
+# `baselines_at = 0` é o regime legado (temporada anterior à 064) e é lido pela
+# vitrine (`CommunityService.GetSeasonBoardsState`), que diz a um jogador o que o
+# número dele significa; a subtração em si não precisa dele, porque uma temporada
+# sem marco simplesmente não tem linha em `season_score_baseline` e o `LEFT JOIN`
+# devolve o estado corrente — os dois caminhos chegam ao mesmo número por motivos
+# diferentes, e é mais barato garantir isso por régua do que por coincidência.
+func _StampRaceBaselines(sql : SQLService, seasonID : int, startsAt : int) -> bool:
+	if not sql.ExecNoLock("INSERT OR REPLACE INTO season_score_baseline (season_id, kind, subject_id, value) SELECT ?, 'power', char_id, power_score FROM character WHERE power_score > 0;", [seasonID]):
+		return false
+	if not sql.ExecNoLock("INSERT OR REPLACE INTO season_score_baseline (season_id, kind, subject_id, value) SELECT ?, 'boss_kills', char_id, bosses_beaten FROM character WHERE bosses_beaten > 0;", [seasonID]):
+		return false
+	if not sql.ExecNoLock("INSERT OR REPLACE INTO season_score_baseline (season_id, kind, subject_id, value) SELECT ?, 'guild_points', guild_id, points FROM guild WHERE points > 0;", [seasonID]):
+		return false
+	return sql.ExecNoLock("UPDATE season SET baselines_at = ? WHERE season_id = ?;", [startsAt, seasonID])
 
 # G1: fechar É congelar. As quatro corridas são gravadas em `season_score` antes
 # do flip active→closed, e o flip é protegido por `status = 'active'` +
@@ -107,12 +141,19 @@ func _CreateSeasonWindow(startsAt : int, endsAt : int, rules : String) -> int:
 # correr horas depois do fim da temporada e premar quem treinou/gastou depois do
 # `ends_at` (débitos 1 e 3 de archive/SEASON_ACTIVATION_NOTE.md). O `settleMutex`
 # é o mesmo da criação, portanto não há interleaving dentro do processo.
-# O que isto NÃO resolve: `power_score`, `bosses_beaten` e `guild.points` são
-# contadores correntes sem histórico — o valor congelado é o do instante do
-# fechamento. É por isso que o relógio de temporada fecha em minutos e não em
-# horas (`SQLCommons.SeasonClockIntervalSec`): a janela restante é fração do ciclo
-# de jogo. O estágio `CLOSING` com apuração por evento (débito 4) continua
-# em aberto, e é pós-beta.
+# O que a 064 resolve: `power_score`, `bosses_beaten` e `guild.points` são
+# contadores correntes sem histórico, e congelar o valor corrente congelava junto
+# tudo o que o jogador fez antes da temporada abrir. Desde a 064 o marco zero é
+# gravado na abertura e o placar é diferença. O que ela NÃO resolve: um valor que
+# CAI dentro da janela (reforja que perde poder, guilda que gasta ponto) sai do
+# placar como zero, nunca como dívida — `MAX(0, …)` é escolha deliberada, porque
+# um negativo numa corrida que paga prêmio seria pior que o estado acumulado. A
+# apuração por evento (débito 4 de archive/SEASON_ACTIVATION_NOTE.md) é o que
+# resolveria isso, e continua pós-beta. O relógio fecha em minutos
+# (`SQLCommons.SeasonClockIntervalSec`) por outro motivo, que também continua:
+# quanto menor a sobra entre `ends_at` e o congelamento, menos jogo
+# pós-temporada entra na conta de `spend`, que tem teto em `ends_at` mas é lida no
+# fechamento.
 func CloseSeason(seasonID : int) -> bool:
 	if Launcher.SQL.QueryBindings("SELECT season_id FROM season WHERE season_id = ? AND status = 'active';", [seasonID]).is_empty():
 		return false
@@ -171,11 +212,19 @@ func EnsureSeason() -> int:
 		Util.PrintLog("Economy", "Season %d (%s) opened from seasons.json: %d dias" % [created, SeasonConfig.ConfigID(entry), (int(window["ends_at"]) - int(window["starts_at"])) / 86400])
 	return created
 
+# Placar da corrida = o que o sujeito FEZ na janela. A subtração é feita no SQL,
+# com `LEFT JOIN` no marco zero da migration 064: quem não tem marco (sujeito
+# nascido depois da abertura, ou temporada legada que nunca teve marco) tem
+# `COALESCE(b.value, 0)` e o número volta a ser o estado corrente, que é a
+# semantics documentada desses dois casos. Ordernar por `scored`, não por
+# `power_score`, é parte do conserto: com teto em `limit`, ordenar pelo absoluto
+# cortava justamente quem subiu muito a partir de baixo — a corrida mais nova
+# ficava de fora do placar que a corrida premia.
 func SnapshotSeasonPower(seasonID : int, limit : int = 100) -> int:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT char_id, power_score FROM character WHERE power_score > 0 ORDER BY power_score DESC LIMIT ?;", [limit])
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT c.char_id AS char_id, MAX(0, c.power_score - COALESCE(b.value, 0)) AS scored FROM character c LEFT JOIN season_score_baseline b ON b.season_id = ? AND b.kind = 'power' AND b.subject_id = c.char_id WHERE MAX(0, c.power_score - COALESCE(b.value, 0)) > 0 ORDER BY scored DESC LIMIT ?;", [seasonID, limit])
 	var n : int = 0
 	for row in rows:
-		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'power', ?, ?);", [seasonID, int(row["char_id"]), int(row["power_score"])]):
+		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'power', ?, ?);", [seasonID, int(row["char_id"]), int(row["scored"])]):
 			n += 1
 	return n
 
@@ -193,18 +242,23 @@ func SnapshotSeasonSpend(seasonID : int) -> int:
 			n += 1
 	return n
 
-# Fase F: snapshot das 2 novas corridas (idempotente por REPLACE).
+# Fase F: snapshot das 2 novas corridas (idempotente por REPLACE). Mesma régua de
+# `power`: o número congelado é a diferença contra o marco zero da 064, e um
+# sujeito sem marco entra com zero de Marco — que para quem nasceu dentro da
+# temporada é o valor absoluto, e é o número certo.
 func SnapshotSeasonBossKills(seasonID : int) -> int:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT c.char_id AS char_id, MAX(0, c.bosses_beaten - COALESCE(b.value, 0)) AS scored FROM character c LEFT JOIN season_score_baseline b ON b.season_id = ? AND b.kind = 'boss_kills' AND b.subject_id = c.char_id WHERE MAX(0, c.bosses_beaten - COALESCE(b.value, 0)) > 0;", [seasonID])
 	var n : int = 0
-	for row in Launcher.SQL.QueryBindings("SELECT char_id, bosses_beaten FROM character WHERE bosses_beaten > 0;", []):
-		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'boss_kills', ?, ?);", [seasonID, int(row["char_id"]), int(row["bosses_beaten"])]):
+	for row in rows:
+		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'boss_kills', ?, ?);", [seasonID, int(row["char_id"]), int(row["scored"])]):
 			n += 1
 	return n
 
 func SnapshotSeasonGuildPoints(seasonID : int) -> int:
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT g.guild_id AS guild_id, MAX(0, g.points - COALESCE(b.value, 0)) AS scored FROM guild g LEFT JOIN season_score_baseline b ON b.season_id = ? AND b.kind = 'guild_points' AND b.subject_id = g.guild_id WHERE MAX(0, g.points - COALESCE(b.value, 0)) > 0;", [seasonID])
 	var n : int = 0
-	for row in Launcher.SQL.QueryBindings("SELECT guild_id, points FROM guild WHERE points > 0;", []):
-		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'guild_points', ?, ?);", [seasonID, int(row["guild_id"]), int(row["points"])]):
+	for row in rows:
+		if Launcher.SQL.ExecuteBindings("INSERT OR REPLACE INTO season_score (season_id, kind, subject_id, value) VALUES (?, 'guild_points', ?, ?);", [seasonID, int(row["guild_id"]), int(row["scored"])]):
 			n += 1
 	return n
 

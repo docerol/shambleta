@@ -510,12 +510,25 @@ func _findNearestDrop() -> Drop:
 	var bestDist : float = INF
 	for dropID in inst.drops:
 		var drop : Drop = inst.drops[dropID]
-		if drop and is_instance_valid(drop):
+		if drop and is_instance_valid(drop) and _canCarry(drop):
 			var dist : float = agent.position.distance_squared_to(drop.position)
 			if dist <= limit and dist < bestDist:
 				bestDist = dist
 				best = drop
 	return best
+
+# O chão não é convite para um pé-de-braço: se a mochila não tem onde guardar o
+# item, ele CONTINUA lá (ninguém apaga drop que não coube — ver
+# `WorldDrop.PickupDrop`) e o farmer não passa a sessão andando até um drop que
+# não pode carregar, o que custaria as próprias mortes e kills que as réguas de
+# produtividade medem. A célula é resolvida pelo MESMO caminho de `PickupDrop`,
+# então "coube?" é a mesma resposta nas duas pontas — e a resposta vem de
+# `ActorInventory.CanHold`, espelho exato de `PushItem`, não de um teto novo.
+func _canCarry(drop : Drop) -> bool:
+	if agent == null or agent.inventory == null or drop.item == null:
+		return false
+	var cell : ItemCell = DB.GetItem(drop.item.cellID, drop.item.cellCustomfield)
+	return cell != null and agent.inventory.CanHold(cell, drop.item.count)
 
 # ------------------------------------------------------------------ death
 

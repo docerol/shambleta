@@ -27,14 +27,14 @@ extends SceneTree
 #  (3) O PREÇO DE ENCHER FAIXA É ZERO, e isto é régua, não promessa: a contagem
 #      de drop por kill não lê a pool — ela sai de `dropRatePPM`
 #      (`OfflineSettle.gd:326`) no offline e da soma das tabelas `_drops` do mob
-#      no farm vivo (`tests/IdleTestsFrontier.gd:875-878`, costurada ao ppm em
-#      `IdleTestsFrontier.gd:896-897`). Três medidas aqui, nenhuma regravada em texto:
+#      no farm vivo (`tests/IdleTestsFrontier.gd:2186-2189`, costurada ao ppm em
+#      `IdleTestsFrontier.gd:2205-2208`). Três medidas aqui, nenhuma regravada em texto:
 #      nenhuma zona carrega taxa própria escondida (a pia é uma régua do
 #      catálogo), o roll devolve exatamente UM item por roll (identidade, nunca
 #      quantidade), e as matérias-primas que a faixa ganhou NÃO estão em mesa
 #      `_drops` de mob nenhum — é por isso que preencher faixa não tem como tocar
 #      no 0,7/kill. A grandeza em si é conferida contra a mesa viva da zona que a
-#      própria fronteira mede (`IdleTestsFrontier.gd:836` == instância da zona 1),
+#      própria fronteira mede (`IdleTestsFrontier.gd:2120` == instância da zona 1),
 #      com a mesma folga de 25% daquela régua.
 #
 # Uso: godot --headless --path . -s tests/drop_band_content_test.gd
@@ -280,7 +280,7 @@ func _suiteAppleScope():
 # O que encher faixa NÃO muda: a expectativa de drop por kill. A contagem tem duas
 # origens e nenhuma delas lê a pool — offline `zone.dropRatePPM` × kills equivalentes
 # (`OfflineSettle.gd:326`), online a soma das probabilidades da mesa `_drops` do mob
-# (`IdleTestsFrontier.gd:875-878`). Daí três medidas:
+# (`IdleTestsFrontier.gd:2186-2189`). Daí três medidas:
 #   (a) nenhuma zona carrega taxa própria escondida: `FarmZoneData.gd:180` dá a
 #       todas o `DefaultDropRatePPM`, e nada em `_make` (`FarmZoneData.gd:260-272`)
 #       o sobrescreve, então conteúdo
@@ -291,7 +291,7 @@ func _suiteAppleScope():
 #       o 0,7 medido subia silenciosamente. É a única forma de o trabalho desta
 #       faixa mover a contagem, e é travada aqui.
 # A grandeza do catálogo é conferida contra a mesa viva da zona que a fronteira
-# mede (`IdleTestsFrontier.gd:836`), com a mesma folga de 25% (`:896-897`).
+# mede (`IdleTestsFrontier.gd:2120`), com a mesma folga de 25% (`:2205-2208`).
 func _suiteKillCount():
 	print("[suite] contagem: conteúdo de faixa não move o drop por kill")
 	var ppm : int = int(_farm.DefaultDropRatePPM)
@@ -336,7 +336,7 @@ func _suiteKillCount():
 
 # Censo das células que os mobs já derrubam por mesa própria (`_drops`), na chave
 # do ItemsDB. É o contrapeso da asserção (c) acima: a contagem do farm vivo nasce
-# deste censo (`IdleTestsFrontier.gd:875-878`), então o que não está aqui não entrou no
+# deste censo (`IdleTestsFrontier.gd:2186-2189`), então o que não está aqui não entrou no
 # roll por kill — e o conteúdo que as faixas ganharam não está.
 func _mobDropTableCensus() -> Dictionary:
 	var out : Dictionary = {}

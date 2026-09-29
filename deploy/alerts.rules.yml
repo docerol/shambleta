@@ -106,6 +106,65 @@ groups:
           summary: "round trip de SQL esperou a queryMutex mais de 100 ms"
           description: "{{ $value }} esperas >100 ms nos últimos 10 min. Antes de encostar no teto do tick, o processo encosta aqui."
 
+      # ORÇAMENTO DE PASSO — a grandeza que faltava no /metrics. Até esta regra
+      # existir, o processo confessava espera de mutex mas NADA confessava o custo
+      # do passo do laço de 30 Hz: um servidor perdendo o tick passo a passo não
+      # tinha como virar alerta, porque o número não saía do processo (só o painel
+      # humano de `sources/gui/ServerDisplay.gd` o lia). Hoje `Launcher` acumula por
+      # passo com `Time.get_ticks_usec()` e `MetricsServer` exporta; a régua é na
+      # CAUDA e nunca na média, pelo mesmo motivo da regra de mutex acima — uma
+      # média de 8 ms convive com 5% dos passos a 120 ms, e é esse 5% que o jogador
+      # sente como o mundo andando em câmera lenta.
+      #
+      # Predícado do numerador (declarado na própria métrica): passo cujo período de
+      # parede passou do orçamento MAIS a folga do throttle. A folga não é cosmética:
+      # sem ela o sleep do próprio engine conta como estouro — piso ocioso mede
+      # 33,61 ms contra 33,33 ms de orçamento, e uma régua estrita `>` denunciaria
+      # 100% dos passos de um servidor vazio, que é o alerta que ninguém desliga.
+      #
+      # É fração, não contagem absoluta: 3 passos de 40 ms numa janela de 5 min é
+      # um GC; 5% de todos os passos é o laço não cabendo no tick. O corte de 5% é
+      # escolha declarada (a 30 Hz são ~1,5 passo por segundo sem relógio), não
+      # número medido — medir o ponto de ruptura é o `multi_instance_tick_test`,
+      # que agora cobra a mesma cauda por degrau.
+      - alert: PassoForaDoOrcamento
+        expr: rate(shambleta_step_over_budget_total[5m]) / rate(shambleta_steps_measured_total[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: ">= 5% dos passos de física estouraram o orçamento de tick por 10 min"
+          description: "{{ $value }} é a fração de passos acima de orçamento+folga. Compare com `shambleta_step_budget_seconds` (o orçamento deste processo) e com a cauda do período no histograma; se `shambleta_step_lost_total` anda junto, o tick não está apenas estourando — está deixando de ser entregue."
+
+      # `over_budget` diz que o passo foi longo; `lost` diz que o atraso virou
+      # crédito não pago: `Engine.get_physics_frames()` andou menos que o tempo de
+      # parede permitia. É o alerta do idle MMO — o mundo dos jogadores em offline
+      # settle anda pelo relógio do passo, e passo perdido é hora de jogo que não
+      # aconteceu. Uma linha só que seja, o player perdeu produção.
+      - alert: PassoPerdido
+        expr: increase(shambleta_step_lost_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "o processo deixou de entregar passos de física (atraso acumulado subiu)"
+          description: "{{ $value }} passos não entregues nos últimos 5 min. Um passo perdido não é recuperado: o relógio do mundo atrasa junto."
+
+      # Honestidade de cobertura: as séries do passo só existem depois da primeira
+      # fronteira de física amostrada, e ausência aqui NÃO é "zero passos acima do
+      # orçamento" — é "não estou medindo". Sem esta regra, um processo com o laço
+      # parado (ou um scrape que sumiu) leria verde na régua de cima, que é a
+      # mesma classe de falso verde que a regra `ReconcileParado` existe para o
+      # reconcile.
+      - alert: PassoSemMedida
+        expr: absent(shambleta_steps_measured_total)
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "/metrics sem as séries de orçamento de passo há 15 min"
+          description: "Ou o laço de física deste processo não amostrou nenhum passo, ou o scrape caiu. Nos dois casos as regras de passo acima estão cegas, não verdes."
+
   - name: shambleta-schema
     rules:
       # P0-STAMP: desde 2026-09-28 o carimbo de versão é fail-closed — um patch que

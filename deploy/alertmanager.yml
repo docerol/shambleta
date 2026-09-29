@@ -15,14 +15,25 @@
 # imagem (`deploy/monitoring/render-alertmanager-config.sh`) materializa o destino
 # no boot e escreve `/etc/alertmanager/alertmanager.yml` — o caminho que o
 # `--config.file` do compose já aponta, que é por que a env sem render nada faria.
+# O terceiro nome da família, `SHAMBLETA_ALERT_NO_PAGER_ACK`, NÃO é credencial e
+# não tem valor no repo: é a declaração de "sem paguer de propósito" (ver abaixo),
+# e a linha dele em `.env.example` é outra pendência pedida ao dono do arquivo.
 #
-# Sem a env, ESTE arquivo continua um config válido e o `severity: page` não acorda
-# ninguém. Isso é configuração INCOMPLETA, não configuração segura: o alerta
-# dispara, fica no /api/v2/alerts e morre lá. A escolha deliberada foi a régua
-# acusar, e não o `docker compose up` recusar subir — motivo, custo e alternativa
-# em deploy/OPS_RUNBOOK.md §2.1. Enquanto estiver sem destino, o que se lê é
-# `docker compose exec game curl -s http://alertmanager:9093/api/v2/alerts`
-# (comando em deploy/OPS_RUNBOOK.md §2.2).
+# Sem a env do page, ESTE arquivo continua um config válido — e é exatamente por
+# isso que validá-lo não era a régua: o alerta dispara, fica no /api/v2/alerts e
+# morre lá. Desde #90 (auditoria 2026-09-29) o render do container RECUSA esse
+# estado: sem destino para o receiver alcancado por `severity: page`,
+# deploy/monitoring/render-alertmanager-config.sh sai != 0 antes do exec e só este
+# container não sobe (nada nesta stack depende do alertmanager — o jogo continua
+# servindo). O estado "este ambiente não tem on-call humano" existe e é legítimo,
+# mas precisa ser DECLARADO: SHAMBLETA_ALERT_NO_PAGER_ACK=1, que sobe o container
+# e imprime o aviso em todo boot. A decisão completa, com o custo de cada lado,
+# está no header do render; `deploy/OPS_RUNBOOK.md` não tem §2.1 (a linha do
+# runbook é pendência da rodada, pedida ao dono do doc). Enquanto estiver sem
+# destino, o que se lê é a mesma família de sonda do runbook (§2, "Saúde: como
+# ler"): `docker compose exec game curl -s http://alertmanager:9093/api/v2/alerts`.
+# A linha específica do pager ainda não está no runbook — é a pendência pedida ao
+# dono do doc nesta rodada (OPS_RUNBOOK.md não tem §2.1 nem §2.2).
 
 global:
   resolve_timeout: 5m

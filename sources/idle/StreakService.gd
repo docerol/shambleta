@@ -67,17 +67,37 @@ static func RewardSpan(fromDay : int, toDay : int) -> int:
 		day += 1
 	return sum
 
-# O que se PERDE ao quebrar a sequência hoje: o ouro que falta para chegar ao
-# próximo marco menos o que a MESMA quantidade de dias pagaria recomeçando do
-# degrau 1 (é exatamente o que o servidor faz com quem volta depois de um dia
-# fora — `RecordLogin` zera `newStreak` para 1). No topo do ciclo o número é 0 de
-# propósito: quem acaba de coletar o marco não tem escalada a perder, só o
-# recomeço.
+# O que se PERDE ao quebrar a sequência hoje. Dois regimes, um número só:
+#
+# 1) Meio do ciclo (o caso geral): o ouro que falta para chegar ao próximo marco
+#    menos o que a MESMA quantidade de dias pagaria recomeçando do degrau 1 — é
+#    exatamente o que o servidor faz com quem volta depois de um dia fora
+#    (`RecordLogin` zera `newStreak` para 1).
+#
+# 2) TOPO do ciclo (dia 7, 14, 21 …): a fórmula 1 devolve 0, porque a escada é
+#    PERIÓDICA (`RewardSpan(8,14) == RewardSpan(1,7) == 3250`). Como o delta é
+#    literalmente zero, o número foi escrito como "quebrar não custa nada" e é
+#    isso que a tela mostrava no dia 7 — o dia que mais paga, 1000 de ouro. A
+#    perda de aversão simplesmente desaparecia no único momento em que ela tinha
+#    mais valor, e do dia 8 em diante não havia régua nenhuma segurando o motivo
+#    de retorno (ver tests/balance_test.gd, suíte 3a).
+#
+#    No topo o que se perde não é o delta entre degraus (esse é zero de fato), é o
+#    CICLO INTEIRO que a escada volta a pagar do degrau 1 até o próximo marco:
+#    `RewardSpan(1, mark - streak)` = 3250. Não se soma outro 1000 do marco a
+#    esse valor: o span até o marco já termina no marco, e somar de novo seria
+#    inflar a cifra em gold que a escada nunca paga. Por isso a grandeza fica
+#    amarrada ao ciclo em tests/balance_test.gd
+#    (`LossOnBreak(s) <= LadderCycleTotal()`), e o número continua dentro do teto
+#    de faucet que a própria suíte confere contra uma liquidação F2P no cap.
 static func LossOnBreak(streak : int) -> int:
 	if streak <= 0:
 		return 0
 	var mark : int = NextMark(streak)
-	return RewardSpan(streak + 1, mark) - RewardSpan(1, mark - streak)
+	var delta : int = RewardSpan(streak + 1, mark) - RewardSpan(1, mark - streak)
+	if delta > 0:
+		return delta
+	return RewardSpan(1, mark - streak)
 
 # ------------------------------------------------------------------ superfície
 

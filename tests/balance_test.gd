@@ -119,6 +119,7 @@ func _run():
 	_suiteStreakSurface()
 	_suiteLadderCurves()
 	_suiteNewZoneFaucet()
+	_suiteDropDistribution()
 	_suiteMaterialShare()
 
 	_finish()
@@ -358,6 +359,34 @@ func _suiteCapDocumented():
 	_check(cycle * 10 <= int(report.goldEarned), "ciclo semanal do streak (%d) <= 10%% de uma liquidação F2P no cap (%d)" % [cycle, int(report.goldEarned)])
 	for s : int in range(1, 15):
 		_check(int(_streak.LadderReward(s)) <= 1000, "degrau %d limitado ao teto da escada (1000)" % s)
+	# #96 (Retenção): o SEGUNDO motivo de retorno — o do dia 8 em diante — medido
+	# dentro deste mesmo teto. O defeito era estrutural: a escada é periódica
+	# (`RewardSpan(8,14) == RewardSpan(1,7)`), então o delta de "quanto eu perco
+	# quebrando" dava exatamente 0 no topo do ciclo, i.e. na tela do dia 7 (o dia
+	# que paga 1000) e em todo múltiplo de 7. Zero na frase de perda é a cifra
+	# sumindo no momento de maior valor, e do dia 8 em diante não havia nenhuma
+	# régua segurando um motivo de retorno. Agora há, e o ouro dela cabe no MESMO
+	# teto do primeiro ciclo.
+	var secondCycle : int = int(_streak.RewardSpan(8, 14))
+	_checkEq(secondCycle, cycle, "o segundo ciclo da escada (dias 8..14) paga o ciclo inteiro (%d == %d) — o motivo de retorno não morre no dia 8" % [secondCycle, cycle])
+	_check(secondCycle * 10 <= int(report.goldEarned), "ciclo do dia 8 em diante (%d) também cabe em 10%% de uma liquidação F2P no cap (%d)" % [secondCycle, int(report.goldEarned)])
+	var loss7 : int = int(_streak.LossOnBreak(7))
+	_check(loss7 > 0, "dia 7 (topo do ciclo): quebrar continua tendo preço (%d de ouro em risco; era 0 — a cifra sumia no dia que mais paga)" % loss7)
+	_checkEq(loss7, cycle, "no topo do ciclo a perda é exatamente o ciclo reconstruído até o próximo marco (%d), nem o delta zero nem um número inflado" % cycle)
+	for s2 : int in range(7, 15):
+		var mk2 : int = int(_streak.NextMark(s2))
+		var loss2 : int = int(_streak.LossOnBreak(s2))
+		var v2 : Dictionary = _streak.BuildView(s2, s2, -1, DEAD_TS)
+		_check(mk2 > s2, "dia %d: existe marco À FRENTE (%d > %d) — segundo motivo de retorno" % [s2, mk2, s2])
+		_checkEq(int(v2.get("days_to_mark", -1)), mk2 - s2, "dia %d: payload anuncia quantos dias faltam para o marco" % s2)
+		_checkEq(int(v2.get("mark_reward", -1)), 1000, "dia %d: o marco anunciado paga o topo da escada" % s2)
+		_check(loss2 > 0, "dia %d: quebrar custa %d (> 0) — nenhum dia da escada fica sem perda de aversão" % [s2, loss2])
+		_checkEq(int(v2.get("loss_on_break", -1)), loss2, "dia %d: a superfície mostra o MESMO número da função (%d)" % [s2, loss2])
+		# Verdade da cifra: a perda prometida nunca pode exceder o ouro que a escada
+		# de fato paga num ciclo. É o que separa "reframe honesto" de inflar a
+		# aversão à perda para empurrar login.
+		_check(loss2 <= cycle, "dia %d: a perda em risco (%d) cabe o ciclo pago (%d) — cifra honesta, não marketing" % [s2, loss2, cycle])
+	_checkEq(int(_streak.LossOnBreak(0)), 0, "sem sequência não há perda a prometer")
 	_dropFixture("bal_cap_account", "BalCapChar")
 
 # ------------------------------------------------------------------ suite 3b: streak
@@ -789,6 +818,147 @@ func _suiteNewZoneFaucet():
 				"zona %d: drop '%s' tier %d dentro da faixa [%d,%d]" % [dz2, str(cell.name), int(cell.tier), tierLo, tierHi])
 			_check(not (hsh == apple and tierLo > 1), "zona %d: loot não é o stand-in Apple do fallback deletado" % dz2)
 	_dropFixture("bal_ladder_account", "BalLadderChar")
+
+# ------------------------------------------------------------------ suite 5b: distribuição do drop offline
+
+# #95 (Economia): a TAXA do drop offline estava certa e a FORMA errada. O settle
+# fazia uma única escolha determinística — `FarmZoneData.GetDropForRoll(zoneID,
+# charID + zoneID)` gravado como `drops[esseHash] = dropCount` — de modo que uma
+# coleta de 8h na zona 24 despevia ~500 itens do MESMO hash, todo dia, para
+# sempre: variância zero, banda de tier nunca percorrida, pool de craft nunca
+# diversificada para quem joga por liquidação (e o AFK é justamente a porta de
+# entrada de quem só liquida). A régua daqui é a do FORMATO; a da quantidade já é
+# da suite 5. Três coisas têm de ficar verdadeiras ao mesmo tempo:
+#   (a) CONSERVAÇÃO — sobre N liquidações o total de itens é exatamente N × o que
+#       o ppm manda, o ouro liquidado é um único valor e nenhuma rolagem inventa
+#       hash fora da pool da zona. Redistribuir não pode virar faucet: se a
+#       rolagem por drop criar item ou ouro novo, esta ponta quebra (e as
+#       identidades gold/xp da suite 5 também).
+#   (b) VARIÂNCIA — N liquidações da MESMA conta/zona (anchors diferentes, como em
+#       coletas reais seguidas) desenham mais de um hash, cobrem os dois tiers da
+#       banda e nenhum hash fica com a massa toda. Com o pick único: 1 hash, 1
+#       tier, share 100% → as três linhas abaixo ficam RED.
+#   (c) REPRODUTIBILIDADE — a mesma janela (mesmo anchor) devolve o mesmo multiset.
+#       O caminho golden continua sem RNG, então a revisão de faucet e o replay do
+#       relatório do jogador seguem possíveis.
+const DropDistLiquidations : int = 12
+# Teto de concentração de um único hash sobre todas as N liquidações. Medido na
+# banda (o pool é ponderado por raridade, então o item comum lidera): o valor
+# antigo era exatamente 1,000 (um hash, todas as unidades) e o redistribuído fica
+# muito abaixo. 0,75 é folga deliberada sobre o medido, não número de gabinete —
+# se a rolagem regredir para "um item só repetido", quebra antes de 0,75.
+const DropDistMaxShare : float = 0.75
+
+func _suiteDropDistribution():
+	print("[suite] 5b: o drop offline tem a taxa E a distribuição (banda percorrida, sem faucet novo)")
+	var charID : int = _createFixture("bal_dist_account", "BalDistChar")
+	if not _check(charID != 0, "fixture de distribuição criada"):
+		return
+	_setLevel(charID, 20)
+	_farmZone.SyncWithDB()
+	var craftSet : Dictionary = {}
+	for row in _sql.QueryBindings("SELECT item_hash FROM craft_item_template;", []):
+		craftSet[int(row.get("item_hash", 0))] = true
+	var apple : int = int(_farmZone.DefaultDropItemHash)
+	var off : float = float(_offline.OfflineFactor)
+	for dz : int in [24, 27]:
+		var zone = _farmZone.GetZone(dz)
+		if not _check(zone != null, "zona %d existe para a régua de distribuição" % dz):
+			continue
+		var tierLo : int = int(zone.tier)
+		var tierHi : int = mini(tierLo + int(_farmZone.DropTierBandSize) - 1, int(_farmZone.MAX_TIER))
+		var poolSet : Dictionary[int, bool] = {}
+		for cellHash in _farmZone.GetDropPool(dz):
+			poolSet[int(cellHash)] = true
+		_sql.SetCharacterFarmZone(charID, dz)
+		# Grandeza esperada por liquidação, refeita AQUI (a suite 5 prova que esta
+		# expressão é o settle): é o número que a conservação vezes N tem de bater.
+		var kills : float = float(zone.parKillsPerHour) * 8.0 * 1.0 * off
+		var expDrop : float = float(zone.dropRatePPM) * kills / 1000000.0
+		var expCount : int = floori(expDrop)
+		if expDrop - float(expCount) >= 0.5:
+			expCount += 1
+		var seenHashes : Dictionary[int, int] = {}
+		var seenTiers : Dictionary[int, int] = {}
+		var totalItems : int = 0
+		var goldValues : Dictionary[int, int] = {}
+		var run3 : Dictionary[int, int] = {}
+		var anchor3 : int = DEAD_TS - 8 * 3600 - 3
+		var k : int = 0
+		while k < DropDistLiquidations:
+			# O anchor anda 1 s por liquidação: a janela continua sendo as 8h do cap
+			# F2P (o `minf` do settle corta o resto), mas cada coleta tem anchor
+			# próprio — que é exatamente o estado de duas coletas reais seguidas.
+			var anchor : int = DEAD_TS - 8 * 3600 - k
+			_sql.UpdateSettleAnchor(charID, anchor, 1.0)
+			_offline.nowOverride = DEAD_TS
+			var rep = _offline.BuildReport(charID, DEAD_TS)
+			_offline.nowOverride = 0
+			if not _check(rep != null, "zona %d: liquidação %d devolve relatório" % [dz, k]):
+				k += 1
+				continue
+			_checkNear(float(rep.hours), 8.0, 0.001, "zona %d: liquidação %d liquidou as 8h do cap F2P" % [dz, k])
+			var runTotal : int = 0
+			for dkey in rep.drops.keys():
+				var hsh : int = int(dkey)
+				var cnt : int = int(rep.drops[dkey])
+				_check(cnt > 0, "zona %d: contagem de drop %d é positiva" % [dz, hsh])
+				_check(poolSet.has(hsh), "zona %d: drop %d saiu da pool da zona (a rolagem não inventa hash)" % [dz, hsh])
+				_check(not (hsh == apple and tierLo > 1), "zona %d: loot não é o stand-in Apple do fallback" % dz)
+				seenHashes[hsh] = int(seenHashes.get(hsh, 0)) + cnt
+				runTotal += cnt
+				if craftSet.has(hsh):
+					continue
+				var cell = _dbScript.ItemsDB.get(hsh, null)
+				if _check(cell != null, "zona %d: drop %d é item do catálogo (não hash órfão)" % [dz, hsh]):
+					_check(int(cell.tier) >= tierLo and int(cell.tier) <= tierHi,
+						"zona %d: drop '%s' tier %d dentro da faixa [%d,%d]" % [dz, str(cell.name), int(cell.tier), tierLo, tierHi])
+					seenTiers[int(cell.tier)] = int(seenTiers.get(int(cell.tier), 0)) + cnt
+			totalItems += runTotal
+			goldValues[int(rep.goldEarned)] = int(goldValues.get(int(rep.goldEarned), 0)) + 1
+			# (a) cada liquidação paga o MESMO total que o ppm manda — nem uma unidade
+			# a mais. É a ponta que impede a rolagem por drop de virar faucet.
+			_checkEq(runTotal, expCount, "zona %d: liquidação %d paga exatamente %d itens (ppm de kills × kills equivalentes; medido %d)" % [dz, k, expCount, runTotal])
+			if k == 3:
+				for tkey in rep.drops.keys():
+					run3[int(tkey)] = int(rep.drops[tkey])
+			k += 1
+		var distinct : int = seenHashes.size()
+		var topHash : int = 0
+		var topCount : int = 0
+		for skey in seenHashes.keys():
+			if int(seenHashes[skey]) > topCount:
+				topCount = int(seenHashes[skey])
+				topHash = int(skey)
+		var share : float = float(topCount) / float(maxi(1, totalItems))
+		var tiersVisited : int = seenTiers.size()
+		print("    [medido] zona %d (banda [%d,%d]): %d liquidações × %d itens = %d itens em %d hashes distintos, tiers visitados %s, hash líder %d com %.1f%%" % [dz, tierLo, tierHi, DropDistLiquidations, expCount, totalItems, distinct, str(seenTiers.keys()), topHash, share * 100.0])
+		# (a) conservação vezes N: o total desenhado é N × a taxa, nem um item a mais
+		# nem a menos — a rolagem por drop redistribui, não mintar.
+		_checkEq(totalItems, expCount * DropDistLiquidations, "zona %d: itens sobre %d liquidações == N × ppm (%d vs %d) — sem faucet novo" % [dz, DropDistLiquidations, totalItems, expCount * DropDistLiquidations])
+		_checkEq(goldValues.size(), 1, "zona %d: o ouro liquidado é o MESMO em %d liquidações (redistribuir drop não encosta no faucet de gold)" % [dz, DropDistLiquidations])
+		# (b) variância — as três linhas que o pick único determinística não passa.
+		_check(distinct > 1, "zona %d: %d liquidações desenham mais de um item (%d hashes; o pick único dava 1)" % [dz, DropDistLiquidations, distinct])
+		_check(tiersVisited >= mini(2, tierHi - tierLo + 1), "zona %d: a banda [%d,%d] é percorrida (%d tiers visitados; o pick único ficava num só)" % [dz, tierLo, tierHi, tiersVisited])
+		_check(share <= DropDistMaxShare, "zona %d: nenhum item leva a massa toda (%.1f%% ≤ %.0f%%; o pick único levava 100%%)" % [dz, share * 100.0, DropDistMaxShare * 100.0])
+		# (c) reproduzibilidade: a MESMA janela (mesmo anchor) devolve o mesmo
+		# multiset — nenhuma das duas pontas acima pode ter vindo de RNG.
+		_sql.UpdateSettleAnchor(charID, anchor3, 1.0)
+		_offline.nowOverride = DEAD_TS
+		var replay = _offline.BuildReport(charID, DEAD_TS)
+		_offline.nowOverride = 0
+		var replayRun : Dictionary[int, int] = {}
+		if replay != null:
+			for rkey in replay.drops.keys():
+				replayRun[int(rkey)] = int(replay.drops[rkey])
+		_checkEq(replayRun.size(), run3.size(), "zona %d: a mesma janela desenha o mesmo número de hashes (%d vs %d)" % [dz, replayRun.size(), run3.size()])
+		var same : bool = replayRun == run3
+		_check(same, "zona %d: a mesma janela (anchor %d) reproduz o mesmo multiset — sem RNG no caminho golden" % [dz, anchor3])
+		# Preview e grant concordam: `RollDrops` é a única fonte dos dois lados.
+		var seedBase : int = int(_offline.call("DropSeedBase", charID, dz, anchor3))
+		var direct : Dictionary = _offline.call("RollDrops", dz, seedBase, expCount)
+		_check(direct == replayRun, "zona %d: a mesma função da liquidação (RollDrops) desenha o que o relatório mostrou")
+	_dropFixture("bal_dist_account", "BalDistChar")
 
 # ------------------------------------------------------------------ suite 6: matéria-prima na faixa
 

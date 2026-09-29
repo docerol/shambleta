@@ -5,13 +5,13 @@ Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, `text =` e
 | Domínio | Chaves | Cobertas pt_BR | Faltando |
 |---|---|---|---|
 | tr() código (UI) | 95 | 95 | 0 |
-| text= .gd (UI, via Localizer) | 68 | 68 | 0 |
-| cenas .tscn (via Localizer) | 159 | 159 | 0 |
-| conteúdo NPCs/quests (fase 2) | 730 | 664 | 66 |
+| text= .gd (UI, via Localizer) | 64 | 64 | 0 |
+| cenas .tscn (via Localizer) | 164 | 164 | 0 |
+| conteúdo NPCs/quests (fase 2) | 732 | 732 | 0 |
 
-**UI total:** 307 chaves, 307 cobertas (100%), 0 faltando. **Conteúdo:** 66 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
+**UI total:** 309 chaves, 309 cobertas (100%), 0 faltando. **Conteúdo:** 0 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
 
-Das cobertas, **13** contam-se por a fonte já estar em português (o `tr()` devolve a chave; a coluna `en` dessas linhas é que carrega a tradução) — listadas ao final, uma a uma.
+Das cobertas, **18** contam-se por a fonte já estar em português (o `tr()` devolve a chave; a coluna `en` dessas linhas é que carrega a tradução) — listadas ao final, uma a uma.
 
 ## Cobertas por fonte em português (UI)
 
@@ -19,15 +19,20 @@ Linhas onde o texto-fonte já é português: o jogador BR vê a chave, e o que e
 
 - Atualizar → en: Refresh
 - Busca por nome, filtro por tipo e teto de preço. Histórico: últimas 10 vendas da sessão. → en: Search by name, filter by type and price cap. History: the last 10 sales of this session.
+- Cancelar → en: Cancel
 - Comprar key → en: Buy key
+- Confirmar → en: Confirm
 - Corromper → en: Corrupt
 - Cubo 3:1 → en: 3:1 Cube
 - Desmanchar → en: Disassemble
 - Eventos → en: Events
+- Forja → en: Forge
 - Guilda → en: Guild
 - Histórico: nenhuma venda nesta sessão. → en: History: no sales this session.
 - Iniciar rush (1 key) → en: Start rush (1 key)
 - Leilão → en: Auction
 - Leilão — Grand Exchange → en: Auction — Grand Exchange
+- Reler catálogo → en: Re-read the catalog
+- Submeter à forja → en: Submit to the forge
 - ⚡ INTERRUPTAR → en: ⚡ INTERRUPT
 

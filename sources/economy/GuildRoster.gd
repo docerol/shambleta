@@ -109,6 +109,27 @@ static func Count(guildID : int) -> int:
 static func IsFull(guildID : int) -> bool:
 	return guildID > 0 and Count(guildID) >= MaxMembers
 
+# A MESMA pergunta do teto, respondida DENTRO do funil de escrita. `Count()` acima
+# pega o `queryMutex` por conta própria e por isso não pode ser chamada de dentro do
+# lambda de `SQL.Transaction` (a casa proíbe: `sources/sql/SQL.gd:662`); este
+# variante lê pelo handle cru que a transação já segura. Não é um segundo teto — é o
+# mesmo `MaxMembers` desta fileira, lido no instante em que a admissão virou INSERT.
+#
+# Porque ela existe (AUDITORIA rodada 3, social): `JoinGuild` fazia
+# `JoinReason` (→ `Count`, lock próprio) e depois um INSERT fora de qualquer funil.
+# Dois joins concorrentes liam o mesmo 19 e escreviam 21: o teto deixava de ser
+# verdade exatamente na única hora em que ele é disputado. Errar a leitura aqui é
+# recusa (`MaxMembers + 1`), nunca licença — mesmo contrato de
+# `_WithdrawsInWindowLocked` no dono da tabela.
+static func CountLocked(sql : Object, guildID : int) -> int:
+	if guildID <= 0 or sql == null:
+		return MaxMembers + 1
+	var res : Array = sql.ExecNoLockQuery("SELECT COUNT(*) AS n FROM guild_member WHERE guild_id = ?;", [guildID])
+	return int(res[0].get("n", 0)) if not res.is_empty() else MaxMembers + 1
+
+static func IsFullLocked(sql : Object, guildID : int) -> bool:
+	return CountLocked(sql, guildID) >= MaxMembers
+
 # `JoinReason` é o choke point de admissão: a pergunta que o `GuildService.JoinGuild`
 # faz a si mesmo antes do INSERT, e que o servidor e o painel refazem para DEVOLVER O
 # MOTIVO ao jogador. Devolve "ok" quando o account pode entrar; senão, o token do

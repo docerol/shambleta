@@ -129,6 +129,20 @@ func HasItem(cell : ItemCell, count : int) -> bool:
 					return true
 	return false
 
+# "Cabe na mochila?" sem mexer em nada: espelha EXATAMENTE as rejeições de
+# `PushItem` acima — pilha existente de item empilhável sempre cabe; pilha nova
+# de empilhável e qualquer unidade de não empilhável só cabem até o teto de
+# `InventorySize`. Não é uma regra nova de economia, é o `PushItem` consultado
+# antes de a_item sair do chão. Sem isto, `WorldDrop.PickupDrop` dava `PopDrop`
+# primeiro e descobria depois que não tinha onde guardar: o item desaparecia do
+# mundo sem nunca chegar ao inventário do jogador (P0 de loot).
+func CanHold(cell : ItemCell, count : int) -> bool:
+	if count <= 0 or not cell:
+		return false
+	if cell.stackable:
+		return GetItem(cell) != null or itemCount < ActorCommons.InventorySize
+	return itemCount + count <= ActorCommons.InventorySize
+
 func HasSpace(count : int) -> bool:
 	var inventoryCount : int = 0
 	for item in items:

@@ -3,10 +3,12 @@ extends SceneTree
 # SOM-IDLE UX/UI (juiz cego 2026-09-27, UX/UI 7.5/10): "botão fora da tela". O
 # `GuildPanel` declarava 420x560 e o corpo montado em código pedia 511x1061 — contra
 # o viewport de projeto (1280x720) a linha de chat da guild, o Confirm/Cancel da
-# prévia de gasto e o Feedback simplesmente não existiam para o jogador, porque
-# `WindowPanel.UpdateWindow` (sources/gui/WindowPanel.gd:235-237) força
-# `size >= minimum_size`: janela cujo conteúdo é maior que a tela transborda e nasce
-# com a parte de baixo abaixo da borda.
+# prévia de gasto e o Feedback simplesmente não existiam para o jogador, porque a
+# janela cujo conteúdo é maior que a tela transborda e nasce com a parte de baixo
+# abaixo da borda. O clamp que faz isso está em
+# `size.x = clamp(...)` / `size.y = clamp(...)` (sources/gui/WindowPanel.gd:238-240),
+# dentro de `UpdateWindow` — as três linhas acima dele são o ramo de arrastar a
+# janela, que não mexe em tamanho nenhum.
 #
 # Esta é a cerca da CLASSE de bug, não uma foto do GuildPanel: o harness instancia
 # TODO painel de HUD (todo script de `sources/gui` que herda de `WindowPanel`,

@@ -132,7 +132,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Os nove gates de estrutura pela mesma porta do `test.sh structure`: o job
+      # Os 11 gates de estrutura pela mesma porta do `test.sh structure`: o job
       # chamava check_god_nodes.sh direto e o check_doc_drift.sh, escrito nesta
       # rodada, não era chamado por ninguém — régua sem execução é régua sem efeito.
       - name: Run structure gates
@@ -410,9 +410,49 @@ jobs:
       - name: Build the web image with the staging args
         run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml build --progress=plain web
 
+      # Finding #89: `deploy/web/Dockerfile` só COPIAVA o nginx.conf — um conf que o
+      # nginx recusa (diretiva fora de contexto, `location` duplicada, `{` sem fechar)
+      # atravessava o build verde e aparecia no primeiro deploy, que é exatamente onde
+      # não se pode experimentá-lo. `nginx -t` dentro da IMAGEM BUILDADA é a validação
+      # real: mesmo binário, mesma config de nível `http` (o arquivo vai para
+      # conf.d/default.conf, lido dentro de `http`), mesma versão 1.27 do produção.
+      # Não é `--dry-run` de parser próprio: é o validador do software que vai servir
+      # a fronteira do dinheiro. O passo falha o job com o motivo do nginx.
+      - name: Validate the built web image with nginx -t
+        run: |
+          if ! docker run --rm --entrypoint nginx "shambleta/web:${SHAMBLETA_TAG}" -t; then
+            echo "::error::nginx -t recusou /etc/nginx/conf.d/default.conf da imagem shambleta/web:${SHAMBLETA_TAG} — o deploy derrubaria o proxy do /checkout/"
+            exit 1
+          fi
+
+  # Finding #83: até aqui o `snap` abaixo precisava só de `builds`, que é job de
+  # EXPORT e não roda teste nenhum — a publicação no store acontecia com a suíte
+  # vermelha, e `scripts/check_ci.sh:190` achava isso um gate porque aceitava
+  # QUALQUER `needs`. Este job não mede nada: ele é o nó que amarra os cinco jobs
+  # que medem ao único job que publica, para o fecho transitivo de `needs` de quem
+  # publica conter teste de verdade. `scripts/check_ci.sh` confere o fecho, e o
+  # canário dele prova que a régua morre se este nó for trocado por `builds`.
+  test-gate:
+    runs-on: ubuntu-latest
+    needs:
+      - code-health
+      - companion-tests
+      - idle-tests
+      - backup-restore
+      - benchmarks
+    name: Test Gate (nothing publishes past this)
+    steps:
+      - name: Confirm the test jobs are all green
+        # Chegar aqui JÁ é a prova: o GitHub só agenda um job com todos os `needs`
+        # em success. O passo existe para o job ter um step legível e o log dizer o
+        # que foi exigido, não para medir de novo.
+        run: echo "code-health, companion-tests, idle-tests, backup-restore e benchmarks terminaram verdes"
+
   snap:
     runs-on: ubuntu-latest
-    needs: builds
+    needs:
+      - builds
+      - test-gate
     name: Pack and Publish Snap
     env:
       SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}

@@ -41,6 +41,116 @@ var BootServer : bool				= false
 signal launchModeUpdated
 signal dbInitialized
 
+# ------------------------------------------------------------------ orçamento de passo
+#
+# O processo do server é um laço de física a `LauncherCommons.ServerMaxFPS` Hz e até
+# aqui nada nele confessava o custo do passo: `/metrics` media espera de mutex
+# (sources/sql/SQL.gd) e o único lugar que lia `Performance.TIME_PHYSICS_PROCESS`
+# era o painel humano de `sources/gui/ServerDisplay.gd`. Um servidor que perde o
+# tick de 30 Hz em TODOS os passos não tem para onde apontar o alerta porque a
+# grandeza não existe fora do processo. Estas linhas medem no próprio laço, com
+# `Time.get_ticks_usec()`, e `sources/system/MetricsServer.gd` exporta.
+#
+# Duas grandezas, porque a casa não aceita média sozinha (uma média de 8 ms esconde
+# um passo de 120 ms que congelou o jogador):
+#   * HISTOGRAMA (buckets cumulativos nas faixas do orçamento) — a forma da cauda;
+#   * CONTADORES de estouro e de passo perdido — o que a regra de alerta lê.
+#
+# Cobertura declarada (a casa trata "indisponível" diferente de zero):
+#   * `period*` é o tempo de PAREDE entre duas fronteiras do laço de física deste
+#     processo. É a grandeza que responde "o tick de 30 Hz foi cumprido": ela vale
+#     sempre, inclusive com zero players e com o pump das instâncias desligado.
+#   * `work*` é o tempo que o pump de idle policies das `WorldInstance` gastou
+#     dentro da mesma janela. NÃO é o passo inteiro: `BaseAgent._physics_process`,
+#     o PhysicsServer2D e a navegação ficam fora dele — é a fração que escala com
+#     player co-residente, que é o número que `deploy/SCALING.md` mede.
+#   * Janela: do boot do processo até agora, sem reset. O processo reiniciando os
+#     contadores voltam a zero, que é a semântica de counter do Prometheus.
+
+# Boundas dos buckets em µs: 16,67 (meio orçamento — o passo de um render a 60 Hz),
+# 33,33 (o orçamento de 30 Hz), 50 e 100. São faixas do orçamento, não uma escala
+# logarítmica: quem olha a cauda quer saber "quantos passos não couberam no tick",
+# e o degrau depois dele é "quanto tempo o jogador ficou sem passo".
+const StepBucketUs : Array[int] = [16667, 33333, 50000, 100000]
+# Folga do predícado de estouro. NÃO é escolha de manual: é o `PeriodToleranceMs`
+# medido em `tests/tick_capacity_test.gd` e usado pelo `multi_instance_tick_test`.
+# Sem ela o próprio throttle do engine conta como estouro — medido no piso do
+# harness, o período de parede de um processo sem nenhum player é 33,61 ms contra
+# um orçamento de 33,33 ms, ou seja: um predícado estrito `>` denunciaria 100% dos
+# passos de um servidor ocioso e o alerta deixaria de significar nada.
+const StepBudgetToleranceUs : int = 1000
+
+var stepBudget : Dictionary = {}
+
+# Estado do acumulador. Puro e de uma página só de propósito: é o mesmo dicionário
+# que `tests/step_budget_metric_test.gd` alimenta com passos sintéticos para
+# conferir o balde, o predícado de estouro e o atraso, sem depender de máquina.
+static func StepBudgetNew(budgetUs : int) -> Dictionary:
+	return {
+		"budgetUs": budgetUs,
+		"bucketUs": StepBucketUs.duplicate(),
+		"toleranceUs": StepBudgetToleranceUs,
+		"steps": 0,
+		"workSumUs": 0, "workMaxUs": 0, "workBuckets": [0, 0, 0, 0],
+		"periodSumUs": 0, "periodMaxUs": 0, "periodBuckets": [0, 0, 0, 0],
+		"overBudget": 0,
+		"lost": 0,
+		"pendingWorkUs": 0,
+		"lastUs": 0, "lastFrame": 0, "startUs": 0, "startFrame": 0,
+		"started": false,
+	}
+
+# Registra um passo. Bucket cumulativo (`le`): um passo entra em TODOS os baldes
+# cuja bounda é >= ele — é o que faz `histogram_quantile` funcionar e é exatamente
+# onde um histograma mal escrito vira "a cauda sumiu". `driftSteps` é o atraso
+# acumulado em passos que o engine não entregou (contado por `Engine.get_physics_frames()`
+# contra o tempo de parede), e entra como MÁXIMO: um counter que desce é uma
+# grandeza que ninguém consegue interpretar numa janela `rate()`.
+static func StepBudgetRecord(state : Dictionary, workUs : int, periodUs : int, driftSteps : int) -> void:
+	state["steps"] = int(state["steps"]) + 1
+	state["workSumUs"] = int(state["workSumUs"]) + workUs
+	state["periodSumUs"] = int(state["periodSumUs"]) + periodUs
+	state["workMaxUs"] = maxi(int(state["workMaxUs"]), workUs)
+	state["periodMaxUs"] = maxi(int(state["periodMaxUs"]), periodUs)
+	for bucket in StepBucketUs.size():
+		if workUs <= StepBucketUs[bucket]:
+			state["workBuckets"][bucket] = int(state["workBuckets"][bucket]) + 1
+		if periodUs <= StepBucketUs[bucket]:
+			state["periodBuckets"][bucket] = int(state["periodBuckets"][bucket]) + 1
+	if periodUs > int(state["budgetUs"]) + int(state["toleranceUs"]):
+		state["overBudget"] = int(state["overBudget"]) + 1
+	state["lost"] = maxi(int(state["lost"]), driftSteps)
+
+# Uma fronteira do laço de física. O trabalho acumulado pelas instâncias ENTRE a
+# fronteira anterior e esta é o trabalho do passo que acabou de fechar — por isso o
+# flush vem antes de zerar o acumulador.
+func _physics_process(_delta : float) -> void:
+	var now : int = Time.get_ticks_usec()
+	var frame : int = int(Engine.get_physics_frames())
+	if not bool(stepBudget["started"]):
+		stepBudget["started"] = true
+		stepBudget["lastUs"] = now
+		stepBudget["lastFrame"] = frame
+		stepBudget["startUs"] = now
+		stepBudget["startFrame"] = frame
+		return
+	var periodUs : int = now - int(stepBudget["lastUs"])
+	var budgetUs : int = int(stepBudget["budgetUs"])
+	var expectedSteps : int = int(now - int(stepBudget["startUs"])) / maxi(budgetUs, 1)
+	var deliveredSteps : int = frame - int(stepBudget["startFrame"])
+	StepBudgetRecord(stepBudget, int(stepBudget["pendingWorkUs"]), periodUs, maxi(0, expectedSteps - deliveredSteps))
+	stepBudget["pendingWorkUs"] = 0
+	stepBudget["lastUs"] = now
+	stepBudget["lastFrame"] = frame
+
+# Cronometrado pela `WorldInstance`: quanto o pump de idle policies gastou neste
+# passo (somado sobre as instâncias do processo).
+func AccumulateStepWork(workUs : int) -> void:
+	stepBudget["pendingWorkUs"] = int(stepBudget["pendingWorkUs"]) + workUs
+
+func StepBudgetSnapshot() -> Dictionary:
+	return stepBudget.duplicate(true)
+
 #
 func Mode(launchClient : bool = false, launchServer : bool = false) -> bool:
 	var isClientConnected : bool = Network.Client != null
@@ -177,6 +287,11 @@ func _ready():
 	var startServer : bool = false
 
 	Root = get_tree().get_root()
+
+	# O orçamento de passo é o do processo, lido da mesma constante que o `--server`
+	# aplica no tick logo abaixo — se `ServerMaxFPS` mudar, o histograma e a régua
+	# mudam junto, sem ninguém re-digitar 33,33.
+	stepBudget = StepBudgetNew(1000000 / maxi(LauncherCommons.ServerMaxFPS, 1))
 
 	Conf.Init()
 

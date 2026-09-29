@@ -1,5 +1,7 @@
 extends SceneTree
 
+# gate-marker: == RPC IDENTITY:
+
 # S1 — prova de transporte real (a única que ninguém pode fingir no loopback).
 # Sobe o NetServer WebSocket do projeto, conecta dois NetClient reais e faz um
 # client chamar o RPC mirando o peer do OUTRO. Identidade falsa no corpo do

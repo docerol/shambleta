@@ -103,6 +103,91 @@ else
 	done <<< "$DELETED_DOTENV"
 fi
 
+# --------------------------- (1b) config de runtime rastreada: o escopo que faltava
+# Finding #87 (2026-09-29): as três listas acima passam por `is_dotenv_name`, e as
+# regras B1/B2 pedem chave MAIÚSCULA sem hífen. O resultado é que o arquivo de
+# configuração que o MODO SERVIDOR lê — `data/conf/credential.cfg`, chave
+# `Email-ApiKey` — era invisível ao portão duas vezes: nem por nome (não é dotenv),
+# nem por forma (a regex não sabe o que é `Email-ApiKey=`). Um `Email-ApiKey=sk…`
+# committado ali atravessaria o gate com ele verde.
+# Desde então: a classe de arquivo entra por nome, a chave de credencial é procurada
+# SEM distinguir caixa e aceitando hífen/ponto, e a saída continua sendo
+# `arquivo:linha` — o valor NUNCA é impresso (log de CI em repo aberto é superfície
+# pública; ver o contrato no topo deste arquivo e a sonda (4d) abaixo).
+is_runtime_config_name() {
+	case "$1" in
+	*.cfg | *.credentials) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# A varredura cobre o índice E o que está na árvore sem estar ignorado: um
+# `credential.cfg` com valor vivo ainda não comitado é exatamente o que o próximo
+# `git add -A` committa, e foi assim que o `.env` entrou neste repo uma vez.
+RUNTIME_CFG="$( { git ls-files --cached; git ls-files --others --exclude-standard; } 2>/dev/null \
+	| sort -u | while IFS= read -r f; do is_runtime_config_name "$f" && printf '%s\n' "$f"; done )"
+RUNTIME_CFG_N="$(printf '%s\n' "$RUNTIME_CFG" | grep -c '[^[:space:]]' || true)"
+
+# Chave de credencial em qualquer caixa, com hífen/ponto, e valor com >=8 caracteres
+# que não são aspa nem espaço. `author=`, `authenticate_accounts=` e `use_credentials=false`
+# ficam fora por construção: a classe exige a PALAVRA de credencial encostada na
+# chave (com fronteira de `_`/`-`/`.` ou fim do nome) e um valor que não é flag.
+RX_C1='^[[:space:]]*[A-Za-z0-9_.-]*(secret|token|passw|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential[s]?|keystore|vapid[_-]?key|dsn|auth[_-]?key)[A-Za-z0-9_.-]*[[:space:]]*[=:][[:space:]]*"?[^"[:space:]]{8,}'
+
+# O valor é LIDO para classificar e nunca para ser impresso. Vazio, máscara, flag
+# booleana, `<placeholder>` e interpolação `${…}` não são credencial viva — sem esta
+# classe o gate gritaria nos seis `.cfg` que já existem e a primeira pessoa que o
+# achateixasse perderia o sinal de verdade (mesmo motivo de `placeholder_hit`).
+runtime_value_spared() {
+	local val
+	val="$(printf '%s' "${1:-}" | sed -nE 's/^[^=:]*[=:][[:space:]]*(.*)$/\1/p')"
+	val="$(printf '%s' "$val" | sed -E 's/[[:space:]]*[;#].*$//')"
+	val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+	[ -z "$val" ] && return 0
+	printf '%s' "$val" | grep -qiE '^(true|false|none|null|on|off|0|1|1[05]|disabled?|enabled?|required|optional)$' && return 0
+	printf '%s' "$val" | grep -qE '^[x.*_-]{6,}$' && return 0
+	printf '%s' "$val" | grep -qiE '^(change_?me|replace_?me|your[_-]?|seu[_-]?|placeholder|exemplo|example|sample|dummy)' && return 0
+	printf '%s' "$val" | grep -qE '^<.*>$' && return 0
+	printf '%s' "$val" | grep -qE '^\$\{[^}]+\}$' && return 0
+	return 1
+}
+
+if [ "$RUNTIME_CFG_N" -gt 0 ]; then
+	pass "$RUNTIME_CFG_N arquivo(s) de configuração de runtime estão no escopo do gate (*.cfg, *.credentials)"
+	printf '       varridos: %s\n' "$(printf '%s\n' "$RUNTIME_CFG" | tr '\n' ' ')"
+else
+	fail "nenhum arquivo de config de runtime foi encontrado pelo gate" "a lista (*.cfg, *.credentials) não vazia" "índice ilegível ou o repo não tem config — a sonda (4d) abaixo é o que prova se a regra está viva"
+fi
+
+CFG_LIVE=0
+CFG_SPARED=0
+while IFS= read -r f; do
+	[ -n "$f" ] || continue
+	hits="$(grep -n -i -E -e "$RX_C1" -- "$f" 2>/dev/null || true)"
+	[ -n "$hits" ] || continue
+	while IFS= read -r h; do
+		[ -n "$h" ] || continue
+		ln="${h%%:*}"
+		body="${h#*:}"
+		if runtime_value_spared "$body"; then
+			CFG_SPARED=$((CFG_SPARED + 1))
+			continue
+		fi
+		# Só arquivo:linha. O `$body` foi lido para classificar e morre aqui.
+		fail "credencial viva em configuração de runtime — $f:$ln" \
+			"chave de credencial com valor vazio, mascarado ou placeholder" \
+			"arquivo:linha impressos, valor ocultado"
+		CFG_LIVE=$((CFG_LIVE + 1))
+	done <<< "$hits"
+done <<< "$RUNTIME_CFG"
+if [ "$CFG_LIVE" = "0" ]; then
+	if [ "$CFG_SPARED" -gt 0 ]; then
+		pass "nenhuma credencial viva em configuração de runtime ($CFG_SPARED match(es) classificado(s) como vazio, flag, máscara ou placeholder — valores não impressos)"
+	else
+		pass "nenhuma credencial viva em configuração de runtime (zero match na classe de arquivo; a prova de que a regra está viva é a sonda (4d))"
+	fi
+fi
+
 # ------------------------------------------- (2) a regra do .gitignore funciona
 # Comportamental, não texto: `git check-ignore` é o git respondendo a pergunta.
 # Um gate que só lesse o `.gitignore` aprovaria `.env` com a regra errada de
@@ -328,13 +413,13 @@ scan_rule "nenhuma URL de banco com usuário:senha embutidos (B7)" "$RX_B7"
 # `B4 — scripts/check_secrets.sh` apontando para a linha do comentário. Um gate de
 # segredo que precisa de allowlist para si mesmo é o bug, não a exceção.
 canary_rule() {
-	local name="$1" regex="$2" good="$3" bad="$4"
-	if ! printf '%s\n' "$good" | grep -E -q -e "$regex"; then
+	local name="$1" regex="$2" good="$3" bad="$4" flags="${5:-}"
+	if ! printf '%s\n' "$good" | grep $flags -E -q -e "$regex"; then
 		fail "$name: regex NÃO casa o canary — regra morta" "a regra caça o segredo plantado" \
 			"zero hits na árvore hoje significa zero poder de detecção, não árvore limpa"
 		return 0
 	fi
-	if printf '%s\n' "$bad" | grep -E -q -e "$regex"; then
+	if printf '%s\n' "$bad" | grep $flags -E -q -e "$regex"; then
 		fail "$name: regex casa TAMBÉM o negativo — regra frouxa" "o placeholder de doc poupano" \
 			"o primeiro README honesto vai derrubar o portão por motivo errado"
 		return 0
@@ -356,6 +441,106 @@ canary_rule "B4" "$RX_B4" "$_AK" "AKIA0123"
 canary_rule "B5" "$RX_B5" "$_MP" "APP_USR-sem-numero"
 canary_rule "B6" "$RX_B6" "${_J1}.${_J2}.c2ln${_J1}" "${_J1}"
 canary_rule "B7" "$RX_B7" "$_DB" "postgres://app@db:5432/sh"
+# A C1 é a regra da classe que o #87 deixou de fora, e ela é a única lida com `-i`
+# (a chave do servidor é `Email-ApiKey`, mista e com hífen; B1/B2 pedem chave MAIÚSCULA
+# sem hífen e por isso nunca viram o arquivo). O positivo e o negativo são montados em
+# runtime: este arquivo é varrido pelas próprias regras e um literal aqui seria o
+# gate precisando de allowlist para si mesmo.
+_C1A="sk-liv"; _C1B="e9f8e7d6c5b4a3f2"
+canary_rule "C1" "$RX_C1" "Email-ApiKey=${_C1A}${_C1B}" 'Email-ApiKey=""' -i
+canary_rule "C1 (chave minúscula com hífen)" "$RX_C1" "send_grid-api-key=${_C1A}${_C1B}" 'send_grid-api-key="x"' -i
+# A regex não sabe o que é placeholder — quem sabe é a classe. Os probes abaixo são
+# o contrato de `runtime_value_spared`, exercitados em processo: o mesmo corpo que o
+# fixture (4d) escreve num arquivo, aqui é passado como string, e a saída é RÓTULO,
+# nunca valor. O valor VAZIO (`""`) não chega à classe: é a própria regex que o
+# recusa (o negativo do canário C1 acima) — linha que a regex não alcança é linha
+# invisível, e um probe que contabiliza invisível como "poupado" estaria medindo o
+# contrário do que diz. `author=` (chave sem palavra de credencial) e flag curta são
+# os dois negativos de REGRA, e os demais são negativos de CLASSE.
+cfg_spare_probe() {
+	local label="$1" body="$2" want="$3" got=0
+	if runtime_value_spared "$body"; then got=1; fi
+	# `want` é o resultado do CLASSIFICADOR, e só vale se a REGRA casar a linha:
+	# uma chave que a regex não alcança não é "poupada", é invisível — que é a
+	# diferença exata entre um placeholder certo e uma regra cega.
+	if ! printf '%s\n' "$body" | grep -i -E -q -e "$RX_C1"; then
+		fail "C1 classe: $label — a regex nem casou a linha" "a regex casar a linha e o classificador decidir o destino" \
+			"linhas que a regex não alcança não podem ser contadas como poupadas (é invisibilidade, não licença)"
+		return 0
+	fi
+	if [ "$got" = "$want" ]; then
+		pass "C1 classe: $label"
+	else
+		fail "C1 classe: $label (esperava spared=$want, veio $got)" "classificador coerente com o contrato" "linha reclassificada"
+	fi
+}
+cfg_spare_probe 'valor vivo é CASADO e não poupado' "Email-ApiKey=${_C1A}${_C1B}" 0
+cfg_spare_probe 'CHANGE_ME é poupado' 'Email-ApiKey="CHANGE_ME"' 1
+cfg_spare_probe '<preencha> é poupado' 'Email-ApiKey=<preencha-a-chave>' 1
+cfg_spare_probe '${INTERPOLACAO} do compose é poupada' 'Email-ApiKey=${SHAMBLETA_EMAIL_KEY}' 1
+cfg_spare_probe 'máscara xxxx é poupada' 'Email-ApiKey="xxxxxxxxxxxx"' 1
+cfg_spare_probe 'flag longa (required) é poupada' 'use_credentials=required' 1
+# Negativos de REGRA, não de classe: `author=` (chave sem palavra de credencial) e
+# valor curto (`false`) não chegam nem perto do match — é a fronteira que impede o
+# gate de gritar nos seis .cfg que já existem no repo.
+canary_rule "C1 (chave que não é credencial)" "$RX_C1" "Email-ApiKey=${_C1A}${_C1B}" 'author="SoM Team"' -i
+canary_rule "C1 (flag booleana curta)" "$RX_C1" "Email-ApiKey=${_C1A}${_C1B}" 'use_credentials=false' -i
+
+# ----------------------- (4d) sonda comportamental: VERMELHO quando vaza, e sem imprimir
+# (1b) prova forma; isto prova efeito, no único caminho que importa: um arquivo de
+# config de runtime com chave de credencial viva TEM de derrubar o portão, e o portão
+# tem de dizer `arquivo:linha` sem nunca dizer o valor. O fixture vive num `mktemp -d`
+# com `git init` próprio — nada aqui escreve, indexa ou staging no repositório desta
+# máquina; o gate é chamado com `SHAMBLETA_REPO_ROOT` apontando para o fixture e com
+# `SHAMBLETA_SECRETS_NO_PROBE=1` cortando a recursão.
+probe_runtime_config() {
+	local label="$1" value="$2" expect="$3" tmp out rc needle bare
+	tmp="$(mktemp -d "${TMPDIR:-/tmp}/shambleta-secrets-probe-XXXXXX")" || {
+		fail "$label: mktemp falhou" "um diretório temporário" "impossível plantar o controle"
+		return 0
+	}
+	mkdir -p "$tmp/data/conf"
+	printf '; config do modo servidor (fixture do gate)\n[Email]\nEmail-ApiKey=%s\nEmail-SenderName=""\n' "$value" > "$tmp/data/conf/credential.cfg"
+	git init -q "$tmp" 2>/dev/null
+	out="$(SHAMBLETA_REPO_ROOT="$tmp" SHAMBLETA_SECRETS_NO_PROBE=1 \
+		bash "$ROOT/scripts/check_secrets.sh" 2>&1)"
+	rc=$?
+	rm -rf "$tmp"
+	needle="$(printf '%s\n' "$out" | grep -oE 'data/conf/credential\.cfg:[0-9]+' | head -1)"
+	bare="${value%\"}"; bare="${bare#\"}"; bare="${bare%\'}"; bare="${bare#\'}"
+	if [ "$expect" = "red" ]; then
+		if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF 'credencial viva em configuração de runtime'; then
+			pass "$label: o valor vivo derrubou o portão (exit $rc, apontando ${needle:-nada})"
+		else
+			fail "$label: o portão NÃO ficou vermelho com credencial viva em config de runtime" \
+				"exit != 0 e a linha da regra C1 na saída" "exit=$rc — a classe continua invisível"
+		fi
+		# A metade que importa para um repo open source: o valor não pode aparecer.
+		# Procuramos o token cru, não a linha inteira — se o gate imprimisse o match,
+		# a string do segredo estaria no log.
+		case "$out" in
+		*"$bare"*)
+			fail "$label: a saída do gate CONTÉM o valor plantado" "somente arquivo:linha" \
+				"o log de CI de um repo público vazaria exatamente o que o gate caça"
+			;;
+		*) pass "$label: a saída não contém o valor plantado (ocultação comportamental)" ;;
+		esac
+	else
+		if printf '%s' "$out" | grep -qF 'nenhuma credencial viva em configuração de runtime'; then
+			pass "$label: o placeholder vazio é poupado pela mesma regra (sem gritar em todo .cfg)"
+		else
+			fail "$label: o portão gritou num valor vazio" "placeholder escapado" \
+				"um gate que grita é um gate achateixado na primeira semana"
+		fi
+	fi
+}
+
+if [ "${SHAMBLETA_SECRETS_NO_PROBE:-0}" != "1" ]; then
+	probe_runtime_config "sonda plantada (valor vivo)" "\"${_C1A}${_C1B}\"" red
+	probe_runtime_config "sonda negativa (placeholder vazio)" '""' green
+else
+	printf '[NOTE] sondas (4d) suprimidas neste run (chamada aninhada do próprio gate)\n'
+fi
 
 # ------------------------- (4c) a saída de blob não pode virar porta de contrabando
 # Toda classificação que poupa um match é um buraco em potencial, então ela é

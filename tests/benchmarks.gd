@@ -1,5 +1,7 @@
 extends SceneTree
 
+# gate-marker: == Benchmarks:
+
 # SOM-IDLE P2: performance benchmark gate.
 # Measures settle, XP walk, and zone catalog operations.
 # Exit code: 0 = within budget, 1 = over budget.

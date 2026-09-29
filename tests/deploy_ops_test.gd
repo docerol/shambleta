@@ -3,8 +3,8 @@ extends SceneTree
 # Gate de deploy conferido contra o MOTOR, não contra o doc.
 #
 # Uso:  godot --headless --path . -s tests/deploy_ops_test.gd
-#       (`harnesses_extra()` (`scripts/test.sh:423-433`) descobre
-#        `tests/*_test.gd` sozinho e `harness_marker()` (`scripts/test.sh:435-440`)
+#       (`harnesses_extra()` (`scripts/test.sh:447`) descobre
+#        `tests/*_test.gd` sozinho e `harness_marker()` (`scripts/test.sh:459`)
 #        lê o marcador da própria linha `== RESULT:` abaixo — nada precisa ser
 #        acrescentado em arquivo de outro dono. Os dois números são conferidos pela
 #        régua de identidade de ponteiro (seção 23 de `scripts/check_doc_drift.sh`),
