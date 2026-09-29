@@ -380,7 +380,7 @@ encontrado credencial viva em arquivo rastreado.
   portão remoto (o último é de `9e38f16`, três commits atrás) e aquele run publicou o snap
   de fato. `snap` com `needs: builds` publica `release: edge` em push a master com
   `idle-tests` vermelho; `release.yml:119,147` repete; `deploy/server/entrypoint.sh:108-137`
-  (SIGTERM → canary → drain) é conferido só por texto em `scripts/check_compose.sh:1160`.
+  (SIGTERM → canary → drain) é conferido só por texto em `scripts/check_compose.sh:1213`.
   *Nota do orquestrador:* parte disso é ausência de ferramenta no host, não defeito do
   repo — mas o publish-sem-teste é do repo, e está aberto como work order.
 - **Live Ops 6,0.** O declarativo é real: `data/conf/liveops_calendar.json:6,8` com três

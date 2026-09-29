@@ -131,6 +131,28 @@ func _initialize():
 		print("FATAL: SQL/Economy não inicializaram")
 		quit(1)
 		return
+	# O catálogo de conteúdo NÃO sobe junto com `SQL.isInitialized`: `DB.Preload()`
+	# empilha os `load_threaded_request` (`sources/db/DB.gd:224`) e o `PreloadUpdate()`
+	# (`sources/db/DB.gd:228`) fecha o preload, chama `Load()` e acende `isInitialized`,
+	# re-armado a cada `process_frame` — portanto precisa de FRAMES. Esperar só o SQL e medir com o
+	# catálogo ainda vazio: aqui os frames caem antes do `quit()`, no runner da CI não,
+	# e o MESMO run vale ~30 ou ~1700 objetos conforme a máquina. O check nomeado é o
+	# ponto — boot leve é vermelho visível, não medição parcial silenciosa.
+	# Padrão de tests/content_hygiene_test.gd.
+	var dbScript : GDScript = load("res://sources/db/DB.gd")
+	var dbReady : bool = false
+	for i in 80:
+		if bool(dbScript.get("isInitialized")):
+			dbReady = true
+			break
+		await create_timer(0.25).timeout
+	if not _check(dbReady, "DB initialized (entities/maps/items carregados)"):
+		print("== RESULT: %d checks, %d failures ==" % [checks, failures])
+		var dbAbort : Node = _launcher.get("DB")
+		if dbAbort != null:
+			dbAbort.call("DrainPendingPreloads")
+		quit(failures)
+		return
 	_run()
 	print("== RESULT: %d checks, %d failures ==" % [checks, failures])
 	var db : Node = _launcher.get("DB")

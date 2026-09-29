@@ -79,6 +79,11 @@ var failures : int = 0
 
 var adm : GDScript = null
 var commons : GDScript = null
+# Boot do catálogo: `_dbScript` é o script lido em runtime (nada de nome global —
+# ver o bloco em `_initialize`) e `_bootReady` só acende depois que as suites
+# síncronas rodaram, porque `_process` já gira enquanto o `await` do boot espera.
+var _dbScript : GDScript = null
+var _bootReady : bool = false
 var reasons : Dictionary = {}
 var ceiling : int = 0
 var perAddress : int = 0
@@ -144,6 +149,24 @@ func _initialize() -> void:
 		print("FATAL: Admission/NetworkCommons não carregaram")
 		quit(1)
 		return
+	# O catálogo de conteúdo NÃO sobe junto com o boot dos autoloads: `DB.Preload()`
+	# empilha os `load_threaded_request` (`sources/db/DB.gd:224`) e o `PreloadUpdate()`
+	# (`sources/db/DB.gd:228`) fecha o preload, chama `Load()` e acende `isInitialized`,
+	# re-armado a cada `process_frame` — portanto precisa de FRAMES. Este harness não esperava por nada:
+	# rodava as suites e caía no `quit()` com o catálogo pelo caminho, então o MESMO
+	# run valia ~30 objetos aqui e ~1700 num runner mais lento (mesma classe da régua
+	# de wall-clock). O check nomeado é o ponto — boot leve é vermelho visível, não
+	# medição parcial silenciosa. Padrão de tests/content_hygiene_test.gd.
+	_dbScript = load("res://sources/db/DB.gd")
+	var dbReady : bool = false
+	for i in 80:
+		if _dbScript != null and bool(_dbScript.get("isInitialized")):
+			dbReady = true
+			break
+		await create_timer(0.25).timeout
+	if not Check(dbReady, "DB initialized (entities/maps/items carregados)"):
+		_finish()
+		return
 	reasons = {
 		"admitted": _const(adm, "ReasonAdmitted"),
 		"ceiling": _const(adm, "ReasonCeiling"),
@@ -169,6 +192,11 @@ func _initialize() -> void:
 	_SuiteGodModeGate()
 	_SuiteSchemaDoor()
 	# S3 precisa de frames (poll de socket de verdade); roda em `_process`.
+	# A liberação vem SÓ aqui: `_process` começa a girar no instante em que
+	# `_initialize()` suspende no `await` do boot, e sem esta guarda o S3 abriria o
+	# socket antes das suites acima — e `frames` contaria os frames da espera,
+	# estourando o timeout da própria máquina de estados num boot lento.
+	_bootReady = true
 
 # --- S1 — um teto, dois transportes, mesma leitura -------------------------
 
@@ -322,6 +350,11 @@ func _SuiteOrcamentoPreAuth():
 # --- S3 — transporte real: N+1 conexões, recusa contada --------------------
 
 func _process(_delta):
+	# Nada de máquina de estados antes do boot fechar (ver `_initialize`): o
+	# contador `frames` é o relógio dos timeouts do S3, e contaria a espera do
+	# catálogo se esta guarda não existisse.
+	if not _bootReady:
+		return false
 	frames += 1
 	if srvApi != null:
 		srvApi.poll()

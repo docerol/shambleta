@@ -181,6 +181,25 @@ func _initialize():
 	shouldRoute = Callable(rulesScript, "ShouldRoute")
 
 	await _waitForLiveSQL()
+	# O catalogo de conteudo NAO sobe junto com `SQL.isInitialized`: `DB.Preload()`
+	# empilha os `load_threaded_request` (`sources/db/DB.gd:224`) e o `PreloadUpdate()`
+	# (`sources/db/DB.gd:228`) fecha o preload, chama `Load()` e acende `isInitialized`,
+	# re-armado a cada `process_frame` — portanto precisa de FRAMES. Esperar so o SQL e medir com o
+	# catalogo ainda vazio: aqui os frames caem antes do `quit()`, no runner da CI nao,
+	# e o MESMO run vale ~30 ou ~1700 objetos conforme a maquina. O check nomeado e o
+	# ponto — boot leve e vermelho visivel, nao medicao parcial silenciosa.
+	# Padrao de tests/content_hygiene_test.gd.
+	var dbScript : GDScript = load("res://sources/db/DB.gd")
+	var dbReady : bool = false
+	for i in 80:
+		if dbScript != null and bool(dbScript.get("isInitialized")):
+			dbReady = true
+			break
+		await create_timer(0.25).timeout
+	if not Check(dbReady, "DB initialized (entities/maps/items carregados)"):
+		print("== RESULT: %d checks, %d failures ==" % [checks, failures])
+		quit(failures)
+		return
 	TestRules()
 	TestEngineApi()
 	TestPoolGates()

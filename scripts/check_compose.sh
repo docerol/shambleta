@@ -123,7 +123,7 @@ fi
 COMPOSE_BIN="$COMPOSE_BIN" RESOLVED_PROD="$RESOLVED_PROD" RESOLVED_MERGED="$RESOLVED_MERGED" \
 SMOKE="$SMOKE" \
 PY="$PY" "$PY" - "$PROD" "$STG" <<'PYEOF'
-import os, re, sys, yaml
+import os, re, subprocess, sys, yaml
 
 prod_path, stg_path = sys.argv[1], sys.argv[2]
 resolved_prod = os.environ.get("RESOLVED_PROD") or ""
@@ -285,16 +285,37 @@ def hc_port(svc):
         return m.group(1)
     return "443" if url.group(1).startswith("https") else "80"
 
+DUR_UNIT = {"ns": 1e-9, "us": 1e-6, "ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0}
+
+
 def seconds(v):
+    # `docker compose config` — o validador canônico, que é o que roda onde há
+    # docker — imprime duração na forma que o daemon aceita, e `75` sai de lá como
+    # `1m15s`. Uma régua que só sabe ler o número que ela mesma escreveu devolve
+    # "ausente" para um knob correto: no run de 2026-09-29 as duas leituras de
+    # `stop_grace_period` fecharam vermelhas com `stop_grace_period='1m15s'`
+    # contra um `>= 68s`, enquanto o mesmo compose lido por `yaml.safe_load` (o
+    # caminho sem docker, desta máquina) lia 75 e passava. `None` é acusação,
+    # nunca 0: 0 passaria em `>= 0` e é exatamente como um healthcheck fictício
+    # nasce.
     if v is None:
         return None
-    if isinstance(v, (int, float)):
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
         return float(v)
-    m = re.match(r'^(\d+(?:\.\d+)?)(s|m|h)?$', str(v).strip())
-    if not m:
+    s = str(v).strip()
+    if not s:
         return None
-    n, unit = float(m.group(1)), m.group(2)
-    return n * {"m": 60, "h": 3600}.get(unit, 1)
+    if re.match(r'^-?\d+(?:\.\d+)?$', s):
+        return float(s)
+    total = 0.0
+    rest = s
+    while rest:
+        m = re.match(r'^(\d+(?:\.\d+)?)(ns|us|ms|s|m|h)', rest)
+        if not m:
+            return None
+        total += float(m.group(1)) * DUR_UNIT[m.group(2)]
+        rest = rest[m.end():]
+    return total
 
 def read(path):
     try:
@@ -632,10 +653,24 @@ for t in atargets:
     target_ok("produção", "alerting", t, prod_services, prod_services)
 
 # (7) Contexto de build — o `.dockerignore` da RAÍZ é o único que o daemon lê, e
-# os Dockerfiles fazem `COPY . .`. Medido aqui (e não afirmado) porque o número
-# que está em deploy/OPS_RUNBOOK.md §4.2 é exatamente este par.
+# os Dockerfiles fazem `COPY . .`. Medido aqui, e medido contra o ÍNDICE: num clone
+# limpo — que é o que a CI builda — índice e árvore são o mesmo conjunto, e nesta
+# máquina não são. A régua antiga (`contexto cai pelo menos 25%`) lia a árvore e por
+# isso era verde aqui, vermelha na CI: os 25% que ela cobrava são a sujeira de quem
+# rodou (`.godot` 70 MB de cache de import, `build/` 92 MB, areia `.test-*` 70 MB,
+# `graphify-out` 11 MB — os ~243 MB que o check de leak abaixo soma e que nenhum
+# clone tem), não o efeito do arquivo. Sobre o que está rastreado o efeito é de um
+# punhado de porcento: os 226 MB de que o export precisa (addons 143 + data 61 +
+# presets 22) têm de continuar dentro, e o par exato é o que as linhas abaixo
+# imprimem — um número copiado aqui envelhece com o tamanho do que está rastreado.
+# O que se cobra do arquivo, então, é a função dele e não um percentual: cada classe
+# de dirt coberta pelo caminho como o Docker o lê, nada do que o build embarca
+# excluído, e o contexto que sobe abaixo de um teto medido. A armadilha de semântica
+# está na linha 14 (padrão sem `/` interno casa só no nível raiz): a linha
+# `__pycache__` nunca pegou `tools/__pycache__/*.pyc`, que está nesta máquina e que
+# nenhum gate via — DIRT é a lista das classes, um caminho por classe.
 before_bytes = before_files = after_bytes = after_files = 0
-ignored_top = []
+leaks = []
 def di_matcher(text):
     out = []
     for ln in text.splitlines():
@@ -666,6 +701,30 @@ def is_ignored(rel):
                 verdict = not neg
     return verdict
 
+# O índice é o contexto de um clone limpo — o que a CI builda. Medido por
+# `git ls-files`, nunca por lista manual.
+INDEX = set()
+tracked_bytes = tracked_files = ship_bytes = ship_files = 0
+git_err = ""
+try:
+    _r = subprocess.run(["git", "ls-files", "-z"], capture_output=True)
+    _paths = [x.decode("utf-8", "replace") for x in _r.stdout.split(b"\0") if x]
+    if _r.returncode != 0 or not _paths:
+        git_err = "saiu com código %d e %d caminhos" % (_r.returncode, len(_paths))
+    INDEX = set(_paths)
+except OSError as exc:
+    git_err = "git indisponível (%s)" % exc
+for p in sorted(INDEX):
+    try:
+        sz = os.path.getsize(p)
+    except OSError:
+        continue
+    tracked_bytes += sz
+    tracked_files += 1
+    if not is_ignored(p):
+        ship_bytes += sz
+        ship_files += 1
+
 for root, dirs, files in os.walk("."):
     dirs[:] = [d for d in dirs if d != ".git"]
     for fn in files:
@@ -679,6 +738,33 @@ for root, dirs, files in os.walk("."):
         if not is_ignored(p):
             after_bytes += sz
             after_files += 1
+            if p not in INDEX:
+                leaks.append((p, sz))
+
+# Teto: o índice congelado na expressão ao nascer esta régua (230.725.456) mais a
+# mesma folga de 25% do gate de teardown (data/conf/teardown_baseline.txt). Não é a
+# régua de performance — é o alarme de "alguém commitou um binário": os 226 MB que
+# o export precisa já estão contados aqui, e nada mais tem 8 zeros de crescimento
+# legítimo.
+SHIP_CEILING = 230725456 + 230725456 // 4
+
+# Uma classe de dirt por caminho: três são arquivos reais medidos nesta máquina
+# (`tools/__pycache__/*.pyc`, `companion/__pycache__/*.pyc`, `.godot/*.cfg`), o resto
+# nomeia a classe onde só o prefixo importa (`tmp/x`). Percentual não é régua nunca.
+DIRT = [
+    ".git/config", ".github/workflows/godot-ci.yml", ".editorconfig", ".qoder/settings.json",
+    ".godot/global_script_class_cache.cfg", "build/Web/libgdsqlite.web.template_release.wasm32.wasm",
+    ".test-home/IdleTests/.booting", ".test-home2/data/Shambleta/logs/godot.log",
+    ".test-k8/IdleTests/.booting", "logs/godot.log", "tmp/x", ".tmp/x", "testing.db-wal",
+    "run.log", "server.pem", "server.crt", "server.key", ".env",
+    "tests/zone_policy_test.gd", "test_scratch.gd", "scripts/census.gd", "e.autotest-entity",
+    "graphify-out/2026-09-24/cost.json", "snap/snapcraft.yaml", "archive/SEASONS_GAP.md",
+    "designs/x", "publishing/x", "landing_new/x",
+    "__pycache__/x.pyc", "companion/__pycache__/server.cpython-314.pyc",
+    "tools/__pycache__/extract_i18n.cpython-314.pyc", ".pytest_cache/x", ".venv/x", ".idea/x",
+    "README.md", "docs/contracts/why.md", "docs/quality/why.md", "node_modules/left-pad/index.js",
+]
+uncovered = [p for p in DIRT if not is_ignored(p)]
 
 shipped = ("addons", "data", "presets", "sources", "project.godot", "export_presets.cfg",
            "companion/server.py", "deploy/web/nginx.conf", "deploy/prometheus.yml",
@@ -686,18 +772,35 @@ shipped = ("addons", "data", "presets", "sources", "project.godot", "export_pres
 ignored_top = [p for p in shipped if is_ignored(p)]
 check(os.path.isfile(".dockerignore"), ".dockerignore existe na raiz do contexto",
       "o único lugar que o daemon lê (build.context: .)", "ausente")
-check(bool(before_bytes) and after_bytes < before_bytes,
-      "contexto medido: %d bytes/%d arquivos SEM .dockerignore -> %d bytes/%d arquivos com ele (-%.1f%%)" % (
-          before_bytes, before_files, after_bytes, after_files,
-          100.0 * (before_bytes - after_bytes) / max(before_bytes, 1)),
-      "o arquivo tira bytes reais do contexto (número impresso aqui é a prova)",
-      "antes=%d depois=%d" % (before_bytes, after_bytes))
-check(before_bytes - after_bytes >= 0.25 * before_bytes,
-      "contexto cai pelo menos 25% com o .dockerignore",
-      ">= 25% dos bytes fora (cache de import, areia de teste, docs, scratch)",
-      "caiu %.1f%% (%d -> %d bytes)" % (100.0 * (before_bytes - after_bytes) / max(before_bytes, 1), before_bytes, after_bytes))
+check(not git_err and tracked_files > 0,
+      "o índice do git foi lido (%d caminhos, %d bytes)" % (tracked_files, tracked_bytes),
+      "`git ls-files -z` devolvendo caminhos — é o contexto de um clone limpo",
+      git_err or "índice lido")
+check(tracked_files > 0 and ship_bytes < tracked_bytes,
+      "contexto medido no ÍNDICE: %d bytes/%d arquivos SEM .dockerignore -> %d bytes/%d arquivos com ele (-%.2f%%)" % (
+          tracked_bytes, tracked_files, ship_bytes, ship_files,
+          100.0 * (tracked_bytes - ship_bytes) / max(tracked_bytes, 1)),
+      "o arquivo tira bytes reais do que está rastreado (o número impresso aqui é a prova)",
+      "antes=%d depois=%d" % (tracked_bytes, ship_bytes))
+check(ship_files > 0 and ship_bytes <= SHIP_CEILING,
+      "contexto que sobe para o daemon cabe o teto medido (%d bytes <= %d)" % (ship_bytes, SHIP_CEILING),
+      "<= medido + 25%% — crescimento de contexto é re-medido de propósito, nunca de carona",
+      "%d bytes em %d arquivos (%.0f%% do teto)" % (ship_bytes, ship_files, 100.0 * ship_bytes / SHIP_CEILING))
+check(not uncovered,
+      "cada classe de dirt está coberta pelo .dockerignore (%d caminhos, %d classes)" % (len(DIRT), len(set(p.split("/")[0] for p in DIRT))),
+      "todos os caminhos de DIRT excluídos pelo .dockerignore como o Docker os lê",
+      "não cobertos: %s" % " ".join(uncovered))
+check(not leaks,
+      "nenhum arquivo fora do índice escapa do .dockerignore e sobe para o daemon (%d arquivos/%d bytes na árvore a mais que o índice)" % (
+          before_files - tracked_files, max(before_bytes - tracked_bytes, 0)),
+      "zero leak: o que a máquina tem a mais que o clone fica fora do contexto",
+      "sobem: %s" % " ".join("%s (%d B)" % (p, sz) for p, sz in leaks[:8]))
 check(not ignored_top, "nada do que o build embarca é excluído pelo .dockerignore",
       "nenhum destes fora: %s" % " ".join(shipped), "excluídos: %s" % " ".join(ignored_top))
+print("[INFO] árvore de trabalho desta máquina (medida, não é régua — um clone limpo "
+      "não tem nada disto): %d bytes/%d arquivos -> %d bytes/%d com o .dockerignore (-%.1f%%)" % (
+          before_bytes, before_files, after_bytes, after_files,
+          100.0 * (before_bytes - after_bytes) / max(before_bytes, 1)))
 
 # todo COPY explícito dos Dockerfiles precisa sobreviver ao ignore.
 copy_missing = []
@@ -1158,6 +1261,25 @@ neg_budget = [budget_problems(*c) for c in (
 check(budget_problems(10, 62, 6, 75, 47, 2, 5) == [] and sum(1 for x in neg_budget[1:] if x) == 3,
       "controle negativo (orçamento do drain): os 3 casos quebrados são acusados e o atual não",
       "1 lote limpo + 3 acusados", "resultado=%s" % ([bool(x) for x in neg_budget],))
+
+# O parser de duração é o olho das réguas de tempo: `docker compose config` — o
+# validador canônico, que é o que roda onde há docker — reimprime `stop_grace_period:
+# 75` como `1m15s`, e um parser que só sabe ler o número que ele mesmo escreveu
+# devolve "ausente" para um knob correto. Foi isso que, no run de 2026-09-29, fechou
+# as duas leituras de grace em vermelho na CI (`'1m15s'` contra `>= 68s`) com o mesmo
+# compose verde nesta máquina, onde `yaml.safe_load` lê 75. Controle negativo: cada
+# forma que o canônico emite vira segundos, e o que não é duração é acusação (`None`)
+# — nunca 0, que passaria em qualquer `>= 0` e é como um healthcheck fictício nasce.
+DUR_GOOD = {"75": 75.0, "1m15s": 75.0, "1m": 60.0, "45s": 45.0, "2h": 7200.0,
+            "1h15m30s": 4530.0, "75.5": 75.5}
+DUR_BAD = [None, "", "   ", "15x", "1m15", "s", "1w", True]
+dur_wrong = ["%r -> %r, esperado %r" % (k, seconds(k), v)
+             for k, v in DUR_GOOD.items() if seconds(k) != v]
+dur_soft = [repr(x) for x in DUR_BAD if seconds(x) is not None]
+check(not dur_wrong and not dur_soft and seconds(75) == 75.0,
+      "controle negativo (parser de duração): as formas do validador canônico viram segundos e o que não é duração é acusação, nunca 0",
+      "75/'75'/'1m15s'/'1h15m30s' lidos como número; None/''/'15x'/'1m15'/'s'/'1w'/True -> None",
+      "; ".join(dur_wrong + ["não é None: %s" % x for x in dur_soft]) or "as 8 formas e os 8 rejeitos conferem")
 
 # O entrypoint tem de ser o que o Dockerfile chama, e o compose não pode passar por
 # cima dele (um `entrypoint:` ou `user:` no serviço desarma o SIGTERM sem ninguém

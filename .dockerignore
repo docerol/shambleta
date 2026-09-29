@@ -108,8 +108,14 @@ docs/agents
 # "nenhum patch visível" (sources/sql/SQL.gd:65).
 
 # -------------------------------------------------------------------------- Python/cellular
+# `__pycache__` e `*.pyc` do bloco acima casam só no nível raiz (linha 14), e o
+# pycache real mora dentro de pacote — cada caminho medido é nomeado aqui. A régua
+# vive em scripts/check_compose.sh: a lista DIRT cobre o caminho aninhado e o check
+# de leak acusa todo `__pycache__` que nasça FORA do índice sem linha neste arquivo
+# (forçar um `.pyc` para o índice é outro ato, e nenhuma régua desta casa o vê ainda).
 companion/__pycache__
 companion/*.pyc
+tools/__pycache__
 companion/venv
 companion/.venv
 companion/cover

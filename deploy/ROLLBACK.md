@@ -309,7 +309,7 @@ Isso dá ao operador três coisas que a frase "o número está certo" nunca deu:
    `schema_blocked` (`sources/network/server/Admission.gd:55`), entregue à porta por
    `_ValidateAuth()` (`sources/network/server/Server.gd:1957`), que lê
    `MigrationBlocked()` (`sources/sql/SQL.gd:80`). Os dois lados do flag, a precedência
-   sobre o teto e essa fiação viva são medidos em S5 (`tests/admission_gate_test.gd:658-763`),
+   sobre o teto e essa fiação viva são medidos em S5 (`tests/admission_gate_test.gd:691-796`),
    sobre WebSocket de verdade. O que o probe continua sem dizer é QUAL patch falhou e
    contra qual carimbo o binário está: isso só o log e a métrica acima dizem, e é por
    isso que o alerta é `shambleta_migration_stalled` e não o healthcheck.

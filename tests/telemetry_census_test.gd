@@ -433,6 +433,24 @@ func _runTests():
 		var sqlNode : Node = launcher.get("SQL")
 		if sqlNode != null and sqlNode.get("isInitialized"):
 			break
+	# O catálogo de conteúdo NÃO sobe junto com `SQL.isInitialized`: `DB.Preload()`
+	# empilha os `load_threaded_request` (`sources/db/DB.gd:224`) e o `PreloadUpdate()`
+	# (`sources/db/DB.gd:228`) fecha o preload, chama `Load()` e acende `isInitialized`,
+	# re-armado a cada `process_frame` — portanto precisa de FRAMES. Esperar só o SQL e medir com o
+	# catálogo ainda vazio: aqui os frames caem antes do `quit()`, no runner da CI não,
+	# e o MESMO run vale ~30 ou ~1700 objetos conforme a máquina. O check nomeado é o
+	# ponto — boot leve é vermelho visível, não medição parcial silenciosa.
+	# Padrão de tests/content_hygiene_test.gd.
+	var dbScript : GDScript = load("res://sources/db/DB.gd")
+	var dbReady : bool = false
+	for tick in 80:
+		if dbScript != null and bool(dbScript.get("isInitialized")):
+			dbReady = true
+			break
+		await create_timer(0.25).timeout
+	if not Check(dbReady, "DB initialized (entities/maps/items carregados)"):
+		_finish()
+		return
 	var corpus : Array = LoadCorpus()
 	Check(corpus.size() > 100, "censo varreu o fonte real (%d arquivos em %s)" % [corpus.size(), ", ".join(Roots)])
 	var writtenInfo : Dictionary = WrittenKinds(corpus)

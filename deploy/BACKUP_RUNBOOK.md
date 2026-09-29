@@ -56,8 +56,8 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
 ```bash
 # 3.1 Sonda de restore no CI/na máquina: cria um diário, relê, confere a versão do
 #     schema contra o banco vivo. Marcador lido pelo gate §24-8.
-bash scripts/test.sh backup            # -> "== Backup Restore Probe: 8 checks, 0 failures =="
-#     (tests/test_backup_restore.gd:67-94)
+bash scripts/test.sh backup            # -> "== Backup Restore Probe: 9 checks, 0 failures =="
+#     (tests/test_backup_restore.gd:86-113)
 
 # 3.2 Os volumes de estado existem e estão montados onde o código espera:
 bash scripts/check_compose.sh          # -> "== COMPOSE GATE: N checks, 0 failures =="

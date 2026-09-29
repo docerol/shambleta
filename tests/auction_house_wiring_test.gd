@@ -9,7 +9,7 @@ extends SceneTree
 # auto-negócio/taxa). O que NÃO existia — e o que este harness veio fechar — era
 # a certeza de que essas três capacidades CHEGAM AO JOGADOR. A costura do painel
 # (`_send` → `NetworkSend` → `Network.<rpc>` → `Server.<handler>`) é uma corrente:
-# se um elo cai, o resto continua verde. `marketplace_depth_test.gd:300` só fazia
+# se um elo cai, o resto continua verde. `marketplace_depth_test.gd:343` só fazia
 # `panel.contains("\"GetAuctionPage\"")` — e foi exatamente assim que a página, a
 # bid e o cancelamento de bid ficaram PRESOS no serviço: o painel continha a
 # string, mas o `match` de `NetworkSend` não tinha braço, caía no `push_error` e o

@@ -22,6 +22,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Five compose gates were red in CI and green here, and they were two different defects.
+  Four were the duration parser: `docker compose config` — the canonical path, which only
+  exists where docker exists, i.e. the runner — reprints `stop_grace_period: 75` as the Go
+  duration `1m15s`, and `seconds()` in `scripts/check_compose.sh` matched
+  `^(\d+(?:\.\d+)?)(s|m|h)?$`, so it returned `None` for a knob that was correct and the
+  grace readings failed against their own `>= 68s` fence. On this machine the same compose
+  goes through `yaml.safe_load`, which yields the int, so the ruler was green exactly where
+  it could not see. It now reads every form the canonical validator emits (`75`, `'75'`,
+  `1m15s`, `1h15m30s`, fractional units) and still answers `None` — never `0`, which would
+  pass any `>= 0` and is how a fictitious healthcheck is born — for what is not a duration:
+  `''`, `'   '`, `'15x'`, `'1m15'` (unit-less tail), `'s'`, `'1w'` (unit docker rejects),
+  `True`. A negative control pins both halves (`DUR_GOOD`/`DUR_BAD`, 8 shapes accepted, 8
+  rejected), so the parser is judged and not trusted.
+  The fifth gate was the build-context ruler — `contexto cai pelo menos 25%` — and it was
+  measuring the developer's dirt. It walked the working tree, so it charged `.dockerignore`
+  for what this machine happens to have: `.godot` 70 MB of import cache, `build/` 92 MB,
+  `.test-*` sandboxes 70 MB, `graphify-out` 11 MB, ~243 MB that no clone contains. Here it
+  printed −51.7% and passed; on the runner, whose checkout has nothing to hide, the same
+  file could not reach 25% and check 94 of 158 was red. The fence now reads the git INDEX
+  (`git ls-files -z`) — the context a clean clone actually uploads, and identical to the tree
+  on the runner — over five checks: the index was readable, the file removes bytes from what
+  is tracked, what uploads fits a measured ceiling, every dirt class is covered by the path
+  as Docker reads it, and nothing outside the index escapes. The percentage is gone because
+  it was never a property of the file: the honest figure is small (−1.66% here today) since
+  the 226 MB the export needs must stay in the context — addons 143 MB + data 61 MB + presets
+  22 MB — and the working-tree number is printed as `[INFO]`, measured and declared not a
+  ruler. Reading the index is itself fenced, not assumed: with `git` stubbed to exit 128 the
+  gate prints four accusations and no silent green.
+  The leak check paid for itself on its first run. `tools/__pycache__/extract_i18n.
+  cpython-314.pyc` (13,295 B) was uploading to the daemon and no gate could see it, because
+  a `.dockerignore` pattern without an internal `/` matches only at the context root — so
+  the line `__pycache__` never covered a nested package. `tools/__pycache__` is now named in
+  the file, `DIRT` carries the path, and the coverage check reproduces those three Docker
+  semantics in python, which makes the next nested cache a red line instead of an upload.
+  Every claim above was produced by breaking it and reverted: dropping the `.godot` line
+  prints the dirt-class failure plus the leak; dropping `tools/__pycache__` prints the same
+  two; a 60 MB tracked probe file trips only the ceiling (`293646553 bytes <= 288406820`);
+  an int-only parser reproduces the CI set exactly — 4 grace failures plus the control, 5,
+  which is what the runner counted. Locally after the change: `== COMPOSE GATE: 156 checks,
+  0 failures == (validação: yaml.safe_load + merge emulado; fumaça: 0 rodaram, 0 falharam,
+  2 pulados)`.
+- Ten harnesses were measuring a catalogue that did not exist yet, and only CI noticed.
+  `admission_gate_test`, `d1_return_metric_test`, `economy_invariant_fuzz`,
+  `faucet_census_test`, `marketplace_depth_test`, `ops_fix_test`, `read_pool_test`,
+  `season_race_delta_test`, `telemetry_census_test` and `test_backup_restore` waited for
+  `SQL.isInitialized` (plus `Economy`/`Telemetry`) and then ran and `quit()` synchronously.
+  The content catalogue is not loaded there: `DB.Preload()` only issues
+  `ResourceLoader.load_threaded_request` for every preset path, and `PreloadUpdate()` —
+  re-armed on `Launcher.get_tree().process_frame` — is what closes the preload, calls
+  `Load()` and lights `isInitialized` (`sources/db/DB.gd:228`). The dictionaries therefore
+  exist only after enough FRAMES. Here the frames land before the harness quits (~1747
+  objects measured); on the CI runner, whose `.godot/` the workflow regenerates, they do
+  not (30–31 measured against the 2247 ceiling recorded from a full local boot), and
+  `scripts/ci_gate_log.sh:120-124` called that exactly what it is — a measurement taken
+  before the thing it measures exists. Same class as a wall-clock assertion. Each harness
+  now waits on `DB.isInitialized` at its own boot-wait site and records a NAMED check
+  (`DB initialized (entities/maps/items carregados)`), the shape already proven by
+  `tests/content_hygiene_test.gd`: a light boot is a visible red, not a silent partial
+  measurement. No ceiling was touched, no metric re-tuned. Measured after the change, ten
+  `one <harness>` runs, all `Gate §24-8 OK`: backup restore `9 checks, 0 failures` / leaked
+  1747 (was 8 checks), d1_return 17 / 1747, faucet 63 / 1747, season_race 34 / 1747,
+  economy fuzz 21892 / 1748, telemetry census 29 / 1748, admission 97 / 1747, marketplace
+  248 / 1747, ops_fix 212 / 1747, read_pool 113 / 1747. Starving the wait so it cannot
+  succeed (`for i in 0`) prints `  [FAIL] DB initialized (entities/maps/items carregados)`
+  and `== Backup Restore Probe: 3 checks, 1 failures ==` with the gate red — the check
+  gates the finish path, it is not decoration. `admission_gate_test` needed a second half:
+  its S3 machine runs in `_process`, which the engine starts turning while `_initialize()`
+  is suspended in the boot `await`, so `_bootReady` now releases S3 only after the
+  synchronous suites and `frames` — the clock of the S3 timeouts — no longer counts the
+  wait. Pointers moved with the lines they name:
+  `deploy/ROLLBACK.md` → `tests/admission_gate_test.gd:691-796`,
+  `deploy/BACKUP_RUNBOOK.md` → `tests/test_backup_restore.gd:86-113`, and
+  `marketplace_depth_test.gd:300` in `tests/auction_house_wiring_test.gd` was already stale
+  by 43 lines (it points at `panel.contains("\"GetAuctionPage\"")`, which lives in `:343`);
+  all three now land on the code the prose claims.
 - The lockout-duration check in `tests/login_hardening_test.gd` was an unsatisfiable wall-clock
   assertion. `RecordFailedLogin` (`sources/sql/SQL.gd:381`) stamps `lockedUntil` from
   `SQLCommons.Timestamp()` at the moment of the write (`sources/sql/SQL.gd:386`) — a
@@ -371,7 +446,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   current value back, and `season.baselines_at` makes the two regimes observable
   instead of assumed: `CommunityService.GetSeasonBoardsState` reports
   `scoring = "delta" | "current"` and `Leaderboard` says so on screen. Pinned by
-  `tests/season_race_delta_test.gd` (33 checks, S1–S9, measured 2026-09-29) —
+  `tests/season_race_delta_test.gd` (34 checks, S1–S9, measured 2026-09-29) —
   including both legs of the confession, because pinning only the legacy `"current"`
   left a facade that always answers `"current"` passing the whole suite. The screen
   is measured too: the idle suite's `ShowSeason` block renders the board with and
