@@ -183,10 +183,10 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 | Marketplace | 8,5 | — |  |  | 8,5 |  |
 | Analytics | 8,0 | — | 8,5 | 7,5 | 8,0 | R3A+R3B: o D1 é honesto sobre a própria janela nas duas pontas (`TelemetryService.gd:83,281`, `companion/server.py:466-476` com `window_closed`, migration 045) e os 14 `FUNNEL_KINDS` têm emissor real — mas `telemetry_event` não tem poda temporal alguma (retenção de 90 dias é só do ledger, `SQLRetention.gd:30`; o único delete é LGPD em `SQL.gd:326`), e `FunnelDaily`/`/metrics` fazem `GROUP BY` numa tabela que cresce para sempre com feature flag como única proteção |
 | Live Ops | 9,2 | — | 6,0 | 6,8 | **6,0** | R3A+R3B: `deploy/alertmanager.yml:60-64` materializa os dois receivers como `webhook_configs: []` — por default do repo o `severity: page` não acorda ninguém; nenhum dashboard versionado; rotação de temporada/campanha é PULL com TTL de 60 s (`LiveOpsCalendar.gd:108`) e não há cron versionado (`deploy/STAGING.md:136`), então a transição depende de trocar arquivo no host. *A favor, medido por R3B:* as dez séries de `alerts.rules.yml` resolvem em `MetricsServer.gd:190-244` e o orçamento do drain tem controle negativo que morde (`check_compose.sh`) |
-| Arquitetura | 8,5 | — |  | 8,9 | 8,5 | R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
-| Performance | 8,5 | — |  | 8,7 | 8,5 | R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms e nenhuma harness compara a cauda com o orçamento |
-| Escalabilidade | 7,4 | — |  | 7,9 | 7,4 | R3B: teto horizontal `[NÃO MEDIDO]`, e `deploy/SCALING.md:125-127` afirma um erro por-passo em `AIAgent.gd:64` que o código já não tem |
-| Código | 8,2 | — |  | 8,6 | 8,2 | R3B: `harness_marker()` não casa marcador mixed-case, então `one benchmarks` e `one test_backup_restore` devolvem vermelho com `godot exit=0` — e nenhuma régua cobre o caminho `one` |
+| Arquitetura | 8,5 | — | 7,0 | 8,9 | **7,0** | R3A+R3B: `EconomyKernel.GrantItem` (`:44-55`) insere em `ledger_transaction` por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex`, **fora** de `SQL.Transaction()` — ao contrário de `LedgerAppend` (`:33-41`), que declara o contrário no comentário — enquanto `:20-28` lê a mesma tabela pelo funil; e `deploy/SCALING.md:285-286` afirma que "a `queryMutex` de `SQL.gd:7` continua sendo o único funil de escrita" contra 30 escritores `.db.` crus em `sources/` (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`, `CheckoutService.gd:490`), sem nenhum gate de censo. R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
+| Performance | 8,5 | — | 8,0 | 8,7 | **8,0** | R3A: mediu `one benchmarks` sob contenção de outro juiz e o p99 normalizado ficou a ~10% do teto (budget 2.076 µs, 1.881 µs) — a régua aperta, mas `max 549.622 µs` com 3 hitches >50 ms não tem causa confirmada; e **não existe detector do orçamento de passo em produção**: `grep -rn "TIME_PHYSICS_PROCESS|get_frames_per_second" sources` devolve só `ServerDisplay.gd:13` (painel de dev legível por humano) e o que sai por `/metrics` é espera de mutex (`MetricsServer.gd:173-178`), não ms/passo. R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms e nenhuma harness compara a cauda com o orçamento |
+| Escalabilidade | 7,4 | — | 7,2 | 7,9 | **7,2** | R3A+R3B: o teto horizontal continua `[NÃO MEDIDO]` e o doc confessa (`SCALING.md:285-295`: "Dois servidores em duas máquinas não foi medido", contenção entre processos no mesmo WAL em `:225-227`) — o "~200 players conviventes" é teto **por processo único**, e ninguém rodou dois escritores com `SHAMBLETA_SERVER_ID` distintos sobre o mesmo arquivo; a âncora do degrau é unilateral (±100 sobre 200 deixa passar um erro de 2× e só pega queda, não inflação). `deploy/SCALING.md:125-127` afirma um erro por-passo em `AIAgent.gd:64` que o código já não tem; o recipe de `:136` usa `godot --headless -s` cru, classe que o próprio `boot_guard` do `test.sh` recusa |
+| Código | 8,2 | — | 7,3 | 8,6 | **7,3** | R3A+R3B: `harness_marker()` (`scripts/test.sh:437`) só casa `"== [A-Z]+[A-Z ]*:`, então `one benchmarks` (marcador real `== Benchmarks:` em `benchmarks.gd:397`) e `one test_backup_restore` devolvem `GATE VERMELHO` com `godot exit=0` e produto verde — reproduzido pelo R3A em shell para os 7 harnesses explícitos; e `reason_toast_test` é julgado certo **por acidente de ordem textual** (a regex casa o `"== RESULT:` de `_finish` em `:57` antes do `== REASON:` de `_initialize` em `:61` — mover `_finish` para o fim troca o marcador do gate). A superfície também mente: `scripts/test.sh:15` anuncia `gate <log> <marker> <script>` como interface, mas `gate` é função interna — os cases são `all|quick|idle|backup|benchmarks|rpc|companion|fixation|preflight|structure|one|diag|clean`. *A favor, medido por R3A:* 1 TODO/real em 330 `.gd`, e `check_god_nodes.sh` limpo com folgas vivas (`Server.gd 1963/1965`) |
 | Testes | 8,2 | — | 7,8 | 8,2 | **7,8** | R3A: ~419 de 4.290 linhas de `Check*` casam TEXTO do fonte; `check_ci.sh:190` aceita `needs` de build como portão. R3B: `tests/nginx_hardening_test.gd:570-574` DEGRADA para ler a doc quando não há nginx no host e `deploy/web/Dockerfile:30` só `COPY`a o `nginx.conf` sem `nginx -t` — um proxy que o nginx recusa passa em todos os gates e chega ao prod |
 | UX/UI | 7,5 | — | 7,0 | 7,5 | **7,0** | R3A+R3B: a passada de telefone do `hud_decision_fit_test` (verde medido por R3B: `== RESULT: 68 checks, 0 failures ==` sobre 390x844 com piso de 48 px) só amarra os 7 painéis que vivem no boot — guilda/leilão/forja/vault, que nascem por ação, estão fora da régua; e 66 chaves de conteúdo NPC seguem sem `pt_BR` (`data/i18n/coverage_report.md`) |
 | Social | 5,5 | 9,0 | 8,0 | 6,5 | **5,5** | R3A+R3B: `GuildService.gd:94-97` é read-then-write sem transação nem lock (`JoinReason` conta por `SELECT COUNT(*)` em `GuildRoster.gd:105-108` e o `INSERT` vem solto, ao contrário de `LeaveGuild` logo abaixo) — o próprio código nomeia o buraco em `GuildRoster.gd:82-85` e a PK de `guild_member` impede double-join mas não o teto estourado; falta transação/`CHECK` durável + N joins simultâneos asseridos |
@@ -379,4 +379,91 @@ encontrado credencial viva em arquivo rastreado.
   `deploy/docker-compose.yml:410-411` deixa `SHAMBLETA_ALERT_PAGE_WEBHOOK_URL` vazio, então
   uma stack recém-subida pagina para ninguém; e a transição S1→S2 nunca foi exercida em
   lugar nenhum (S2 agendada para 2027-01-15).
+
+### Veredito bruto — juiz A, grupo engenharia (Arquitetura, Performance, Escalabilidade, Código)
+
+Chegou 2026-09-29 (39 chamadas, assento relançado com teto). Rodou `one benchmarks` ele
+mesmo, sob contenção de outro juiz, e refez em shell a deriva do marcador para os 7
+harnesses explícitos. Conferi por mim, antes de gravar: os dois funis de
+`ledger_transaction` em `EconomyKernel.gd` (`:20-28` lê, `:44-55` escreve fora de
+transação), a afirmação de `SCALING.md:285-286`, os 30 sites `.db.` crus, a ausência de
+métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gate` que
+`scripts/test.sh:15` anuncia e não existe como case.
+
+- **Arquitetura 7,0.** A favor: identidade nunca vem do pacote — `Server.gd:600`
+  (`Peers.GetCharacter(peerID)`, repetido em `:625/:639/:654/:730`) com a régua que morde
+  em `tests/run_rpc_identity_test.gd:147`, dois WebSockets reais em que A declara ser B e
+  o servidor devolve o `AuthPeerID` de A. Leitura fail-closed em `SQLReadRules.gd:14-19`
+  (`txnDepth > 0` nunca roteia) e `SQLReadPool.gd:11-13` declarando o pool
+  não-fonte-de-verdade, com a opção `read_only=true` refutada por medição no próprio repo.
+  **Contra (a nota):** `EconomyKernel.GrantItem` (`:44-55`) insere em `ledger_transaction`
+  por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex(accountID)` — não
+  sob `queryMutex` e não dentro de `SQL.Transaction()`, ao contrário do que o comentário de
+  `LedgerAppend` (`:33-41`) exige — enquanto `:20-28` lê a mesma tabela pelo funil.
+  `SCALING.md:286` afirma que a `queryMutex` "continua sendo o único funil de escrita"; a
+  varredura do juiz devolve 30 sites `.db.` crus em `sources/`, inclusive caminhos de
+  dinheiro (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`,
+  `CheckoutService.gd:490`). Nenhum gate faz censo desses sites, embora o repo já tenha a
+  técnica para `presence_session`. *Hipótese declarada por ele:* benigno em termos de
+  corrida, não de observabilidade — `Thread.new()` só aparece em `SQLBackups.gd:5`; li o
+  sítio da definição, não cada chamador.
+- **Performance 8,0.** `bash scripts/test.sh one benchmarks 600` → última linha
+  `== GATES COM RUÍDO: none ==`, com `Load probe: 800 settles — p50 618 µs, p99 1938 µs,
+  max 549622 µs (budget p99: 2076 µs), erros: 0` e normalização no mesmo processo (máquina
+  a 1,03×; p99 normalizado 1881 µs = 3,62× o baseline). A auto-auditoria recusa folga
+  abaixo do pior p99 normalizado já medido sob carga hostil (`benchmarks.gd:373-375`,
+  `WorstP99NormalizadoSobCargaUs = 1601`) e fecha os dois lados (folga `>4×` deixa passar
+  regresso de 5×; `<2×` flakeia contra o ruído de 1,24× do run ocioso), com a cauda julgada
+  duas vezes — p99 normalizado E taxa de hitch (`benchmarks.gd:388`, porque "com 800
+  amostras, 1% de hitch cai exatamente no furo do p99"). Calibre de 4 ms/passo injetado de
+  propósito em `tick_capacity_test.gd:81-82,443-445`, com o monitor da engine obrigado a
+  ver ≥70% da queima. **Contra:** nenhum detector do orçamento de passo em produção —
+  `grep -rn "TIME_PHYSICS_PROCESS" sources` devolve só `ServerDisplay.gd:13` (painel de dev
+  legível por humano) e `/metrics` expõe espera de mutex (`MetricsServer.gd:173-178`), não
+  ms/passo; o `max 549.622 µs` (3 hitches >50 ms em 800) ficou sem causa confirmada —
+  provavelmente o auto-checkpoint do WAL, como `benchmarks.gd:56-60` declara. *Não remediu*
+  `tick_capacity_test` nem `multi_instance_tick_test` (outro juiz segurava o lock, visível
+  no `GATE SERIALIZADO`), então as escadas de tick ficaram evidência estática, não veredito
+  medido.
+- **Escalabilidade 7,2.** A favor, e ele faz questão de registrar: o teto é degrau medido
+  com âncora amarrada à medição (`SCALING.md:99-105`,
+  `DRIFT proc_inside_rung_players 200`) e cobrada por `multi_instance_tick_test.gd:1675` com
+  mensagem que nomeia a regressão ("capacidade real caiu abaixo do que a doc promete"); os
+  recursos que NÃO limitam foram medidos (`fd 15→15`, threads 16→16, `RLIMIT_NOFILE` e
+  `NPROC` lidos de `/proc/self/limits`, inclinação de RSS 0,671 MB/player, então quem
+  vincula é o tick); a extrapolação 10→15 instâncias é rotulada "**declarada** (não é
+  medição)". **Contra:** o horizontal é confesso em texto — `:285-295` "Dois servidores em
+  duas máquinas não foi medido", contenção entre processos no mesmo WAL em `:225-228` —
+  então o "~200 players conviventes" é teto **por processo único** e o número de lançamento
+  não tem medida multi-processo. A tolerância da âncora (±100 sobre 200) aceita doc entre
+  100 e 300: um erro de 2× passa, e a régua é unilateral (pega queda, não inflação). A §2
+  admite que outra corrida (2026-09-28 22:27) leu 1,38/4,75/8,12/31,82 nos mesmos degraus —
+  prosa defasada, rotulada como prosa. O recipe de `:136` manda rodar `godot --headless -s`
+  cru, com caminho absoluto pessoal, classe de processo que o próprio `boot_guard` do
+  `test.sh` recusa por causar SIGSEGV.
+- **Código 7,3.** O defeito que ele mais gosta: `one benchmarks` devolve
+  `::error::o run não terminou: faltou a linha "== RESULT:" (crash ou timeout)` e
+  `GATE VERMELHO: benchmarks` com `godot exit=0` e `== Benchmarks: 0 failures ==` no
+  produto. Causa determinística, apurada em estático: `scripts/test.sh:437` casa só
+  `"== [A-Z]+[A-Z ]*:` e cai no default `== RESULT:`, que `tests/benchmarks.gd:397`
+  (`== Benchmarks:`) não emite — só o case hardcoded `:604` conhece o marcador real. Mesmo
+  defeito em `test_backup_restore` (emite `== Backup Restore Probe:`). E `reason_toast_test`
+  é julgado certo **por acidente de ordem textual**: a regex acha o `"== RESULT:` de
+  `_finish` (`:57`) antes do `== REASON:` de `_initialize` (`:61`); mover `_finish` para o
+  fim do arquivo troca o marcador que o gate cobra — o contrato de `testing.md` ("o
+  marcador vem do próprio arquivo") está cumprido por 59 auto-inscritos e violado por 2 dos
+  7 explícitos no caminho `one`. A dívida é honesta e medida: 1 TODO/FIXME real em 330
+  `.gd` (os demais hits são "TODOS" em português), `check_god_nodes.sh` limpo com folgas
+  vivas (`Server.gd 1963/teto 1965`, `SQL.gd 1808/1814`) e a regra "encolheu tem que baixar
+  o teto" no cabeçalho (`:16-24`). *Nota dele:* o `gate <log> <marker> <script>` que o
+  cabeçalho de `test.sh:15` anuncia como interface não é case — os cases são
+  `all|quick|idle|backup|benchmarks|rpc|companion|fixation|preflight|structure|one|diag|clean`,
+  então rodou os `check_*.sh` à mão. Não abriu os valores de `data/conf/credential.cfg:1-6`
+  (só nomes de chave e contagem de linhas); `check_secrets.sh` →
+  `== SECRETS GATE: 37 checks, 0 failures ==`, o que "sugere placeholder/allowlist, não
+  credencial viva".
+- **Ponto cego declarado por ele:** os falsos-vermelhos do `one` são fail-closed (nunca
+  geram verde falso), mas queimam um boot de vários minutos justamente do juiz que depura;
+  e a veracidade do marcador dos outros 56 harnesses ficou como deriva em shell, não como
+  run.
 
