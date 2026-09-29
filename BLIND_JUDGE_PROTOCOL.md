@@ -173,10 +173,10 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 
 | categoria | R1 | R2 | juiz A (R3) | juiz B (R3) | mínima vigente | lacuna nomeada em R3 |
 |---|---|---|---|---|---|---|
-| Core Gameplay | 8,3 | — |  |  | 8,3 |  |
-| Core Loop | 8,7 | — |  |  | 8,7 |  |
-| Meta Game | 8,5 | — |  |  | 8,5 |  |
-| Game Design | 8,6 | — |  |  | 8,6 |  |
+| Core Gameplay | 8,3 | — |  | 8,5 | 8,3 | R3B: nenhuma régua roda `IdlePolicy` por N ticks com morte real para afirmar a curva morte→eficiência→revive; a política confia no comentário de `FarmZoneData.gd:45-47` |
+| Core Loop | 8,7 | — |  | 6,5 | **6,5** | R3B: nine writers of `stat.gp` bypass the kernel and the player snapshot is absolute, so an online character's vendor debit is reverted within 600 s — a gold dupe the kernel's own detector is blind to by construction |
+| Meta Game | 8,5 | — |  | 7,5 | 7,5 | R3B: o ranking de temporada pontua estado ACUMULADO (`power_score`, `bosses_beaten`) em vez do delta da janela, e `pass_tiers` está `{}` nos dados — a agenda declarada ainda não controla a recompensa |
+| Game Design | 8,6 | — |  | 7,0 | 7,0 | R3B: nenhum sumiouro de gold escala com a torneira exponencial (~2,26M gold/h na zona 27 contra ~29k/dia de teto no vendor), e `Experience.gd:9-10` afirma "3 semanas" e "satura na zona 24" contra os números que a curva de 27 zonas produz |
 | Retenção | 7,8 | — |  |  | 7,8 |  |
 | Economia | 9,4 | — |  |  | 9,4 |  |
 | Monetização | 9,4 | — |  |  | 9,4 |  |
@@ -246,6 +246,56 @@ grep puro o defeito de marcador e confirmou código-vs-doc uma afirmação falsa
   o marcador (`test.sh:569-570,602,606`), então o buraco é exclusivo do caminho `one` — o
   caminho que este protocolo manda o juiz usar. *Lacuna:* nenhuma régua cobre o caso
   mixed-case (falta um assert de que `harness_marker benchmarks == "== Benchmarks:"`).
+
+### Veredito bruto — juiz B, grupo produto (Core Gameplay, Core Loop, Meta Game, Game Design)
+
+Chegou 2026-09-28 no assento relançado com teto de chamadas (60 chamadas, 3 tentativas de
+harness). **Nenhuma linha verde é dele**: as três tentativas foram bloqueadas pelo boot guard
+de outro juiz — `bash scripts/test.sh one balance_test 420` devolveu `RC=1` com
+`GATE PULADO: godot estrangeiro (pid 269904) com cwd em /mnt/dados/Projetos/shambleta` e
+`== GATES VERMELHOS: boot_guard ==`. Ele mesmo declarou que nada do grupo foi provado por
+execução nesta passada; as evidências abaixo são de fonte lido e de uma curva calculada por
+ele. Isso é tratado como HIPÓTESE de nota, não como veredito medido — mas a lacuna do Core
+Loop foi conferida pelo orquestrador no fonte e é real (ver §"P0 do dual-write" abaixo).
+
+- **Core Gameplay 8,5.** O produtor e o consumidor de `State.DEAD` existem:
+  `sources/idle/IdlePolicy.gd:191` e `:522-535` (`_tickDead` → `Revive()`, `State.SEEK`,
+  `sessionDeaths`/`sessionDowntimeSecs`), com substep fixo `TickInterval = 0.25` e
+  `MaxCatchUpSeconds = 2.0` (`:163-166`). Aggro com cap cobrado no runtime e dano agregado
+  por atacante (`sources/actor/agent/variants/AIAgent.gd:37-68`); drop nasce no evento de
+  morte (`MonsterAgent.gd:34-40`) e é coletado com raio finito (`IdlePolicy.gd:483-518`,
+  `LootSearchRadius = 192`). *Hipótese:* `autoPotionItemHash = 215387671` (Apple) pode ser a
+  razão do texto de `FarmZoneData.gd:45-47`; não confirmou se char novo tem Apple nem se o
+  `CactusPotion` do vendor (`EconomyCatalog.gd:201`) entra no auto-use.
+- **Core Loop 6,5.** A porta de capacidade fecha no servidor (`FarmZoneData.gd:266` cobrado em
+  `Server.gd:612`, `WorldCommands.gd:1125`, `IdlePolicyService.gd:66,259`) e o anel de
+  prestígio é lido no faucet (`OfflineSettle.gd:290-296`; essência em `Stats.gd:241`).
+  *Contra, o defeito:* dez escritores crus de `stat.gp` fora do kernel, com o contrato do
+  kernel em `EconomyKernel.gd:85-96` dizendo que escrever `stat.gp` sem mexer no agente é
+  escrever valor que sobrevive até o próximo snapshot — e o snapshot é absoluto
+  (`SQL.gd:1156`, `SQL.gd:533-544`, `World.gd:206`, `SQLCommons.gd:11`). O detector
+  (`EconomyKernel.gd:187`) só flagge `s.gp < balance_after`, então a perna do estouro é cega.
+- **Meta Game 7,5.** Temporada é dado + estado: `data/conf/seasons.json` (`s1` rotativa, `s2`
+  1799971200–1802563200, `premium_sku pass.s2`) com recusa explícita de vigência inválida
+  (`SeasonService.gd:150-171`, `:158`, `:163`) e relê por relógio (`SQLBackups.gd:142`).
+  Missão do passe resolvida por `COUNT(*)` de telemetria e ledger reais
+  (`PassService.gd:130-178`) e entrega escrevendo wallet+ledger, baú, VIP e cosmético
+  (`:315-352`). Governança autoritativa com rastro (`GuildService.gd:263,278,294,313`,
+  migration 062) e buff de guilda consumido no settle (`OfflineSettle.gd:230-233`).
+  *Hipótese/lacuna:* `SnapshotSeasonPower`/`SnapshotSeasonBossKills` pontuam estado
+  acumulado, não o delta da janela (`SeasonService.gd:174-207`; só `spend` é janelado), e
+  `pass_tiers` é `{}` nas duas entradas — a tabela vem dos defaults de código.
+- **Game Design 7,0.** Curva calculada por ele sobre `Experience.gd:14-16` e
+  `FarmZoneData.gd:263-270`: zona 27 dá `xp/kill 397.047`, `par/h 76`, `offline xp/h
+  18.105.343`, `h to L60 250.1h = 10.4d`; zona 24 dá `458.3h = 19.1d`; total
+  `4.527.868.739` XP; última linha do cálculo: `essence at cap: xp/h z27 online ->
+  50,694,961`. Com cap F2P de 8 h (`OfflineSettle.gd:22`), a nota de
+  `Experience.gd:9-10` ("~3 semanas", "income saturates at zone 24") não é verdadeira — e
+  `ZONE_COUNT = 27`. `data/conf/economy_base_catalog.json` tem 5 knobs; o resto da afinação é
+  const de GDScript. Torneira × gasto: ~2,26M gold/h na zona 27 contra ~29.000 gold/dia de
+  teto do vendor, 10.000 a chave de boss, 5.000 a guilda, `500 × tier²` = 40.500 na forja
+  tier 9 (`CraftCatalog.gd:111-112`).
+
 
 ### Veredito bruto — juiz A, grupo entrega (Testes, Segurança, DevOps, Live Ops)
 
