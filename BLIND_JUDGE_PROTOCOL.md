@@ -194,6 +194,12 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 | DevOps | 8,9 | 8,8 | 6,3 | 7,0 | **6,3** | R3A+R3B: `snap`/`release` com `needs: builds` publicam com teste vermelho; `deploy/ROLLBACK.md:26-33` declara que não há registry e `pull_policy: never` (`docker-compose.yml:50,102,211,319,374`), então o `SHAMBLETA_TAG` do job `container-images` morre no runner efêmero; smoke de compose roda 0 containers e nenhum `up` existe no caminho |
 | Documentação | 8,6 | 7,5 | 8,5 | 6,5 | **6,5** | R3A: taxa de erro falsa medida por ele = 0/5 (`DOC DRIFT: 1391 checks, 0 failures`), mas nenhuma afirmação de COMPORTAMENTO é coberta — números de `SCALING.md`/`OPS_RUNBOOK.md`/`WEB_SLIM.md` e o "4.7.2" de `deploy/web/landing/index.html:118`, construído em 4.7.1; e `tests/panel_fit_test.gd:6-7` aponta `WindowPanel.gd:235-237` para código que está em :238-239 sem acusação. R3B: duas afirmações falsas conferidas por mim passam — `docs/development/testing.md:87` diz "as 61 patches reais do boot viram a versão 61" contra 62 `.sql` em `data/conf/migrations/` (001..062), e a régua de numeral (`check_doc_drift.sh:178`) só morde quando o substantivo é "migrations", nunca "patches"; `README.md:65` aponta `Action.gd:176-199` para a cadeia `ui_*` que vai até 200, com `ui_fullscreen` FORA do intervalo citado, sem acusação |
 
+Cadeiras entregues: **8 de 10** — produto A+B, engenharia A+B, entrega A+B,
+experiência A+B. Faltam as duas de dinheiro (`juiz-A-dinheiro2`, `juiz-B-dinheiro2`),
+relançadas depois que os assentos originais estouraram o teto de turnos. Enquanto elas
+voam, a árvore fica congelada: são exatamente os arquivos de dinheiro que elas leem, e
+mudar `scripts/test.sh` sob um run em andamento fabrica um verde que ninguém mediu.
+
 R1 foi um juiz por categoria (a regra 6 só passou a valer na rodada 2), então a
 coluna R1 é nota única. `Social` teve R2 re-medida à parte, com a governança de
 guilda como lacuna: 9,0, e a mínima continua 5,5 até os dois juízes da rodada 3
