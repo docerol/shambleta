@@ -182,16 +182,16 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 | Monetização | 9,4 | — |  |  | 9,4 |  |
 | Marketplace | 8,5 | — |  |  | 8,5 |  |
 | Analytics | 8,0 | — |  |  | 8,0 |  |
-| Live Ops | 9,2 | — |  |  | 9,2 |  |
-| Arquitetura | 8,5 | — |  |  | 8,5 |  |
-| Performance | 8,5 | — |  |  | 8,5 |  |
-| Escalabilidade | 7,4 | — |  |  | 7,4 |  |
-| Código | 8,2 | — |  |  | 8,2 |  |
-| Testes | 8,2 | — |  |  | 8,2 |  |
+| Live Ops | 9,2 | — | 6,0 |  | **6,0** | R3A: falta a ponta do operador — nenhum dashboard versionado, nenhum prova executada de entrega de alerta, nenhum exercício cronometrado do drain; e o `SHAMBLETA_ALERT_PAGE_WEBHOOK_URL` vazio por default pagina para ninguém |
+| Arquitetura | 8,5 | — |  | 8,9 | 8,5 | R3B: nenhum run verde exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
+| Performance | 8,5 | — |  | 8,7 | 8,5 | R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms, e nenhuma harness compara a cauda com o orçamento |
+| Escalabilidade | 7,4 | — |  | 7,9 | 7,4 | R3B: teto horizontal (multi-processo) continua `[NÃO MEDIDO]`, e o `deploy/SCALING.md` afirma um erro por-passo em `AIAgent.gd` que o código já não tem |
+| Código | 8,2 | — |  | 8,6 | 8,2 | R3B: `harness_marker()` não casa marcador mixed-case, então `one benchmarks` e `one test_backup_restore` devolvem vermelho com `godot exit=0` — e nenhuma régua cobre o caminho `one` |
+| Testes | 8,2 | — | 7,8 |  | **7,8** | R3A: ~419 de 4.290 linhas de `Check*` casam TEXTO do fonte em vez de executar o comportamento; e `check_ci.sh:190` aceita `needs` de build como portão, passando verde sobre o buraco que ela mesma existe para fechar |
 | UX/UI | 7,5 | — |  |  | 7,5 |  |
 | Social | 5,5 | 9,0 |  |  | 5,5 |  |
-| Segurança | 8,7 | 6,8 |  |  | 6,8 |  |
-| DevOps | 8,9 | 8,8 |  |  | 8,8 |  |
+| Segurança | 8,7 | 6,8 | 7,2 |  | 6,8 | R3A: o limitador de RPC mora no processo do chamador (`Network.CallServer`), o servidor não cobra chat nem fan-out global, e a cesta pré-auth de `Admission` nunca é podada |
+| DevOps | 8,9 | 8,8 | 6,3 |  | **6,3** | R3A: o que publica não é barrado por teste (`snap`/`release` com `needs: builds`), nenhuma imagem tem registry por SHA, o smoke de compose roda 0 serviços por falta de docker na máquina, e `entrypoint.sh` é conferido só por casamento de texto |
 | Documentação | 8,6 | 7,5 |  |  | 7,5 |  |
 
 R1 foi um juiz por categoria (a regra 6 só passou a valer na rodada 2), então a
@@ -199,4 +199,97 @@ coluna R1 é nota única. `Social` teve R2 re-medida à parte, com a governança
 guilda como lacuna: 9,0, e a mínima continua 5,5 até os dois juízes da rodada 3
 concordarem. Preencher A/B com a nota, as três evidências e a lacuna; a coluna
 "mínima vigente" é recalculada na hora, não lembrada.
+
+### Veredito bruto — juiz B, grupo engenharia (Arquitetura, Performance, Escalabilidade, Código)
+
+Chegou 2026-09-28, depois de 90 chamadas de ferramenta e seis execuções verdes próprias
+(`companion` 744 checks, `structure` 9 gates com doc-drift 1391, `scale_test` 95,
+`tick_capacity_test` 32, `multi_instance_tick_test` 198, `benchmarks`). Reproduziu por
+grep puro o defeito de marcador e confirmou código-vs-doc uma afirmação falsa no
+`deploy/SCALING.md`.
+
+- **Arquitetura 8,9.** Roteador de leitura fail-closed em `sources/sql/SQLReadRules.gd:326,329`
+  (`ShouldRoute` devolve falso com `txnDepth > 0`) e leitores `PRAGMA query_only=1` fora da
+  mutex em `sources/sql/SQLReadPool.gd:7,73,96`; `one multi_instance_tick_test` →
+  `== RESULT: 198 checks, 0 failures ==` com `SQL 0.0 rt/tick` e `mutex 0.00 us/tick` em
+  todos os degraus. Caminho monetário único em `sources/economy/EconomyKernel.gd:33` com
+  triggers ABORT em `data/conf/migrations/009_idle_economy.sql:26-35` e roldura durável em
+  `data/conf/migrations/056_ledger_retention.sql:103-107`. Identidade nunca vem do payload
+  (`sources/network/Network.gd:1133,1141`); idempotência dupla do grant
+  (`sources/economy/CheckoutService.gd:164,168,174`). *Lacuna:* nada prova consistência
+  monetária entre PROCESSOS — todos os degraus medidos são multi-instância num só processo.
+- **Performance 8,7.** `one tick_capacity_test` → `== RESULT: 32 checks, 0 failures ==`,
+  medianas 1,58 → 4,57 → 10,68 → 27,86 ms (orçamento 33,33 ms), custo marginal ~0,132
+  ms/player, extrapolação própria de ~240 players/zona; o injetor de estouro respondeu
+  (40 ms queimados → período 46,22 ms). `one benchmarks` verde com `== Benchmarks: 0
+  failures ==`. *Lacuna:* a cauda não cabe no orçamento — a 200 players o p95/max deu
+  42,09 ms acima dos 33,33 ms, e o veredito é gated pela mediana; nenhuma harness compara
+  p95 com o orçamento. *Hipótese não descontada:* período de 33,60 ms até com 1 player é
+  granularidade do timer headless, não custo do produto.
+- **Escalabilidade 7,9.** `one multi_instance_tick_test` (198 checks) chega a 300 players
+  (15×20) com 25,80 ms dentro do orçamento e estoura a 400 (20×20): 90,12 ms de trabalho,
+  período 53,37 ms, CPU ~1,00 core — consistente com a linha do doc (88,93 ms / 20,52 Hz).
+  As âncoras `DRIFT proc_*` estão vivas e conferem. *Contra:* `deploy/SCALING.md:125-127`
+  afirma que o `ERROR: Attempted to erase a variable of type 'int' into a TypedArray` em
+  `sources/actor/agent/variants/AIAgent.gd:64` acontece dentro do passo de física e está
+  incluído nos custos medidos — hoje a linha 64 é COMENTÁRIO e a 68 usa `pop_front()`; o
+  bug foi corrigido. *Lacuna:* mesma do Arquitetura — shard real multi-processo indemonstrado.
+- **Código 8,6.** Varredura de dívida: os ~121 hits de TODO/FIXME/HACK são a palavra
+  portuguesa "todo", zero marcadores reais; guard-clause e autoridade do par em
+  `sources/network/server/Server.gd` derivando de `Peers.GetAccount/GetCharacter` do peer
+  de transporte; idempotência do grant com as duas guardas. *Contra, defeito concreto:*
+  `harness_marker()` em `scripts/test.sh:435-440` casa só `"== [A-Z]+[A-Z ]*:`, mas
+  `tests/benchmarks.gd:397` imprime `== Benchmarks:` e `tests/test_backup_restore.gd:28`
+  imprime `== Backup Restore Probe:` e nenhum dos dois imprime `== RESULT:`; o fallback
+  faz `one benchmarks` e `one test_backup_restore` voltar VERMELHO pelo
+  `scripts/ci_gate_log.sh` com `godot exit=0` e zero falhas. O `all` disfarça porque fixa
+  o marcador (`test.sh:569-570,602,606`), então o buraco é exclusivo do caminho `one` — o
+  caminho que este protocolo manda o juiz usar. *Lacuna:* nenhuma régua cobre o caso
+  mixed-case (falta um assert de que `harness_marker benchmarks == "== Benchmarks:"`).
+
+### Veredito bruto — juiz A, grupo entrega (Testes, Segurança, DevOps, Live Ops)
+
+Chegou 2026-09-28 (assento relançado com teto de chamadas depois que o juiz original
+estourou 150 turnos esperando um processo em background). 80 chamadas, medido sob contenção
+pesada — o `admission_gate_test` dele esperou ~980 s pelo `flock` de boot. Declarou não ter
+encontrado credencial viva em arquivo rastreado.
+
+- **Testes 7,8.** `one admission_gate_test` → `godot exit=0` com
+  `== ADMISSION: 96 checks, 0 failures ==`; `tests/perf_fix_test.gd:141` asserta
+  `Check(src.contains("Peers.Footprint(peerID, \"claim_settle\", ...)` — lê PROSA do fonte;
+  contou 419 linhas de `Check(...contains(...)` em 4.290 linhas de `Check*` em `tests/*.gd`
+  (~10% da suíte é casamento de texto). `scripts/check_ci.sh:190` aceita qualquer `needs`
+  como portão, e `.github/workflows/godot-ci.yml:415` dá `needs: builds` ao job que publica;
+  `structure` verde com `== CI GATE: 97 checks, 0 failures ==` passa por cima do próprio
+  buraco. *Hipótese:* ~93 suítes do kernel ficaram não conferidas nesta passada.
+- **Segurança 7,2.** `sources/network/server/Admission.gd:72` declara `windows` e escreve em
+  `:141`; nenhum `erase`/`clear` no repo — cesta pré-auth cresce sem teto por endereço.
+  Caminho de ataque que o código não barra: o limitador por RPC vive em
+  `sources/network/Network.gd:1146`, dentro de `CallServer`, que roda no processo do
+  CHAMADOR; no servidor `Peers.Footprint` só aparece em `Server.gd:629` e `:1085`, e
+  `TriggerChat` (`Server.gd:1644`) corta tamanho, cobra mute, faz
+  `Network.NotifyGlobal("ChatPlayer", ...)` sem cobrar taxa — quem pular `CallServer` e
+  emitir o `@rpc` direto inunda o fan-out. `.github/workflows/release.yml:107-109` assina o
+  APK de release com `/root/debug.keystore`, `androiddebugkey`/`android`. *Hipótese:*
+  superfície SQL sem injeção encontrada (concatenações em `SQL.gd:825,836` e
+  `FraudeReview.gd:248` montam cláusulas internas e passam valores por bindings).
+- **DevOps 6,3.** `structure` → `== COMPOSE GATE: 152 checks, 0 failures ==` com
+  "fumaça: 0 rodaram, 0 falharam, 2 pulados", porque `docker` não existe na máquina; nginx
+  idem. `gh run list --commit 855b0a7…` não devolve run: a árvore atual nunca passou pelo
+  portão remoto (o último é de `9e38f16`, três commits atrás) e aquele run publicou o snap
+  de fato. `snap` com `needs: builds` publica `release: edge` em push a master com
+  `idle-tests` vermelho; `release.yml:119,147` repete; `deploy/server/entrypoint.sh:108-137`
+  (SIGTERM → canary → drain) é conferido só por texto em `scripts/check_compose.sh:1160`.
+  *Nota do orquestrador:* parte disso é ausência de ferramenta no host, não defeito do
+  repo — mas o publish-sem-teste é do repo, e está aberto como work order.
+- **Live Ops 6,0.** O declarativo é real: `data/conf/liveops_calendar.json:6,8` com três
+  kinds e `ImplementedKinds` recusando o arquivo inteiro por kind sem consumidor;
+  `data/conf/seasons.json:2` com relê por TTL de 60 s e `_fail_closed`; `/flags reload`
+  dentro do processo vivo (`sources/ops/OpsCommands.gd:79-80`); `deploy/alerts.rules.yml:102`
+  bate com a série emitida em `sources/system/MetricsServer.gd:239` e o evaluator de
+  alerta agora existe no compose (`:315,370`). *Lacuna:* nenhum dashboard versionado,
+  nenhuma prova de ENTREGA de alerta, nenhum exercício cronometrado do drain;
+  `deploy/docker-compose.yml:410-411` deixa `SHAMBLETA_ALERT_PAGE_WEBHOOK_URL` vazio, então
+  uma stack recém-subida pagina para ninguém; e a transição S1→S2 nunca foi exercida em
+  lugar nenhum (S2 agendada para 2027-01-15).
 
