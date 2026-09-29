@@ -533,6 +533,11 @@ func ConnectCharacter(nickname : String, peerID : int):
 					# SOM-IDLE idle-first: login é farmando — fresh char entra na
 					# zona 1, char zonado retoma a sessão da zona salva.
 					IdlePolicyService.AutoFarmOnLogin(peer.characterID, agent)
+					# §12 (AUDITORIA_2026-09-27): a metade durável da presença — o que um
+					# segundo processo, ou este depois de um restart, consegue consultar.
+					# A zona sai da política recém-criada porque é `AutoFarmOnLogin` quem
+					# decide a zona do login (a coluna salva ainda pode estar em 0).
+					Presence.Report(Launcher.SQL, peer.characterID, peer.accountID, nickname, agent.idlePolicy.zoneID if agent.idlePolicy else int(charInfo.get("farm_zone", 0)), SQLCommons.Timestamp())
 
 					var ip : String = Peers.GetPeerIP(peerID)
 					Util.PrintLog("Server", "Player connected: %s (%d) via %s from %s" % [nickname, peerID, Peers.GetTransportName(Peers.GetTransport(peerID)), ip if not ip.is_empty() else "unavailable"])
@@ -563,6 +568,9 @@ func DisconnectCharacter(peerID : int):
 			WorldAgent.RemoveAgent(player)
 			peer.SetAgent(NetworkCommons.PeerUnknownID)
 			Network.online_player_disconnected.emit(playerName)
+			# §12: a linha durável sai junto com o índice em memória. Sem isto o
+			# "quem está online" do outro processo mentiria até o TTL vencer.
+			Presence.Forget(Launcher.SQL, peer.characterID)
 		peer.SetCharacter(NetworkCommons.PeerUnknownID)
 
 func RequestOnlineList(peerID : int):
@@ -606,6 +614,10 @@ func SetFarmZone(zoneID : int, peerID : int):
 		return
 
 	Launcher.SQL.SetCharacterFarmZone(charID, zoneID)
+	# §12 (AUDITORIA_2026-09-27): a zona vai junto na presença durável porque é o
+	# "online em que zona" que o OUTRO processo lê — este é o único ponto onde a zona
+	# muda numa sessão viva, então é aqui que a cauda do banco é re-estampada.
+	Presence.Report(Launcher.SQL, charID, maxi(0, Peers.GetAccount(peerID)), player.nick, zoneID, SQLCommons.Timestamp())
 	IdlePolicyService.StartIdleSession(player, zoneID)
 	Network.FarmZoneFeedback(zoneID, true, "farming", peerID)
 
@@ -650,9 +662,9 @@ func ClaimPassReward(level : int, track : String, peerID : int):
 		Network.SeasonPassState(Launcher.Economy.GetSeasonPass(accountID), peerID)
 		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
-# Fase C: compra do premium = intent do companion (sku pass.s1, R$ 24,90).
-# Follow-up Deluxe (BATTLE_PASS_S1 §4): sku pass.s1.deluxe (R$ 44,90 —
-# preço sugerido no doc, dono confirma).
+# Fase C: compra do premium = intent do companion (R$ 24,90; deluxe R$ 44,90).
+# O SKU não é decidido aqui: `GetPassCheckoutIntent` resolve o passe da temporada
+# ativa (OPS-2) — um literal neste transport venderia o passe da S1 com a S2 no ar.
 func BuyPass(tier : String, peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	if accountID == NetworkCommons.PeerUnknownID:
@@ -661,7 +673,7 @@ func BuyPass(tier : String, peerID : int):
 	if tier != "standard" and tier != "deluxe":
 		Network.PassFeedback(false, "bad_tier", peerID)
 		return
-	Network.CheckoutIntent(Launcher.Economy.GetCheckoutIntent(accountID, "pass.s1" if tier == "standard" else "pass.s1.deluxe"), peerID)
+	Network.CheckoutIntent(Launcher.Economy.GetPassCheckoutIntent(accountID, tier), peerID)
 
 func SkipPassLevel(peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
@@ -958,6 +970,55 @@ func BuyVaultSlots(peerID : int):
 		Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
 		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
+# As cinco ESCRITAS de guild do painel: identidade do peer, regra de vault do service (§14).
+func CreateGuild(guildName : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	if accountID == NetworkCommons.PeerUnknownID or charID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var guildID : int = Launcher.Economy.CreateGuild(accountID, charID, guildName)
+	Network.GuildFeedback(guildID > 0, "ok" if guildID > 0 else "rejected", peerID)
+	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
+func JoinGuild(guildID : int, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var ok : bool = Launcher.Economy.JoinGuild(accountID, guildID)
+	Network.GuildFeedback(ok, "ok" if ok else GuildRoster.RefusalFor(accountID, guildID), peerID)
+	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
+func LeaveGuild(peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var ok : bool = Launcher.Economy.LeaveGuild(accountID)
+	Network.GuildFeedback(ok, "ok" if ok else "no_guild", peerID)
+	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
+func DepositToVault(itemID : int, count : int, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	if accountID == NetworkCommons.PeerUnknownID or charID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var ok : bool = Launcher.Economy.DepositToVault(accountID, charID, itemID, count)
+	Network.GuildFeedback(ok, "ok" if ok else "rejected", peerID)
+	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
+func WithdrawFromVault(itemID : int, count : int, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	var charID : int = Peers.GetCharacter(peerID)
+	if accountID == NetworkCommons.PeerUnknownID or charID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var ok : bool = Launcher.Economy.WithdrawFromVault(accountID, charID, itemID, count)
+	Network.GuildFeedback(ok, "ok" if ok else ("bad_args" if count > GuildVaultLimits.MaxWithdrawPerAction else "rejected"), peerID)
+	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
 func GetTournaments(peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	if accountID == NetworkCommons.PeerUnknownID:
@@ -1088,6 +1149,23 @@ func SetReferralCode(code : String, peerID : int):
 		Network.ReferralState({"ok" = false, "reason" = "not_logged_in"}, peerID)
 		return
 	Network.ReferralState(Launcher.Economy.SetReferralCode(accountID, code), peerID)
+
+# SOM-W5 (peça 6): registro da subscription de web push. A conta é SEMPRE a do
+# peer — o payload traz material opaco do navegador (endpoint, chaves), e uma
+# conta nele seria o jogador escrevendo na caixa de correio de outro. A validação
+# do material (teto de tamanho, base64url, https) é do serviço
+# `WebPushSubscription.Register`, e a resposta ao jogador sai por
+# `CommandFeedback` com o RÓTULO do motivo, nunca com o endpoint (a URL do
+# provedor é credencial: quem tem ela + as chaves manda notificação).
+func RegisterPushSubscription(endpoint : String, p256dh : String, auth : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.CommandFeedback("push subscription refused (not_logged_in)", peerID)
+		return
+	WebPushSubscription.RegisterAndReport(accountID, endpoint, p256dh, auth, peerID)
+
+func UnregisterPushSubscription(peerID : int):
+	WebPushSubscription.ReportUnregister(Peers.GetAccount(peerID), peerID)
 
 func BuyDailyOffer(offerID : String, peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
@@ -1671,7 +1749,7 @@ func DropItem(itemID : int, customfield : StringName, itemCount : int, itemIndex
 
 func EquipItem(itemID : int, customfield : StringName, itemIndex : int, peerID : int):
 	var cell : ItemCell = DB.GetItem(itemID, customfield)
-	if cell and cell.slot != ActorCommons.Slot.NONE:
+	if CellCommons.IsEquippable(cell):
 		var player : PlayerAgent = Peers.GetAgent(peerID)
 		if player and ActorCommons.IsAlive(player) and player.inventory:
 			player.inventory.EquipItem(cell, itemIndex)
@@ -1845,14 +1923,12 @@ func _enter_tree():
 	multiplayerAPI.auth_callback = _ValidateAuth
 	multiplayerAPI.auth_timeout = NetworkCommons.LoginAttemptTimeout
 
-	var ret : Error = FAILED
-	if useWebSocket:
-		ret = currentPeer.create_server(serverPort, "*", tlsOptions)
-	else:
-		ret = currentPeer.create_server(serverPort, NetworkCommons.MaxPlayerCount)
-		if ret == OK and tlsOptions:
-			ret = currentPeer.host.dtls_server_setup(tlsOptions)
-
+	# SOM-IDLE ADMISSION: os dois transportes saem do mesmo teto, lido uma única vez
+	# dentro de `Admission.OpenTransport`. O WebSocket não tem onde receber o número
+	# no transporte (o 2º argumento do motor é o endereço de bind), então ele vira a
+	# régua da porta de entrada — fecha a divergência 128/sem-teto.
+	admission = Admission.OpenTransport(currentPeer, useWebSocket, serverPort, tlsOptions)
+	var ret : int = admission.BindError
 	if ret != OK:
 		push_error("Server could not be created, please check if your port %d is valid" % serverPort)
 		return
@@ -1867,12 +1943,14 @@ func _enter_tree():
 			"Testing" if LauncherCommons.IsTesting else "Release"
 		])
 
+# Porta de entrada pré-auth: teto único dos dois transportes + orçamento por endereço.
+var admission : Admission = null
+
 func _ValidateAuth(peerID: int, data: PackedByteArray):
-	if data.size() >= 8 and data.decode_s64(0) == NetworkCommons.ProtocolVersion:
-		multiplayerAPI.send_auth(peerID, PackedByteArray([1]))
-		multiplayerAPI.complete_auth(peerID)
-	else:
-		currentPeer.disconnect_peer(peerID)
+	# A decisão deixou de ser "o protocolo bate": `complete_auth` só vem depois do
+	# veredito de `Admission` (motivo e contagem de recusas vivem naquele módulo).
+	admission.CheckAuth(multiplayerAPI, currentPeer, peerID, data,
+		Launcher.SQL != null and Launcher.SQL.MigrationBlocked())
 
 func Destroy():
 	if multiplayerAPI.peer_connected.is_connected(ConnectPeer):

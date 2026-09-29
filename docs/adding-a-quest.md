@@ -18,7 +18,7 @@ Throughout this guide the example is an NPC named `Wend` who gives a quest calle
 
 Every character in the game (i.e. NPC, monster, or player) is described by an `EntityData` resource. These live as `.tres` files in `presets/entities/`, and the game scans that whole folder at startup, so **there is no list to register your new file in**. Dropping the file in the folder is enough.
 
-One rule matters more than the rest: the resource's `_id` field must be exactly the hash of its `_name` field. The game uses these hashed numbers instead of strings everywhere for speed, and if the two disagree, loading stops with an assert in `DB.ParseEntitiesDB`. That assert message prints the number you should have used, so if you get it wrong you can copy the correct value straight out of the error.
+One rule matters more than the rest: the resource's `_id` field must be exactly the hash of its `_name` field. The game uses these hashed numbers instead of strings everywhere for speed. If the two disagree, `DB.ParseEntitiesDB` reports it with `push_error` and skips that one entity — the message reads `ID for entity <nome> is not set, add: <hash>` and prints the number you should have used, so you can copy the correct value straight out of the error. The skip is per entity, not per catalog: the characters that come after yours in the folder still load, which means a wrong `_id` does not stop the server — it leaves your NPC missing until you fix the field and restart. The same folder scan rejects a duplicated `_id` the same way (skip plus `Duplicated entity in EntitiesDB`).
 
 There are two ways to create the resource.
 
@@ -87,7 +87,7 @@ The code that reads these properties and turns them into a `SpawnObject` lives i
 
 ## 3. Create the quest data
 
-A `QuestData` resource holds the human-readable description of the quest — the summary a player sees in their quest log. It is purely presentational. None of these fields drive any game logic; all of the real behaviour lives in the script you write in step 5.
+A `QuestData` resource holds the description of the quest a player reads in their quest log — plus the two fields that are the quest's actual payout. `name`, `description`, `giver`, `target` and `reward` are showcase: no server code reads them to decide anything. `rewardGP` and `rewardEXP` are the **declared reward**, and they do drive game logic: `NpcCommons.SetQuest` pays them, through the economy ledger, the moment the quest's state transitions to completion. The `reward` string is only what the player reads, so keep it honest — the payment toast is generated from the numbers, never from that text.
 
 Quest resources live in `presets/quests/`. Duplicate `NinaHungry.tres` to `SimpleErrand.tres` and fill in the fields:
 
@@ -99,8 +99,12 @@ giver = "Wend"
 giverLocation = "Tulimshar Gates"
 target = "Straw Hat x1"
 targetLocation = "Tulimshar Market"
-reward = "50 GP"
+reward = "50 GP"            # what the player reads; never a source of payment
+rewardGP = 50                # what the server actually credits, through the ledger
+rewardEXP = 0                # declared XP (0 = no XP leg)
 ```
+
+Leaving both numbers at `0` is the normal case for a quest that pays only an item, karma or a line of dialogue — `QuestData.HasDeclaredReward()` gates the whole payment path, so nothing is minted until the data says so.
 
 Unlike entities, the `id` here does not have to be right by hand — the game re-derives it from `name` when the resource loads. The `name` field, on the other hand, does matter, because the next step hashes that exact same string to produce the quest's identifier in code. Keep the two in sync.
 
@@ -193,10 +197,11 @@ func OnCheck():
         Mes("My hat! You found it!")
         RemoveItem(DB.GetCellHash("Straw Hat"))
         SetQuest(QUEST, ProgressCommons.SIMPLE_ERRAND.REWARDS_WITHDREW)
-        AddGP(50)
     else:
         Mes("Still by the bakery stand, I think.")
 ```
+
+That last `SetQuest` is the payment. Moving the quest to `REWARDS_WITHDREW` is the transition `NpcCommons.SetQuest` watches, and it credits the `rewardGP`/`rewardEXP` you declared in the resource — gold through `EconomyKernel.MoveGold` (one ledger line with reason `quest:<questID>:gold`), XP through the agent plus a matching ledger line. You do not add the money yourself, and you should not: the ledger line is what makes the payout auditable, what makes a re-visit pay nothing, and what the reconcile job can check the wallet against.
 
 Reading that top to bottom: a player who has never spoken to Wend is at `INACTIVE`, so they get the pitch and a choice. Accepting moves them to `STARTED`, which is saved to their character. Coming back while `STARTED`, they hit `OnCheck()`, which either takes the hat and pays out, or nudges them back to the market. Once they are at `REWARDS_WITHDREW` neither of the first two cases match, so the `_` catch-all gives them a friendly line forever after.
 
@@ -211,7 +216,7 @@ These are the functions available inside your script. All of them assume there i
 - **Dialogue:** `Mes` (speak), `Think` (thought bubble), `Narrate` (unattributed narration), `Choice(text, callable)`, `Farewell` and `Greeting` (random polite lines).
 - **Quest:** `GetQuest(id)`, `SetQuest(id, state)`, `IsQuestStarted(id)`, `IsQuestCompleted(id)`.
 - **Inventory:** `HasItem`, `AddItem`, `RemoveItem`. Items are identified by hash, so wrap the name: `DB.GetCellHash("Straw Hat")`.
-- **Rewards:** `AddGP` (money), `AddExp`, `TeachSkill`, `AddKarma`.
+- **Rewards:** for the completion payout, declare `rewardGP`/`rewardEXP` and let `SetQuest` pay them (above). `AddGP` (money), `AddExp`, `TeachSkill`, `AddKarma` are the hand-paid calls: they move the loaded agent only — `AddGP` sums `stat.gp` in memory and writes no ledger line, so it reaches the database on the periodic agent snapshot. Use them only for what a single declared number per quest cannot express: a branch that pays 1000 or 2000 depending on the answer, or an intermediate state that pays early. Every new hand-paid dialogue is one more payout no ledger line proves, and `tests/quest_reward_test.gd` measures the census of dialogues still paying by hand and ratchets the ones already migrated back into the data — by name — so they cannot quietly come back.
 - **Warp and UI:** `Warp`, `HighlightUI`, `OpenUI`, `DisplayTracker`.
 
 ### One thing that surprises people: dialogue is queued

@@ -62,6 +62,7 @@ var _cellCommons : GDScript = null
 var _craft : GDScript = null
 var _catalog : GDScript = null
 var _streak : GDScript = null
+var _streakRows : GDScript = null
 var _networkCommons : GDScript = null
 var _actorCommons : GDScript = null
 var _skillCommons : GDScript = null
@@ -95,6 +96,7 @@ func _run():
 	_craft = load("res://sources/economy/CraftCatalog.gd")
 	_catalog = load("res://sources/economy/EconomyCatalog.gd")
 	_streak = load("res://sources/idle/StreakService.gd")
+	_streakRows = load("res://sources/gui/StreakRows.gd")
 	_networkCommons = load("res://sources/network/NetworkCommons.gd")
 	_actorCommons = load("res://sources/actor/ActorCommons.gd")
 	_skillCommons = load("res://sources/skill/SkillCommons.gd")
@@ -114,8 +116,10 @@ func _run():
 	_suiteCraftCeiling()
 	_suiteCapDocumented()
 	_suiteStreak()
+	_suiteStreakSurface()
 	_suiteLadderCurves()
 	_suiteNewZoneFaucet()
+	_suiteMaterialShare()
 
 	_finish()
 
@@ -152,6 +156,12 @@ func _dropFixture(accountName : String, nickname : String):
 
 func _setLevel(charID : int, level : int):
 	_sql.db.update_rows("stat", "char_id = %d" % charID, {"level" = level, "experience" = 0})
+
+# Contagem do lote entregue no inventário vivo (`item`, storage 0) — a mesma régua
+# que `tests/IdleTests.gd` usa para provar que um drop é materializado, não exibido.
+func _countItem(charID : int, itemHash : int) -> int:
+	var rows : Array[Dictionary] = _sql.db.select_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemHash, charID], ["count"])
+	return 0 if rows.is_empty() else int(rows[0]["count"])
 
 func _gpOf(charID : int) -> int:
 	var rows : Array = _sql.db.select_rows("stat", "char_id = %d" % charID, ["gp"])
@@ -420,6 +430,160 @@ func _suiteStreak():
 	_streak.economyOverride = null
 	_dropFixture("bal_streak_account", "BalStreakChar")
 
+# ------------------------------------------------------------------ suite 3c: superfície
+
+# JUÍZ 2026-09-27 (Retenção 7,8/10): "o streak de login não tem superfície" — o
+# serviço carimbava o dia e pagava o degrau (suite 3b), mas `PeekStreak` não tinha
+# UM chamador de produção, então a mecânica não podia puxar ninguém de volta. Esta
+# suíte mede as três pontas que fecham a lacuna, cada uma por um caminho diferente
+# de propósito: (a) o payload que o SERVIDOR projeta do banco (`View`) traz o dia
+# vigente, o próximo marco e o custo de quebrar com os MESMOS números que o grant
+# pagou — se a tela e o pagamento divergirem, quebra; (b) o caminho de rede é
+# lido na fonte (RPC de leitura + push do login, cliente espelhando sem calcular),
+# porque superfície alimentada por número local não é superfície, é decoração;
+# (c) `StreakRows` desenha cada número como string conferida linha a linha. Mais a
+# outra ponta que o mesmo juíz espreitava: o offline não pode ser só popup — o baú
+# que a LIQUIDAÇÃO real mintar tem de aparecer no estado do servidor e abrir de
+# verdade, entregando item + espelho de ledger.
+func _suiteStreakSurface():
+	print("[suite] 3c: superfície do streak (servidor alimenta, janela desenha) + baú do offline abre de verdade")
+	var charID : int = _createFixture("bal_surface_account", "BalSurfaceChar", 10000)
+	if not _check(charID != 0, "fixture da superfície criada"):
+		return
+	var accountID : int = _sql.GetAccountIDForCharacter(charID)
+	_streak.sqlOverride = _sql
+	_streak.economyOverride = _economy
+	# Três logins em dias consecutivos do relógio do servidor; o último resultado do
+	# GRANT é a régua com que a superfície é conferida abaixo.
+	var lastGrant : Dictionary = {}
+	for day : int in range(1, 4):
+		_streak.nowOverride = DEAD_TS + (day - 1) * 86400
+		lastGrant = _streak.RecordLogin(charID, accountID)
+		_check(bool(lastGrant.get("ok", false)), "login do dia %d carimbado" % day)
+	_streak.nowOverride = DEAD_TS + 2 * 86400
+	var view : Dictionary = _streak.View(charID)
+	var streak : int = int(view.get("current_streak", 0))
+	_check(bool(view.get("ok", false)), "View devolve estado projetado pelo servidor")
+	_checkEq(streak, 3, "a superfície mostra o dia 3 depois de três logins seguidos")
+	_checkEq(int(view.get("best_streak", 0)), 3, "a melhor marca acompanha na superfície")
+	_check(bool(view.get("logged_today", false)), "com o carimbo de hoje a superfície diz HOJE")
+	_checkEq(int(view.get("today_reward", -1)), int(lastGrant.get("reward", -2)), "o ouro exibido do dia == o ouro que o servidor CONCEDEU neste login")
+	_checkEq(int(view.get("today_reward", -1)), int(_streak.LadderReward(streak)), "e o exibido vem da mesma escada que paga, não de tabela paralela")
+	_checkEq(int(view.get("next_day", 0)), 4, "próximo dia anunciado")
+	_checkEq(int(view.get("next_reward", 0)), int(_streak.LadderReward(4)), "próximo degrau anunciado == escada(4)")
+	_checkEq(int(view.get("mark_day", 0)), int(_streak.NextMark(streak)), "marco == NextMark(dia atual)")
+	_checkEq(int(view.get("mark_reward", 0)), 1000, "o marco paga o topo da escada (1000)")
+	_checkEq(int(view.get("days_to_mark", 0)), int(view.get("mark_day", 0)) - streak, "faltam (marco - dia) dias para o marco")
+	var loss : int = int(view.get("loss_on_break", -1))
+	_checkEq(loss, int(_streak.LossOnBreak(streak)), "custo de quebrar == LossOnBreak(dia atual)")
+	_check(loss > 0, "no meio da escada quebrar tem preço visível (%d de ouro)" % loss)
+	_checkEq((view.get("ladder", []) as Array).size(), 7, "a escada inteira vai no payload (7 degraus)")
+	_checkEq(int(view.get("cycle_total", 0)), int(_streak.LadderCycleTotal()), "ciclo total == soma da escada que paga")
+	var reset : int = int(view.get("reset_in_sec", -1))
+	_check(reset > 0 and reset <= 86400, "a janela do servidor vem com contagem positiva (1..86400s; medido %d)" % reset)
+	# Quebrar tem que aparecer na superfície com o MESMO número do grant.
+	_streak.nowOverride = DEAD_TS + 12 * 86400
+	var afterGap : Dictionary = _streak.RecordLogin(charID, accountID)
+	_checkEq(int(afterGap.get("reward", -1)), 100, "quebrar devolve ao degrau 1 no GRANT")
+	var gapView : Dictionary = _streak.View(charID)
+	_checkEq(int(gapView.get("current_streak", -1)), 1, "e mostra o dia 1 na SUPERFÍCIE (mesmo número do grant)")
+	_checkEq(int(gapView.get("today_reward", -1)), 100, "com o ouro de hoje já pago na linha de cabeça")
+	# Um char que nunca logou não pode fabricar dia: tudo vem do banco.
+	var freshID : int = _createFixture("bal_fresh_account", "BalFreshChar", 10000)
+	if _check(freshID != 0, "fixture novata criada"):
+		var freshView : Dictionary = _streak.View(freshID)
+		_checkEq(int(freshView.get("current_streak", -1)), 0, "nunca logou: dia 0, nenhum número inventado")
+		_check(not bool(freshView.get("logged_today", true)), "logged_today sai do banco, não do chute")
+		_checkEq(int(freshView.get("today_reward", -1)), 0, "e hoje não paga nada")
+		_checkEq(int(freshView.get("mark_day", 0)), 7, "o marco continua sendo o topo do ciclo (7)")
+	_dropFixture("bal_fresh_account", "BalFreshChar")
+	# (b) O caminho até a tela é do SERVIDOR nos dois sentidos.
+	var svcSrc : String = FileAccess.get_file_as_string("res://sources/idle/StreakService.gd")
+	_check(svcSrc.contains("var state : Dictionary = PeekStreak(charID)"), "PeekStreak tem chamador de produção (View) — o estado da superfície é o gravado no banco")
+	var serverSrc : String = FileAccess.get_file_as_string("res://sources/network/server/Server.gd")
+	_check(serverSrc.contains("func GetStreak(peerID : int):"), "há RPC de leitura do streak no servidor")
+	_check(serverSrc.contains("Network.StreakState(StreakService.View(charID), peerID)"), "o RPC responde com View(charID) relido do banco; cliente não manda número nenhum")
+	var policySrc : String = FileAccess.get_file_as_string("res://sources/idle/IdlePolicyService.gd")
+	_check(policySrc.contains("Network.StreakState(StreakService.View(charID), player.peerID)"), "o login empurra o estado da superfície junto do carimbo")
+	_check(policySrc.contains("int(streak.get(\"reward\", 0)) > 0"), "a frase de pagamento só sai quando o resultado REAL do grant pagou ouro")
+	var netSrc : String = FileAccess.get_file_as_string("res://sources/network/Network.gd")
+	_check(netSrc.contains("CallServer(\"GetStreak\"") and netSrc.contains("CallClient(\"StreakState\""), "os dois sentidos do canal existem em Network (pedido e push)")
+	var cliSrc : String = FileAccess.get_file_as_string("res://sources/network/client/Client.gd")
+	_check(cliSrc.contains("LastStreak = state"), "o cliente espelha o estado que o servidor mandou")
+	_check(not cliSrc.contains("LadderReward") and not cliSrc.contains("StreakService"), "e não calcula escada nenhuma: zero autoridade de streak no cliente")
+	var afkSrc : String = FileAccess.get_file_as_string("res://sources/gui/AfkReport.gd")
+	_check(afkSrc.contains("StreakRows.Build($Layout)"), "a janela do RETORNO monta as linhas do streak na própria caixa")
+	_check(afkSrc.contains("Network.GetStreak()"), "e pede o estado ao servidor quando o cache está vazio")
+	_check(afkSrc.contains("func ShowStreak(state : Dictionary):"), "há entrada de redraw para o push do login")
+	# O chat é a outra metade da superfície: `/streak` existe, é registrado, e lê o
+	# estado GRAVADO (View), não um número local. A linha que promete o `/streak` em
+	# StreakService.gd só é verdade com estes três registros aqui.
+	var cmdSrc : String = FileAccess.get_file_as_string("res://sources/world/WorldCommands.gd")
+	_check(cmdSrc.contains("CommandManager.Register(\"streak\", CommandStreak,"), "/streak está registrado (comando real, não comentário)")
+	_check(cmdSrc.contains("CommandManager.Unregister(\"streak\")"), "e desregistrado no teardown, como os demais comandos")
+	_check(cmdSrc.contains("var state : Dictionary = StreakService.View(caller.GetCharacterID())"), "o /streak responde do estado que o servidor gravou")
+	_check(cmdSrc.contains("int(state.get(\"loss_on_break\", 0))"), "e a linha do comando diz o preço de quebrar, do mesmo payload")
+	# (c) O módulo de desenho mostra os números do servidor, um por um.
+	var head : String = String(_streakRows.Headline(view))
+	_check(head.contains("dia 3"), "linha de cabeça mostra o dia vigente (%s)" % head)
+	_check(head.contains("+300"), "e o ouro que hoje pagou (%s)" % head)
+	var nextLine : String = String(_streakRows.NextMarkLine(view))
+	_check(nextLine.contains("dia 4 paga +400"), "linha do próximo login diz o degrau seguinte (%s)" % nextLine)
+	_check(nextLine.contains("marco no dia 7"), "e onde fica o marco com o valor dele (%s)" % nextLine)
+	var breakLine : String = String(_streakRows.BreakLine(view))
+	_check(breakLine.contains(str(loss)), "linha da perda cita o número que o SERVIDOR deixa de pagar (%s)" % breakLine)
+	var ladderLine : String = String(_streakRows.LadderLine(view))
+	_checkEq(ladderLine.count(":+"), 7, "a escada desenhada tem os 7 degraus que pagam (%s)" % ladderLine)
+	_check(ladderLine.contains("1000"), "com o topo visível (%s)" % ladderLine)
+	_check(String(_streakRows.CountdownLine(view)).contains("h"), "contagem do dia do servidor desenhada")
+	# Sem resposta do servidor a linha é uma linha também — nunca some da janela.
+	_check(String(_streakRows.Headline({})).contains("servidor"), "payload ausente diz 'esperando o servidor', não fecha a superfície")
+	_check(not String(_streakRows.BreakLine({})).is_empty(), "e a linha da perda continua desenhada sem estado")
+	# (d) Offline não é só popup: settle REAL → baú no estado do servidor → abre e
+	# materializa item + ledger. É o mesmo caminho do `/openchest` e da janela Chests.
+	_offline.sqlOverride = _sql
+	_offline.economyOverride = _economy
+	_sql.SetCharacterFarmZone(charID, 1)
+	var settleAt : int = DEAD_TS + 12 * 86400
+	_sql.UpdateSettleAnchor(charID, settleAt - 8 * 3600, 1.0)
+	var closedBefore : int = _sql.GetClosedChests(charID).size()
+	_offline.nowOverride = settleAt
+	var settled : Dictionary = _offline.SettlePending(charID)
+	_offline.nowOverride = 0
+	var minted : int = int(settled.get("chests", 0))
+	_check(minted > 0, "a liquidação offline entrega baú de verdade no estado do servidor (%d), não só texto no popup" % minted)
+	var closedNow : Array[Dictionary] = _sql.GetClosedChests(charID)
+	_checkEq(closedNow.size(), closedBefore + minted, "os %d baús do settle viraram chest_instance fechada" % minted)
+	# Índice protegido: sem o baú no banco a suíte falha limpo — o gate exige zero
+	# SCRIPT ERROR, então estourar `Array[Dictionary][0]` no meio da suíte seria tão
+	# ruim quanto o bug que ele denuncia.
+	var openID : int = int(closedNow[0]["id"]) if not closedNow.is_empty() else 0
+	_check(openID > 0, "o baú liquidado está na lista de baús fechados do servidor")
+	if openID > 0:
+		var listed : Array = (_economy.GetEconomyState(accountID, charID)).get("chests", []) as Array
+		_check(listed.has(openID), "o baú do settle está no EconomyState que a janela de baús desenha (%d)" % openID)
+		var opened : Dictionary = _economy.OpenChest(charID, openID)
+		if _check(not opened.is_empty(), "abrir pela porta do servidor funciona"):
+			_checkEq(_sql.GetClosedChests(charID).size(), closedBefore + minted - 1, "abrir CONSUME o baú")
+			var itemHash : int = int(opened.get("item_id", 0))
+			_check(itemHash != 0 and _countItem(charID, itemHash) >= int(opened.get("count", 1)), "a recompensa está materializada no inventário (item %d)" % itemHash)
+			var mirror : Array[Dictionary] = _sql.QueryBindings("SELECT id FROM ledger_transaction WHERE char_id = ? AND reason LIKE 'chest:%';", [charID])
+			_checkEq(mirror.size(), 1, "com espelho de ledger do lado do item (recompensa liquidada, não decorativa)")
+			_check(_economy.OpenChest(charID, openID).is_empty(), "reabrir o mesmo baú é recusado (sem farm de drop)")
+	_sql.db.delete_rows("chest_instance", "char_id = %d" % charID)
+	_sql.db.delete_rows("item", "char_id = %d" % charID)
+	# O ledger fica de propósito: o trigger `ledger_transaction_no_delete`
+	# (056_ledger_retention.sql:103) recusa apagar linha não coberta por rollup, e
+	# o espelho do baú é exatamente uma linha fiscal. Aposentar a fixture é tirar o
+	# dono — as réguas daqui consultam por char/account e o reconcile dá JOIN em
+	# character, então a série sai de todas as varreduras junto com ele.
+	_offline.sqlOverride = null
+	_offline.economyOverride = null
+	_streak.nowOverride = 0
+	_streak.sqlOverride = null
+	_streak.economyOverride = null
+	_dropFixture("bal_surface_account", "BalSurfaceChar")
+
 # ------------------------------------------------------------------ suite 4: curvas da escada
 
 # JUÍZ 2026-09-27: "depois das 24 zonas e dos 4 bosses, só boss-rush e tormento
@@ -597,12 +761,21 @@ func _suiteNewZoneFaucet():
 		var dropTotal : int = 0
 		for dkey in report8.drops.keys():
 			dropTotal += int(report8.drops[dkey])
-		var expDrop : float = float(zone8.dropRatePPM) * float(report8.hours) * 3600.0 * float(report8.efficiency) * off / 1000000.0
+		var kills24 : float = float(zone8.parKillsPerHour) * float(report8.hours) * float(report8.efficiency) * off
+		var expDrop : float = float(zone8.dropRatePPM) * kills24 / 1000000.0
 		var expCount : int = floori(expDrop)
 		if expDrop - float(expCount) >= 0.5:
 			expCount += 1
-		_checkEq(dropTotal, expCount, "zona %d: n. de drops liquidado == ppm x h x 3600 x eff x 0,6 / 1e6 (medido %d, formula %.3f)" % [dz2, dropTotal, expDrop])
+		_checkEq(dropTotal, expCount, "zona %d: n. de drops liquidado == ppm de kills x kills equivalentes (medido %d, formula %.3f)" % [dz2, dropTotal, expDrop])
 		_check(dropTotal > 0, "zona %d: a liquidação entrega drop (%d itens em 8h)" % [dz2, dropTotal])
+		# Grandeza, não fórmula: a trava de cima só repete a conta do settle e foi
+		# exatamente por isso que as duas eram verdes quando o ppm era lido como
+		# partes-por-milhão de SEGUNDOS (3 itens em 8h de zona 24, 0,008 por kill).
+		# O drop offline tem que ficar na ordem do drop ao vivo: ao menos 0,1 item
+		# por kill equivalente (o medido na tabela viva é 0,7) e nunca mais de um
+		# por kill — a mesa não derruba dois itens do mesmo cadáver.
+		_check(expDrop >= kills24 * 0.1, "zona %d: pia offline na ordem do farm ao vivo (%.3f ≥ %.1f kills × 0,1)" % [dz2, expDrop, kills24])
+		_check(dropTotal <= int(kills24), "zona %d: itens liquidados cabem nos kills da janela (%d ≤ %d)" % [dz2, dropTotal, int(kills24)])
 		var tierLo : int = int(zone8.tier)
 		var tierHi : int = mini(tierLo + int(_farmZone.DropTierBandSize) - 1, int(_farmZone.MAX_TIER))
 		for dkey2 in report8.drops.keys():
@@ -616,3 +789,60 @@ func _suiteNewZoneFaucet():
 				"zona %d: drop '%s' tier %d dentro da faixa [%d,%d]" % [dz2, str(cell.name), int(cell.tier), tierLo, tierHi])
 			_check(not (hsh == apple and tierLo > 1), "zona %d: loot não é o stand-in Apple do fallback deletado" % dz2)
 	_dropFixture("bal_ladder_account", "BalLadderChar")
+
+# ------------------------------------------------------------------ suite 6: matéria-prima na faixa
+
+# SOM-CRAFT 2026-09-27: a faixa de drop deixou de ser só equipamento — agora cabe
+# insumo nela, e o segundo verbo ("farmar material → forjar") existe por este
+# caminho. Duas coisas têm de ficar verdadeiras ao mesmo tempo, e é isto que a
+# régua abaixo mede no roll REAL (FarmZoneData.GetDropForRoll), não em contagem de
+# célula:
+#   (a) COBERTURA — nenhuma zona da escada fica sem fonte de matéria-prima (faixa
+#       sem insumo = forja inacessível naquele ponto da ladder);
+#   (b) PROPORÇÃO — a fatia do roll que cai em material fica na banda declarada
+#       (FarmZoneData.MaterialDropSharePPM). É o que impede o segundo verbo de
+#       drenar silenciosamente a pia de equipamento: as curvas gold/XP das suítes
+#       4 e 5 são contrato deste arquivo, e uma drop-share grande as mudaria sem
+#       mudar nenhum número delas (ela age por identidade do drop, não por contagem).
+func _suiteMaterialShare():
+	print("[suite] 6: matéria-prima cabe na faixa sem drenar o equipamento")
+	_farmZone.SyncWithDB()
+	var zoneCount : int = int(_farmZone.ZONE_COUNT)
+	var sharePPM : int = int(_farmZone.MaterialDropSharePPM)
+	_check(sharePPM > 0 and sharePPM <= 100000,
+		"a fatia declarada de matéria-prima é pequena e não-zero (%d ppm <= 10%%)" % sharePPM)
+	var rolls : int = 3000
+	for z in range(1, zoneCount + 1):
+		var zone = _farmZone.GetZone(z)
+		if zone == null:
+			continue
+		var pool : Array = _farmZone.GetDropPool(z)
+		var matCells : int = 0
+		var equipCells : int = 0
+		for h in pool:
+			var cell = _dbScript.ItemsDB.get(int(h), null)
+			if cell == null:
+				continue	# template de craft aprovado não é célula do ItemsDB
+			if bool(cell.material):
+				matCells += 1
+			elif int(cell.slot) >= 0 and int(cell.slot) < 8:
+				equipCells += 1
+		_check(matCells > 0, "zona %d (tier %d): a faixa tem matéria-prima (%d cells)" % [z, int(zone.tier), matCells])
+		_check(equipCells > 0, "zona %d (tier %d): a faixa continua com equipamento (%d cells)" % [z, int(zone.tier), equipCells])
+		var hits : int = 0
+		for r in rolls:
+			var pick : int = int(_farmZone.GetDropForRoll(z, r))
+			var picked : Variant = _dbScript.ItemsDB.get(pick, null)
+			if picked != null and bool(picked.material):
+				hits += 1
+			elif picked == null:
+				_check(false, "zona %d roll %d: drop fora do catálogo (%d)" % [z, r, pick])
+		var measured : float = 100.0 * float(hits) / float(rolls)
+		var declared : float = 100.0 * float(_farmZone.GetMaterialDropShare(z))
+		_checkNear(measured, float(sharePPM) / 10000.0, 1.5,
+			"zona %d: fatia do roll que cai em material == banda declarada (medido %.2f%%, declarado %.2f%%)" % [z, measured, float(sharePPM) / 10000.0])
+		_checkNear(declared, measured, 1.0,
+			"zona %d: o peso publicado fecha com o roll medido (%.2f%% vs %.2f%%)" % [z, declared, measured])
+		# O resto do roll continua sendo equipamento/consumível da faixa — se o
+		# material comeu a pia, esta é a linha que grita primeiro.
+		_check(float(hits) < float(rolls) * 0.15, "zona %d: material leva menos de 15%% dos rolls (%d/%d)" % [z, hits, rolls])

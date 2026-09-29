@@ -69,6 +69,17 @@ func _initialize():
 	# A contagem de checks vai para a linha de resultado de propósito:
 	# `scripts/ci_gate_log.sh` lê o nº de falhas DA LINHA, e uma linha que só diz
 	# "0 failures" não prova que o loop acima iterou alguma coisa — um `checks` que
-	# encolhe ou um `return` precoce ficariam verdes.
+	# encolhe ou um `return` precoce ficariam verdes. A linha sai ANTES do drain de
+	# propósito: se o próprio drain travar, o veredito continua legível no log e o
+	# gate acusa a saída que não bate, em vez de perder o run inteiro.
 	print("== RESULT: %d checks, %d failures ==" % [checks.size(), failures])
+	# O drain vem antes do quit pelo mesmo motivo de `balance_test.gd:22-23`: num
+	# `-s` o `_initialize` roda com os autoloads pela metade, o `quit(0)` só é
+	# atendido no fim do boot, e o Launcher._exit_tree pega preloads pendentes no
+	# meio — SIGSEGV com o veredito já impresso (medido: exit 134 com
+	# "37 checks, 0 failures"). O gate já recusa exit e veredito que não batem;
+	# isto é o que faz os dois baterem.
+	var dbScript : GDScript = load("res://sources/db/DB.gd")
+	if dbScript != null:
+		dbScript.call("DrainPendingPreloads")
 	quit(failures)

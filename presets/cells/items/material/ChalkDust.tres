@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ItemCell" format=3 uid="uid://bt3h9kq7wz1ma"]
+
+[ext_resource type="Texture2D" uid="uid://chohwstjqw5ow" path="res://data/graphics/items/common/powder.png" id="1_icon"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="2_script"]
+
+[resource]
+script = ExtResource("2_script")
+name = "Chalk Dust"
+description = "Fine white powder scraped from the cave floors around Candor. The first thing a forge eats."
+tier = 1
+material = true
+icon = ExtResource("1_icon")
+stackable = true

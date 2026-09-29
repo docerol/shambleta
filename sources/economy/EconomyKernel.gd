@@ -196,11 +196,14 @@ func ReconcileWalletDaily(nowSec : int = 0) -> Dictionary:
 	var gemsCount : int = gemsRows.size()
 	return {"gp": gpCount, "gems": gemsCount, "total": gpCount + gemsCount}
 
-# Diagnóstico da perna de gp: quais personagens estão abaixo do atestado e por
+# Diagnóstico das DUAS pernas de carteira: quem está abaixo do atestado e por
 # quanto. `/metrics` só expõe o contador; quem abre o incidente precisa do par
-# (char, esperado, gravado) — e é a mesma régua do `ReconcileWalletDaily` acima,
+# (dono, esperado, gravado) — e é a mesma régua do `ReconcileWalletDaily` acima,
 # incluindo aí o ÚLTIMO `balance_after` como atestado: com MAX aqui, o contador e
 # esta lista divergiam (o job dizia 1, o diagnóstico entregava 4 nomes).
+# Cada linha carrega `kind` e o tamanho da lista é EXATAMENTE o `total` do
+# contador: um diagnóstico que não bate com o número que ele explica é uma régua
+# nova mentindo sobre a velha.
 func DivergingWallets(nowSec : int = 0) -> Array[Dictionary]:
 	var sql : SQLService = Launcher.SQL
 	if sql == null or not sql.isInitialized:
@@ -209,12 +212,24 @@ func DivergingWallets(nowSec : int = 0) -> Array[Dictionary]:
 		nowSec = SQLCommons.Timestamp()
 	var dayStart : int = nowSec - (nowSec % 86400)
 	var dayEnd : int = dayStart + 86400
-	return sql.QueryBindings(
+	var rows : Array[Dictionary] = sql.QueryBindings(
 		"SELECT s.char_id AS char_id, s.gp AS recorded, (SELECT l.balance_after FROM ledger_transaction l WHERE l.char_id = s.char_id AND l.kind = ? AND l.created_at >= c.created_timestamp ORDER BY l.id DESC LIMIT 1) AS attested"
 		+ " FROM stat s INNER JOIN character c ON c.char_id = s.char_id"
 		+ " WHERE s.gp < (SELECT l.balance_after FROM ledger_transaction l WHERE l.char_id = s.char_id AND l.kind = ? AND l.created_at >= c.created_timestamp ORDER BY l.id DESC LIMIT 1)"
 		+ " AND EXISTS (SELECT 1 FROM ledger_transaction w WHERE w.char_id = s.char_id AND w.kind = ? AND w.created_at >= ? AND w.created_at < ?);",
 		[EconomyCatalog.LedgerKindGold, EconomyCatalog.LedgerKindGold, EconomyCatalog.LedgerKindGold, dayStart, dayEnd])
+	for gpRow in rows:
+		gpRow["kind"] = "wallet_gp"
+	var gems : Array[Dictionary] = sql.QueryBindings(
+		"SELECT wa.account_id AS account_id, wa.gems AS recorded, (SELECT l.balance_after FROM ledger_transaction l WHERE l.account_id = wa.account_id AND l.kind = ? AND l.created_at >= a.created_timestamp ORDER BY l.id DESC LIMIT 1) AS attested"
+		+ " FROM wallet wa INNER JOIN account a ON a.account_id = wa.account_id"
+		+ " WHERE wa.gems < (SELECT l.balance_after FROM ledger_transaction l WHERE l.account_id = wa.account_id AND l.kind = ? AND l.created_at >= a.created_timestamp ORDER BY l.id DESC LIMIT 1)"
+		+ " AND EXISTS (SELECT 1 FROM ledger_transaction x WHERE x.account_id = wa.account_id AND x.kind = ? AND x.created_at >= ? AND x.created_at < ?);",
+		[EconomyCatalog.LedgerKindGems, EconomyCatalog.LedgerKindGems, EconomyCatalog.LedgerKindGems, dayStart, dayEnd])
+	for gemRow in gems:
+		gemRow["kind"] = "wallet_gems"
+		rows.append(gemRow)
+	return rows
 
 
 # ------------------------------------------------------------------ boss keys (character column + ledger mirror)
@@ -290,6 +305,25 @@ func _MoveStackUIDs(charFrom : int, charTo : int, itemID : int, count : int) -> 
 		return {}
 	return {"consumed" = consumed, "granted" = granted}
 
+# SOM-IDLE B1: o outro lado de `_MoveStackUIDs` — todo caminho que consome lotes
+# com `ConsumeItemLotsRaw` (corrupção, cubo, desmanche, insumo do craft) tem que
+# decrescer o AGREGADO aqui, senão `item.count` continua contando o que não existe
+# mais: a tela mostra item fantasma e o reconcile diário
+# (`TournamentArenaService.gd:398`) grava divergência de pilha permanente, que o
+# job reporta e não conserta. Lote sem linha agregada não é falha deste chamamento
+# (o consumo já validou o lote): é órfão pré-existente, devolvido como consumido
+# para a transação seguir, e a varredura de órfãos é quem nomeia o problema.
+func _DecayStackRaw(charID : int, itemID : int, count : int) -> bool:
+	var sql : SQLService = Launcher.SQL
+	var condition : String = "item_id = %d AND char_id = %d AND storage = 0" % [itemID, charID]
+	var rows : Array[Dictionary] = sql.db.select_rows("item", condition, ["count"])
+	if rows.is_empty():
+		return true
+	var have : int = int(rows[0].get("count", 0) if rows[0].get("count", 0) != null else 0)
+	if have > count:
+		return sql.UpdateRowsRaw("item", condition, {"count" = have - count})
+	return sql.DeleteRowsRaw("item", condition)
+
 func _UIDList(uids : Array) -> String:
 	var parts : PackedStringArray = PackedStringArray()
 	for uid in uids:
@@ -300,6 +334,15 @@ func _UIDList(uids : Array) -> String:
 # Transaction(). Retorna o uid do lote ou 0.
 func _GrantStackRaw(charID : int, accountID : int, itemID : int, count : int, ledgerReason : String, grantReason : String = "", bound : int = 0, parentUID : int = 0, creatorAccountID : int = 0) -> int:
 	var sql : SQLService = Launcher.SQL
+	# SOM-CRAFT: invariante de dados — lote de MATÉRIA-PRIMA nasce bound, sempre,
+	# independente de quem concedeu (baú, vendor, desmanche, seed do bot, GM). Os
+	# caminhos de trade consomem só lotes unbound (ConsumeItemLotsRaw / _MoveStackUIDs
+	# com allowBound=false), então o carimbo é o que tira material do mercado sem
+	# mexer na matemática de gold do leilão. Lookup direto no ItemsDB (não
+	# DB.GetItem): hash de template de craft pode não ser célula conhecida e
+	# GetItem faria push_error dentro de transação.
+	if bound == 0 and CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)):
+		bound = 1
 	var existing : Array[Dictionary] = sql.db.select_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemID, charID], ["count"])
 	var delivered : bool = false
 	if not existing.is_empty():

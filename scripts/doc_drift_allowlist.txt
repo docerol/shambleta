@@ -9,6 +9,8 @@
 #
 # Formato: uma entrada por linha, relativa à raiz, sem comentário na mesma linha
 # (o parser separa por espaços — o que não for caminho vira lixo na lista).
+# Caminho `.md` declarado morto NÃO vai aqui: vai em `scripts/dead_paths.txt`, o
+# registro da seção 24, que cobra motivo na mesma linha e confere se ele voltou.
 # Motivo de cada entrada:
 #   sources/discord/       ponte removida em 2026-09-25 por decisão do dono
 #   addons/discord_gd      idem; a saída é medida no `index.pck` re-exportado

@@ -168,7 +168,7 @@ func DropItem(cell : ItemCell, count : int, itemIndex : int):
 			WorldDrop.PushDrop(item, actor)
 
 func EquipItem(cell : ItemCell, itemIndex : int):
-	if not cell or cell.type != CellCommons.Type.ITEM or cell.slot == ActorCommons.Slot.NONE or not actor:
+	if not cell or cell.type != CellCommons.Type.ITEM or not CellCommons.IsEquippable(cell) or not actor:
 		return
 	# Hero class: fora da classe do item não equipa (classless pode tudo).
 	if not ClassBonus.CanEquip(actor, cell):

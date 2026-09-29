@@ -45,7 +45,7 @@ const MIME = {
 	'.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/vnd.microsoft.icon', '.cfg': 'text/plain',
 };
 
-// O contrato de isolamento do nginx (deploy/web/nginx.conf:21-32): COOP/COEP em
+// O contrato de isolamento do nginx (deploy/web/nginx.conf:72-79): COOP/COEP em
 // todo arquivo do shell e `no-cache` em index.html e no service worker, para o
 // deploy novo ser pego na hora. Copiado de propósito: se as duas metades
 // divergirem, o QA local verde não vale para a produção.

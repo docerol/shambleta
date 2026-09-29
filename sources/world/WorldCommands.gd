@@ -61,6 +61,8 @@ func RegisterCommands():
 	CommandManager.Register("chests", CommandChests, ActorCommons.Permission.NONE, "chests" )
 	CommandManager.Register("openchest", CommandOpenChest, ActorCommons.Permission.NONE, "openchest <chest_id>" )
 	CommandManager.Register("trade", CommandTrade, ActorCommons.Permission.NONE, "trade <player> <item_id> [count=1]" )
+	# SOM-IDLE retenção: superfície do streak de login no chat ("/streak")
+	CommandManager.Register("streak", CommandStreak, ActorCommons.Permission.NONE, "streak" )
 	# SOM-IDLE: D3 — CS panel (procurar transação/item, fila de revisão)
 	CommandManager.Register("cs_trans", CommandCsTrans, ActorCommons.Permission.GM, "cs_trans <account> [limit]" )
 	CommandManager.Register("cs_item", CommandCsItem, ActorCommons.Permission.GM, "cs_item <uid>" )
@@ -69,7 +71,7 @@ func RegisterCommands():
 	CommandManager.Register("cs_flag_info", CommandCsFlagInfo, ActorCommons.Permission.GM, "cs_flag_info <id>" )
 	CommandManager.Register("cs_fraud_stats", CommandCsFraudStats, ActorCommons.Permission.GM, "cs_fraud_stats" )
 	# SOM-IDLE: E1/E2 — guilds, auction house, seasons
-	CommandManager.Register("guild", CommandGuild, ActorCommons.Permission.NONE, "guild create|join|leave|info|deposit|withdraw|levelup|top ..." )
+	CommandManager.Register("guild", CommandGuild, ActorCommons.Permission.NONE, "guild create|join|leave|kick|promote|demote|invite|info|deposit|withdraw|levelup|top ..." )
 	CommandManager.Register("ah", CommandAH, ActorCommons.Permission.NONE, "ah list|buy|cancel|browse ..." )
 	CommandManager.Register("season", CommandSeason, ActorCommons.Permission.NONE, "season active|board ..." )
 	# Fase F: copas semanais (inscrição em gold, prêmios em gems + título).
@@ -91,6 +93,17 @@ func RegisterCommands():
 	CommandManager.Register("boss", CommandBoss, ActorCommons.Permission.NONE, "boss [next]" )
 	# SOM-IDLE Fase H: GM review of player-crafted item submissions
 	CommandManager.Register("cs_craft", CommandCsCraft, ActorCommons.Permission.GM, "cs_craft <list|approve <id>|reject <id> [reason]>" )
+	# SOM-IDLE social (AUDITORIA_2026-09-27 §14 SOCIAL): os cinco verbos do grafo, no
+	# mesmo dispatcher que porta /report. ROTA DE COMANDO, não @rpc dedicado: `Server.gd`
+	# não tem folga nenhuma no teto do gate anti-god-node (o número é o que
+	# `scripts/check_god_nodes.sh` imprime, não este texto), e levantar ratchet para caber
+	# feature é o que a régua proíbe. Permission.NONE porque amigo e bloqueio são
+	# instrumentos do jogador comum; o alvo é nick resolvido pelo servidor.
+	CommandManager.Register("friend", CommandFriend, ActorCommons.Permission.NONE, "friend <player>" )
+	CommandManager.Register("unfriend", CommandUnfriend, ActorCommons.Permission.NONE, "unfriend <player>" )
+	CommandManager.Register("ignore", CommandIgnore, ActorCommons.Permission.NONE, "ignore <player>" )
+	CommandManager.Register("unignore", CommandUnignore, ActorCommons.Permission.NONE, "unignore <player>" )
+	CommandManager.Register("social", CommandSocial, ActorCommons.Permission.NONE, "social [friends|ignores]" )
 
 static func UnregisterCommands():
 	CommandManager.Unregister("spawn")
@@ -151,6 +164,7 @@ static func UnregisterCommands():
 	CommandManager.Unregister("openchest")
 	CommandManager.Unregister("trade")
 	CommandManager.Unregister("gems")
+	CommandManager.Unregister("streak")
 	# SOM-IDLE: D3
 	CommandManager.Unregister("cs_trans")
 	CommandManager.Unregister("cs_item")
@@ -174,6 +188,13 @@ static func UnregisterCommands():
 	CommandManager.Unregister("boss")
 	# SOM-IDLE Fase H
 	CommandManager.Unregister("cs_craft")
+		# SOM-IDLE social: o par exato dos cinco verbos. Faltar o Unregister faz o
+	# `RegisterCommands` da sessão seguinte morrer em "already registered".
+	CommandManager.Unregister("friend")
+	CommandManager.Unregister("unfriend")
+	CommandManager.Unregister("ignore")
+	CommandManager.Unregister("unignore")
+	CommandManager.Unregister("social")
 
 # SOM-IDLE: F3 — zone map listing with power gates ("/zones")
 func CommandZones(caller : PlayerAgent) -> bool:
@@ -231,6 +252,27 @@ func CommandGems(caller : PlayerAgent) -> bool:
 		Network.CommandFeedback("No account bound", caller.peerID)
 		return false
 	Network.CommandFeedback("Gems: %d" % Launcher.Economy.GetGems(accountID), caller.peerID)
+	return true
+
+# P2-retenção (AUDITORIA_2026-09-27 §6 — "sem streaks em lugar nenhum"): o streak
+# tem que poder ser PERGUNTADO, não só empurrado no login (a janela de retorno fica
+# escondida atrás do mouse; o chat é a superfície de um MMO de texto). Nada é
+# calculado aqui: `StreakService.View` relê `login_streak` e projeta a MESMA escada
+# que `RecordLogin` pagou, então o número que o jogador lê é o número gravado pelo
+# servidor. Cliente não manda dia, streak nem ouro.
+func CommandStreak(caller : PlayerAgent) -> bool:
+	if not caller:
+		return false
+	var state : Dictionary = StreakService.View(caller.GetCharacterID())
+	var today : String = "pagou +%d de ouro" % int(state.get("today_reward", 0)) if bool(state.get("logged_today", false)) else "ainda não foi carimbado"
+	var lines : PackedStringArray = PackedStringArray()
+	lines.append("Streak: dia %d (melhor %d) — hoje %s." % [int(state.get("current_streak", 0)), int(state.get("best_streak", 0)), today])
+	lines.append("Próximo login: dia %d paga +%d. Marco no dia %d libera +%d (faltam %d dia(s))." % [
+		int(state.get("next_day", 0)), int(state.get("next_reward", 0)), int(state.get("mark_day", 0)),
+		int(state.get("mark_reward", 0)), int(state.get("days_to_mark", 0))])
+	lines.append("Quebrar a sequência custa %d de ouro e volta ao degrau 1. Dia do servidor em %ds." % [
+		int(state.get("loss_on_break", 0)), int(state.get("reset_in_sec", 0))])
+	Network.CommandFeedback("\n".join(lines), caller.peerID)
 	return true
 
 # SOM-IDLE: F4 — chest listing and opening ("/chests", "/openchest <id>")
@@ -511,7 +553,7 @@ func CommandGuild(caller : PlayerAgent, arg : String = "") -> bool:
 		return false
 	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
 	if parts.is_empty():
-		Network.CommandFeedback("Usage: /guild create <name> | join <id> | leave | info | deposit <item> <n> | withdraw <item> <n> | levelup | fastlevelup | buyslot | tag <TAG> | top", caller.peerID)
+		Network.CommandFeedback("Usage: /guild create <name> | join <id> | leave | info | deposit|withdraw <item> <n> | levelup | fastlevelup | buyslot | tag <TAG> | kick|promote|demote|invite <player> | top", caller.peerID)
 		return false
 	var accountID : int = Peers.GetAccount(caller.peerID)
 	var charID : int = caller.GetCharacterID()
@@ -576,6 +618,18 @@ func CommandGuild(caller : PlayerAgent, arg : String = "") -> bool:
 			var tg : Dictionary = Launcher.Economy.SetGuildTag(accountID, parts[1])
 			Network.CommandFeedback("Guild tag: [%s]" % str(tg.get("tag", "")) if bool(tg.get("ok", false)) else "Tag failed (%s)" % str(tg.get("reason", "?")), caller.peerID)
 			return bool(tg.get("ok", false))
+		# AUDITORIA 2026-09-28 (administração de guilda na mão do jogador): os quatro
+		# verbos de roster entram pela ROTA DE COMANDO e a política inteira mora em
+		# `sources/economy/GuildRoster.gd`. Aqui só se resolve o nick (nunca o id do
+		# pacote) e se devolve a frase. É o MESMO desenho de `/friend`, pelo MESMO
+		# motivo medido: `Server.gd` está no teto do ratchet anti-god-node.
+		"kick", "promote", "demote", "invite":
+			if parts.size() < 2:
+				Network.CommandFeedback("Usage: /guild <kick|promote|demote|invite> <player>", caller.peerID)
+				return false
+			var admin : Dictionary = GuildRoster.Command(parts[0], accountID, GetAccountID(parts[1]), parts[1])
+			Network.CommandFeedback(str(admin.get("text", "")), caller.peerID)
+			return bool(admin.get("ok", false))
 		"top":
 			var rows : Array = Launcher.Economy.GetGuildLeaderboard(10)
 			if rows.is_empty():
@@ -1792,6 +1846,59 @@ func CommandQuery(caller : PlayerAgent, targetName : String) -> bool:
 
 	Network.ChatQuery(target.nick, caller.peerID)
 	return true
+
+# SOM-IDLE social (AUDITORIA_2026-09-27 §14 SOCIAL, 4/10: "amizades, lista de
+# ignorados, denúncias: inexistente ou decorativo"): os cinco verbos do grafo entram no
+# MESMO dispatcher que já porta /report. A ROTA é comando, não @rpc dedicado, por medida
+# e não por gosto: `Server.gd` não tem folga nenhuma no teto do gate anti-god-node (o
+# número que vale é o que `scripts/check_god_nodes.sh` imprime no run), e levantar
+# ratchet para caber feature é exatamente o que a régua da casa proíbe — então a escrita
+# acontece aqui, no funil que `Chat.gd:170` já usa
+# (`Network.TriggerCommand` → `Server.TriggerCommand` → `CommandManager.Handle`). Estes
+# handlers são finos de propósito: resolve o nick, delega, responde. Toda a política
+# (simetria da amizade, tetos, auto-relacionamento, o corte de entrega no chat) mora em
+# `sources/social/SocialGraph.gd`, arquivo fora da allowlist — e a frase vista pelo
+# jogador também, ao lado do token que a produziu (precedente:
+# `ChatModeration.CanSpeak` devolve mensagem, não código).
+func CommandFriend(caller : PlayerAgent, arg : String = "") -> bool:
+	return _SocialEdge(caller, arg, SocialGraph.KindFriend, true)
+
+func CommandUnfriend(caller : PlayerAgent, arg : String = "") -> bool:
+	return _SocialEdge(caller, arg, SocialGraph.KindFriend, false)
+
+func CommandIgnore(caller : PlayerAgent, arg : String = "") -> bool:
+	return _SocialEdge(caller, arg, SocialGraph.KindIgnore, true)
+
+func CommandUnignore(caller : PlayerAgent, arg : String = "") -> bool:
+	return _SocialEdge(caller, arg, SocialGraph.KindIgnore, false)
+
+# Os quatro verbos compartilham um caminho porque a única diferença entre eles é qual
+# aresta o módulo escreve: dois fluxos de identidade e resposta seriam duas chances de
+# tratar conta como dado vindo do client e duas chances de vazar token cru na tela.
+func _SocialEdge(caller : PlayerAgent, arg : String, kind : String, add : bool) -> bool:
+	if not caller:
+		return false
+	var nick : String = arg.strip_edges().get_slice(" ", 0)
+	# A identidade de quem age sai do PEER; o alvo sai de um nick resolvido AQUI.
+	# `target_account_id` nunca é lido do pacote — quem escreve o pacote escolhe a
+	# própria caixa de entrada, não a do vizinho.
+	var accountID : int = Peers.GetAccount(caller.peerID)
+	var targetID : int = GetAccountID(nick) if not nick.is_empty() else 0
+	if targetID <= 0:
+		Network.CommandFeedback(SocialGraph.Message({"ok": false, "reason": "usage" if nick.is_empty() else "unknown_target"}, kind, add, nick), caller.peerID)
+		return false
+	var result : Dictionary = SocialGraph.Add(kind, accountID, targetID) if add else SocialGraph.Remove(kind, accountID, targetID)
+	Network.CommandFeedback(SocialGraph.Message(result, kind, add, nick, accountID), caller.peerID)
+	return bool(result.get("ok", false))
+
+# A lista do grafo, lida do banco pelo servidor. O `/social` é o que o painel mostra
+# quando o jogador quer conferir o estado; nada aqui inventa cópia local no cliente.
+func CommandSocial(caller : PlayerAgent, arg : String = "") -> bool:
+	if not caller:
+		return false
+	var listed : Dictionary = SocialGraph.DescribeLists(Peers.GetAccount(caller.peerID), arg.strip_edges().to_lower())
+	Network.CommandFeedback(str(listed.get("text", "")), caller.peerID)
+	return bool(listed.get("ok", false))
 
 # Helpers
 static func GetAccountID(nickname : String) -> int:

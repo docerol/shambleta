@@ -254,7 +254,10 @@ func _suitePassAutoClaim():
 	_checkEq(_ledgerCount(accountID, reason), 1, "segunda passada não duplica ledger")
 	_sql.db.delete_rows("season_account_state", "season_id = %d;" % seasonID)
 	_sql.db.delete_rows("season", "season_id = %d;" % seasonID)
-	_sql.db.delete_rows("ledger_transaction", "account_id = %d;" % accountID)
+	# Nada de apagar ledger: a linha do `pass_reward` é o que a régua de cima
+	# acabou de contar, e `ledger_transaction_no_delete` (056:103) recusa o DELETE.
+	# Quem aposenta a série é o `_dropFixture` abaixo, porque as pernas do reconcile
+	# dão JOIN em account/wallet.
 	_sql.db.delete_rows("cosmetic_grant", "account_id = %d;" % accountID)
 	_dropFixture("edfx_pass_account", "EdfxPassChar")
 

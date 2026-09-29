@@ -12,7 +12,7 @@ Este guia cobre o setup completo para desenvolver o Shambleta localmente.
 ## Clone e abertura
 
 ```bash
-git clone https://github.com/shambleta/shambleta.git
+git clone https://github.com/docerol/shambleta.git
 cd shambleta
 ```
 
@@ -68,19 +68,19 @@ O banco de dados (`live.db`) fica em `game-data:/data`.
 ./scripts/test.sh benchmarks   # performance benchmarks
 ./scripts/test.sh companion    # fronteira do dinheiro (webhook/segurança/reembolso)
 ./scripts/test.sh fixation     # só os harnesses auto-inscritos
-./scripts/test.sh preflight    # parse de todo harness, antes de qualquer gate
-./scripts/test.sh structure    # gates de estrutura: god-node, doc drift, compose
+./scripts/test.sh preflight    # compilação (parse+compile) de todo harness, antes de qualquer gate
+./scripts/test.sh structure    # gates de estrutura (a lista vive em structure_gates())
 ./scripts/test.sh diag         # pacing diagnosis
 ./scripts/test.sh clean        # limpa testing.db
 ```
 
 **Quantos harnesses são, não vai escrito aqui de propósito.** A lista é derivada
 em `scripts/test.sh`: os nomes em `EXPLICIT_HARNESSES` mais todo
-`tests/*_test.gd`/`tests/*_fuzz.gd`, auto-inscrito por nome (`harnesses_extra()`,
-`scripts/test.sh:144-154`), e o `preflight` conta o total a cada run ("Preflight
-parse OK: N harnesses"). Número fixado em doc é número que apodrece no commit
-seguinte — o que este guia garante é a **porta** e a **regra de inscrição**. Os
-subcomandos listados acima são conferidos um a um pelo gate
+`tests/*_test.gd`/`tests/*_fuzz.gd`, auto-inscrito por nome (os dois em
+`harnesses_extra()` (`scripts/test.sh:423-433`)), e o `preflight` conta o total a cada run
+("Preflight OK: N harnesses, cada um no teto medido de SCRIPT ERROR"). Número fixado em doc é número que apodrece
+no commit seguinte — o que este guia garante é a **porta** e a **regra de
+inscrição**. Os subcomandos listados acima são conferidos um a um pelo gate
 `scripts/check_doc_drift.sh`.
 
 ## Convenções
@@ -102,7 +102,7 @@ domínio fica em `sources/network/server/` (`Server.gd`, `Peers.gd`, `ChatModera
 `OnlineList.gd`, `EmailService.gd`) e no cliente em `sources/network/client/Client.gd`.
 A versão do protocolo é derivada dos `@rpc` por `NetworkCommons.ComputeProtocolVersion`.
 Os autoloads registrados são **seis**: `Launcher`, `Network`, `FSM`, `Monitoring`,
-`WebPush`, `PwaUpdate` (`[autoload]` em `project.godot:31-36`) — o resto é
+`WebPush`, `PwaUpdate` (`[autoload]` em `project.godot:29-36`) — o resto é
 `class_name` global ou serviço composto no `Launcher`.
 <!-- DRIFT autoload_count 6 -->
 <!-- DRIFT autoload_names FSM,Launcher,Monitoring,Network,PwaUpdate,WebPush -->

@@ -7,17 +7,22 @@ class_name GuildPanel
 # guild — tudo por botão. Os painéis daqui (Leaderboard, Social) são read-only;
 # este é o primeiro que AGE.
 #
-# Arquitetura de chamada. O game é server-authoritative e, no multiplayer real,
-# a GUI só conversa com o servidor pelo facade `Network` (@rpc). Só que hoje o
-# facade expõe para guild APENAS `GetGuildState` (leitura), `LevelUpGuildFast` e
-# `BuyVaultSlots` — não existe @rpc para criar/entrar/depositar/retirar/buscar
-# (Network.gd e Server.gd são de outro dono nesta rodada). O boot de dev/teste é
-# client+server no mesmo processo (`Launcher.Economy` existe na GUI — é o que
-# Gui.gd:SimulateCheckout e todos os testes de guild usam), então o painel chama
-# o service diretamente por aí, que é o caminho autoritativo nesse modo. Quando
-# `Launcher.Economy` for null (cliente puro), o painel tenta o facade `Network`
-# para as três operações que já têm RPC e, para o resto, devolve feedback honesto
-# em vez de fingir. As linhas exatas de @rpc que faltam estão no relatório.
+# Arquitetura de chamada. O game é server-authoritative e a GUI só conversa com o
+# servidor pelo facade `Network` (@rpc). Para guild o facade expõe leitura
+# (`GetGuildState`), os dois gastos de gems (`LevelUpGuildFast`, `BuyVaultSlots`) e
+# as cinco ESCRITAS deste painel — `CreateGuild`, `JoinGuild`, `LeaveGuild`,
+# `DepositToVault`, `WithdrawFromVault` (`sources/network/Network.gd`), cada uma com
+# seu handler autoritativo em `sources/network/server/Server.gd`, onde conta e
+# personagem SAEM DO PEER, nunca do pacote.
+# O boot de dev/teste tem client+server no mesmo processo (`Launcher.Economy` existe
+# na GUI — é o que Gui.gd:SimulateCheckout e as suítes de guild usam), então a
+# perna primária continua chamando o service direto, que é o caminho autoritativo
+# nesse modo. Quando `Launcher.Economy` é null (cliente puro, o caso do export web)
+# ou a conta local não resolve (`LocalPlayerIDs()` depende de `Peers`, o registro do
+# SERVIDOR), a escrita sai pelo facade e o veredito volta por
+# `GuildFeedback` → `ShowNetworkFeedback`, com o estado fresco por `GuildState` →
+# `RenderState`. O que ainda NÃO tem @rpc é a busca por nome: no cliente puro ela diz
+# que não está disponível, em vez de fingir.
 #
 # A UI é montada em código no _ready (mesmo padrão de Activities/Checkout, que o
 # comentário de Gui.gd descreve como "runtime, sem .tscn"). Assim o painel funciona
@@ -143,13 +148,30 @@ func FetchState() -> Dictionary:
 
 # ------------------------------------------------------------------ ações (escrevem)
 
+# Segunda perna de escrita: sem service neste processo, ou sem conta local, o painel
+# é cliente puro e manda pelo facade. O que pinta agora é "enviado", nunca "feito" —
+# o veredito real chega por `GuildFeedback` → `ShowNetworkFeedback` e o estado por
+# `GuildState` → `RenderState`. O painel não manda conta nem personagem: quem é o
+# jogador é decisão do peer no servidor.
+func _WriteOverNetwork(label : String, send : Callable) -> void:
+	if Network == null:
+		SetFeedback("%s: no local session and no network facade" % label)
+		return
+	send.call()
+	SetFeedback("%s: sent to the server" % label)
+
+# Veredito assíncrono da segunda perna. O motivo cru do servidor não vai à tela sem
+# passar pelo catálogo de toasts (§13).
+func ShowNetworkFeedback(ok : bool, reason : String) -> void:
+	SetFeedback("Guild: done." if ok else PlayerReasons.ToToast("Guild rejected: " + reason))
+
 func CreateGuildNamed(guildName : String) -> int:
 	var eco : EconomyService = _ResolveEconomy()
 	var ids : Dictionary = LocalPlayerIDs()
 	var accountID : int = int(ids.get("account", 0))
 	var charID : int = int(ids.get("char", 0))
 	if eco == null or accountID <= 0 or charID <= 0:
-		SetFeedback("Create: no local session")
+		_WriteOverNetwork("Create", func() -> void: Network.CreateGuild(guildName))
 		return 0
 	var guildID : int = eco.CreateGuild(accountID, charID, guildName)
 	if guildID > 0:
@@ -162,8 +184,11 @@ func CreateGuildNamed(guildName : String) -> int:
 func JoinGuildByID(guildID : int) -> bool:
 	var eco : EconomyService = _ResolveEconomy()
 	var accountID : int = int(LocalPlayerIDs().get("account", 0))
-	if eco == null or accountID <= 0 or guildID <= 0:
-		SetFeedback("Join: no local session")
+	if guildID <= 0:
+		SetFeedback("Join: bad guild id")
+		return false
+	if eco == null or accountID <= 0:
+		_WriteOverNetwork("Join", func() -> void: Network.JoinGuild(guildID))
 		return false
 	var ok : bool = eco.JoinGuild(accountID, guildID)
 	SetFeedback("Joined." if ok else "Join rejected (already in a guild, or guild gone).")
@@ -175,7 +200,7 @@ func LeaveCurrentGuild() -> bool:
 	var eco : EconomyService = _ResolveEconomy()
 	var accountID : int = int(LocalPlayerIDs().get("account", 0))
 	if eco == null or accountID <= 0:
-		SetFeedback("Leave: no local session")
+		_WriteOverNetwork("Leave", func() -> void: Network.LeaveGuild())
 		return false
 	var ok : bool = eco.LeaveGuild(accountID)
 	SetFeedback("Left the guild." if ok else "Leave rejected (dissolve needs an empty vault?).")
@@ -184,12 +209,15 @@ func LeaveCurrentGuild() -> bool:
 
 # Deposita `count` unidades de `itemID` do inventário do personagem no vault.
 func DepositItem(itemID : int, count : int) -> bool:
+	if itemID <= 0 or count <= 0:
+		SetFeedback("Deposit: bad amount")
+		return false
 	var eco : EconomyService = _ResolveEconomy()
 	var ids : Dictionary = LocalPlayerIDs()
 	var accountID : int = int(ids.get("account", 0))
 	var charID : int = int(ids.get("char", 0))
-	if eco == null or accountID <= 0 or charID <= 0 or itemID <= 0 or count <= 0:
-		SetFeedback("Deposit: no local session or bad amount")
+	if eco == null or accountID <= 0 or charID <= 0:
+		_WriteOverNetwork("Deposit", func() -> void: Network.DepositToVault(itemID, count))
 		return false
 	var ok : bool = eco.DepositToVault(accountID, charID, itemID, count)
 	SetFeedback("Deposited %d." % count if ok else "Deposit failed (not enough in inventory, or vault full).")
@@ -200,18 +228,23 @@ func DepositItem(itemID : int, count : int) -> bool:
 # Retira `count` de `itemID` do vault para o inventário. Só officer/líder (regra do
 # service) — e agora limitado pelo portão anti-dreno de §14 (`GuildWithdrawGate`).
 # O botão da UI passa por `RequestWithdraw`, que arma; este método é o único choke
-# point e vale também para chamada direta de teste.
+# point e vale também para chamada direta de teste. O portão vem ANTES das duas
+# pernas: é a antecedência de cliente, e a recusa do servidor (§14, metade durável)
+# continua valendo para quem não passa por aqui.
 func WithdrawItem(itemID : int, count : int) -> bool:
-	var eco : EconomyService = _ResolveEconomy()
-	var ids : Dictionary = LocalPlayerIDs()
-	var accountID : int = int(ids.get("account", 0))
-	var charID : int = int(ids.get("char", 0))
-	if eco == null or accountID <= 0 or charID <= 0 or itemID <= 0 or count <= 0:
-		SetFeedback("Withdraw: no local session or bad amount")
+	if itemID <= 0 or count <= 0:
+		SetFeedback("Withdraw: bad amount")
 		return false
 	var gate : String = WithdrawGateReason(count)
 	if not gate.is_empty():
 		SetFeedback(gate)
+		return false
+	var eco : EconomyService = _ResolveEconomy()
+	var ids : Dictionary = LocalPlayerIDs()
+	var accountID : int = int(ids.get("account", 0))
+	var charID : int = int(ids.get("char", 0))
+	if eco == null or accountID <= 0 or charID <= 0:
+		_WriteOverNetwork("Withdraw", func() -> void: Network.WithdrawFromVault(itemID, count))
 		return false
 	var ok : bool = eco.WithdrawFromVault(accountID, charID, itemID, count)
 	if ok:
@@ -238,7 +271,7 @@ func RequestWithdraw(itemID : int, count : int) -> bool:
 	if rank != "leader" and rank != "officer":
 		SetFeedback("Withdraw: need officer+")
 		return false
-	var wanted : int = mini(count, GuildWithdrawGate.MaxWithdrawPerAction)
+	var wanted : int = mini(count, GuildVaultLimits.MaxWithdrawPerAction)
 	var gate : String = WithdrawGateReason(wanted)
 	if not gate.is_empty():
 		SetFeedback(gate)

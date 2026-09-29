@@ -24,12 +24,34 @@ var _eco : EconomyService = null
 # multiplica anúncio nenhum — o ×2 do loot é perk do tier 2
 # (OfflineSettle._LootMult), e baú/chave continuam dobrando a QUANTIDADE para
 # quem tem VIP ativo.
-# SOM-IDLE M2 (era T7): nada aqui é aberto por compilação. SHAMBLETA_AD_STUB=1 é
-# o que autoriza o servidor a mintar slots, i.e. a aceitar a declaração de
-# exibição feita pelo próprio client; o default é fechado e produção não seta a
-# env. Enquanto não houver SSV no servidor essa é a fronteira: o teto do abuso
-# passa a ser a cota da conta por placement (não o vocabulário de strings), e no
-# afkhoras o prêmio é hora de farm — não dinheiro.
+# SOM-IDLE M2 (era T7): nada aqui é aberto por compilação. A autoridade deste
+# crédito tem DOIS interruptores de ambiente, e só um deles é produção:
+#
+#   * PRODUÇÃO — `SHAMBLETA_AD_SSV=1`: o slot é mintado PENDENTE (`expires_at = 0`)
+#     e a linha só vira crédito depois que o portal de anúncio chama o gateway e a
+#     assinatura HMAC é aceita. A AUTORIDADE DE PRODUÇÃO é a linha
+#     `UPDATE ad_slot SET expires_at = ? ... AND expires_at = 0` em
+#     `companion/ad_ssv.py` (`activate()`), na rota `POST /webhooks/ads` — nada
+#     neste arquivo decide sozinho que um anúncio foi assistido.
+#   * BETA/TESTE — `SHAMBLETA_AD_STUB=1` (`EconomyCatalog.AdStubEnabled()`,
+#     default fechado): autoriza este servidor a aceitar
+#     a declaração de exibição feita pelo próprio client (linha viva no mint). É o
+#     único caminho em que a declaração do client credita, e é exatamente por isso
+#     que ele continua restrito ao stub: `SuiteDeployMode` assenta que o compose de
+#     produção não seta a env.
+#
+# Com as duas desligadas não há mintagem, logo não há crédito em nenhum placement
+# (o default de produção, ontem e hoje). Ligadas, a decisão mais estrita vence: o
+# mint é pendente (SSV), nunca vivo.
+
+# Seam do harness: -1 = ler a env (default fechado); 1/0 forçam o modo. Mesmo
+# formato de `slotTTLOverride` — um número, sem estado global novo.
+static var ssvOverride : int = -1
+
+func _AdSSVEnabled() -> bool:
+	if ssvOverride >= 0:
+		return ssvOverride == 1
+	return OS.get_environment("SHAMBLETA_AD_SSV").strip_edges() == "1"
 
 # Seam do divisor de dia (espelha OfflineSettle.nowOverride): sem isto a regra
 # "a hora ganha não se perde se você coletar antes do divisor" é indemonstrável
@@ -49,13 +71,14 @@ func AdViewsToday(accountID : int, placement : String = "") -> int:
 # C2 (auditoria 2026-09-24): o credential deixa de ser um formato derivável e
 # passa a ser uma linha. Mintar um slot é o que a exibição de um anúncio custa:
 # o servidor reserva a cota, gera o nonce e o amarra à conta e ao placement. A
-# env do stub continua o interruptor — sem ela não há mintagem, e logo não há
-# crédito em nenhum placement (era exatamente o default de produção antes, e
-# continua sendo).
+# env do stub continua o interruptor do caminho antigo; o nonce mintado aqui É o
+# id de correlação do SSV (o `user_id` que o portal devolve na assinatura), e em
+# modo SSV a linha nasce PENDENTE — ver `_AdSSVEnabled()` no topo do arquivo.
 func MintAdSlot(accountID : int, placement : String) -> Dictionary:
 	if not placement in EconomyCatalog.AD_PLACEMENTS:
 		return {"ok": false, "reason": "unknown_placement"}
-	if not EconomyCatalog.AdStubEnabled():
+	var ssv : bool = _AdSSVEnabled()
+	if not ssv and not EconomyCatalog.AdStubEnabled():
 		return {"ok": false, "reason": "ad_source"}
 	if accountID <= 0:
 		return {"ok": false, "reason": "not_logged_in"}
@@ -65,7 +88,12 @@ func MintAdSlot(accountID : int, placement : String) -> Dictionary:
 		return gate
 	var now : int = SQLCommons.Timestamp()
 	var nonce : String = _NewAdNonce()
-	if not Launcher.SQL.ExecuteBindings("INSERT INTO ad_slot (account_id, placement, nonce, created_at, expires_at) VALUES (?, ?, ?, ?, ?);", [accountID, placement, nonce, now, now + _SlotTTL()]):
+	# `expires_at = 0` é o marcador de pendência: `_ConsumeAdSlot` filtra por
+	# `expires_at > agora`, então uma linha pendente NÃO credita nada — o crédito
+	# só acontece quando o gateway escreve o prazo (prova assinada pelo portal).
+	# No stub o prazo é gravado já no mint, que é a declaração do client valendo.
+	var expires : int = 0 if ssv else now + _SlotTTL()
+	if not Launcher.SQL.ExecuteBindings("INSERT INTO ad_slot (account_id, placement, nonce, created_at, expires_at) VALUES (?, ?, ?, ?, ?);", [accountID, placement, nonce, now, expires]):
 		return {"ok": false, "reason": "db_error"}
 	return {"ok": true, "reason": "ok", "token": "slot:" + nonce}
 
@@ -86,12 +114,22 @@ static func _NewAdNonce() -> String:
 # as views: sem isso, clicar 12 vezes sem assistir nenhuma reservaria o dia
 # inteiro e o player seguinte (ou o mesmo, no outro personagem) ficava sem cota
 # — e com isso, o outro lado: estocar authorization não dá prêmio extra.
+# Dois estados contam como pendência, e por motivos opostos: a linha VIVA ainda
+# não gasta (`expires_at > agora`) e a linha SEM PROVA do modo SSV
+# (`expires_at = 0`) também reserva a cota — enquanto o portal não responder, o
+# lugar continua ocupado. Pendência velha (`created_at` fora do corredor) deixa
+# de contar, que é o que devolve a cota de quem teve o SDK mudo.
 func _AdSlotsOutstanding(accountID : int, placement : String) -> int:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ad_slot WHERE account_id = ? AND placement = ? AND expires_at > ?;", [accountID, placement, SQLCommons.Timestamp()])
+	var now : int = SQLCommons.Timestamp()
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM ad_slot WHERE account_id = ? AND placement = ? AND ((expires_at > 0 AND expires_at > ?) OR (expires_at = 0 AND created_at >= ?));", [accountID, placement, now, now - _SlotTTL()])
 	return 0 if rows.is_empty() else int(rows[0]["n"])
 
+# Vencimento nos dois sentidos: linha viva cujo prazo passou, e pendência de SSV
+# que o portal nunca confirmou. Uma pendência nova NUNCA é apagada — ela é a
+# reserva do jogador, e apagá-la cedo devolveria cota a quem não assistiu nada.
 func _PurgeExpiredSlots() -> void:
-	Launcher.SQL.ExecuteBindings("DELETE FROM ad_slot WHERE expires_at <= ?;", [SQLCommons.Timestamp()])
+	var now : int = SQLCommons.Timestamp()
+	Launcher.SQL.ExecuteBindings("DELETE FROM ad_slot WHERE (expires_at > 0 AND expires_at <= ?) OR (expires_at = 0 AND created_at < ?);", [now, now - _SlotTTL()])
 
 # Consumo = DELETE condicionado. A linha some no primeiro uso, então não existe
 # replay: a segunda tentativa com o mesmo nonce acha 0 linhas e devolve false.
@@ -100,6 +138,12 @@ func _PurgeExpiredSlots() -> void:
 # abandonado (anúncio fechado antes do fim) de valer depois.
 # `changes()` depois do `DELETE` na mesma conexão é o precedente de
 # SQL.ConsumeTwoFactorToken (SQL.gd:1174).
+# O filtro `expires_at > agora` é também o que fecha a declaração do client em
+# modo SSV: linha pendente tem `expires_at = 0` e nunca passa por aqui. Quem escreve
+# o prazo é só `companion/ad_ssv.py` (`activate()`), após HMAC válido — a autoridade
+# de produção do crédito. Sem o gateway, `WatchAd` devolve `bad_token` para todo
+# nonce mintado em SSV, e o único lugar onde a palavra do client ainda credita é o
+# stub `SHAMBLETA_AD_STUB=1` (beta, default fechado).
 func _ConsumeAdSlot(token : String, accountID : int, placement : String) -> bool:
 	if not token.begins_with("slot:"):
 		return false
@@ -129,8 +173,13 @@ func _AdAllowed(accountID : int, placement : String) -> Dictionary:
 # compartilhado — o número que Flush devolve não é atribuível a esta view.
 # Sem lock aqui: a cadeia RPC→WatchAd→Flush é síncrona na thread principal (o
 # único Thread do repositório é SQLBackups.gd:5) e não tem await, então não há
-# interleaving a excluir; e envolver em sql.Transaction deadlockaria, porque Flush
-# abre a dele e queryMutex (SQL.gd:511) não é reentrante.
+# interleaving a excluir. E não dá para envolver em `sql.Transaction`: o motivo
+# NÃO é deadlock — medido neste build (Godot 4.7.2, `Mutex.try_lock()` na thread
+# que já segura a mutex devolve `true`), a queryMutex de SQL.gd:7 é recursiva
+# sim, como SQL.gd:535-538 afirma. O motivo é o BEGIN aninhado: SQL.gd:528-533
+# mediu que o interno falha, o END interno comete o trabalho do externo e o
+# ROLLBACK externo responde "no transaction is active". Flush abre a dele;
+# aninhar aqui cometeria hora de afk antes de saber se a view pagou.
 func _RecordAdView(accountID : int, charID : int, placement : String) -> bool:
 	var before : int = AdViewsToday(accountID, placement)
 	Launcher.Telemetry.Record("ad_view", accountID, charID, 0, JSON.stringify({"placement": placement}))

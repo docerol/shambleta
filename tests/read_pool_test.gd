@@ -322,6 +322,20 @@ func TestRules() -> void:
 # ---------------------------------------------------------------------------
 func TestEngineApi() -> void:
 	print("-- 2) API da engine (Godot %s) --" % str(Engine.get_version_info().string))
+	# A queryMutex de SQL.gd:7 protege o handle único, e duas comentários no repo
+	# discordavam sobre o que ela faz quando a MESMA thread pede de novo: um dizia
+	# "recursiva" (SQL.gd:535), o outro "não é reentrante, deadlockaria"
+	# (AdsCosmeticsService.gd). Os dois não podem estar certos, e os dois guiam
+	# decisão de dinheiro. Medido aqui, na engine deste build, sem banco no meio.
+	# O motivo real para não aninhar `Transaction()` é o outro bloco abaixo.
+	var probe : Mutex = Mutex.new()
+	probe.lock()
+	var reentered : bool = probe.try_lock()
+	if reentered:
+		probe.unlock()
+	probe.unlock()
+	Check(reentered, "Mutex da engine ACEITA re-entrada da mesma thread (try_lock devolve true) — a queryMutex não trava sozinha")
+	Note("se a engine mudarem e isto virar false, SQL.Transaction() aninhado passa a DEADLOCKAR e o aviso de SQL.gd:535-538 vira regra, não curiosidade")
 	WipeTmp()
 	var writer : Object = OpenHandle(TmpDB, false)
 	if not Check(writer != null, "handle de escrita abre no banco temporario"):
@@ -348,7 +362,27 @@ func TestEngineApi() -> void:
 	Note("read_only=true: open_db=%s SELECT=%s erro=\"%s\"" % [str(roOpened), str(roRead), String(roFlag.error_message)])
 	if roOpened:
 		roFlag.close_db()
+	# O outro lado da mesma discórdia: por que `SQL.Transaction()` não pode ser
+	# aninhado, se a mutex deixa? Medido no handle cru, sem o nó de produção no
+	# meio — é o comportamento do libgdsqlite deste repo, documentado em
+	# SQL.gd:528-533 e citado (com o motivo errado) em AdsCosmeticsService.gd.
+	var outerBegin : bool = bool(writer.query("BEGIN;"))
+	writer.query("INSERT INTO t (v) VALUES ('outer');")
+	var innerBegin : bool = bool(writer.query("BEGIN;"))
+	writer.query("INSERT INTO t (v) VALUES ('inner');")
+	var innerEnd : bool = bool(writer.query("END;"))
+	var outerCommit : bool = bool(writer.query("COMMIT;"))
+	var witness : Object = OpenHandle(TmpDB, false)
+	var seen : int = -1
+	if witness != null:
+		witness.query("PRAGMA query_only=1;")
+		if bool(witness.query("SELECT count(*) AS c FROM t;")):
+			seen = int(witness.query_result[0]["c"])
+		witness.close_db()
 	writer.close_db()
+	Check(outerBegin and not innerBegin, "BEGIN aninhado FALHA no libgdsqlite (não existe transação dentro de transação)")
+	Check(innerEnd and seen == 4, "o END interno cometeu o trabalho do externo também: um witness vê %d linhas, não 2 — aninhar comete cedo, não trava" % seen)
+	Check(not outerCommit, "o COMMIT do externo falha depois: a transação que ele achava que controlava já foi")
 
 # ---------------------------------------------------------------------------
 # 3) Gates do pool.

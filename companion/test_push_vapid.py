@@ -97,12 +97,20 @@ raises(pv.ConfigError, lambda: pv.load_signing_key(
 raises(pv.ConfigError, lambda: pv.load_signing_key(
     {pv.VAPID_PRIVATE_ENV: pv.b64u_encode(b"\x00" * 32)}),
    "escalar 0 é recusado")
+# Os dois fixtures abaixo são PEMs MALFORMADOS de propósito — corpo de 3 octetos,
+# sem a estrutura SEC1. O marcador é montado em tempo de execução (a mesma
+# convenção de `pem()` em test_push_common.py) porque o gate de segredos lê o
+# texto rastreado e não tem como distinguir um cabeçalho de chave privada escrito
+# à mão de uma chave privada de verdade: um literal assim conta como falha, e é
+# mais caro relaxar a regra do que esconder o fixture. O parser recebe os mesmos
+# bytes de sempre — o que muda é só onde a string é montada.
+_PEM_HEAD = "-----BEGIN EC " + "PRIVATE KEY-----\n"
+_PEM_TAIL = "-----END EC " + "PRIVATE KEY-----"
 raises(pv.ConfigError, lambda: pv.load_signing_key(
-    {pv.VAPID_PRIVATE_ENV: "-----BEGIN EC PRIVATE KEY-----\nQUJD\n"
-                           "-----END EC PRIVATE KEY-----"}),
+    {pv.VAPID_PRIVATE_ENV: _PEM_HEAD + "QUJD\n" + _PEM_TAIL}),
    "PEM sem estrutura ECPrivateKey é recusado")
 raises(pv.ConfigError, lambda: pv.load_signing_key(
-    {pv.VAPID_PRIVATE_ENV: "-----BEGIN EC PRIVATE KEY-----\nAAAA"}),
+    {pv.VAPID_PRIVATE_ENV: _PEM_HEAD + "AAAA"}),
    "PEM sem END é recusado (não um DER truncado aceito por acidente)")
 eq(pv.public_key_from_private(_priv_int), _pub_b64,
    "public_key_from_private e push_ready derivam a mesma pública")

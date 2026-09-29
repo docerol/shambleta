@@ -16,6 +16,11 @@ class_name IdleTests
 
 const Zone1GoldenXpPerKill : int = 1200
 const Zone1GoldenParKills : int = 150			# SOM-IDLE: par recalibrado pós cast-fix+dano-mínimo (probe mede ~160/h)
+# Topo da escada, medido como número e não rederivado da fórmula: é o que impede
+# a régua de provar apenas que `_make` multiplica por si mesma. z27 é a última
+# zona REAL (ZONE_COUNT), e o par dela é o número que o settle offline usa.
+const ZoneTopGoldenXpPerKill : int = 397047		# 1200 × 1,25^26
+const ZoneTopGoldenParKills : int = 76			# round(3600 / (24 + 0,9 × 26))
 const TolerancePct : float = 0.5
 
 var failures : int = 0
@@ -91,8 +96,16 @@ func CreateFixture(sql : SQLService, accountName : String, nickname : String, gp
 		return 0
 	sql.SetSkill(charID, SkillCommons.SkillMeleeName.hash(), 1)
 	sql.SetSkill(charID, SkillCommons.SkillRunName.hash(), 1)
-	# Seed starting gold for delta assertions
-	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = gp})
+	# Seed starting gold for delta assertions — pelo caminho único atestado, nunca
+	# `update_rows` cru no stat row. A perna de ledger do reconcile (`HAVING
+	# total < 0`) soma apenas o que o ledger atesta: com seed cru o fixture tem
+	# 100k em `stat.gp` e zero crédito no ledger, então a primeira taxa real
+	# (corrupt 500, fee de AH) deixa a conta com saldo atestado NEGATIVO e o
+	# reconcile acusa a suíte — que é o que a de sinks pagava há dias. MoveGold
+	# grava stat.gp e espelha o delta na mesma transação, e é seguro sem agente
+	# (fixture está offline: o banco é o único estado).
+	if gp > 0 and not Launcher.Economy.MoveGold(charID, gp, "fixture_seed"):
+		return 0
 	return charID
 
 # C2 (auditoria 2026-09-24): o credential de anúncio deixou de ser um formato
@@ -170,10 +183,17 @@ func SuiteZoneCatalog() -> void:
 		CheckEq(zone1.parKillsPerHour, par, "Zone 1 par kills/h")
 		CheckEq(par, Zone1GoldenParKills, "Zone 1 par golden (recalibrated)")
 		CheckEq(zone1.goldPerKill, roundi(1200 / 8), "Zone 1 goldPerKill = xp/8")
-	# z24 ≈ 1200 * 1.25^23 ≈ 234k (±0.5%) — curva agora termina na última zona real
-	var zoneDeep : FarmZoneData = FarmZoneData.GetZone(24)
-	if zoneDeep:
-		CheckNear(float(zoneDeep.xpPerKill), roundi(1200.0 * pow(1.25, 23)), TolerancePct, "Zone 24 xpPerKill golden")
+	# Meio da escada (z24) e TOPO (última zona real, contada por ZONE_COUNT e não
+	# digitada): o topo é o número que aparece na doc de progressão e no settle.
+	var zoneMid : FarmZoneData = FarmZoneData.GetZone(24)
+	if zoneMid:
+		CheckNear(float(zoneMid.xpPerKill), roundi(1200.0 * pow(1.25, 23)), TolerancePct, "Zone 24 xpPerKill golden")
+	var zoneTop : FarmZoneData = FarmZoneData.GetZone(FarmZoneData.GetZoneCount())
+	if Check(zoneTop != null, "Top-of-ladder zone resolves by catalog count"):
+		CheckEq(zoneTop.xpPerKill, ZoneTopGoldenXpPerKill, "top zone xpPerKill golden (curve endpoint)")
+		CheckEq(zoneTop.parKillsPerHour, ZoneTopGoldenParKills, "top zone par kills/h golden (feeds offline settle)")
+		CheckEq(zoneTop.goldPerKill, roundi(float(ZoneTopGoldenXpPerKill) / 8.0), "top zone goldPerKill = xp/8")
+		CheckEq(zoneTop.tier, FarmZoneData.MAX_TIER, "top zone sits in the last tier")
 	# Tier progression: tier = ceil(id/3); minPower = 24 + 8*(z-1) (escada suave)
 	var z6 : FarmZoneData = FarmZoneData.GetZone(6)
 	if z6:
@@ -235,7 +255,11 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 		armedViews += 1
 	CheckEq(armedViews, wantedViews, "golden: as %d horas compradas passaram no cap de views" % wantedViews)
 
-	# Capturado ANTES da liquidação: é o nível que o settle vê (a fixture é L1).
+	# Capturado ANTES da liquidação: é o nível que o settle vê (a fixture é L1), e o
+	# ouro é o saldo que o caminho atestado deixou na carteira — ler, e não assumir o
+	# 5000 do default de `CreateFixture`, é o que mantém esta régua sobre o settle
+	# depois que o seed do fixture passou a existir no ledger.
+	var gpBeforeSettle : int = int(sql.GetStat(charID).get("gp", 0))
 	var nb : float = NewbieMultForLevel(LevelOf(sql, charID))
 	var report : Dictionary = OfflineSettle.SettlePending(charID)
 	OS.set_environment("SHAMBLETA_AD_STUB", "")
@@ -256,18 +280,37 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	Check(nb > 1.0, "golden: fixture é newbie (×%s) — a trava de gold sem boost é significativa" % str(nb))
 	var expectedGold : int = roundi(float(zone5.goldPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor)
 	var expectedTax : int = roundi(float(expectedGold) * 0.05)	# 5% — eff < 1.0
-	var expectedDrop : int = floori(float(zone5.dropRatePPM) * h * 3600.0 * eff * OfflineSettle.OfflineFactor / 1000000.0)
+	# O fixture do golden não tem VIP, guild nem campanha no ar. `report.mods` entra
+	# no produto do drop e no das chaves; se ele sair de 1,0 a régua abaixo passa a
+	# conferir a fórmula contra o próprio multiplicador e deixa de ser régua. Trava.
+	CheckEq(roundi(float(report.get("mods", 0.0)) * 1000.0), 1000, "golden: mods == 1,0 no fixture (sem VIP/guild/campanha)")
+	# Drop de item tem a MESMA unidade da chave de boss: ppm de KILLS × kills
+	# equivalentes da janela. O settle tratava o ppm como partes-por-milhão de
+	# SEGUNDOS (`ppm × h × 3600 / 1e6`), e a zona 1 pagava 0,54 item/h contra os
+	# ~105/h do farm ao vivo na mesma zona (par 150 kills/h × 0,7 drop/kill medido
+	# em `SuiteIdleLootPipeline`). As duas réguas que existiam (`drop count golden`
+	# aqui, zona 8 em `tests/balance_test.gd`) refaziam a expressão errada e eram
+	# verdes ao defeito — por isso agora uma trava a grandeza e a outra amarra o ppm
+	# à probabilidade viva, em vez de repetir a conta.
+	var expectedKills : float = float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor
+	var dropExp : float = float(zone5.dropRatePPM) * expectedKills / 1000000.0
+	var expectedDrop : int = floori(dropExp)
+	if dropExp - float(expectedDrop) >= 0.5:
+		expectedDrop += 1
 
 	CheckEq(int(h * 100.0), 1200, "hours = 12 (capped)")
 	CheckEq(int(report["efficiency"] * 100.0), int(eff * 100.0), "efficiency = 0.8")
 	CheckEq(int(report["xp_earned"]), expectedXp, "xp golden")
 	CheckEq(int(report["gold_earned"]), expectedGold, "gold golden")
 	CheckEq(int(report["gold_taxed"]), expectedTax, "death tax golden")
-	CheckEq(int(report.get("drops", {}).get(FarmZoneData.GetDropForRoll(5, charID + 5), 0)), expectedDrop, "drop count golden")
+	var dropped5 : int = int(report.get("drops", {}).get(FarmZoneData.GetDropForRoll(5, charID + 5), 0))
+	CheckEq(dropped5, expectedDrop, "drop count golden (z5/12h/0,8 → %.1f kills equiv × ppm)" % expectedKills)
+	Check(dropped5 > 0, "drop: 12h de zona 5 pagam ao menos um item (foi %d)" % dropped5)
+	Check(dropExp <= expectedKills + 0.001, "drop: a pia nunca paga mais que um item por kill equivalente (%.2f ≤ %.2f)" % [dropExp, expectedKills])
+	Check(dropped5 <= int(expectedKills), "drop: itens liquidados cabem nos kills da janela (%d ≤ %d)" % [dropped5, int(expectedKills)])
 	CheckEq(int(report["chests"]), 3, "chests = min(3, floor(12/4))")
 
 	# SOM-IDLE: chaves de boss acumulam offline com o mesmo ppm do drop ao vivo.
-	var expectedKills : float = float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor
 	var keyExp : float = float(BossService.KeyDropPPM) * expectedKills / 1000000.0
 	var expectedKeys : int = floori(keyExp)
 	if keyExp - float(expectedKeys) >= 0.5:
@@ -281,18 +324,23 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	Check(newLevel > 1, "Level raised via curve (now %d)" % newLevel)
 	var xpRemainder : int = 0 if stat["experience"] == null else int(stat["experience"])
 	Check(xpRemainder < Experience.GetNeededExperienceForNextLevel(newLevel), "XP remainder below next level")
-	var expectedFinalGold : int = 5000 + expectedGold - expectedTax
+	var expectedFinalGold : int = gpBeforeSettle + expectedGold - expectedTax
 	CheckEq(int(stat["gp"]), expectedFinalGold, "gp credited net of tax")
-	# Ledger: one gold row + one xp row
+	# Ledger: a perna do settle é identificada pelo REASON do próprio job, não por
+	# "a única linha de gold do personagem". Desde que `CreateFixture` semeia pelo
+	# caminho atestado (EconomyKernel.MoveGold) o char tem também a linha do seed, e
+	# `ledgerGold[0]` de um conjunto misto passava a ler a linha errada — a régua
+	# conferia o seed de 5000 achando que era o settle.
+	var settleReason : String = str(OfflineSettle.LedgerReason)
 	var ledgerGold : Array[Dictionary] = sql.QueryBindings(
-		"SELECT amount, balance_after FROM ledger_transaction WHERE char_id = ? AND kind = 'gold';", [charID])
-	CheckEq(ledgerGold.size(), 1, "1 gold ledger row")
+		"SELECT amount, balance_after FROM ledger_transaction WHERE char_id = ? AND kind = 'gold' AND reason = ?;", [charID, settleReason])
+	CheckEq(ledgerGold.size(), 1, "1 gold ledger row do settle")
 	if not ledgerGold.is_empty():
 		CheckEq(int(ledgerGold[0]["amount"]), expectedGold - expectedTax, "ledger gold net")
 		CheckEq(int(ledgerGold[0]["balance_after"]), expectedFinalGold, "ledger gold balance_after")
 	var ledgerXp : Array[Dictionary] = sql.QueryBindings(
-		"SELECT amount FROM ledger_transaction WHERE char_id = ? AND kind = 'xp';", [charID])
-	CheckEq(ledgerXp.size(), 1, "1 xp ledger row")
+		"SELECT amount FROM ledger_transaction WHERE char_id = ? AND kind = 'xp' AND reason = ?;", [charID, settleReason])
+	CheckEq(ledgerXp.size(), 1, "1 xp ledger row do settle")
 
 	# Item row + chest rows
 	var items : Array[Dictionary] = sql.QueryBindings("SELECT count FROM item WHERE item_id = ? AND char_id = ?;", [FarmZoneData.GetDropForRoll(5, charID + 5), charID])
@@ -304,7 +352,12 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	var newAnchor : int = int(sql.GetCharacter(charID)["last_settled_at"])
 	Check(newAnchor >= now, "anchor advanced (now=%d, anchor=%d)" % [now, newAnchor])
 
-func SuiteSettleIdempotency(sql : SQLService, charID : int, expectedLedgerRows : int) -> void:
+# Linhas de ledger que MOVEM valor no personagem (gold + xp). É a grandeza da
+# idempotência do settle; essence/boss_key têm régua própria logo acima.
+func _LedgerMovementRows(sql : SQLService, charID : int) -> int:
+	return int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE char_id = ? AND kind IN ('gold','xp');", [charID])[0]["c"])
+
+func SuiteSettleIdempotency(sql : SQLService, charID : int) -> void:
 	print("[suite] settle idempotency")
 	# Segunda chamada com o MESMO anchor. O relógio precisa ser pinado: o guard de
 	# idempotência é `now <= last_settled_at` e o settle do golden acima já andou
@@ -315,6 +368,7 @@ func SuiteSettleIdempotency(sql : SQLService, charID : int, expectedLedgerRows :
 	var pinned : int = int(sql.GetCharacter(charID)["last_settled_at"])
 	OfflineSettle.nowOverride = pinned
 	var statBefore : Dictionary = sql.GetStat(charID)
+	var rowsBefore : int = _LedgerMovementRows(sql, charID)
 	var report : Dictionary = OfflineSettle.SettlePending(charID)
 	var statAfter : Dictionary = sql.GetStat(charID)
 	OfflineSettle.nowOverride = 0
@@ -327,10 +381,11 @@ func SuiteSettleIdempotency(sql : SQLService, charID : int, expectedLedgerRows :
 	Check(xpAfter == xpBefore, "experience unchanged on re-settle")
 
 	# Gold + xp are the value-moving rows the settle idempotency is about; a
-	# re-settle must not duplicate them. (boss_key rows are also idempotent via
-	# the anchor guard but tracked separately by the golden boss_keys check.)
-	var ledgerCount : int = int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE char_id = ? AND kind IN ('gold','xp');", [charID])[0]["c"])
-	CheckEq(ledgerCount, expectedLedgerRows, "no duplicate gold/xp ledger rows after re-settle")
+	# re-settle must not duplicate them. A régua é a diferença medida em torno do
+	# re-settle, não um número passado pelo chamador: com o seed do fixture no
+	# ledger, "2 linhas" deixou de ser o estado do personagem e virou suposição.
+	var ledgerCount : int = _LedgerMovementRows(sql, charID)
+	CheckEq(ledgerCount, rowsBefore, "no duplicate gold/xp ledger rows after re-settle")
 
 	# Same-millisecond double settle across fresh anchors
 	var now : int = SQLCommons.Timestamp()
@@ -430,10 +485,47 @@ func SuiteLedgerTriggers(sql : SQLService, charID : int, accountID : int) -> voi
 	var deleteBlocked : bool = sql.ExecuteBindings("DELETE FROM ledger_transaction WHERE reason = 'trigger-test';", [])
 	Check(not updateBlocked and not deleteBlocked, "ledger DELETE blocked by trigger")
 
-func SuiteReconcile(economy : EconomyService) -> void:
-	print("[suite] reconcile")
+# Réguas de reconcile espalhadas pelas suítes chamavam `ReconcileDaily() == 0`
+# cru: quando pegavam 1, a linha de falha era "1 vs 0" e a caçada recomeçava em 90
+# suítes. Este helper imprime as LINHAS nomeadas antes de reclamar — o mesmo
+# rodapé que o job diário entrega ao plantão.
+func CheckReconcileClean(economy : EconomyService, label : String) -> bool:
 	var divergences : int = economy.ReconcileDaily()
-	CheckEq(divergences, 0, "zero divergence on clean data")
+	if divergences != 0:
+		for row in economy.ReconcileDetail():
+			print("  [reconcile-offender] " + JSON.stringify(row))
+	return CheckEq(divergences, 0, label)
+
+func SuiteReconcile(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] reconcile")
+	CheckReconcileClean(economy, "zero divergence on clean data")
+
+	# A régua do RODAPÉ, não do contador: enveneno a base com um lote que eu crio e
+	# eu apago (não depende do inventário do fixture) e exijo que o diagnóstico
+	# nomeie exatamente o que o contador conta. Um `ReconcileDetail()` decorativo —
+	# o caso que deixou o gate de pilha uma execução inteira mudo — passa no contador
+	# e falha aqui, em tamanho, em dono e na aritmética do veneno.
+	# A perna depende do estado: lote sem agregado é `orphan_lot`, lote a mais em
+	# cima de um agregado existente é `stack_mismatch`; em ambas `lots = agregado + 3`.
+	var poisonItem : int = 909090909
+	var poisoned : bool = sql.ExecuteBindings(
+		"INSERT INTO item_instance (char_id, item_id, count, storage, bound, customfield, reason, parent_uid, created_at) VALUES (?, ?, 3, 0, 0, '', 'reconcile-poison', 0, ?);",
+		[lastCharID, poisonItem, SQLCommons.Timestamp()])
+	if Check(poisoned, "veneno: lote de 3 unidades sem agregado"):
+		var found : int = economy.ReconcileDaily()
+		var detail : Array[Dictionary] = economy.ReconcileDetail()
+		CheckEq(found, 1, "contador pega o lote envenenado")
+		CheckEq(detail.size(), found, "o diagnóstico nomeia EXATAMENTE o que o contador conta (%d linhas para %d)" % [detail.size(), found])
+		var named : int = 0
+		for row in detail:
+			print("  [reconcile-offender] " + JSON.stringify(row))
+			var kind : String = str(row.get("kind", ""))
+			if (kind == "orphan_lot" or kind == "stack_mismatch") and int(row.get("char_id", 0)) == lastCharID \
+					and int(row.get("lots", 0)) == 3 + int(row.get("aggregate", 0)):
+				named += 1
+		CheckEq(named, 1, "o offender é o meu lote: perna de pilha, dono = fixture, lots = agregado + 3")
+	sql.ExecuteBindings("DELETE FROM item_instance WHERE char_id = ? AND item_id = ? AND reason = 'reconcile-poison';", [lastCharID, poisonItem])
+	CheckReconcileClean(economy, "contador e diagnóstico voltam a zero depois de desfazer o veneno")
 
 # DB-backed aggregate: fixture + settle/ledger suites (called by the runner)
 func SuiteDBBacked(sql : SQLService, economy : EconomyService) -> bool:
@@ -447,11 +539,11 @@ func SuiteDBBacked(sql : SQLService, economy : EconomyService) -> bool:
 	var accountID : int = sql.GetAccountIDForCharacter(charID)
 	lastCharID = charID
 	SuiteSettleGolden(sql, economy, charID, accountID)
-	SuiteSettleIdempotency(sql, charID, 2)
+	SuiteSettleIdempotency(sql, charID)
 	SuiteSettleChaos(sql, charID)
 	SuiteTransactionNesting(sql, charID, accountID)
 	SuiteLedgerTriggers(sql, charID, accountID)
-	SuiteReconcile(economy)
+	SuiteReconcile(sql, economy)
 
 	var statFinal : Dictionary = sql.GetStat(charID)
 	var xpF : Variant = statFinal["experience"]
@@ -495,7 +587,10 @@ func SuiteIdlePolicySim(charID : int) -> void:
 		print("SIM SNAPSHOT (compressed-scale, non-binding): avg %.0f kills/h vs design par %.0f/h (%+.1f%%)" % [avgRate, designPar, parDeltaPct])
 
 # One seeded farm run; returns the snapshot dictionary.
-func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zoneID : int = 1, dumpMatchup : bool = false) -> Dictionary:
+# killAtGameSec >= 0 mata o farmer de propósito nesse instante de tempo de jogo
+# (via BaseAgent.Kill(), o MESMO caminho de produção: Stats.SetHealth → Killed →
+# ActorCommons.State.DEATH) e devolve no snapshot o que a política fez depois.
+func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zoneID : int = 1, dumpMatchup : bool = false, killAtGameSec : float = -1.0) -> Dictionary:
 	var snapshot : Dictionary = {"run": runIdx, "kills": 0, "kills_per_hour": 0.0, "deaths": 0, "efficiency": 0.0, "gold_gained": 0, "levels_gained": 0}
 
 	var agent : PlayerAgent = await _SpawnSimAgent(charID, runIdx, zoneID)
@@ -574,11 +669,18 @@ func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zo
 	# measured rate machine-independent.
 	var wallCapMsec : int = maxi(75000, int(float(simSeconds) * 1000.0 / maxf(1.0, timeScale)) * 4)
 	var sampleAtMsec : int = startMsec + 20000
+	var killPending : bool = killAtGameSec >= 0.0
+	snapshot.killAttempted = false
 	while Engine.get_physics_frames() - startTicks < targetTicks:
 		await Launcher.get_tree().physics_frame
 		if dumpMatchup and is_instance_valid(agent) and Time.get_ticks_msec() >= sampleAtMsec:
 			sampleAtMsec += 20000
 			_PrintCombatSample(agent, policy)
+		if killPending and is_instance_valid(agent) and policy.GetSessionDuration() >= killAtGameSec:
+			killPending = false
+			snapshot.killAttempted = true
+			snapshot.killsBeforeKill = policy.sessionKills
+			agent.Kill()
 		if not is_instance_valid(agent) or Time.get_ticks_msec() - startMsec > wallCapMsec:
 			break
 	Engine.time_scale = 1.0
@@ -586,6 +688,10 @@ func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zo
 	if Check(is_instance_valid(agent), "sim run %d: agent survived the session" % runIdx):
 		snapshot.kills = policy.sessionKills
 		snapshot.deaths = policy.sessionDeaths
+		snapshot.downtimeSecs = policy.sessionDowntimeSecs
+		snapshot.efficiencyRaw = policy.ComputeSessionEfficiencyRaw()
+		snapshot.revived = ActorCommons.IsAlive(agent)
+		snapshot.killsAfterDeath = policy.sessionKills - int(snapshot.get("killsBeforeKill", 0))
 		snapshot.efficiency = policy.ComputeSessionEfficiency()
 		snapshot.kills_per_hour = float(policy.sessionKills) * 3600.0 / maxf(1.0, policy.GetSessionDuration())
 		snapshot.levels_gained = agent.stat.level - startLevel
@@ -593,7 +699,13 @@ func _SimRun(charID : int, runIdx : int, simSeconds : int, timeScale : float, zo
 		snapshot.merge(policy.SnapshotMetrics())
 
 		print("SIM RUN %d: %s" % [runIdx, str(snapshot)])
-		Check(snapshot.efficiency >= IdlePolicy.MinEfficiency and snapshot.efficiency <= 1.0, "sim run %d: efficiency in [0.5, 1.0] (%.2f)" % [runIdx, snapshot.efficiency])
+		# Régua no valor SEM clamp: `ComputeSessionEfficiency()` devolve
+		# clampf(..., MinEfficiency, 1.0), e confinar o teto do gate ao piso do
+		# clamp produzia uma régua que não pode falhar (1 morte ou 100, o número
+		# publicado é 0.5). Aqui o que se cobra é que o ciclo de morte do farmer
+		# custe menos de metade da sessão — com deaths/downtime impressos junto.
+		Check(snapshot.efficiencyRaw >= IdlePolicy.MinEfficiency, "sim run %d: custo de morte abaixo de metade da sessão (raw %.2f, deaths %d, downtime %.0fs)" % [runIdx, snapshot.efficiencyRaw, snapshot.deaths, snapshot.downtimeSecs])
+		Check(snapshot.efficiencyRaw <= 1.0, "sim run %d: efficiency raw <= 1.0 (%.2f)" % [runIdx, snapshot.efficiencyRaw])
 		Check(snapshot.gold_gained >= 0, "sim run %d: gold delta sane (%d)" % [runIdx, snapshot.gold_gained])
 
 	IdlePolicyService.StopIdleSession(agent)
@@ -1890,6 +2002,16 @@ func SuiteOnboarding(sql : SQLService) -> void:
 func _SimRunDiag(charID : int, zoneID : int, simSeconds : int) -> Dictionary:
 	return await _SimRun(charID, 900 + zoneID, simSeconds, 1.0, zoneID, true)
 
+# Mesmo caminho, com o relógio comprimido exposto. A compressão BARATA a amostra
+# (600 s de jogo em 30 s de parede) e serve para A/B de política, mas NÃO é a
+# taxa do produto: medido em 2026-09-27 com este fixture L1/zona 1, o farmer
+# saturava em 4 kills qualquer que fosse a janela — 4 em 120 s (120/h), 4 em 200 s
+# (72/h), 4 em 300 s (48/h) a 1×, e 4 em 600 s @20x (~24/h). Kills constantes com
+# janela crescente não é cadência, é o mesmo bug visto de fora: depois do 4º kill
+# o personagem parava de se mover. Para número de design, scale 1.
+func _SimRunScaled(charID : int, runIdx : int, simSeconds : int, timeScale : float, zoneID : int, dumpMatchup : bool) -> Dictionary:
+	return await _SimRun(charID, runIdx, simSeconds, timeScale, zoneID, dumpMatchup)
+
 # SOM-IDLE D1: real-time pacing probe — the BINDING par gate (no compression).
 # Fresh L1 fixture (par is calibrated for onboarding rates, not geared chars).
 func SuiteIdlePolicyRealTime(sql : SQLService) -> void:
@@ -1904,27 +2026,52 @@ func SuiteIdlePolicyRealTime(sql : SQLService) -> void:
 	print("REALTIME: %.0f kills/h vs par %.0f/h" % [rate, par])
 	Check(float(snapshot.get("kills", 0)) > 0, "realtime: productive")
 	# Gate largo de propósito: o processo tem variância alta entre runs (RNG de
-	# wander/spawn; banda observada 36–90). Precisão de pacing vem do harness
-	# (determinístico) + telemetria do beta. Aqui: piso de onboarding (L2 em
-	# minutos) e teto de sanidade.
+	# wander/spawn). Precisão de pacing vem do harness (determinístico) + telemetria
+	# do beta. Aqui: piso de onboarding (L2 em minutos) e teto de sanidade.
 	# SOM-IDLE D1 (b): recalibração do gate (2026-09-14). A taxa agora é
 	# kills por HORA DE JOGO (policy em substeps de TickInterval no relógio
 	# físico — WorldInstance/IdlePolicy), não wall-clock: antes, sob carga de
 	# suíte o tick starvation derrubava a leitura (24/h "falso doente").
-	# Medições com o gate honesto, zona 1 L1, seed fixa: standalone 79,97/h
-	# (4 kills/180s); in-suíte 47,99/h (4 kills/300s) e 35,99/h (3 kills/300s)
-	# em duas corridas — mundo residual das suítes anteriores eleva
-	# walk/re-target do farmer e a granularidade de kills inteiros no jogo
-	# vale ±12/h numa janela de 300s. Piso 30 = "ainda matando em ritmo de
-	# onboarding": 0–2 kills/300s (≤24/h) é o regime doente que ele pega.
+	# Medições ANTIGAS (regime doente, antes do fix do revive): standalone 79,97/h
+	# (4 kills/180s); in-suíte 47,99/h (4 kills/300s) e 35,99/h (3 kills/300s).
+	# As três leituras eram o MESMO bug: o farmer saturava em ~4 kills porque
+	# morria e `IdlePolicy.State.DEAD` não tinha produtor — estátua pelo resto da
+	# sessão. Ver FarmZoneData (par) e SuiteIdleDeathRevive (regressão).
+	# Medições NOVAS, 2026-09-27, mesmo fixture L1/zona 1/300 s a 1×, duas corridas
+	# standalone: 251,9/h (21 kills) e 239,9/h (20 kills) — 168% do par de 150/h.
+	# Teto 320 = sanidade acima do medirado com folga de variância; piso 30 = "ainda
+	# matando em ritmo de onboarding". O piso NÃO é mais o detector do farmer-estátua
+	# (48/h passava dele): quem caça essa regressão é SuiteIdleDeathRevive, que exige
+	# kill depois de morrer. (A anotação antiga "~160/h estável" não reproduzia nem no
+	# commit que a escreveu — ver archive/D1_GATE_REPORT.md.)
 	# Precisão de pacing pertence ao harness determinístico e à telemetria.
-	# (A anotação antiga "~160/h estável" não reproduzia nem no commit que a
-	# escreveu — 47,99/h in-situ; ver archive/D1_GATE_REPORT.md.)
-	# Teto 200/h. Par de design da zona 1 = 150/h (meta de conteúdo, não gate).
 	Check(rate >= 30.0, "realtime: onboarding floor (%.0f/h ≥ 30/h)" % rate)
-	Check(rate <= 200.0, "realtime: sanity ceiling (%.0f/h ≤ 200/h)" % rate)
+	Check(rate <= 320.0, "realtime: sanity ceiling (%.0f/h ≤ 320/h)" % rate)
 	sql.db.delete_rows("character", "nickname = 'IdleRTTester'")
 	sql.db.delete_rows("account", "username = 'idle_rt_account'")
+
+# SOM-IDLE (2026-09-27): regressão do "farmer-estátua". Nenhum caminho do
+# IdlePolicy ENTRAVA em State.DEAD (não existia produtor), então `_tickDead` — o
+# único revive do idle — era código morto: o farmer morria para o mob, o
+# ActorCommons.State.DEATH é absorvente na mesa STATE_TRANSITIONS, e
+# `_velocity_computed` trava currentVelocity em ZERO para todo estado != WALK. A
+# policy seguia em COMBAT mandando WalkToward para um corpo. Assinatura medida com
+# tests/diag_pacing.gd a 1×: kills saturam em 4 em qualquer janela (4/120s,
+# 4/200s, 4/300s), pos congelado, input≠0, navpath válido, vel=0, phys=true.
+# Esta suite mata o farmer de propósito pelo caminho de produção (BaseAgent.Kill
+# → Stats.SetHealth → Killed → State.DEATH) e exige que ele VOLTE A PRODUZIR.
+func SuiteIdleDeathRevive(charID : int) -> void:
+	print("[suite] idle death → revive in place → farming resumes")
+	var snapshot : Dictionary = await _SimRun(charID, 960, 300, 20.0, 1, false, 20.0)
+	if not Check(bool(snapshot.get("killAttempted", false)), "death: o farmer foi morto dentro da sessão"):
+		return
+	Check(bool(snapshot.get("revived", false)), "death: policy devolveu o farmer à vida (State.DEAD → Revive in place)")
+	Check(int(snapshot.get("deaths", 0)) >= 1, "death: a morte foi contada na sessão (deaths=%d)" % int(snapshot.get("deaths", 0)))
+	Check(float(snapshot.get("downtimeSecs", 0.0)) > 0.0, "death: downtime medido maior que zero (%.1fs) — DEAD foi um estado real, não um rótulo" % float(snapshot.get("downtimeSecs", 0.0)))
+	# O gate de verdade não é "voltou a viver", é "voltou a trabalhar": um revive
+	# que devolve HP mas deixa a policy presa no alvo morto continuaria um farmer
+	# inútil. Exige kill DEPOIS da morte.
+	Check(int(snapshot.get("killsAfterDeath", 0)) > 0, "death: farming retoma após o revive (%d kills depois de morrer)" % int(snapshot.get("killsAfterDeath", 0)))
 
 # SOM-IDLE D1: faucet harness — settle linearity, ledger integrity, throughput.
 func SuiteFaucetHarness(sql : SQLService) -> void:
@@ -1996,12 +2143,52 @@ func _PrintCombatSample(agent : PlayerAgent, policy : IdlePolicy) -> void:
 	var target : BaseAgent = WorldAgent.GetAgent(policy.currentTargetRID) as AIAgent if policy.currentTargetRID != 0 else null
 	var dist : float = agent.position.distance_to(target.position) if target and is_instance_valid(target) else -1.0
 	var attackable : bool = SkillCommons.IsAttackable(agent, target, skill) if target and skill else false
-	print("SAMPLE t=%ds kills=%d state=%d casting=%s cooling=%s actionBusy=%s mana=%d/%d stamina=%d/%d dist=%.0f attackable=%s tgtAlive=%s" % [
-		int(policy.GetSessionDuration()), policy.sessionKills, policy.state,
+	# SOM-IDLE D1: as três hipóteses para o stall do farmer têm assinaturas
+	# diferentes no mesmo frame, e uma só delas é visível sem isto: (a) o jogador
+	# está parado porque o nav não tem caminho (walk não sobe, navfin=true, caminho
+	# vazio), (b) o alvo foge mais rápido que o jogador (walk sobe, dist também),
+	# (c) o cast sai e fizzla (walk irrelevante, casting=true em amostra alternada).
+	# Sem walk/hp/caminho na amostra, as três ficam idênticas no log e a correção vira chute.
+	var walk : float = policy.metricWalkDistance
+	var tgtHP : String = "?" if target == null or not is_instance_valid(target) else "%d/%d" % [target.stat.health, target.stat.current.maxHealth]
+	var navPath : int = -1
+	var navFin : bool = false
+	var nextPos : Vector2 = Vector2.INF
+	var avoid : bool = false
+	# O nome do getter mudou entre versões do engine (is_physics_process →
+	# is_physics_processing) e chamar o errado derruba a linha inteira de cada
+	# amostra em runtime, não em parse — o log ficava mudo e o run "verde". Pergunta
+	# antes de chamar.
+	var phys : String = "n/a"
+	if agent.has_method("is_physics_processing"):
+		phys = str(agent.is_physics_processing())
+	elif agent.has_method("is_physics_process"):
+		phys = str(agent.is_physics_process())
+	if agent.agent:
+		navPath = agent.agent.get_current_navigation_path().size()
+		navFin = agent.agent.is_navigation_finished()
+		avoid = agent.agent.get_avoidance_enabled()
+		if not navFin:
+			nextPos = agent.agent.get_next_path_position()
+	# astate/vel/input/phys são o que separa as três hipóteses de imobilidade:
+	# caminho de nav existe mas a velocidade integrada é ZERO pode ser (i) a mesa
+	# STATE_TRANSITIONS recusando WALK (astate preso, input≠0, vel=0), (ii) o nó
+	# sem _physics_process (phys=false) ou (iii) avoidance devolvendo 0 (avoid=true,
+	# input≠0, vel=0). Sem estes quatro campos o log não distingue as três.
+	# hp/alive/deaths entraram depois porque a amostra não dizia se o MORTO era o
+	# farmer ou o alvo: astate=4 com hp>0 é estado inventado, astate=4 com hp<=0 é
+	# morte real sem revive — e foram exatamente os dois campos que fecharam a
+	# questão (o farmer morria e a policy nunca entrava em DEAD).
+	print("SAMPLE t=%ds kills=%d deaths=%d state=%d astate=%d hp=%d/%d alive=%s phys=%s avoid=%s input=%s vel=%s next=%s casting=%s cooling=%s actionBusy=%s mana=%d/%d stamina=%d/%d dist=%.0f attackable=%s tgtAlive=%s walk=%.0f tgtHP=%s navpath=%d navfin=%s pos=%s" % [
+		int(policy.GetSessionDuration()), policy.sessionKills, policy.sessionDeaths, policy.state,
+		agent.state, agent.stat.health, agent.stat.current.maxHealth, ActorCommons.IsAlive(agent),
+		phys, avoid, str(agent.currentInput), str(agent.velocity),
+		str(nextPos),
 		SkillCommons.IsCasting(agent), skill != null and SkillCommons.IsCoolingDown(agent, skill),
 		SkillCommons.HasAnyActionInProgress(agent),
 		agent.stat.mana, agent.stat.current.maxMana, agent.stat.stamina, agent.stat.current.maxStamina,
-		dist, attackable, target != null and is_instance_valid(target) and ActorCommons.IsAlive(target)])
+		dist, attackable, target != null and is_instance_valid(target) and ActorCommons.IsAlive(target),
+		walk, tgtHP, navPath, navFin, str(agent.position.round())])
 
 # ------------------------------------------------------------------ F3 suites
 
@@ -2136,7 +2323,15 @@ func SuiteBossLadder(sql : SQLService, economy : EconomyService) -> void:
 	# StartBossFight precisa de uma sessão de farm ativa; sem ela o challenge cai
 	# na sim (sem spawnar arena).
 	Check(not bool(IdlePolicyService.StartBossFight(agent, 0).get("started", true)), "live: no farm session → no arena")
-	CheckEq(economy.GrantBossKey(charID, 1, "test"), 3, "topped to 3 keys for sim path")
+	# Zera antes de topping. A régua esperava "2 + 1 = 3", que só valia enquanto
+	# nenhuma outra fonte tivesse concedido key antes do ladder — e existem três:
+	# o drop de chave do farm online (0,2%/kill em `Formula.gd:229`), o settle
+	# offline e o bônus de fronteira. Somar kills na conta (a suíte da esteira de
+	# item faz isso) transforma saldo-fixo em loteria.
+	var seedKeys : int = sql.GetCharacterBossKeys(charID)
+	if seedKeys > 0:
+		Check(economy.SpendBossKey(charID, seedKeys, "test"), "sim: zera as chaves herdadas de outras suítes (%d)" % seedKeys)
+	CheckEq(economy.GrantBossKey(charID, 3, "test"), 3, "topped to 3 keys for sim path")
 
 	var xpBefore : int = agent.stat.experience
 	var lose : Dictionary = economy.ChallengeBoss(charID, agent)
@@ -2151,12 +2346,19 @@ func SuiteBossLadder(sql : SQLService, economy : EconomyService) -> void:
 	agent.stat.current.attack = 999999
 	agent.stat.current.defense = 999999
 	agent.stat.current.maxHealth = 99999999
+	var keysBeforeWin : int = sql.GetCharacterBossKeys(charID)
 	var win : Dictionary = economy.ChallengeBoss(charID, agent)
 	Check(bool(win.get("ok", false)), "sim: second challenge accepted")
 	Check(bool(win.get("win", false)), "sim: overpowered char beats boss")
-	CheckEq(sql.GetCharacterBossesBeaten(charID), 1, "sim: victory advances ladder")
 	Check(int(win.get("chests", -1)) >= 1, "sim: victory grants chest(s)")
-	CheckEq(sql.GetCharacterBossKeys(charID), 1, "sim: key spent on the win")
+	CheckEq(sql.GetCharacterBossesBeaten(charID), 1, "sim: victory advances ladder")
+	# Vencer uma fronteira NOVA tem 30% de devolver a chave (`frontier_bonus`,
+	# `BossProgressionService.gd:283`, com `randf()`). A régua comparava o saldo com
+	# 1 fixo, então o gate `idle` era moeda ao ar: 1 de cada ~3 rodadas vermelhas
+	# sem nenhum defeito no produto. O que é determinístico é a DESPESA — uma chave
+	# por challenge, nunca menos, e no máximo o reembolso da fronteira.
+	var keysAfterWin : int = sql.GetCharacterBossKeys(charID)
+	Check(keysAfterWin == keysBeforeWin - 1 or keysAfterWin == keysBeforeWin, "sim: key spent on the win (± frontier bonus): %d → %d" % [keysBeforeWin, keysAfterWin])
 
 	# zerar as chaves → bloqueio de "no key"
 	economy.SpendBossKey(charID, sql.GetCharacterBossKeys(charID), "test")
@@ -2332,6 +2534,19 @@ func _GrantGold(sql : SQLService, charID : int, accountID : int, amount : int, r
 	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = gp + amount})
 	economy.LedgerAppend(charID, accountID, "gold", amount, gp + amount, reason)
 
+# Põe o saldo EXATAMENTE em `target` pelo caminho atestado: MoveGold é delta, e o
+# ledger grava o balance_after que a perna de carteira do reconcile compara com
+# `stat.gp`. Escrever o stat cru aqui — como estas suítes faziam para simular
+# "char pobre" e "char sem ouro pro pedágio" — deixa a carteira ABAIXO do último
+# saldo atestado, e o reconcile passa a ter razão ao acusar: o teste é exatamente
+# o escritor fora do caminho único que a régua caça.
+func _SetGold(charID : int, target : int) -> bool:
+	var rows : Array = Launcher.SQL.db.select_rows("stat", "char_id = %d" % charID, ["gp"])
+	var current : int = int(rows[0]["gp"]) if not rows.is_empty() else 0
+	if current == target:
+		return true
+	return Launcher.Economy.MoveGold(charID, target - current, "fixture_set_gold")
+
 # OpenChest: provably-fair roll, pity timer, single-open, ledger mirror
 func SuiteChests(sql : SQLService, charID : int, accountID : int) -> void:
 	print("[suite] chests (F4)")
@@ -2380,6 +2595,28 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 	_GrantGold(sql, charID, accountID, 2000, "fixture_craft_seed")
 	sql.SetEmailVerified(accountID, true)
 	var feeT1 : int = CraftCatalog.SubmitFee(1)  # 500 * 1 * 1 = 500
+
+	# SOM-CRAFT: o craft tem DOIS insumos desde 2026-09-28 (ouro + matéria-prima da
+	# faixa). A recusa por falta de material é medida antes de qualquer pilha ser
+	# concedida, com ouro sobrando: é a única forma de provar que os dois motivos
+	# continuam distintos na tela (inverter a ordem daria `insufficient_gold` para
+	# quem só está sem insumo). Concedido pelo caminho de produção
+	# (`AddItemToCharacter`), que carimba o lote como bound pela regra do kernel —
+	# material unbound não é o que o drop entrega.
+	var matT1 : int = FarmZoneData.GetBandMaterialHash(1)
+	var matNeed : int = CraftCatalog.MaterialPerCraft(1)
+	Check(matT1 != DB.UnknownHash, "a faixa do tier 1 declara uma matéria-prima")
+	Check(matNeed > 0, "o craft de tier 1 cobra %d unidades dela" % matNeed)
+	var gpNoMat : int = int(sql.db.select_rows("stat", "char_id = %d" % charID, ["gp"])[0].get("gp", 0))
+	var noMat : Dictionary = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "NoMatBlade", {"Attack" = 5})
+	Check(not bool(noMat["ok"]), "sem matéria-prima a forja recusa mesmo com ouro")
+	Check(str(noMat["reason"]) == "no_stock", "o motivo é no_stock, nunca insufficient_gold")
+	CheckEq(int(sql.db.select_rows("stat", "char_id = %d" % charID, ["gp"])[0].get("gp", 0)), gpNoMat, "na recusa por insumo o ouro fica intacto")
+	# Exatamente 3 crafts felizes passam por aqui (MyBlade, BladeTwo, BladeThree):
+	# pilha certa, saldo zero no fim, e nenhuma unidade sobrando para esconder um
+	# consumo parcial.
+	sql.AddItemToCharacter(charID, matT1, matNeed * 3, "fixture_craft_mat")
+	CheckEq(sql.GetLotBalanceRaw(charID, matT1, true), matNeed * 3, "a pilha de matéria-prima entra bound e é contável")
 	var bad : Dictionary = economy.SubmitCraft(charID, accountID, -1, shortSwordHash, "Blade", {})
 	Check(not bool(bad["ok"]), "rejected: invalid slot")
 	Check(str(bad["reason"]) == "invalid_slot", "invalid_slot reason")
@@ -2417,13 +2654,13 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 	Check(str(bad["reason"]) == "name_duplicate", "name_duplicate reason")
 
 	# --- Insufficient gold ---
-	# Set gp below fee (500) — stat.gp only, no ledger change (rejected submissions don't burn)
-	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = 10})  # below 500 fee
+	# Saldo abaixo do pedágio (500) pelo caminho atestado — ver _SetGold.
+	Check(_SetGold(charID, 10), "fixture: ouro abaixo do pedágio")
 	bad = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "MyBlade", {"Attack" = 10})
 	Check(not bool(bad["ok"]), "rejected: insufficient gold")
 	Check(str(bad["reason"]) == "insufficient_gold", "insufficient_gold reason")
 	# No gold burnt on rejection — restore gp for happy path
-	sql.db.update_rows("stat", "char_id = %d" % charID, {"gp" = 7000})
+	Check(_SetGold(charID, 7000), "fixture: ouro restaurado para o happy path")
 
 	# --- Happy path ---
 	var result : Dictionary = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "MyBlade", {"Attack" = 10})
@@ -2469,6 +2706,20 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 	result = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "BladeFour", {"Attack" = 5})
 	Check(not bool(result["ok"]), "fourth submission rejected: daily cap reached")
 	Check(str(result["reason"]) == "daily_cap_reached", "daily_cap_reached reason")
+	# Contabilidade do insumo: 3 forjas × matNeed = a pilha inteira, e nem o agregado
+	# nem o lote ficam para trás. Um `item.count` que sobrevive ao consumo é o
+	# "item fantasma" que o reconcile diário conta como divergência de pilha, então
+	# a régua do sink é o próprio job, não uma consulta inventada aqui.
+	CheckEq(sql.GetLotBalanceRaw(charID, matT1, true), 0, "as três forjas consumiram a pilha exata de matéria-prima")
+	CheckEq(sql.db.select_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [matT1, charID], ["count"]).size(), 0, "e o agregado do insumo foi drenado junto (nenhum item fantasma)")
+	var matLedger : Array[Dictionary] = sql.QueryBindings("SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, "craft_material:%d" % matT1])
+	CheckEq(matLedger.size(), 3, "cada craft deixa UMA linha de débito de insumo no ledger")
+	var matDebits : int = 0
+	for entry in matLedger:
+		if int(entry["amount"]) == -matNeed:
+			matDebits += 1
+	CheckEq(matDebits, 3, "todo lançamento de insumo é débito de -%d unidades (nunca crédito)" % matNeed)
+	CheckReconcileClean(economy, "reconcile limpo depois dos três crafts (ouro E pilha espelhados)")
 	sql.ExecuteBindings("DELETE FROM live_event_tick WHERE event_id IN (SELECT id FROM live_event WHERE kind = 'smith_week' AND starts_at = ?);", [smithStart])
 	sql.ExecuteBindings("DELETE FROM live_event WHERE kind = 'smith_week' AND starts_at = ?;", [smithStart])
 
@@ -2493,13 +2744,18 @@ func SuiteCraftDrops(sql : SQLService, charID : int, accountID : int) -> void:
 	Check(zone1Pool.has(shortSwordHash), "craft template hash in zone 1 drop pool")
 
 	# Weighted roleta: Short Sword now has Incomum weight (60) from the template.
-	# Over a full sweep of 200 rolls, it must drop (weight > 0) but less often
+	# Over a full sweep of 1000 rolls, it must drop (weight > 0) but less often
 	# than if it were Common (weight 100). Compare against a non-template item
 	# in the same pool (e.g. Apple at hash 215387671, weight 100).
+	# 1000, não 200: a banda do sword é 60 de um total ~5700 (e cresce quando a
+	# faixa ganha matéria-prima), então 200 amostras davam ~2 hits esperados — um
+	# 0/200 determinístico é azar de amostragem, não item inalcançável (o próprio
+	# comentário de GetDropForRoll, FarmZoneData.gd:401, diz que 200 rolls deixam
+	# itens do lattice inalcançáveis). 1000 amostras cobrem a banda com folga.
 	var swordCount : int = 0
 	var appleCount : int = 0
 	var otherCount : int = 0
-	for r in 200:
+	for r in 1000:
 		var itemHash : int = FarmZoneData.GetDropForRoll(1, r)
 		if itemHash == shortSwordHash:
 			swordCount += 1
@@ -2601,6 +2857,14 @@ func SuiteCraftFee(sql : SQLService, charSeller : int, accountSeller : int) -> v
 func _FarmSubmitAndApprove(sql : SQLService, charID : int, accountID : int, baseHash : int, itemName : String) -> void:
 	var economy : EconomyService = Launcher.Economy
 	_GrantGold(sql, charID, accountID, 20000, "fixture_craft_seed")
+	# O insumo da faixa do tier do item: sem esta linha o `return` de abaixo pega o
+	# caminho do `no_stock` e a suíte de drops de craft morre em silêncio (o helper
+	# não asserts — quem confere o resultado é a suíte que o chama).
+	var baseCell : ItemCell = DB.GetItem(baseHash)
+	var baseTier : int = maxi(int(baseCell.tier) if baseCell != null else 1, 1)
+	var farmMat : int = FarmZoneData.GetBandMaterialHash(baseTier)
+	if farmMat != DB.UnknownHash:
+		sql.AddItemToCharacter(charID, farmMat, CraftCatalog.MaterialPerCraft(baseTier) * 4, "fixture_craft_mat")
 	# Clear any prior pending submissions for this char (daily cap guard)
 	var subs : Array = sql.QueryBindings("SELECT id FROM craft_submission WHERE char_id = ? AND status = 'pending';", [charID])
 	for s in subs:
@@ -3508,7 +3772,7 @@ func SuiteTournamentDonation(sql : SQLService) -> void:
 	var poorChar : int = CreateFixture(sql, "idle_tn_poor", "IdleTnPoor")
 	if Check(poorChar != 0, "poor fixture created"):
 		var poorAcct : int = sql.GetAccountIDForCharacter(poorChar)
-		sql.db.update_rows("stat", "char_id = %d" % poorChar, {"gp" = 0})
+		Check(_SetGold(poorChar, 0), "fixture: personagem sem ouro para o pedágio do torneio")
 		Check(str(economy.EnterTournament(poorAcct, poorChar, t1).get("reason", "")) == "insufficient_gold", "broke rejected")
 		sql.db.delete_rows("character", "nickname = 'IdleTnPoor'")
 		sql.db.delete_rows("account", "username = 'idle_tn_poor'")
@@ -3746,11 +4010,14 @@ func SuiteVendor(sql : SQLService) -> void:
 	Check(str(economy.BuyVendorOffer(accountID, charID, "nope").get("reason", "")) == "unknown_offer", "unknown offer rejected")
 	_GrantGold(sql, charID, accountID, -(g0 - 50 - 10), "vendor_test_poor")
 	Check(str(economy.BuyVendorOffer(accountID, charID, "potion").get("reason", "")) == "insufficient_gold", "poor rejected")
-	# Estoque: 20/dia esgotam, 21ª recusa
+	# Estoque: o teto do catálogo esgota, a compra seguinte recusa. Contar no literal
+	# (19/21) é o harness afirmar um número que `ShopService` lê de
+	# `EconomyCatalog.VENDOR_STOCK_PER_DAY`: o gate fica verde hoje e na semana em que
+	# o estoque mudar ele para de descrever o jogo.
 	_GrantGold(sql, charID, accountID, 100000, "vendor_test_stock")
-	for i in 19:
+	for i in EconomyCatalog.VENDOR_STOCK_PER_DAY:
 		economy.BuyVendorOffer(accountID, charID, "apple")
-	Check(str(economy.BuyVendorOffer(accountID, charID, "apple").get("reason", "")) == "sold_out", "21st apple sold out")
+	Check(str(economy.BuyVendorOffer(accountID, charID, "apple").get("reason", "")) == "sold_out", "compra %d depois do estoque do catálogo é sold_out" % [EconomyCatalog.VENDOR_STOCK_PER_DAY + 1])
 	var st2 : Dictionary = economy.GetVendorState(accountID)
 	var left : int = -1
 	for e in st2.get("offers", []):
@@ -3947,7 +4214,7 @@ func SuiteItemLots(sql : SQLService) -> void:
 	sql.db.delete_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [apple, charB])
 
 	# Full reconcile holds with lots in play
-	CheckEq(economy.ReconcileDaily(), 0, "reconcile zero divergences")
+	CheckReconcileClean(economy, "reconcile zero divergences")
 
 	sql.db.delete_rows("character", "nickname = 'IdleB1TesterA'")
 	sql.db.delete_rows("character", "nickname = 'IdleB1TesterB'")
@@ -4395,15 +4662,25 @@ func SuiteFraud(sql : SQLService) -> void:
 	Check(economy.ExecuteTrade(charA, charB, [{"item_id" = apple, "count" = 1}], []), "verified trade executes")
 	Check(not economy.ExecuteTrade(charA, charB, [{"item_id" = apple, "count" = 1}], []), "cooldown rejects repeat")
 
-	# Daily cap (cooldown knob off for the loop, restored right after)
+	# Daily cap (cooldown knob off for the loop, restored right after).
+	# Os dois números são LIDOS do knob, não chutados: `trade_cooldown_sec` e
+	# `trade_daily_cap` viraram dados (`data/conf/economy_base_catalog.json`,
+	# banda declarada em `_knob_ranges`), então restaurar `= 60` no fim carimbaria
+	# o valor do catálogo com um literal e a próxima suíte da corrida rodaria com o
+	# cooldown do harness, não com o do jogo. O laço deriva de `capWas - 1` porque
+	# o trade de `IdleTests.gd:4661` já consumiu um slot do dia.
+	var cooldownWas : int = EconomyService.TradeCooldownSec
+	var capWas : int = EconomyService.TradeDailyCap
+	Check(capWas >= 1, "o teto diário lido do catálogo é contável (cap=%d)" % capWas)
 	EconomyService.TradeCooldownSec = 0
 	var made : int = 0
-	for i in 19:
+	for i in (capWas - 1):
 		if economy.ExecuteTrade(charA, charB, [{"item_id" = apple, "count" = 1}], []):
 			made += 1
-	CheckEq(made, 19, "19 more trades to the cap")
-	Check(not economy.ExecuteTrade(charA, charB, [{"item_id" = apple, "count" = 1}], []), "daily cap rejects 21st")
-	EconomyService.TradeCooldownSec = 60
+	CheckEq(made, capWas - 1, "%d mais trades até o teto do catálogo (%d do dia, contando o do cooldown)" % [capWas - 1, capWas])
+	Check(not economy.ExecuteTrade(charA, charB, [{"item_id" = apple, "count" = 1}], []), "daily cap rejects trade %d" % (capWas + 1))
+	EconomyService.TradeCooldownSec = cooldownWas
+	CheckEq(EconomyService.TradeCooldownSec, cooldownWas, "cooldown do catálogo volta exatamente como estava (harness não deixa knob sujo)")
 
 	# Burst scan flags the farmer; review closes it
 	Check(economy.RunFraudScan() >= 1, "burst scan opened flags")
@@ -4488,9 +4765,9 @@ func SuiteGuilds(sql : SQLService) -> void:
 
 	# Create: validation + cost
 	CheckEq(economy.CreateGuild(accountA, charA, "AB"), 0, "short name rejected")
-	sql.db.update_rows("stat", "char_id = %d" % charA, {"gp" = 100})
+	Check(_SetGold(charA, 100), "fixture: fundo abaixo do custo da guilda")
 	CheckEq(economy.CreateGuild(accountA, charA, "Idle E Guild"), 0, "no gold rejected")
-	sql.db.update_rows("stat", "char_id = %d" % charA, {"gp" = 5000})
+	Check(_SetGold(charA, 5000), "fixture: fundo restaurado para fundar")
 	var guildID : int = economy.CreateGuild(accountA, charA, "Idle E Guild")
 	Check(guildID > 0, "guild created (#%d)" % guildID)
 	CheckEq(economy.CreateGuild(accountC, charC, "Idle E Guild"), 0, "duplicate name rejected")
@@ -4561,7 +4838,7 @@ func SuiteGuilds(sql : SQLService) -> void:
 	Check(economy.LeaveGuild(accountB), "last member disbands")
 	Check(economy.GetGuild(guildID).is_empty(), "guild gone")
 
-	CheckEq(economy.ReconcileDaily(), 0, "reconcile clean after guild flows")
+	CheckReconcileClean(economy, "reconcile clean after guild flows")
 	for nick in ["IdleETesterA", "IdleEBTester", "IdleECTester", "IdleEDTester"]:
 		sql.db.delete_rows("character", "nickname = '%s'" % nick)
 	for user in ["idle_e_account_a", "idle_e_account_b", "idle_e_account_c", "idle_e_account_d"]:
@@ -4647,7 +4924,7 @@ func SuiteSeasonAH(sql : SQLService) -> void:
 	Check(season2 > 0, "new season after close")
 	Check(economy.CloseSeason(season2), "cleanup close")
 
-	CheckEq(economy.ReconcileDaily(), 0, "reconcile clean after AH/season flows")
+	CheckReconcileClean(economy, "reconcile clean after AH/season flows")
 	sql.db.delete_rows("character", "nickname = 'IdleAHSeller'")
 	sql.db.delete_rows("character", "nickname = 'IdleAHBuyer'")
 	sql.db.delete_rows("account", "username = 'idle_ah_seller'")
@@ -4884,7 +5161,28 @@ func SuiteNetworkDispatch(root : Node) -> void:
 	for must : String in ["ChallengeBoss", "GetBossState", "BossState", "BossResult", "TargetAlteration", "EconomyState", "OpenChest", "CommandFeedback"]:
 		Check(facade.has_method(must), "facade exposes %s (P4 regression)" % must)
 	var re : RegEx = RegEx.new()
-	re.compile("Network\\.([A-Za-z_][A-Za-z0-9_]*)\\(")
+	# Âncora de fronteira: sem o `[^A-Za-z0-9_]` antes, `RecordingNetwork.new(` ou
+	# `MyNetwork.Dispatch(` contam como chamada ao facade e a régua denuncia um
+	# método que nunca existiu. GDScript não tem lookbehind, então o prefixo entra
+	# no grupo 0 e o nome fica no grupo 2.
+	re.compile("(^|[^A-Za-z0-9_])Network\\.([A-Za-z_][A-Za-z0-9_]*)\\(")
+	Check(re.search("	var x : int = RecordingNetwork.new().Count()") == null, "fronteira: RecordingNetwork.new não é chamada ao facade")
+	Check(re.search("var x : int = 2; Network.OpenChest(x)") != null, "fronteira: chamada real ao facade continua sendo lida (a âncora não cega a régua)")
+	# Âncora de aspa: a régua lê TEXTO, e texto é também o que uma string carrega. A mesa
+	# de mutilação de `tests/craft_wiring_test.gd` tinha a agulha `"Network.SubmitAuction("`
+	# como DADO — é a corda que prova que o braço do painel é `SubmitCraft`, não uma
+	# chamada ao facade — e a régua denunciava esse literal como método inexistente.
+	# Paridade das aspas não-escapadas antes do casamento: ímpar = dentro de literal, e
+	# literal não despacha RPC. (Por linha: um casamento em string de várias linhas não
+	# existe neste projeto, e o control abaixo mostra que o filtro não cegou a régua.)
+	Check(not facade.has_method("SubmitAuction"),
+			"o caso filtrado continua sendo um nome que o facade NÃO tem — sem isso o filtro de aspa pode estar mascarando uma chamada real")
+	var datumLine : String = "\t[\"braço literal\", \"panel\", \"Network.SubmitAuction(\"]"
+	Check(_InsideStringLiteral(datumLine, datumLine.find("Network.SubmitAuction")),
+			"filtro de aspa: agulha dentro de aspas NÃO é lida como chamada ao facade")
+	var callLine : String = "\tNetwork.SubmitAuction(args)"
+	Check(not _InsideStringLiteral(callLine, callLine.find("Network.SubmitAuction")),
+			"filtro de aspa: chamada fora de aspas continua julgada pelo mesmo nome (o filtro não cegou a régua)")
 	var missing : Dictionary = {}
 	var filesChecked : int = 0
 	var stack : Array[String] = ["res://sources", "res://tests"]
@@ -4903,16 +5201,33 @@ func SuiteNetworkDispatch(root : Node) -> void:
 				filesChecked += 1
 				var f := FileAccess.open(full, FileAccess.READ)
 				if f != null:
-					for m in re.search_all(f.get_as_text()):
-						var methodName : String = m.get_string(1)
-						if not facade.has_method(methodName):
-							if not missing.has(methodName):
-								missing[methodName] = full
-							print("  [dispatch-miss] %s (first: %s)" % [methodName, missing[methodName]])
+					for line : String in f.get_as_text().split("\n"):
+						for m in re.search_all(line):
+							var methodName : String = m.get_string(2)
+							if _InsideStringLiteral(line, m.get_start() + m.get_string(1).length()):
+								continue
+							if not facade.has_method(methodName):
+								if not missing.has(methodName):
+									missing[methodName] = full
+								print("  [dispatch-miss] %s (first: %s)" % [methodName, missing[methodName]])
 			fname = d.get_next()
 		d.list_dir_end()
 	Check(filesChecked > 150, "dispatch scan covered codebase (%d .gd files)" % filesChecked)
 	Check(missing.is_empty(), "no Network method call resolves outside the facade (%d missing)" % missing.size())
+
+# Ímpar de aspas não-escapadas antes de `at` significa que `at` cai dentro de um literal
+# de string daquela linha — é o desempate que separa chamada de dado textual.
+func _InsideStringLiteral(line : String, at : int) -> bool:
+	var quotes : int = 0
+	var i : int = 0
+	while i < at and i < line.length():
+		if line[i] == "\\":
+			i += 2
+			continue
+		if line[i] == "\"":
+			quotes += 1
+		i += 1
+	return quotes % 2 == 1
 
 # ROADMAP_COMERCIAL S2: AH bot seed — idempotente, gated, buy path real,
 # invariantes de lots/ledger intactos (reconcile verde depois do fluxo).
@@ -4945,7 +5260,7 @@ func SuiteAHBots(sql : SQLService, economy : EconomyService) -> void:
 		CheckEq(economy.BrowseListings(50).size(), created - 1, "ah bots: listing consumed by buy (finite stock)")
 		CheckEq(economy.EnsureAuctionBots(), 0, "ah bots: no reseed after purchase (no faucet)")
 	# Reconcile continua verde (lote do buyer + agregado + ledger espelhados).
-	CheckEq(economy.ReconcileDaily(), 0, "ah bots: reconcile clean after seed+buy")
+	CheckReconcileClean(economy, "ah bots: reconcile clean after seed+buy")
 	sql.db.delete_rows("character", "nickname = 'IdleAHBuyer'")
 	sql.db.delete_rows("account", "username = 'idle_ah_buyer'")
 	for botUser in EconomyCatalog.AH_BOT_ACCOUNTS:
@@ -5700,7 +6015,7 @@ func SuiteOpsA2(sql : SQLService) -> void:
 					gateNames.append(base)
 			gateNames.sort()
 		# A régua era "três gates de script vivem em scripts/" e mediu 4 quando
-		# `check_secrets.sh` entrou no runner (scripts/test.sh:256). O tamanho nunca foi o
+		# `check_secrets.sh` entrou no runner (`scripts/test.sh:532`). O tamanho nunca foi o
 		# contrato — era só o sintoma móvel de um conjunto que precisa ser conhecido e
 		# prestado contas, e é isso que continua cobrado nas duas pontas: (a) cada
 		# `check_*.sh` no disco é chamado pelo runner, que é o laço `orphanGates` logo
@@ -5750,16 +6065,32 @@ func SuiteOpsA2(sql : SQLService) -> void:
 	Check(FileSystem.DirExists(Path.MusicPst), "web: pasta de música existe no source tree (o guard do boot não desliga a música no desktop)")
 	Check(not FileSystem.DirExists("res://presets/_ausente_/"), "web: DirExists distingue pasta ausente (senão o check de cima passaria com um return true)")
 
-	# Census, não lista lembrada: varre os .gd que usam a ponte e exige que nenhum teste
-	# método nela. Discrimina nos dois sentidos — reintroduzir o padrão em qualquer
-	# arquivo da árvore falha aqui, e um usuário novo da ponte entra no census sem
-	# ninguém precisar atualizar lista.
+	# Census, não lista lembrada: varre os .gd que falam com a ponte e exige que ninguém
+	# teste método NA PONTE. Discriminar pela variável que recebeu `get_interface` é o
+	# que torna a régua exata — `has_method` num Node é checagem correta, e uma régua
+	# que marca o arquivo inteiro por conter o padrão passa a ser a que a primeira
+	# pessoa contorna trocando o nome da variável, não a que a segunda corrige o bug.
 	var bridgeOffenders : String = ""
 	for gdPath in _GdFilesUnder("res://sources"):
 		var bridgeSrc : String = _RepoFile(gdPath)
-		if bridgeSrc.contains("get_interface") and _StripCommentLines(bridgeSrc).contains(".has_method("):
+		if _BridgeHasMethodOffender(bridgeSrc):
 			bridgeOffenders += String(gdPath).replace("res://", "") + " "
 	Check(bridgeOffenders.is_empty(), "web: nenhum usuário da JavaScriptBridge testa método na ponte (%s)" % bridgeOffenders)
+
+	# Uma régua narrowing precisa provar que ainda pega o bug, senão é só um filtro que
+	# apitou menos. Os fixtures abaixo são as quatro formas que importam: a variável da
+	# ponte, a cadeia direta, o Node legítimo (não pode marcar) e o comentário (não pode
+	# marcar — foi um comentário que fez a régua antiga acusar um arquivo são).
+	Check(_BridgeHasMethodOffender("var js = JavaScriptBridge.get_interface(\"X\")\n\tif js.has_method(\"m\"):\n\t\tpass\n"),
+		"web: a régua da ponte pega has_method na variável que recebeu get_interface (fixture)")
+	Check(_BridgeHasMethodOffender("\tif JavaScriptBridge.get_interface(\"X\").has_method(\"m\"):\n\t\tpass\n"),
+		"web: a régua da ponte pega a cadeia direta get_interface().has_method (fixture)")
+	Check(_BridgeHasMethodOffender("\tconst bridge := JavaScriptBridge.get_interface(\"X\")\n\tbridge.has_method(\"m\")\n"),
+		"web: a régua da ponte pega const/inferência, não só `var` (fixture)")
+	Check(not _BridgeHasMethodOffender("var js = JavaScriptBridge.get_interface(\"X\")\n\tvar net = root.get_node_or_null(NodePath(\"Network\"))\n\tif net.has_method(\"m\"):\n\t\tpass\n"),
+		"web: a régua da ponte NÃO marca has_method num Node que não veio da ponte (fixture)")
+	Check(not _BridgeHasMethodOffender("# js.has_method(\"m\") era o bug histórico\nvar js = JavaScriptBridge.get_interface(\"X\")\njs.can_subscribe()\n"),
+		"web: a régua da ponte lê código, não comentário (fixture)")
 
 	var disconnectBody : String = _FnBody(_RepoFile("res://sources/network/client/Client.gd"), "func DisconnectServer()")
 	if Check(not disconnectBody.is_empty(), "web: corpo de Client.DisconnectServer é legível do harness"):
@@ -5798,6 +6129,26 @@ func _StripCommentLines(text : String) -> String:
 			continue
 		kept += line + "\n"
 	return kept
+
+# Predicado do census da JavaScriptBridge (ver o bloco que o chama). Um objeto que
+# veio de `JavaScriptBridge.get_interface` não responde `has_method` como checagem de
+# existência: Godot encaminha o nome para o lado JS e o que volta é
+# `TypeError: obj[method] is not a function`. Testar método NA PONTE é bug, testar
+# método num Node é checagem válida — a régua distingue os dois pela variável que
+# recebeu `get_interface`, não pela presença do padrão no arquivo. Cobre `var`/`const`,
+# atribuição sem palavra-chave, `:=` e a cadeia direta.
+func _BridgeHasMethodOffender(src : String) -> bool:
+	var code : String = _StripCommentLines(src)
+	if code.is_empty():
+		return false
+	var decl : RegEx = RegEx.create_from_string("(?:var|const)?\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?::=|=)\\s*JavaScriptBridge\\.get_interface\\(")
+	if decl != null:
+		for m in decl.search_all(code):
+			var use : RegEx = RegEx.create_from_string("\\b" + String(m.get_string(1)) + "\\.has_method\\(")
+			if use != null and use.search(code) != null:
+				return true
+	var chain : RegEx = RegEx.create_from_string("JavaScriptBridge\\.get_interface\\([^)]*\\)\\.has_method\\(")
+	return chain != null and chain.search(code) != null
 
 # Cada `location` do nginx como {header, body}, varrida do texto com as chaves
 # balanceadas. O harness não é o servidor nginx: isto é a menor leitura que permite
@@ -6202,7 +6553,7 @@ func SuiteDeployMode() -> void:
 	Check(nginx.contains("resolver "), "nginx resolve o upstream a cada request (boot do web não morre sem companion)")
 	# O que a régua antiga procurava era `location ~ `, e esse regex SAIU do arquivo: a
 	# rota do dinheiro hoje é um par de prefixos, `location ^~ /webhooks/`
-	# (deploy/web/nginx.conf:148) e `location ^~ /checkout/` (deploy/web/nginx.conf:170),
+	# (deploy/web/nginx.conf:164) e `location ^~ /checkout/` (deploy/web/nginx.conf:194),
 	# separados porque os dois tráfegos têm tetos diferentes. Não achando o header,
 	# `locPattern` vinha vazio e o estrago era assimétrico: os três checks de conteúdo
 	# caíam, mas os quatro "cai no proxy do companion" passavam VAZIOS, porque regex
@@ -6591,7 +6942,17 @@ func SuiteCatalogConsistency(sql : SQLService) -> void:
 	var catRouteAt : int = py.find("if path == \"/catalog\":")
 	var catRouteEnd : int = py.find("if path == \"/metrics\":", catRouteAt)
 	if Check(catRouteAt >= 0 and catRouteEnd > catRouteAt, "rota /catalog localizável em companion/server.py"):
-		Check(py.substr(catRouteAt, catRouteEnd - catRouteAt).contains("sku.startswith(\"_\")"), "/catalog não publica declaração como item de loja")
+		var catRoute : String = py.substr(catRouteAt, catRouteEnd - catRouteAt)
+		# A rota delega o corpo a `public_catalog`, então é no corpo DELA que mora a
+		# predicate. Cobrar o literal dentro da rota é régua que lê o próprio emboçado:
+		# quando o corpo virou função, a rota ficou sem o texto e o gate acusou o
+		# produto de ter perdido o filtro — que ele não perdeu. O que se exige aqui é
+		# o fio: a rota publica pelo corpo, e o corpo recusa declaração.
+		Check(catRoute.contains("public_catalog("), "a rota /catalog publica pelo corpo `public_catalog`, não por laço próprio")
+		var catBodyAt : int = py.find("def public_catalog(")
+		var catBodyEnd : int = py.find("\ndef ", catBodyAt + 1)
+		if Check(catBodyAt >= 0 and catBodyEnd > catBodyAt, "corpo de `public_catalog` localizável em companion/server.py"):
+			Check(py.substr(catBodyAt, catBodyEnd - catBodyAt).contains("sku.startswith(\"_\")"), "/catalog não publica declaração como item de loja")
 
 	# §10: o validador é o que roda no boot do servidor — exercitado com catálogo
 	# quebrado de propósito, cada linha mirando uma classe de divergência.
@@ -6798,6 +7159,11 @@ func SuiteChatModeration(sql : SQLService) -> void:
 		current = []
 		for rawLine in _RepoFile(String(filePath)).split("\n"):
 			var line : String = String(rawLine)
+			# Comentário não é chamada. Lido cru, um `# ChatModeration.CanSpeak decide
+			# isto no servidor` dentro do corpo de um retransmitor o aprovava sem portão
+			# nenhum — e o mesmo texto na UI de quem RECEBE acusava o cliente de filtrar.
+			if line.strip_edges().begins_with("#"):
+				continue
 			if line.begins_with("func ") or line.begins_with("static func "):
 				if not current.is_empty():
 					blocks.append(current)
@@ -6823,8 +7189,13 @@ func SuiteChatModeration(sql : SQLService) -> void:
 	# O mute é sanção de envio: no cliente seria cosmético.
 	var clientCalls : String = ""
 	for filePath in _GdFilesUnder("res://sources/gui") + _GdFilesUnder("res://sources/network/client"):
-		if _RepoFile(String(filePath)).contains("ChatModeration"):
-			clientCalls += String(filePath) + " "
+		for rawLine in _RepoFile(String(filePath)).split("\n"):
+			var cLine : String = String(rawLine)
+			if cLine.strip_edges().begins_with("#"):
+				continue
+			if cLine.contains("ChatModeration"):
+				clientCalls += String(filePath) + " "
+				break
 	Check(clientCalls.is_empty(), "cliente: nada de mute no recebimento (seria cosmético) (%s)" % clientCalls)
 
 	# --- schema e wiring de boot ------------------------------------------
@@ -7830,6 +8201,14 @@ func SuiteItemSinks(sql : SQLService) -> void:
 	CheckEq(int(salv4.get("gold", 0)), 400, "salvage T4 gold")
 	CheckEq(sql.GetCharacterEssence(charID) - essS, 8, "salvage T4 essence")
 
+	# SOM-IDLE B1: os três sumidouros consomem LOTES, e o que os distingue do trade
+	# (`_MoveStackUIDs`, que decrementa o agregado na mesma transação) é justamente
+	# não ter para onde transferir — o item sai do jogo. Se o `item.count` ficar
+	# parado, a tela mostra item fantasma e o job diário
+	# (`TournamentArenaService.ReconcileDaily`) registra divergência de pilha para
+	# sempre. A régua é o job real, não uma consulta parecida escrita aqui.
+	CheckReconcileClean(economy, "corrupt/cube/salvage drenam lote E agregado (reconcile limpo)")
+
 	for nick in ["IdleSinkTester"]:
 		sql.db.delete_rows("character", "nickname = '%s'" % nick)
 	for uname in ["idle_sink_account"]:
@@ -8056,560 +8435,3 @@ func _ProgressValue(rows : Array[Dictionary], keyColumn : String, valueColumn : 
 		if int(row.get(keyColumn, 0)) == entryID:
 			return int(row.get(valueColumn, -1))
 	return -999
-
-# Tormento (D2) + boss rush com key.
-func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
-	print("[suite] torment + boss rush")
-	# Mults puros
-	Check(absf(Formula.TormentRewardMult(0) - 1.0) < 0.0001, "T0 reward x1")
-	Check(absf(Formula.TormentRewardMult(4) - 2.0) < 0.0001, "T4 reward x2")
-	Check(absf(Formula.TormentMobHpFactor(10) - 2.0) < 0.0001, "T10 mobs 2x HP")
-	Check(absf(Formula.TormentMobDmgFactor(10) - 2.5) < 0.0001, "T10 mobs 2.5x dmg")
-	Check(absf(Formula.TormentRewardMult(-3) - 1.0) < 0.0001, "negative torment clamps")
-	CheckEq(Formula.TormentMaxCap, 10, "torment cap 10")
-	# Persistência + gate de set
-	var charID : int = CreateFixture(sql, "idle_torment_account", "IdleTormentTester", 20000)
-	if not Check(charID != 0, "torment fixture created"):
-		return
-	CheckEq(sql.GetTormentLevel(charID), 0, "torment default 0")
-	CheckEq(sql.GetTormentMax(charID), 0, "torment max default 0")
-	Check(sql.SetTormentMax(charID, 2) and sql.GetTormentMax(charID) == 2, "torment max stored")
-	Check(not bool(economy.SetTorment(charID, null, 5).get("ok", false)), "set above max rejected")
-	Check(bool(economy.SetTorment(charID, null, 2).get("ok", false)), "set within max ok")
-	CheckEq(sql.GetTormentLevel(charID), 2, "torment level stored")
-	# Compra de key com gold
-	var gp0 : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
-	var buy : Dictionary = economy.BuyBossKey(charID)
-	if Check(bool(buy.get("ok", false)), "key bought with gold"):
-		CheckEq(int(buy.get("keys", -1)), 1, "first key")
-		var gp1 : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charID])[0]["gp"])
-		CheckEq(gp0 - gp1, EconomyCatalog.BOSS_KEY_GOLD_PRICE, "key price burned")
-	# Rush sem key → rejeita (gasta a key comprada primeiro)
-	Check(economy.SpendBossKey(charID, 1, "test"), "key spent")
-	Check(not bool(economy.RunBossRush(charID, null).get("ok", false)), "rush without agent rejected")
-	# Rush com agente overpower: vence a escada inteira
-	var agent : PlayerAgent = await _SpawnSimAgent(charID, 981, 1)
-	if Check(agent != null, "rush agent spawned"):
-		IdlePolicyService.StopIdleSession(agent)
-		agent.stat.current.attack = 999999
-		agent.stat.current.defense = 999999
-		agent.stat.current.maxHealth = 99999999
-		CheckEq(economy.GrantBossKey(charID, 1, "test"), 1, "rush key granted")
-		var xpBefore : int = agent.stat.experience
-		var rush : Dictionary = economy.RunBossRush(charID, agent)
-		if Check(bool(rush.get("ok", false)), "rush resolves"):
-			CheckEq(int(rush.get("wins", -1)), BossService.GetBossCount(), "rush clears the ladder")
-			Check(int(rush.get("xp", 0)) > 0, "rush grants xp")
-			Check(int(rush.get("chests", 0)) >= BossService.GetBossCount(), "rush grants chest per win")
-			Check(agent.stat.experience > xpBefore, "rush xp applied to agent")
-			CheckEq(sql.GetCharacterBossesBeaten(charID), BossService.GetBossCount(), "rush advances ladder")
-			Check(sql.GetTormentMax(charID) >= 1, "clearing ladder unlocks T1")
-		IdlePolicyService.StopIdleSession(agent)
-	for nick in ["IdleTormentTester"]:
-		sql.db.delete_rows("character", "nickname = '%s'" % nick)
-	for uname in ["idle_torment_account"]:
-		sql.db.delete_rows("account", "username = '%s'" % uname)
-
-# Índice de basename -> caminhos `res://` (no máximo três por nome), construído uma vez por
-# processo. Ele existe porque a documentação escreve ponteiro das duas formas: medido, dos 122
-# `arquivo:linha` do beta, 40 vêm com caminho e 82 com nome cru (`Gui.gd:681`). Sem índice a régua
-# olharia um terço da evidência que diz estar olhando.
-static var _ptrIndex : Dictionary = {}
-
-static func _PtrIndexWalk(dirPath : String) -> void:
-	var dir : DirAccess = DirAccess.open(dirPath)
-	if dir == null:
-		return
-	dir.list_dir_begin()
-	var entry : String = dir.get_next()
-	while entry != "":
-		if not entry.begins_with("."):
-			if dir.current_is_dir():
-				_PtrIndexWalk(dirPath.path_join(entry))
-			else:
-				var bucket : Array = _ptrIndex.get(entry, [])
-				if bucket.size() < 3:
-					bucket.append(dirPath.path_join(entry))
-					_ptrIndex[entry] = bucket
-		entry = dir.get_next()
-	dir.list_dir_end()
-
-# Devolve "" quando o ponteiro não resolve sem ambiguidade. Ordem: caminho literal; nome que existe
-# na raiz do projeto; nome único na árvore. Nome ausente é histórico legítimo (a prosa que fala do
-# `gut_runner.gd` apagado tem que poder existir) e nome ambíguo não tem como decidir — os dois ficam
-# fora de propósito.
-static func _PtrResolve(cited : String) -> String:
-	var direct : String = "res://" + cited
-	if FileAccess.file_exists(direct):
-		return direct
-	if cited.find("/") >= 0:
-		return ""
-	if _ptrIndex.is_empty():
-		_PtrIndexWalk("res://")
-	var arr : Array = _ptrIndex.get(cited, [])
-	if arr.size() == 1:
-		return String(arr[0])
-	return ""
-
-# Toda `*.md` que o projeto mantém, com o mesmo critério de exclusão do walk de
-# código: diretório escondido (`.godot`, `.git`, `.test-home`), vendor em `addons/` e o
-# depósito de registros mortos em `archive/`. `graphify-out/` sai também, e por outro
-# motivo: é saída de ferramenta, regravada por outro processo, `gitignore`ada e já
-# excluída do pacote (`export_presets.cfg`, `exclude_filter`). Não é documentação que
-# alguém mantenha, e um número de linha dela vem do snapshot do dia em que o gráfico foi
-# gerado — a régua puniria o run por algo que nenhum autor escreveu.
-# Derivar da árvore é o ponto — uma lista escrita à mão aqui é exatamente a doc que
-# grava número: `README.md` e as quatro `docs/adding-*.md` (o primeiro arquivo que um
-# contribuidor novo abre) ficaram de fora da régua de ponteiros enquanto ela existiu, e
-# nada avisou.
-static func _MdFilesAll() -> Array[String]:
-	var skipped : Array[String] = ["addons", "archive", "graphify-out"]
-	var found : Array[String] = []
-	var stack : Array[String] = ["res://"]
-	while not stack.is_empty():
-		var current : String = stack.pop_back()
-		var dir : DirAccess = DirAccess.open(current)
-		if dir == null:
-			continue
-		dir.list_dir_begin()
-		var fname : String = dir.get_next()
-		while fname != "":
-			var full : String = current.path_join(fname)
-			if dir.current_is_dir():
-				if not fname.begins_with(".") and not skipped.has(fname):
-					stack.append(full)
-			elif fname.ends_with(".md"):
-				found.append(full)
-			fname = dir.get_next()
-		dir.list_dir_end()
-	found.sort()
-	return found
-
-# Ponteiros de evidência da documentação do beta. O §24, o handoff de lançamento e o roadmap citam
-# `arquivo:linha` como prova de cada item — e linha derrapa sozinha quando o código muda de
-# tamanho. Medido nesta passada: nove ponteiros do próprio documento de auditoria já apontavam para
-# outro lugar (oito com número errado, um com caminho errado — `server/Peers.gd:284`, que vive em
-# `sources/network/server/Peers.gd`), e um caía numa suíte diferente da que a prosa nomeia
-# (`IdleTests.gd:3163-3175` para checks que estão em `:3405-3410`, dentro de `SuiteChestOdds`, com
-# seis checks onde são cinco). A checagem é tripla: (1) o arquivo citado existe e a linha citada
-# cabe nele; (2) se a prosa em volta do ponteiro cita uma mensagem de check entre aspas e essa
-# mensagem existe no arquivo, ela tem que cair no intervalo citado; (3) todo `Suite*` citado na
-# documentação tem que ser `func` real. Mensagem que não existe no arquivo é prosa, não citação de
-# teste, e fica fora de propósito. Só o que está entre backticks conta na regra de linha: sem isso,
-# `127.0.0.1:8901` viraria caminho de arquivo.
-func SuiteEvidencePointers() -> void:
-	print("[suite] ponteiros de evidência")
-	var ptrRx : RegEx = RegEx.new()
-	ptrRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):(\\d+)(?:-(\\d+))?`")
-	var msgRx : RegEx = RegEx.new()
-	msgRx.compile("\"([^\"]{12,90})\"")
-	# `CheckBox.new(` não é check de teste: a âncora exige chamada `Check…(`.
-	var checkRx : RegEx = RegEx.new()
-	checkRx.compile("\\bCheck[A-Za-z]*\\(")
-	# A lista é derivada da árvore (`_MdFilesAll`), não escrita aqui. O que ficou de
-	# fora é só o que a própria suíte de código já exclui: vendor e o depósito de
-	# registros mortos. Uma lista à mão foi o formato até 2026-09-27 e ela envelheceu
-	# mais rápido que a documentação — as `docs/adding-*.md`, que são exatamente o
-	# caminho de entrada de quem chega novo, nunca foram conferidas.
-	var docs : Array[String] = _MdFilesAll()
-	if not Check(docs.size() >= 30 and docs.has("res://README.md")
-			and docs.has("res://docs/development/testing.md")
-			and docs.has("res://deploy/ROLLBACK.md"),
-			"varredura acha a doc que a régua tem que ler: %d arquivos .md, com README, testing.md e ROLLBACK.md" % docs.size()):
-		return
-	var lineCache : Dictionary = {}
-	var quebrados : Array[String] = []
-	var derrapados : Array[String] = []
-	var conferidos : int = 0
-	var comMensagem : int = 0
-	for docPath in docs:
-		var docRaw : String = _RepoFile(docPath)
-		if not Check(docRaw != "", "evidência: %s existe e lê" % docPath):
-			continue
-		var docLines : PackedStringArray = docRaw.split("\n")
-		for i in docLines.size():
-			var matches : Array[RegExMatch] = ptrRx.search_all(String(docLines[i]))
-			if matches.is_empty():
-				continue
-			var window : String = ""
-			for w in range(maxi(0, i - 1), mini(docLines.size(), i + 2)):
-				window += String(docLines[w]) + "\n"
-			for m in matches:
-				var cited : String = String(m.get_string(1))
-				var resPath : String = _PtrResolve(cited)
-				if resPath == "":
-					continue
-				if not lineCache.has(resPath):
-					lineCache[resPath] = _RepoFile(resPath).split("\n")
-				var src : PackedStringArray = lineCache[resPath]
-				var from : int = int(m.get_string(2))
-				var to : int = int(m.get_string(3))
-				if to < from:
-					to = from
-				conferidos += 1
-				if from > src.size() or to > src.size():
-					quebrados.append("%s:%d (%s tem %d linhas)" % [cited, to, resPath, src.size()])
-					continue
-				for msgMatch in msgRx.search_all(window):
-					var msg : String = String(msgMatch.get_string(1))
-					if msg.find("/") >= 0 or msg.find("res://") >= 0:
-						continue
-					# A regra só vale para citação de *mensagem de check*: em arquivo de código, o
-					# hit tem que ser uma linha de `Check…`. Sem isso a régua confunde rótulo de UI
-					# com evidência — medido ao abrir a resolução por nome, quatro falsos positivos
-					# (`"UI gráfica em desenvolvimento"` em `Gui.gd`, `"SetupTwoFactor"` em
-					# `Settings.gd`, `"18 years old or older"` em `Login.gd`) todos strings de texto,
-					# nenhum check. Em `.md` a citação é prosa sobre prosa, então vale o match solto.
-					var prosa : bool = cited.get_extension().to_lower() == "md"
-					var hit : int = 0
-					for j in src.size():
-						var srcLine : String = String(src[j])
-						if srcLine.find(msg) < 0:
-							continue
-						if not prosa and checkRx.search(srcLine) == null:
-							continue
-						hit = j + 1
-						break
-					if hit == 0:
-						continue
-					comMensagem += 1
-					if hit < from - 2 or hit > to + 2:
-						derrapados.append("%s:%d-%d cita \"%s\", que está em :%d" % [cited, from, to, msg, hit])
-	CheckEq(quebrados.size(), 0, "ponteiros: %d referências arquivo:linha conferidas, nenhuma fora do arquivo (%s)" % [conferidos, " | ".join(quebrados)])
-	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])
-	# (3) Nome de suíte. A prosa do beta afirma "coberto por `SuiteX`", e nome que não é `func`
-	# na árvore é exatamente a classe de defeito que já foi achado nesta auditoria (documentação
-	# descrevendo teste inexistente). Diferente de número de linha, nome não drifta com edição.
-	# A coleta varre `tests/` inteiro, não só este arquivo: as suítes que vivem em harness
-	# próprio (`*_test.gd` descoberto por `scripts/test.sh`) são tão reais quanto as daqui, e
-	# chamá-las de fantasma seria a régua inventando falha.
-	var nameRx : RegEx = RegEx.new()
-	nameRx.compile("\\b(Suite[A-Za-z0-9_]+)\\b")
-	var defRx : RegEx = RegEx.new()
-	defRx.compile("(?m)^(static )?func (Suite[A-Za-z0-9_]+)\\(")
-	var definidas : Dictionary = {}
-	for testFile in _GdFilesUnder("res://tests"):
-		for d in defRx.search_all(_RepoFile(String(testFile))):
-			definidas[String(d.get_string(2))] = true
-	var citadas : Dictionary = {}
-	var fantasmas : Array[String] = []
-	for docPath in docs:
-		for n in nameRx.search_all(_RepoFile(docPath)):
-			var nome : String = String(n.get_string(1))
-			if citadas.has(nome):
-				continue
-			citadas[nome] = true
-			if not definidas.has(nome):
-				fantasmas.append(nome)
-	CheckEq(fantasmas.size(), 0, "ponteiros: %d nomes de suíte citados na documentação existem como `func` em algum arquivo de tests/ (%s)" % [citadas.size(), " | ".join(fantasmas)])
-	# Cobertura no log: "0 falhas" sozinho não diz o quanto foi olhado, que é exatamente a
-	# classe de problema que este guard veio fechar.
-	print("  [info] ponteiros: %d referências arquivo:linha, %d com mensagem de check na prosa, %d nomes de suíte" % [conferidos, comMensagem, citadas.size()])
-
-# Navegação externa no export Web. O beta roda no navegador, e no navegador
-# `OS.shell_open` não leva a URL para lugar nenhum — por isso a porta do dinheiro
-# (`Checkout.gd`, `_launch_payment_url`) faz `window.open` por `JavaScriptBridge` quando
-# `LauncherCommons.isWeb`. O outro sítio que navega para fora é o clique de link dentro do
-# texto do ACEITE (`Scrollable.gd`, o painel que o gate de idade obriga o jogador a ler
-# antes de marcar a caixa de 18+), que chamava `OS.shell_open` cru. Um terceiro — o botão
-# do Discord em `Gui.gd` — saiu do jogo em 2026-09-25 junto da ponte e do addon, porque o
-# endereço horneado em `LauncherCommons` era o do upstream de que o projeto fez fork e o
-# projeto não tem servidor próprio. A régua é por BLOCO e varre `sources/`
-# inteira, não por arquivo: a guarda antiga lia o corpo de uma função do checkout e por
-# construção não podia ver o resto do cliente. Linha de comentário não conta como ramo —
-# senão dá para passar na régua escrevendo a palavra na prosa.
-func SuiteExternalLinksWebBranch() -> void:
-	print("[suite] navegação externa no export Web")
-	var sitios : int = 0
-	var nus : Array[String] = []
-	for found in _GdFilesUnder("res://sources"):
-		var path : String = String(found)
-		var src : PackedStringArray = _RepoFile(path).split("\n")
-		var fnNome : String = ""
-		var fnFim : int = -1
-		for i in src.size():
-			var line : String = String(src[i])
-			var trimmed : String = line.strip_edges()
-			if trimmed.begins_with("func ") or trimmed.begins_with("static func "):
-				fnNome = trimmed.substr(trimmed.find("func ") + 5).get_slice("(", 0)
-				fnFim = i
-				continue
-			if trimmed.begins_with("#") or line.find("OS.shell_open(") < 0:
-				continue
-			sitios += 1
-			var j : int = fnFim + 1
-			var bloco : String = ""
-			while j < src.size():
-				var inner : String = String(src[j])
-				var innerTrimmed : String = inner.strip_edges()
-				if not innerTrimmed.is_empty() and not inner.begins_with("\t"):
-					break
-				if not innerTrimmed.begins_with("#"):
-					bloco += inner + "\n"
-				j += 1
-			if not bloco.contains("JavaScriptBridge") or not bloco.contains("isWeb"):
-				nus.append("%s:%d em %s" % [path, i + 1, fnNome])
-	CheckEq(nus.size(), 0, "navegação externa: todo OS.shell_open de sources/ tem ramo Web com JavaScriptBridge (%d sítios; sem ramo: %s)" % [sitios, " | ".join(nus)])
-	print("  [info] navegação externa: %d sítios de OS.shell_open em sources/, todos com ramo Web" % sitios)
-
-# Offline comprado com anúncio (plano 2026-09-25). A regra do dono: "cada anúncio
-# soma +1h; o divisor de 24h reinicia; VIP faz 24h sem assistir nada". O piso F2P
-# que era 1h saiu da zona hostil da retenção e hoje é `OfflineSettle.BaseCapHours`
-# (8h, P1-retenção) — o que o anúncio compra continua sendo HORA por cima dele, e
-# é isso que esta suíte mede. Esta suíte cobre o mecanismo — placement, horas
-# ganhas por PERSONAGEM, as duas metades da janela (divisor e coleta) e o teto de
-# baú. O C2 ligou o settle nela (CapHoursForCharacter em BuildReport e em
-# SettlePending), então os asserts de liquidação no fim são a prova de que a
-# ligou: sem eles o cap novo existiria no catálogo sem pagar hora a ninguém.
-func SuiteOfflineAdHours(sql : SQLService) -> void:
-	print("[suite] offline comprado com anúncio (C1/C2)")
-	var economy : EconomyService = Launcher.Economy
-	var tele : TelemetryService = Launcher.Telemetry
-	var now : int = SQLCommons.Timestamp()
-	var tok : Callable = func(a : int, p : String) -> String: return AdToken(a, p)
-	OS.set_environment("SHAMBLETA_AD_STUB", "1")
-	var charA : int = CreateFixture(sql, "idle_offad_a", "IdleOffAdA")
-	var charB : int = CreateFixture(sql, "idle_offad_b", "IdleOffAdB")
-	if not Check(charA != 0 and charB != 0, "offad fixtures created"):
-		return
-	var acctA : int = sql.GetAccountIDForCharacter(charA)
-	var acctB : int = sql.GetAccountIDForCharacter(charB)
-	sql.SetCharacterFarmZone(charA, 1)
-	var old : int = now - 7200		# anchor "2h atrás", i.e. nada coletado depois das views
-
-	Check(EconomyCatalog.AD_PLACEMENTS.has(EconomyCatalog.AD_AFKHOURS), "afkhoras é placement conhecido")
-	CheckEq(int(EconomyCatalog.AD_OFFLINE_HOURS_PER_AD * 100.0), 100, "cada anúncio vale 1h")
-
-	# O placement novo não abriu porta de bypass: sem a env do beta não há mint,
-	# e um nonce chutado continua sem valer nada.
-	OS.set_environment("SHAMBLETA_AD_STUB", "")
-	Check(str(economy.MintAdSlot(acctA, EconomyCatalog.AD_AFKHOURS).get("reason", "")) == "ad_source", "afkhoras sem a env: mint recusado")
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, "slot:" + "f".repeat(32)).get("reason", "")) == "bad_token", "afkhoras sem a env: bad_token")
-	OS.set_environment("SHAMBLETA_AD_STUB", "1")
-
-	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "sem view: 0h compradas")
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_BOSSKEY, tok.call(acctA, EconomyCatalog.AD_BOSSKEY)).get("reason", "")) == "ok", "bosskey view registrada")
-	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "view de outro placement não compra hora")
-
-	# Linearidade: 1 view = 1h, sem teto e sem acúmulo de sobra.
-	for i in 3:
-		Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(acctA, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras view %d ok" % (i + 1))
-		CheckNear(economy.AfkHoursEarned(acctA, charA, old), float(i + 1), 0.01, "cap cresce 1h por view")
-
-	# Por PERSONAGEM: a mesma conta com outro personagem, ou outro personagem com
-	# a mesma conta, não herda a hora — senão 6 personagens lavariam o contador.
-	CheckNear(economy.AfkHoursEarned(acctB, charA, old), 0.0, 0.01, "conta errada: 0h")
-	CheckNear(economy.AfkHoursEarned(acctA, charB, old), 0.0, 0.01, "personagem errado: 0h")
-
-	# As duas metades do max(divisor do dia, último settle): o divisor zera a
-	# janela quando o dia vira, e o anchor consome quando se coleta.
-	AdsCosmeticsService.dayStartOverride = now + 60
-	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 0.0, 0.01, "virou o dia sem coletar: hora perdida")
-	AdsCosmeticsService.dayStartOverride = 0
-	CheckNear(economy.AfkHoursEarned(acctA, charA, old), 3.0, 0.01, "janela de volta: as 3h continuam compradas")
-	CheckNear(economy.AfkHoursEarned(acctA, charA, now + 60), 0.0, 0.01, "anchor passado pela coleta: nada pendente")
-
-	# Composição do cap: comprado pela conta + assistido pelo personagem.
-	CheckNear(OfflineSettle.CapHoursForCharacter(charA, acctA, old), OfflineSettle.CapHoursForAccount(acctA) + 3.0, 0.01, "cap do personagem = comprado + 3h de anúncio")
-	Check(str(economy.WatchAd(acctB, charB, EconomyCatalog.AD_AFKHOURS, tok.call(acctB, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "view do personagem B ok")
-	Check(sql.SetVIPUntil(acctB, now + 30 * 86400) and sql.SetVIPTier(acctB, 1), "vip tier 1 na conta B")
-	CheckNear(OfflineSettle.CapHoursForAccount(acctB), 24.0, 0.01, "VIP compra 24h sem assistir nada")
-	CheckNear(OfflineSettle.CapHoursForCharacter(charB, acctB, old), 25.0, 0.01, "VIP + anúncio compõem sem teto")
-
-	# O settle LÊ o cap composto: comprado pela conta + assistido pelo personagem.
-	# Com a base em 8h e três views, uma janela de 14h paga 11h — o que não coube
-	# no teto não é pago e não se acumula.
-	sql.UpdateSettleAnchor(charA, now - 14 * 3600, 1.0)
-	var report : Dictionary = OfflineSettle.SettlePending(charA)
-	tele.Flush()
-	if Check(not report.is_empty(), "settle lê o cap do personagem"):
-		CheckNear(float(report.get("hours", 0.0)), OfflineSettle.BaseCapHours + 3.0, 0.01, "14h de janela pagam a base + 3h de anúncio")
-		CheckNear(float(report.get("cap_hours", 0.0)), OfflineSettle.BaseCapHours + 3.0, 0.01, "cap_hours vai no relatório")
-		Check(not bool(report.get("doubled", true)), "F2P nunca líquida dobrado")
-		CheckEq(int(report.get("chests", 0)), 2, "11h no floor(h/4) com teto de 3 pagam 2 baús")
-	# Hora não liquidada não fica pendurada: o anchor avançou além das views.
-	OfflineSettle.nowOverride = int(report.get("last_settled_at", 0)) + 3600
-	var next : Dictionary = OfflineSettle.SettlePending(charA)
-	tele.Flush()
-	OfflineSettle.nowOverride = 0
-	if Check(not next.is_empty(), "settle seguinte produz"):
-		CheckNear(float(next.get("hours", 0.0)), 1.0, 0.01, "sem view nova, a janela de 1h é paga por inteiro")
-		CheckNear(float(next.get("cap_hours", 0.0)), OfflineSettle.BaseCapHours, 0.01, "sem view nova, o teto volta à base")
-
-	# Piso e teto de baú (risco 1 do plano). A 1h o floor(h/4) pagaria 0 baú, e a
-	# janela AFK é justamente o produto do F2P; na outra ponta, o gate de pegada
-	# de 60 s permite uma coleta por minuto, que sem teto viraria 24 baús/dia.
-	var budgetChar : int = CreateFixture(sql, "idle_offad_c", "IdleOffAdC")
-	if Check(budgetChar != 0, "chest budget fixture created"):
-		var budgetAcct : int = sql.GetAccountIDForCharacter(budgetChar)
-		sql.SetCharacterFarmZone(budgetChar, 1)
-		var minted : int = 0
-		for i in 24:
-			sql.UpdateSettleAnchor(budgetChar, SQLCommons.Timestamp() - 3600, 1.0)
-			var r : Dictionary = OfflineSettle.SettlePending(budgetChar)
-			minted += int(r.get("chests", 0))
-			if i == 0:
-				CheckEq(int(r.get("chests", 0)), 1, "1h líquida garante 1 baú")
-				CheckEq(int(r.get("boss_keys", 0)), 0, "1h não fabrica chave de chefe")
-		tele.Flush()
-		CheckEq(minted, EconomyCatalog.ChestsPerDayFromSettle, "24 coletas de 1h pagam o teto do dia")
-		CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND origin = 'settle';", [budgetChar])[0]["n"]), minted, "o teto vale na tabela, não só no relatório")
-		sql.db.delete_rows("chest_instance", "char_id = %d" % budgetChar)
-		sql.db.delete_rows("character", "nickname = 'IdleOffAdC'")
-		sql.db.delete_rows("account", "username = 'idle_offad_c'")
-
-	# ok ⇒ a view está contável. Antes WatchAd respondia ok:true sem olhar o que
-	# TelemetryService.Flush() devolveu (0 quando a transação falha); com hora
-	# offline em jogo isso viraria anúncio assistido e não pago.
-	var viewsBefore : int = economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS)
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(acctA, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ok", "afkhoras com a janela normal: ok")
-	CheckEq(economy.AdViewsToday(acctA, EconomyCatalog.AD_AFKHOURS), viewsBefore + 1, "ok: a view está na janela que os caps consultam")
-
-	# O ramo negativo, injetado pelo próprio seam: uma janela que não consegue
-	# ver a view recém-gravada não pode creditar.
-	AdsCosmeticsService.dayStartOverride = now + 3600
-	Check(str(economy.WatchAd(acctA, charA, EconomyCatalog.AD_AFKHOURS, tok.call(acctA, EconomyCatalog.AD_AFKHOURS)).get("reason", "")) == "ad_persist", "view fora da janela: ad_persist, não ok")
-	AdsCosmeticsService.dayStartOverride = 0
-
-	sql.db.delete_rows("telemetry_event", "account_id = %d OR account_id = %d" % [acctA, acctB])
-	sql.db.delete_rows("character", "nickname = 'IdleOffAdA' OR nickname = 'IdleOffAdB'")
-	sql.db.delete_rows("account", "username = 'idle_offad_a' OR username = 'idle_offad_b'")
-
-# Vitrine honesta (plano 2026-09-25, fatias 2 e 4). Duas famílias de defeito,
-# ambas medidas no mapeamento de venda: anunciar algo que a outra porta recusa
-# (o passe fora de temporada) e cobrar por algo que nenhum renderizador mostra
-# (frame, rebirth_fx). A função de filtro é pura de propósito — os dois ramos
-# são provados sem tocar banco; o banco prova só o fio que a liga ao estado.
-func SuiteStorefrontHonesty(sql : SQLService) -> void:
-	print("[suite] vitrine honesta: passe, rótulo de cobrança e renderizador (C3/C4)")
-	var economy : EconomyService = Launcher.Economy
-	var charID : int = CreateFixture(sql, "idle_vitrine_a", "IdleVitrineA")
-	if not Check(charID != 0, "vitrine fixture created"):
-		return
-	var accountID : int = sql.GetAccountIDForCharacter(charID)
-	var total : int = EconomyCatalog.SHOP_CATALOG.size()
-	var off : Array = Storefront.ShopCatalog(false)
-
-	CheckEq(Storefront.ShopCatalog(true).size(), total, "com temporada, a vitrine é o catálogo inteiro")
-	CheckEq(off.size(), total - Storefront.PassSkus.size(), "sem temporada, só os SKUs de passe somem")
-	var offSkus : Array = []
-	for e in off:
-		offSkus.append(str((e as Dictionary).get("sku", "")))
-	for passSku in Storefront.PassSkus:
-		Check(not offSkus.has(String(passSku)), "%s some da vitrine sem temporada" % String(passSku))
-
-	# Terceira família de mentira de vitrine: o NÚMERO impresso no letreiro. A loja
-	# anunciava "offline cap 1h + 1h per ad" e o VIP "(24h offline)" como texto
-	# corrido; quando a base F2P subiu para 8h (P1-retenção) a tela continuou
-	# vendendo a regra velha — que é exatamente o tipo de divergência que nenhuma
-	# asserção de comportamento pega, porque o comportamento estava certo. A régua
-	# é de fonte: os rótulos são montados em `ShowState`, e hora de offline só pode
-	# chegar lá por constante (`OfflineSettle` / `EconomyCatalog`), nunca por dígito.
-	# Varrido por String e não RegEx pelo mesmo motivo de `_MemberAccesses`.
-	var shopSrc : String = _FnBody(_RepoFile("res://sources/gui/Shop.gd"), "func ShowState(")
-	if Check(shopSrc.contains("vipLabel.text") and shopSrc.contains("buyVip1.text"),
-			"loja: os dois letreiros de VIP são montados em ShowState"):
-		var hoursChumbadas : String = ""
-		for rawLine in shopSrc.split("\n"):
-			var line : String = String(rawLine)
-			if not line.contains("vipLabel.text") and not line.contains("buyVip"):
-				continue
-			var k : int = 0
-			while k < line.length():
-				if line[k] < "0" or line[k] > "9":
-					k += 1
-					continue
-				var e : int = k
-				while e < line.length() and line[e] >= "0" and line[e] <= "9":
-					e += 1
-				while e < line.length() and line[e] == " ":
-					e += 1
-				if e < line.length() and line[e] == "h" \
-						and not _IsIdentChar(line[e + 1] if e + 1 < line.length() else " ", false):
-					hoursChumbadas += line.substr(k, e - k + 1) + " "
-				k = e
-		Check(hoursChumbadas.is_empty(), "nenhuma hora de offline chumbada no letreiro da loja (%s)" % hoursChumbadas)
-
-	# `Storefront.PassSkus` é uma lista de SKUs; a verdade sobre o que É passe
-	# mora no kind do catálogo canônico. Sem este amarrio a lista vira quarta
-	# cópia à deriva — e o erro silencioso é filtrar demais (some produto pagável).
-	var parsed : Variant = JSON.parse_string(_RepoFile("res://data/conf/paid_catalog.json"))
-	if not Check(typeof(parsed) == TYPE_DICTIONARY, "catálogo pago canônico parseia"):
-		return
-	var paid : Dictionary = parsed
-	var jsonPass : Array = []
-	var placeholder : String = ""
-	for key in paid.keys():
-		var sku : String = String(key)
-		if sku.begins_with("_"):
-			continue
-		var item : Variant = paid[key]
-		if typeof(item) != TYPE_DICTIONARY:
-			continue
-		var entry : Dictionary = item
-		if str(entry.get("kind", "")) == "pass_premium":
-			jsonPass.append(sku)
-		# O `title` é impresso no Checkout Pro pelo companion
-		# (`build_preference_payload`: "título (sku)") — é o que o pagador lê no
-		# extrato, e o que uma contestação cita.
-		var title : String = str(entry.get("title", ""))
-		if not title.is_empty() and title.to_lower().contains("pending"):
-			placeholder += sku + " "
-	# Comparação bidirecional: filtrar de menos deixa botão mentiroso na vitrine,
-	# filtrar a mais esconde produto pagável — e os dois erros são silenciosos.
-	var drift : String = ""
-	for want in Storefront.PassSkus:
-		if not jsonPass.has(String(want)):
-			drift += String(want) + " "
-	for have in jsonPass:
-		if not Storefront.PassSkus.has(String(have)):
-			drift += String(have) + " "
-	Check(drift.is_empty(), "PassSkus == kind pass_premium do catálogo canônico (%s)" % drift)
-	Check(placeholder.is_empty(), "nenhum rótulo de cobrança com placeholder (%s)" % placeholder)
-
-	# O fio que liga o filtro ao estado consolidado que a Loja desenha. A env é
-	# salva e devolvida no fim: `CreateSeason` recusa -1 com a trava ligada, e o
-	# estado da env no fim do run não é decisão desta suíte.
-	var seasonsEnv : String = OS.get_environment("SHAMBLETA_ENABLE_SEASONS")
-	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", "1")
-	for r in sql.QueryBindings("SELECT season_id FROM season WHERE status = 'active';", []):
-		economy.CloseSeason(int((r as Dictionary).get("season_id", 0)))
-	var stateOff : Dictionary = economy.GetEconomyState(accountID, charID)
-	CheckEq((stateOff.get("catalog", []) as Array).size(), off.size(), "estado sem temporada traz a vitrine filtrada")
-	Check(not bool(stateOff.get("season_active", true)), "estado declara season_active = false")
-	var seasonID : int = economy.CreateSeason(7)
-	if Check(seasonID > 0, "temporada criada para a vitrine"):
-		var stateOn : Dictionary = economy.GetEconomyState(accountID, charID)
-		CheckEq((stateOn.get("catalog", []) as Array).size(), total, "com temporada, os dois botões de passe voltam")
-		Check(bool(stateOn.get("season_active", false)), "estado declara season_active = true")
-		Check(economy.CloseSeason(seasonID), "temporada da vitrine fechada")
-	OS.set_environment("SHAMBLETA_ENABLE_SEASONS", seasonsEnv)
-
-	# Cosmético sem renderizador: a oferta sai do botão (flag no payload) e a
-	# cobrança sai na porta do dinheiro. O resto da vitrine continua listado —
-	# colecionar o que se ganhou não é vender.
-	var col : Dictionary = economy.GetCosmetics(accountID)
-	var colSkus : Array = col.get("catalog", [])
-	CheckEq(colSkus.size(), EconomyCatalog.COSMETIC_CATALOG.size(), "a coleção continua listando o catálogo inteiro")
-	var sellable : int = 0
-	for c in colSkus:
-		var ce : Dictionary = c
-		if int(ce.get("price", 0)) > 0:
-			if bool(ce.get("rendered", false)):
-				sellable += 1
-			else:
-				Check(not Storefront.IsRenderedCosmetic(str(ce.get("id", ""))),
-					"%s: flag do estado bate com o catálogo" % str(ce.get("id", "")))
-	CheckEq(sellable, 1, "um único cosmético pago tem renderizador hoje")
-	Check(not Storefront.IsRenderedCosmetic("nao_existe"), "cosmético inexistente não é renderizável")
-	sql.IncRebirthCounter(charID)
-	sql.SetGems(accountID, 5000)
-	var blocked : Dictionary = economy.BuyCosmetic(accountID, charID, "rebirth_fx")
-	Check(str(blocked.get("reason", "")) == "not_rendered", "rebirth_fx cobrado com saldo => not_rendered")
-	CheckEq(economy.GetGems(accountID), 5000, "not_rendered: o gate é pré-débito, saldo intacto")
-	Check(not economy.HasCosmetic(accountID, "rebirth_fx"), "not_rendered não concedeu o cosmético")
-
-	sql.ExecuteBindings("DELETE FROM ledger_transaction WHERE account_id = ?;", [accountID])
-	sql.db.delete_rows("cosmetic_grant", "account_id = %d" % accountID)
-	sql.db.delete_rows("character", "nickname = 'IdleVitrineA'")
-	sql.db.delete_rows("account", "username = 'idle_vitrine_a'")

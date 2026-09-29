@@ -61,7 +61,11 @@ func ClearAttacker():
 
 func RemoveOldestAttacker():
 	attackers.sort_custom(func(a, b): return a.time < b.time)
-	attackers.erase(0)
+	# `erase()` recebe VALOR, não índice: com `Array[Dictionary]` o `erase(0)` de
+	# antes não removia nada e ainda despejava um erro por chamada dentro do passo
+	# físico. `pop_front()` tira o mais velho depois da ordenação.
+	if not attackers.is_empty():
+		attackers.pop_front()
 
 func GetMostValuableAttacker() -> BaseAgent:
 	var target : BaseAgent = null
@@ -123,8 +127,11 @@ func SetData():
 		aiBehaviour = spawnInfo.behaviour
 	for skillCell : SkillCell in data._skills:
 		AddSkill(skillCell, data._skills[skillCell])
-	for dropCell : ItemCell in data._drops:
-		AddItem(dropCell, data._drops[dropCell])
+	# `data._drops` NÃO vai para o inventário do mob: os números são probabilidade
+	# por kill, e quem os rola é `MonsterAgent._RollDrops` na morte. Rolar aqui daria
+	# a mesma taxa média (A/B medido 2026-09-28: 8 em 12 kills pelo spawn contra 7
+	# pela morte), mas o mob vivo passaria a sessão segurando loot que ninguém
+	# ganhou e o chão receberia `item.count` em vez da mesa.
 	minWanderingSpeed = int(stat.current.walkSpeed / 4)
 	maxWanderingSpeed = int(stat.current.walkSpeed / 2)
 	super.SetData()

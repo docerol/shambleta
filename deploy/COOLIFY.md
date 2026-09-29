@@ -115,9 +115,9 @@ public bind`. Veja `deploy/TLS.md` para o guia completo.
      arquivos de deploy (`SuiteDeployMode`).
    - `SHAMBLETA_OFFSITE_BACKUPS` = **deixe como o compose já define: `/data-backups`**
      (`deploy/docker-compose.yml`, `SHAMBLETA_OFFSITE_BACKUPS: ${...:-/data-backups}`).
-     **Não** se põe vazio: vazio desliga o push inteiro — `GetOffsiteBackupPath()`
-     devolve `""` e `PushOffsite()` sai na primeira linha
-     (`sources/sql/SQLCommons.gd:88`, `sources/sql/SQLBackups.gd:36-38`) — e o gate
+     **Não** se põe vazio: vazio desliga o push inteiro — `PushOffsite()` sai na
+     primeira linha (`sources/sql/SQLBackups.gd:36-38`) porque
+     `GetOffsiteBackupPath()` devolve `""` (`sources/sql/SQLCommons.gd:107-108`) — e o gate
      `scripts/check_compose.sh` recusa compose com este valor diferente de
      `/data-backups`, porque o `/data-backups` do default é justamente o mount do
      volume `game-backups`. Só troque quando houver montagem offsite real (NFS /
@@ -138,6 +138,17 @@ public bind`. Veja `deploy/TLS.md` para o guia completo.
      beta: com a env posta, o job diário abre a temporada de 30 dias com regras
      congeladas, fecha a vencida e liquida os prêmios em gems; sem ela, Season
      Pass e placar de temporada ficam vazios e o shell continua no ar.
+   - `SHAMBLETA_TAG` = **o knob do rollback** (não é env do jogo: é variável de
+     interpolação do compose, lida em cada invocação). É o que nomeia a imagem
+     que o `build:` produz — `image: shambleta/game:${SHAMBLETA_TAG:-local-unpinned}`
+     e os outros quatro serviços buildados. Posta no ambiente do recurso com o
+     sha curto que você está deployando, cada deploy ganha um alvo nomeado e o
+     §7 deixa de depender exclusivamente do histórico do painel. Sem ela, os
+     cinco serviços resolvem para `local-unpinned`: o stack sobe igual, mas não
+     existe "a versão anterior" para nomear no compose — ver
+     `deploy/ROLLBACK.md`, "Artefato versionado". **Ponha um valor fixo aqui e
+     deixe o auto-deploy no push ligado é o mesmo defeito do tag `latest`:** todo
+     push reescreve a mesma etiqueta e não sobra nada para voltar.
 3. Domínios por serviço (aba Domains):
    - `web` → `https://seudominio.com` (porta 80 do container).
    - `game` → `https://ws.seudominio.com` (porta **6108** do container). O
@@ -188,13 +199,23 @@ reset de senha não envia e-mail.
    tem porta publicada, então quem responde é o proxy do `web`. Um `POST` em
    `/checkout/intents` sem token deve devolver **JSON** do companion (`401`,
    `{"error": "missing_token"}` — é a string que o companion devolve, não uma
-   frase legível; ver `_resolve_checkout_account` em `companion/server.py:1508`);
+   frase legível; ver `_resolve_checkout_account` em `companion/server.py:1746`);
    se vier o 404 em HTML do nginx, o proxy não está no ar e
    nenhuma compra começa:
    ```bash
    curl -i -X POST https://seudominio.com/checkout/intents \
      -H 'Content-Type: application/json' -d '{"sku":"gems.550"}'
    ```
+   A mesma prova vale para a leitura de preço: `GET /catalog` é a ÚNICA rota
+   pública que TOCA o banco do jogo, e é dela que a vitrine sabe qual passe a
+   temporada em vigor vende. Sem proxy → 404 em HTML do nginx; com proxy mas sem
+   companion → o `location` devolve 502. O veredito de temporada tem de aparecer
+   no corpo, para cada `pass_premium`, com preço intacto:
+   ```bash
+   curl -s https://seudominio.com/catalog | grep -o 'season_eligible' | wc -l
+   ```
+   Número esperado = quantidade de passes do catálogo (`data/conf/paid_catalog.json`);
+   zero ou 404 aqui = a loja está oferecendo um SKU que o checkout pode recusar.
 5. Webhook de teste (só faz sentido em modo sandbox `shared`; agora o corpo
    referencia um **SKU** — o valor vem do catálogo, não do corpo):
    ```bash
@@ -212,11 +233,12 @@ reset de senha não envia e-mail.
 
 | Tarefa | Como |
 |---|---|
-| Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLCommons.gd:32` + `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
+| Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLCommons.gd:43` + `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
 | Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:21`), disparado em `sources/sql/SQLBackups.gd:121-125` (o porquê do desacoplamento está no comentário `:111-120`) — saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
 | Wipe de progresso (pré-beta) | migration `014_reset_progress_idle` ou reset do volume `game-data` antes dos convites. |
 | Logs do server | Logs do container `game` (Util.PrintLog vai ao stdout). |
 | Atualizar jogo | Push no branch → rebuild (client web é imutável por build; o server ignora clientes com protocol version diferente — força refresh). |
+| Voltar atrás | §7: `SHAMBLETA_TAG` no ambiente do recurso dá alvo de compose; sem ele, o rollback é o histórico do painel. A fronteira do schema (§7.3) vale nos dois caminhos. |
 
 ## 6. Limitações conhecidas (beta)
 
@@ -238,3 +260,75 @@ reset de senha não envia e-mail.
   desenho do companion v0). Multi-node/CCU alto → Postgres (ARCHITECTURE §15).
 - `ws.seudominio.com` publica o WebSocket do jogo **atrás do proxy**; nunca
   abra a 6108 do container na internet.
+
+## 7. Rollback (voltar atrás)
+
+O fluxo de deploy deste arquivo é "push no branch → rebuild" (§5). O rollback tem
+de ser lido no mesmo eixo, e há exatamente dois caminhos — escolha **um** e registre
+a escolha em `deploy/LAUNCH_HANDOFF.md`, porque os dois deixam evidências diferentes
+no host.
+
+### 7.1 Pelo histórico do próprio recurso (o caminho padrão do Coolify)
+
+1. Abra o recurso Docker Compose → o serviço que ficou ruim (`game` é o caso comum).
+2. No histórico de deployments do recurso, selecione o deployment anterior ao que
+   quebrou e acione a reimplantação dele — o Coolify re-aponta para o artefato que ele
+   mesmo buildou naquele deployment. Não há registry no meio (§2 do compose:
+   `pull_policy: never` nos cinco serviços buildados), então quem tem a imagem é o
+   host, e o painel é a única coisa que sabe qual deployment é qual.
+3. Confira por fora, com o passo "Ver o que está no ar agora" de
+   `deploy/ROLLBACK.md` — `docker inspect --format '{{.Config.Image}}'` no container
+   do `game`. O que a UI diz é o que foi *pedido*; o `inspect` diz o que está
+   *rodando*, e num deploy interrompido os dois não batem.
+
+Os nomes exatos das telas e o comportamento de retenção de imagem do painel não foram
+medidos nesta máquina — não há Coolify aqui **[NÃO MEDIDO]**. O que se exige do
+operador é o resultado do passo 3, não a confiança na tela.
+
+### 7.2 Pela tag do compose (quando você pisa `SHAMBLETA_TAG`)
+
+Com o knob do §2 posto no ambiente do recurso, cada deploy ganha um nome, e a volta é
+a do `deploy/ROLLBACK.md` — no host, com o repositório clonado:
+
+```bash
+docker images | grep '^shambleta/'                        # que tags este host guarda
+export SHAMBLETA_TAG=<sha-anterior-da-lista>
+docker compose -f deploy/docker-compose.yml up -d --no-build game web companion
+```
+
+O `--no-build` não é opcional aqui: sem ele, um tag que não está no host faz o compose
+**reconstruir o fonte do branch** e subir o build que você acabou de rejeitar com a
+etiqueta do que você queria. Com `pull_policy: never` + `--no-build`, o compose não pode
+buildar nem puxar: ou usa aquela imagem, ou falha — e falha é a resposta correta.
+
+Se você usa auto-deploy no push **e** um `SHAMBLETA_TAG` fixo no ambiente, os dois
+caminhos se cancelam: todo push reescreve a mesma etiqueta e `docker images` mostra um
+`shambleta/game:<mesmo-tag>` para sempre. Nesse estado o §7.2 não existe e o rollback é
+100% o painel (§7.1). As três posturas honestas são: tag fixo + rollback pelo painel;
+tag por release posta a cada deploy manual; ou deixar o knob de fora e assumir que os
+serviços ficam em `local-unpinned`, sabendo que não há alvo de compose.
+
+### 7.3 A fronteira: o binário volta, o schema não
+
+Migração é forward-only e roda no boot do `game`. Um binário com menos patches do que a
+versão gravada na base não rebaixa nada — ele recusa e loga
+`SQL: <N> patches visíveis contra a base na versão <M> — binário mais velho que o
+schema. Nada aplicado.`, e o chão do rollback passa a ser **o último build cujo número
+de `data/conf/migrations/*.sql` é >= a versão do `live.db`**. O comando dos dois números
+e as três saídas quando não há tal build (corrigir para a frente, restaurar backup com
+perda, reparar o schema para cima) estão em `deploy/ROLLBACK.md`, "A fronteira do
+schema". Redeploy pelo Coolify de um commit antigo **não** reescreve este fato: o painel
+troca a imagem, não o volume `game-data`.
+
+### 7.4 O que o rollback não apaga
+
+* `docker compose down -v` num stack Coolify remove os volumes nomeados — `game-data`
+  é o `live.db` e `game-backups` é o histórico. Reimplantar não traz de volta.
+* Limpeza de imagem (`docker image prune -a`) no host remove os artefatos que o §7.2
+  endereça. Se o painel tem sua própria política de retenção, confira antes de rodar
+  poda "para liberar disco": o disco que você libera é o caminho de volta.
+* O endereço do game server no client web é **de build** (`SHAMBLETA_SERVER_ADDRESS`,
+  §2): voltar o `web` para um artefato antigo também volta o endereço antigo horneado
+  no `.pck`. Se o incidente foi troca de domínio, o rollback do `web` sozinho não
+  resolve — é rebuild com o ARG certo.
+

@@ -50,7 +50,7 @@ No installation needed — play directly in your browser at the project's web do
 ### Run Server (Docker)
 
 ```bash
-docker compose up -d
+cd deploy && docker compose up -d
 ```
 
 See [deploy/COOLIFY.md](deploy/COOLIFY.md) for the full deployment guide.
@@ -67,7 +67,7 @@ live: `Action.gd:176-199` dispatches the project's `ui_*` actions (declared in
 `F3` inventory, `F6` minimap, `F7` chat, `F8` emote, `F9` social, `F10` settings
 and `F11` fullscreen — the four game-state-only ones are gated on the same line
 they are read. `F12` is the exception: it is a raw key, not an action, because the
-`ui_f10` action it used to call never existed (`sources/gui/Gui.gd:577-583` explains
+`ui_f10` action it used to call never existed (`sources/gui/Gui.gd:428-434` explains
 why it moved off `F10`). None of these keys exist on web or mobile, so every window
 is also reachable by tap: the on-screen `Menu` indicator (`MenuIndicator.gd:63`)
 opens the 17 `WindowButton` icons declared in `presets/gui/Game.tscn` (Stat,
@@ -83,8 +83,10 @@ toggles got its own button because it had no other caller (`ManualHudBar.gd:84`)
 - **Network:** ENet, WebSocket, and WebRTC transports with a unified RPC layer.
 - **Idle engine:** `IdlePolicy` ticks at physics FPS; offline settle is idempotent via `last_settled_at`.
 
-Current docs live in [`docs/`](docs/) (`development/architecture.md`, `setup.md`,
-`testing.md`, `debugging.md`, plus the `adding-a-*.md` recipes), the commercial plan in
+Current docs live in [`docs/`](docs/) (`docs/development/architecture.md`,
+`docs/development/setup.md`, `docs/development/testing.md`,
+`docs/development/debugging.md`, plus the `docs/adding-a-*.md` recipes — item,
+quest, skill, zone), the commercial plan in
 [`ROADMAP_COMERCIAL.md`](ROADMAP_COMERCIAL.md), and the historical design record —
 architecture, economy study, monetization, battle pass, season activation notes — in
 [`archive/`](archive/).
@@ -101,9 +103,12 @@ lista — os nomes em `EXPLICIT_HARNESSES` mais todo `tests/*_test.gd` /
 `tests/*_fuzz.gd`, auto-inscrito por nome (`harnesses_extra()`), e o `preflight`
 imprime o total a cada run. Um harness novo entra no portão sozinho, sem edição de
 doc. CI roda o mesmo script em todo push — `idle-tests`, `backup-restore`,
-`benchmarks`, `companion-tests` e `code-health` (os três gates de estrutura:
-god-node, doc drift e compose) — sempre através de `scripts/ci_gate_log.sh`: exit
-code sozinho não aprova nada. Ver
+`benchmarks`, `companion-tests` e `code-health` (os nove gates de estrutura:
+god-node, doc drift, compose, secrets, CI, dead code, untracked, gate-log e
+boot-sandbox) — sempre através de `scripts/ci_gate_log.sh`: exit
+code sozinho não aprova nada. A contagem não é decorativa: toda prosa que afirma
+quantos gates de estrutura existem é conferida contra `structure_gates()` pela
+régua de registro de `scripts/check_doc_drift.sh`. Ver
 [docs/development/testing.md](docs/development/testing.md).
 
 ## Contributing

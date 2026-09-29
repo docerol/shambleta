@@ -47,7 +47,7 @@ O risco do projeto não é falta de competência de engenharia. É que **a engen
 | Login | sessão | `AutoFarmOnLogin` já coloca o char na zona 1 farmando — **login é farmando** `[CÓDIGO]` |
 | Input ativo | agência | manual **pausa** a policy (`NoteActivity`) e retoma após 10s → jogar ativo não aumenta renda de farm `[CÓDIGO]` |
 | UI | 8 janelas essenciais | shell de **~24 janelas** de MMO carregadas (`Gui.gd:129-151`), muitas em hotkey `[CÓDIGO]` |
-| Mercado | Grand Exchange | **comandos de texto** `/ah list|buy|cancel|browse`; a janela é read-only e o próprio `Gui.gd:644` diz "UI gráfica em desenvolvimento" `[CÓDIGO]` |
+| Mercado | Grand Exchange | **comandos de texto** `/ah list|buy|cancel|browse`; a janela era read-only e o próprio `Gui.gd:87-88` (HISTÓRICO gravado no código) dizia "UI gráfica em desenvolvimento" — fechado em 2026-09-27 por `AuctionHousePanel.gd`, que fala por RPC (`Network.gd:616-666`) `[CÓDIGO]` |
 | Moeda na UI de leilão | gems | o preço exibido é `price_gold` rotulado como **"gems"** (`AuctionHouseWindow.gd:_render_list`) `[CÓDIGO]` |
 | Temporada/Passe | implementado | **OFF** (`SeasonsBetaLock=true` + env) `[CÓDIGO]` |
 | Anúncios reward | portais | **stub**, token `stub:<placement>:<dia>` mintável `[CÓDIGO]` |
@@ -104,7 +104,7 @@ estado comercial hoje = (Economia 6,0 + Monetização 4,0 + Marketplace 4,0 + Li
 
 **O jogo.** `IdlePolicy` é uma FSM IDLE→SEEK→COMBAT→LOOT→DEAD com substep fixo de 0,25 s de jogo. Ela farma a zona salva sozinha e produz XP/ouro/drops/chaves. Ao logar, `AutoFarmOnLogin` já coloca o personagem na zona 1 farmando. `[CÓDIGO]`
 
-**A única decisão que altera resultado** é a janela de interrupt do boss — ciclo 3,0 s, janela 1,2 s, gerando `InterruptBonus` (`IdlePolicy.gd:85-86, 331-341`). É uma escolha de design **certa**: dá um skill-check real num gênero que normalmente não tem nenhum. Mas é também a única. Os botões "manuais" do HUD são Melee/Run e atalhos de janela, e input manual **pausa** a policy por 10 s (`IdlePolicyService.gd:198-241`). Corolário desconfortável e verificável: **jogar ativo não aumenta a renda de farm** — o jogo é tão bom ou melhor jogado desligado. `[CÓDIGO]`
+**A única decisão que altera resultado** é a janela de interrupt do boss — ciclo 3,0 s, janela 1,2 s, gerando `InterruptBonus` (`IdlePolicy.gd:85-86, 331-341`). É uma escolha de design **certa**: dá um skill-check real num gênero que normalmente não tem nenhum. Mas é também a única. Os botões "manuais" do HUD são Melee/Run e atalhos de janela, e input manual **pausa** a policy por 10 s (`IdlePolicyService.gd:34-77`). Corolário desconfortável e verificável: **jogar ativo não aumenta a renda de farm** — o jogo é tão bom ou melhor jogado desligado. `[CÓDIGO]`
 
 **Loop médio** (sessão): coletar relatório AFK → abrir baús (pity determinístico a cada 10) → subir zona até o gate de `minPower` → gastar chaves de boss. **Loop longo** (dias/semanas): cap L60 → XP excedente vira essência → favores (`favor_xp`/`favor_gold`/`attune_offline`) compõem renda a 1,05^n contra custo 1,7^n → renascimento; Torment (cap 10) e BossRush escalam o mesmo eixo. `[CÓDIGO]`
 
@@ -122,13 +122,13 @@ A arquitetura do loop é honesta e o warm-start é excelente — você já está
 | Rebirth / essência / favores | ON | `RebirthData.gd` |
 | Boss ladder + interrupt | ON (**só 4 bosses**) | `BossService` |
 | Baús + pity | ON, odds públicas | `TradeChestService` |
-| VIP (cap offline 1 h free / 24 h, ×1,2; tier 2 líquida 2×) | ON | `OfflineSettle.gd:12-29` |
-| Anúncios reward | ON mas **stub** | `EconomyCatalog.gd:297` `[CÓDIGO]` |
+| VIP (cap offline 1 h free / 24 h, ×1,2; tier 2 líquida 2×) | ON | `OfflineSettle.gd:13-27` (a base F2P é 8 h desde 2026-09-27) |
+| Anúncios reward | ON mas **stub** | `EconomyCatalog.gd:378-379` (o interruptor é env, default fechado; era `const`) `[CÓDIGO]` |
 | Auction House | ON p/ jogadores, **bots OFF** | `SHAMBLETA_AH_BOTS` |
 | Torneio / arena ELO | ON, **mas criado só pelo job de 24 h** | `TournamentArenaService.gd:136-260` |
 | Guildas (pontos, buff 2%/nível) | ON | `GuildService` |
 | Live events (`weekend_drops`, `smith_week`) | **mecanismo ON, zero dados semeados → nunca dispara** | `CommunityService.gd:18-88` `[CÓDIGO]` |
-| **Temporada + Battle Pass** | **OFF por padrão** → `GetSeasonPass()` = `no_season` | `SeasonService.gd:27-30`, `SeasonsBetaLock=true` `[CÓDIGO]` |
+| **Temporada + Battle Pass** | **OFF por padrão** → `GetSeasonPass()` = `no_season` | `SeasonService.gd:27-29`, `SeasonsBetaLock=true` `[CÓDIGO]` |
 
 Achado adicional de acoplamento `[CÓDIGO]`: torneio, arena, live events, referral, fraud-scan e ciclo de temporada rodam **dentro do job de backup diário** (`SQLBackups.gd:101-107`, guarded por `if not backupFilePath.is_empty()`). Numa instalação nova o `lastDailyBackupTimestamp` inicia em "agora" → **nenhum torneio ou ticket de arena existe nas primeiras ~24 h de uptime**, e se o backup for desativado ou falhar, **toda a rotação meta para**. Meta-sistema dependente de uma tarefa de backup é um risco de operação, não de design.
 
@@ -170,7 +170,7 @@ Sustentabilidade `[CÓDIGO + aritmética]`: em endgame com 16 h online + 8 h off
 
 | # | Achado | Classificação | Severidade |
 |---|---|---|---|
-| E1 | Ouro/XP dos caminhos **live** nunca entram no `ledger_transaction`; o `ReconcileDaily` **não confere ledger×gp apesar do comentário prometer** (`TournamentArenaService.gd:264-288` só confere saldos negativos e lots≡agregado) → divergência invisível a qualquer job | `[CÓDIGO]` | Média — não duplica nada, mas cega a detecção de trapaça em ouro |
+| E1 | Ouro/XP dos caminhos **live** nunca entram no `ledger_transaction`; o `ReconcileDaily` **não confere ledger×gp apesar do comentário prometer** (`TournamentArenaService.gd:382-416` só confere saldos negativos e lots≡agregado) → divergência invisível a qualquer job | `[CÓDIGO]` | Média — não duplica nada, mas cega a detecção de trapaça em ouro |
 | E2 | Forge/cube consomem `item_instance` (lots) **sem baixar o agregado `item.count`** → contagem fantasma detectada e nunca reparada | `[CÓDIGO]` | Baixa — **não é duplicação**: escrow do AH e do trade consome por lot, então o stock fantasma não vira item vendável |
 | E3 | `ProcessPendingGrants`: `Transaction()` aplica o grant na linha 118 e o `UPDATE ... status='processed'` roda na **119, fora da transação** → se o processo morre na janela, o grant é reaplicado no boot | `[CÓDIGO]` | **Alta no caminho pago**: crash + restart = gemas em dobro para 1 pagamento. Janela estreita, mas é dinheiro |
 | E4 | Reroll e VIP pagos não-atômicos (`ShopService.gd:118-138`, `CheckoutService.gd:19-33`) | `[CÓDIGO]` | Média — perde o jogador, não lucra o atacante |
@@ -204,7 +204,7 @@ O fluxo ponta-a-ponta existe e é server-authoritative `[CÓDIGO]`: botão → `
 
 1. **O grant não chega.** `[CÓDIGO]` `LauncherCommons.gd:23`: `IsTesting = not OS.has_feature("production")`. Nenhum dos 7 presets em `export_presets.cfg` declara `custom_features="production"` (todos `""`), e `deploy/server/Dockerfile:31` é `CMD ["/app/Shambleta.x86_64", "--server"]` sem injetar feature. Logo o servidor abre `user://testing.db` (`SQLCommons.gd:47`), enquanto `deploy/companion/Dockerfile:20` abre hardcoded `.../app_userdata/Shambleta/live.db`. O volume é compartilhado (`deploy/docker-compose.yml`, comentário "MESMO volume do game") — **o nome do arquivo é que diverge**. O `grant_queue` escrito pelo companion nunca é lido pelo jogo. Silencioso, sem crash, sem teste que o pegue.
 2. **Mesmo sem isso, não se cobra: `SHAMBLETA_MP_ACCESS_TOKEN` está vazio no compose** (fail-closed → 503) `[CÓDIGO]`. É onboarding de conta PJ, não engenharia.
-3. **SKU morto:** `pass.s1` existe no `companion/catalog.json` mas **não** no `SHOP_CATALOG` do jogo (`EconomyCatalog.gd:65-74` traz só `.deluxe`) → `GetCheckoutIntent("pass.s1")` responde `unknown_sku`. `[CÓDIGO]` O passe padrão é incomprável pelo client. Correção de uma linha.
+3. **SKU morto:** `pass.s1` existe no `companion/catalog.json` mas **não** no `SHOP_CATALOG` do jogo (`EconomyCatalog.gd:104-108` traz só `.deluxe`) → `GetCheckoutIntent("pass.s1")` responde `unknown_sku`. `[CÓDIGO]` O passe padrão é incomprável pelo client. Correção de uma linha.
 4. **Catálogos divergindo:** `vip.1mo` a **R$24,90** no código contra R$14,90 no ROADMAP (alinhado em 2026-09-25: o ROADMAP passou a 24,90); `pass.s1` R$24,90 contra R$19,90 no ROADMAP; `AHListFeeGems=5` contra "10 flat" no ROADMAP. `[CÓDIGO]` O preço que o jogador vê é o do client, o que o companion cobra é o do `catalog.json` — dois artefatos mantidos em sincronia manual.
 
 **Tabela de SKUs reais:** `gems.550/.1200/.3000` R$19,90/39,90/79,90 · `vip.1mo` 24,90 · `vip.3mo` 59,90 · `starter.pack` 9,90 one-time D0–D3 · `founder.pack` 39,90 one-time · `pass.s1` 24,90 **(quebrado)** · `pass.s1.deluxe` 44,90 · `donate.support` 4,90. A curva escalona bem (R$/gem 0,036 → 0,033 → 0,027, −26% no topo), existe entrada barata (R$4,90/R$9,90) e existe segunda compra porque gems são sink recorrente. Falta um ímã de *primeira* compra de gems.
@@ -224,7 +224,7 @@ Os primitivos são certos e os números são ruins.
 **Certo** `[CÓDIGO]`: escrow por lot com cadeia `parent_uid`, entrega all-or-nothing numa transação, taxa de listagem 5 gems **+ creator fee 1%**, bot de estoque **finito e que nunca recompra** (portanto sink, não fonte), self-buy/self-trade bloqueados, `RunFraudScan` diário rodando.
 
 **Errado:**
-- **Não existe camada de rede.** Não há RPC de `list`/`buy`/`cancel` no `Network.gd`/`Server.gd`. `AuctionHouseService.ListItemForSale` existe como função e **não tem chamador externo**. A `AuctionHouseWindow.gd` declara isso no próprio cabeçalho ("Nota honesta: não há RPC de listagem no servidor") e o `Gui.gd:644` instrui o jogador a **digitar `/ah list`, `/ah buy`, `/ah cancel`** porque a "UI gráfica [está] em desenvolvimento" (na data desta auditoria o terceiro comando era `/ah sell`, que `WorldCommands.CommandAH` nunca conheceu; trocado em 2026-09-25). Guilda tem o mesmo padrão: create/join/leave por comando. `[CÓDIGO]`
+- **Não existe camada de rede.** Não há RPC de `list`/`buy`/`cancel` no `Network.gd`/`Server.gd`. `AuctionHouseService.ListItemForSale` existe como função e **não tem chamador externo**. A `AuctionHouseWindow.gd` declara isso no próprio cabeçalho ("Nota honesta: não há RPC de listagem no servidor") e o `Gui.gd:87-88` registra que o botão instruía o jogador a **digitar `/ah list`, `/ah buy`, `/ah cancel`** porque a "UI gráfica [está] em desenvolvimento" (na data desta auditoria o terceiro comando era `/ah sell`, que `WorldCommands.CommandAH` nunca conheceu; trocado em 2026-09-25). Guilda tem o mesmo padrão: create/join/leave por comando. `[CÓDIGO]`
 - **A janela erra a moeda:** `BrowseListings` seleciona `price_gold`, e `_render_list` imprime `"%s [%s] x%d — %d gems"`. O jogador lê "gems" onde é ouro. `[CÓDIGO]`
 - **Liquidez nasce vazia:** os bots cobrem **6 consumíveis** (Apple→CactusPotion, 60–600 gold) e estão **OFF em beta**. Para equipamento, zero. Um mercado sem contraparte no primeiro dia não se recupera sozinho. `[CÓDIGO]`
 - **Wash trade é detectado, não prevenido:** não há teto de preço nem appraisal por tier, então listar junk caro e comprar em ouro transfere valor por dentro do AH pagando só 5 gems + 1%. `[CÓDIGO]` p/ ausência do guard; `[INFERÊNCIA]` p/ prevalência.
@@ -244,22 +244,22 @@ Tudo de bom primeiro, porque é real `[CÓDIGO]`: SQL param-bound em todo o DAO 
 
 O caminho completo foi rastreado até o efeito, conforme exige o método:
 `DeleteAccount` (`Server.gd:36-47`): `peer = GetPeer(peerID)` → `accountID = peer.accountID` → `SQL.EraseAccount(accountID)`.
-`TriggerCommand` (`Server.gd:1194-1197`): `GetAgent(peerID)` → `CommandManager.Handle(player, command)`, executando `!ban` / `!permission` / `!item` / `!spawn` **com a permissão da vítima**.
+`TriggerCommand` (`Server.gd:483-501`): `GetAgent(peerID)` → `CommandManager.Handle(player, command)`, executando `!ban` / `!permission` / `!item` / `!spawn` **com a permissão da vítima**.
 `DeleteCharacter` (`:275`), `RequestRefund` (`:51`), `ArenaAttack` (`:909`), `ClaimOfflineSettle`/`ClaimAchievement` (`:404`, `:529`) seguem o mesmo padrão. O único portão é `Peers.Footprint(peerID, …)`, que também é chaveado no id spoofado — ou seja, o rate-limit **consome a cota da vítima**.
 
 Nenhum outro subsistema impede isso: não há middleware de sessão, não há verificação de canal, e o `SetFormation` que acertou o ownership (`GetAccountIDForCharacter(charID) != accountID`, `:370`) prova que o padrão correto existe no código-base — só não é aplicado à identidade do chamador. Mitigações parciais: `ChangePassword` exige a senha atual (não vira takeover trivial) e as respostas RPC voltam ao `peerID` da vítima, o que limita **exfiltração** (essa parte fica `[HIPÓTESE]`: é preciso confirmar se o socket do impostor recebe a resposta). A **mutação** e a **impersonação** não são limitadas.
 
 O exploit em si é `[INFERÊNCIA]` — não foi executado contra um servidor nesta auditoria, por estar em scope read-only. O **vetor** é `[CÓDIGO]`, e o vetor basta: não existe caminho de login que autentique o dono da conexão antes da ação.
 
-**V2 — Janela TOTP ~±15 minutos.** `[CÓDIGO]` `TwoFactorAuth.gd:103-107`: `candidateCounter = baseCounter + drift * TOTP_STEP_SECONDS` e depois `GenerateTOTP(secret, candidateCounter * TOTP_STEP_SECONDS)` — mas `GenerateTOTP` já divide o timestamp por 30 internamente. O duplo escalonamento faz os contadores testados serem `base + {−30, 0, +30}` **steps**, com drift ∈ {−1,0,1}. Aceita códigos defasados ±900 s, com 3 contras simultâneas, onde a RFC 6238 pede ±1 step. Verifiquei linha por linha. Mitigado em parte pelo desafio single-use, expirado e vinculado ao peer (`Peers.ValidateTwoFactorChallenge`), que está bem feito — mas a primitiva está errada.
+**V2 — Janela TOTP ~±15 minutos.** `[CÓDIGO]` `TwoFactorAuth.gd:60-65`: `candidateCounter = baseCounter + drift * TOTP_STEP_SECONDS` e depois `GenerateTOTP(secret, candidateCounter * TOTP_STEP_SECONDS)` — mas `GenerateTOTP` já divide o timestamp por 30 internamente. O duplo escalonamento faz os contadores testados serem `base + {−30, 0, +30}` **steps**, com drift ∈ {−1,0,1}. Aceita códigos defasados ±900 s, com 3 contras simultâneas, onde a RFC 6238 pede ±1 step. Verifiquei linha por linha. Mitigado em parte pelo desafio single-use, expirado e vinculado ao peer (`Peers.ValidateTwoFactorChallenge`), que está bem feito — mas a primitiva está errada.
 
-**V3 — Recompensa de anúncio mintável, e não é configurável.** `[CÓDIGO]` `EconomyCatalog.gd:297` era `const AdStubEnabled : bool = true` — **const, não env** (SOM-IDLE M2 fechou isso: hoje é `static func` atrás de `SHAMBLETA_AD_STUB=1`, default desligado, ligado só pelo deploy do beta). `_ValidAdToken` aceita `stub:<placement>:<dia>` (`AdsCosmeticsService.gd:47-55`), e o `AdProvider.ShowRewarded` chama `_MintStub` **mesmo no modo `portal`**, depois do callback do SDK: não existe prova de exibição verificável no servidor em nenhum dos dois caminhos. Um cliente forja o token e coleta o cap diário (1 baú / 2 chaves de boss / reroll / horas de offline) sem ver anúncio. Não rouba dinheiro diretamente, mas destrói a segunda fonte de receita e faz o relatório de ads mentir.
+**V3 — Recompensa de anúncio mintável, e não é configurável.** `[CÓDIGO]` EconomyCatalog.gd linha 297 era `const AdStubEnabled : bool = true` — **const, não env** (SOM-IDLE M2 fechou isso: hoje é `static func` atrás de `SHAMBLETA_AD_STUB=1`, default desligado, ligado só pelo deploy do beta). `_ValidAdToken` aceita `stub:<placement>:<dia>` (AdsCosmeticsService.gd linhas 47-55), e o `AdProvider.ShowRewarded` chama `_MintStub` **mesmo no modo `portal`**, depois do callback do SDK: não existe prova de exibição verificável no servidor em nenhum dos dois caminhos. Um cliente forja o token e coleta o cap diário (1 baú / 2 chaves de boss / reroll / horas de offline) sem ver anúncio. Não rouba dinheiro diretamente, mas destrói a segunda fonte de receita e faz o relatório de ads mentir.
 
 **Retificação de V3 (passada de segurança de 2026-09-26).** Os dois nomes citados acima não existem mais no repositório (`_ValidAdToken` e `_MintStub` foram removidos juntas; o único vestígio é o check que exige a ausência, `tests/IdleTests.gd:2837`), e as duas frases entre parênteses descrevem a árvore auditada, não a atual. O que fechou, e o que continua aberto, está em **(w)**: o credential deixou de ser formato derivável e virou linha de uso único mintada pelo servidor (`ad_slot`, migration 048), o cap passou a contar views **mais** as reservas pendentes, e `afkhoras`/`reroll` — que não tinham cap nenhum — entraram no dicionário. A mintagem passou a ser pedida antes de exibir (`AdProvider.ShowRewarded` → `Network.RequestAdSlot`), e o `stub:<placement>:<dia>` público saiu de cena. O interruptor do servidor também saiu do compose de produção: `SHAMBLETA_AD_STUB` agora é autorização para mintar com default **fechado em deploy**, e a harness liga a env ela mesma. **O que não fechou** é o que o próprio item pedia como prova: sem SSV do provedor, quem autoriza a mintagem ainda é a declaração de exibição do client — Bloco 2, item 14.
 
 **V4 — 2FA é inatingível.** `[CÓDIGO]` `Settings.gd:602/614/655` tem botões reais que chamam `Network.SetupTwoFactor` / `VerifyTwoFactorSetup` / `DisableTwoFactor`; os três `@rpc` existem (`Network.gd:86-96`); a persistência inteira existe (`SQL.SetTwoFactorSecret/SetTwoFactorEnabled/ConsumeTwoFactorToken`). **`Server.gd` não tem nenhum dos três handlers** — `ENetServer.callv("SetupTwoFactor", …)` cai num método inexistente. E `Settings.gd:599` ainda consulta `Launcher.SQL.IsTwoFactorEnabled(...)`, que é `null` num processo cliente (SQL só nasce em `Launcher.Server()`, `Launcher.gd:60-74`). Dois defeitos independentes no mesmo botão. Resultado: **ninguém consegue ativar 2FA no produto** — nem o staff, que é justamente a conta que a V1 torna valiosa.
 
-**V5 — Chat interpreta BBCode de texto do jogador.** `[CÓDIGO]` Verificação própria: `Chat.gd:56` faz `tab.text += "[color=#" + cor + "]" + text + "[/color]"` com o texto cru do chat; as abas são instâncias de `ChatLabel.tscn`, que é `RichTextLabel` com **`bbcode_enabled = true`**. Então `[url=…]`, `[font_size=999]`, `[shake]`, `[rainbow]` de qualquer jogador são interpretados no cliente de todos os outros — phishing clicável e assédio visual, em canais local/global/whisper. Somando: `TriggerChat` (`Server.gd:1080-1094`) **não limita o comprimento** de `text`, não tem filtro de conteúdo, não tem ferramenta de denúncia, e o broadcast global amplifica o texto de um único peer. A V1 permite ainda enviar isso **como a identidade de outra pessoa**.
+**V5 — Chat interpreta BBCode de texto do jogador.** `[CÓDIGO]` Verificação própria: `Chat.gd:75` fazia `tab.text += "[color=#" + cor + "]" + text + "[/color]"` com o texto cru do chat (fechado na passada de 2026-09-26: a linha de hoje escapa por `Util.EscapeBBCode`); as abas são instâncias de `ChatLabel.tscn`, que é `RichTextLabel` com **`bbcode_enabled = true`**. Então `[url=…]`, `[font_size=999]`, `[shake]`, `[rainbow]` de qualquer jogador são interpretados no cliente de todos os outros — phishing clicável e assédio visual, em canais local/global/whisper. Somando: `TriggerChat` (`Server.gd:1644-1650`) **não limita o comprimento** de `text`, não tem filtro de conteúdo, não tem ferramenta de denúncia, e o broadcast global amplifica o texto de um único peer. A V1 permite ainda enviar isso **como a identidade de outra pessoa**.
 
 **V6 — menores.** `[CÓDIGO]` Não existe verificação de idade, gate 18+, nem restrição de acesso a menores no cliente ou no servidor. Relevante para a §21 e para a Play Store.
 
@@ -267,7 +267,7 @@ O exploit em si é `[INFERÊNCIA]` — não foi executado contra um servidor nes
 
 **Como a nota sobe:** (a) identidade derivada do transporte em um único ponto de despacho, com o parâmetro `peerID` **removido** das assinaturas `@rpc` — ~~removido~~ **media errado, desfeito por medição em 2026-09-25**: o parâmetro é o slot de identidade no fio e a aridade é o protocolo (ver linha 1 da tabela de itens do §24 e o item (6) da retificação do rodapé); o que fechou foi o guard, passado a casar o marcador do slot em vez do nome literal; (b) TOTP em ±1 step; (c) stub de anúncio por env com default false e SSV real — ~~por env com default false~~ **feito em duas metades desiguais**: a env com default fechado é de 2026-09-24 (M2), o credential de uso único mintado pelo servidor é de 2026-09-26 ((w)), e o **SSV real continua em aberto** (Bloco 2, item 14 — decisão de rede de anúncios é do dono); (d) handlers de 2FA escritos; (e) chat renderizado como texto, com cap de tamanho.
 
-**V7 — o cliente desligava a verificação do certificado do servidor.** `[CÓDIGO]` Achado **depois** desta auditoria, na passada de beta (2026-09-24), e ela não está na lista acima nem em (a)–(e): `sources/network/client/Client.gd:779` montava `TLSOptions.client_unsafe()` e entregava a opção tanto a `create_client(url, tlsOptions)` (WebSocket) quanto a `currentPeer.host.dtls_client_setup(serverAddress, tlsOptions)` (ENet/DTLS). `client_unsafe()` desliga as duas conferências — cadeia contra CA confiável **e** hostname. No mesmo ramo, `_ValidateServerAuth` faz `multiplayerAPI.complete_auth(peerID)` sem nenhum teste criptográfico, ou seja, o `auth_callback` não cobria o buraco. Isto não é hipótese: é a opção que o código pedia, e a linha está no histórico desde `c727e69` (2026-08-14).
+**V7 — o cliente desligava a verificação do certificado do servidor.** `[CÓDIGO]` Achado **depois** desta auditoria, na passada de beta (2026-09-24), e ela não está na lista acima nem em (a)–(e): `sources/network/client/Client.gd:945-948` montava `TLSOptions.client_unsafe()` e entregava a opção tanto a `create_client(url, tlsOptions)` (WebSocket) quanto a `currentPeer.host.dtls_client_setup(serverAddress, tlsOptions)` (ENet/DTLS). `client_unsafe()` desliga as duas conferências — cadeia contra CA confiável **e** hostname. No mesmo ramo, `_ValidateServerAuth` faz `multiplayerAPI.complete_auth(peerID)` sem nenhum teste criptográfico, ou seja, o `auth_callback` não cobria o buraco. Isto não é hipótese: é a opção que o código pedia, e a linha está no histórico desde `c727e69` (2026-08-14).
 
 O efeito foi rastreado até o canal: pelos RPCs de auth viajam a senha do login, o token de "lembrar" e o código 2FA. Sem verificação de certificado, um MITM na rota (Wi‑Fi público, DNS envenenado, proxy corporativo) apresenta **qualquer** certificado, coleta a credencial e repassa o tráfego ao servidor real — o jogador loga e não vê nada. O servidor tinha (e tem) a defesa do outro lado (`RequiresTLS()` + hard‑stop do bind inseguro), o que torna o achado fácil de perder: a borda estava fechada, o cliente não. **Esta parte é argumento de semântica de API, não reprodução**: o colhimento por MITM não foi executado localmente, e nesta máquina ele não é reproduzível — ver a limitação medida abaixo. Corrigido por `NetworkCommons.ClientTLSOptions()` — `TLSOptions.client(âncora)` com o bundle de `OS.get_system_ca_certificates()` passado explicitamente, já que o `TLSOptions.client()` sem argumento falha nesta engine antes do handshake (`SSL module failed to initialize!`, `-0x6C00`); o hostname é derivado do URL pelo próprio Godot. Medido com fixture autoassinado: com a store do sistema como âncora a conexão é **recusada** (`-0x2700`/`-0x7180`) e o mesmo certificado é aceito quando vira a âncora — a verificação está viva e discrimina. No mesmo caminho, `client_unsafe()` também não completa aqui (mesmo erro de init, `-0x6C00`), o que é exatamente por que o buraco não se demonstra por reprodução neste build: ele se demonstra pelo que a API pede (`client_unsafe` desliga cadeia e hostname) somado ao `auth_callback` oco. Guard em `SuiteOpsA2`: varre os 279 `.gd` de `sources/` atrás de `client_unsafe` fora de comentário, inspeciona as opções TLS vivas (`not is_unsafe_client()`, âncora de CA presente) e confere que a opção chega aos dois transportes. Consequência documentada em `deploy/TLS.md` e `deploy/STAGING.md`: bind direto autoassinado passa a falhar de propósito no cliente.
 
@@ -326,7 +326,7 @@ servidor garante e a suíte mede.
 
 **Performance 6,0.** As mitigações são reais e não só de debug: WAL + `synchronous=NORMAL` + `busy_timeout` aplicados no servidor (`SQL.gd:1302-1304` `[CÓDIGO]` — corrige um item de auditoria antiga; re-endereçado em 2026-09-26, quando a passada de performance empurrou essas três linhas de `:1177-1180` — o conteúdo delas não mudou), dirty-check de entidades, pausa de física de IA ociosa, AOI, índices, batching de egress. Rodei os benchmarks `[TESTE]`: settle 1 ms (budget 500), XP walk 0 ms, catálogo 0 ms/24 zonas, load probe 200 settles P99 1 ms, 0 falhas. **O número é verdadeiro e mede pouco**: são 200 settles **sequenciais no mesmo personagem**, numa `testing.db` ociosa, sem o lock global e sem carga concorrente; e o "XP walk" é um laço `totalXp += 10` que mede zero. `[CÓDIGO]` Os jobs de CI só leem exit code, sem grep de `SCRIPT ERROR`/`PASSED`, e vazamentos de RID/recursos no teardown não alteram o exit code — classe de falha invisível ao pipeline `[TESTE]`. **Retificado em 2026-09-26, item (8) do bloco de correções do §25: o veredito "mede pouco" foi executado e derrubado** — o probe hoje faz 800 settles, cruza a fronteira do checkpoint do WAL, cobra taxa de hitch além do p99, e o gate provou estar verde sobre uma mitigação que ele nunca executava.
 
-Gargalos concretos: `BackupPlayers` a cada 600 s faz ~5 UPDATEs por jogador na main thread → a 1k CCU são ~5.000 UPDATEs em rajada (hitch de centenas de ms), a 10k vira stall multi-segundo com storm de desconexões; `Localizer.gd:28-71` percorre **a árvore inteira de UI a cada 1 s** alocando Array e `set_meta` por nó — ruído de GC justamente no alvo web/mobile. `[CÓDIGO]` (2026-09-26: o `Localizer` foi corrigido — passo dirigido por evento com fallback que só anda nos rótulos visíveis; o ponteiro acima endereça a revisão de 2026-09-24, na árvore de hoje a cadência está em `Localizer.gd:75-87` e a andada podada em `Localizer.gd:109-128`. Números e o resto da passada estão no item (8) do bloco de correções do §25. `BackupPlayers` continua aberto de caso pensado, e o termo dominante dentro dele — `UpdateProgress`, ~300 statements por jogador — já saiu de rajada pura para 3 queries em 1 transação.)
+Gargalos concretos: `BackupPlayers` a cada 600 s faz ~5 UPDATEs por jogador na main thread → a 1k CCU são ~5.000 UPDATEs em rajada (hitch de centenas de ms), a 10k vira stall multi-segundo com storm de desconexões; Localizer.gd linhas 28-71 percorre **a árvore inteira de UI a cada 1 s** alocando Array e `set_meta` por nó — ruído de GC justamente no alvo web/mobile. `[CÓDIGO]` (2026-09-26: o `Localizer` foi corrigido — passo dirigido por evento com fallback que só anda nos rótulos visíveis; o ponteiro acima endereça a revisão de 2026-09-24, na árvore de hoje a cadência está em `Localizer.gd:75-87` e a andada podada em `Localizer.gd:109-128`. Números e o resto da passada estão no item (8) do bloco de correções do §25. `BackupPlayers` continua aberto de caso pensado, e o termo dominante dentro dele — `UpdateProgress`, ~300 statements por jogador — já saiu de rajada pura para 3 queries em 1 transação.)
 
 **SQLite não é o teto a 1k–10k** `[INFERÊNCIA]`: ~1k CCU ≈ 8–20 writes/s sustentados, folgado no WAL. O que dói é a rajada e a contenção do writer único quando game e companion escrevem no mesmo arquivo (`busy_timeout=5000` enfileira até 5 s).
 
@@ -340,7 +340,7 @@ Pontos verdadeiros: `_essential_windows()` retorna exatamente 8 janelas `[TESTE]
 
 Pontos que custam caro:
 1. **Botão visível que não funciona.** O 2FA em `Settings.gd` aparece, clicável, e nada acontece (V4). Um botão morto ensina o jogador a não confiar na interface. `[CÓDIGO]`
-2. **A interface manda o jogador usar o terminal.** `Gui.gd:644`: use `/ah list`, `/ah buy`, `/ah cancel` ("UI gráfica em desenvolvimento"; o terceiro era `/ah sell`, inexistente — corrigido em 2026-09-25). Mercado é a feature social central e é texto puro. `[CÓDIGO]`
+2. **A interface mandava o jogador usar o terminal.** `Gui.gd:87-88`: use `/ah list`, `/ah buy`, `/ah cancel` ("UI gráfica em desenvolvimento"; o terceiro era `/ah sell`, inexistente — corrigido em 2026-09-25). Mercado é a feature social central e era texto puro. **Fechado em 2026-09-27:** o botão abre `AuctionHousePanel`, que fala por RPC (`Network.gd:616-666`) e não pelo chat. `[CÓDIGO]`
 3. **Rótulo de moeda errado** na janela de leilão (ouro exibido como gems). `[CÓDIGO]`
 4. **Onboarding é 100% descritivo.** Nenhuma micro-ação guiada: não manda abrir 1 baú, ver o relatório AFK, acertar 1 interrupt. Cita F2/F6 e 6 janelas de uma vez. O tour explica onde olhar, não o que fazer. `[CÓDIGO]`
 5. **Densidade de MMO sobre núcleo idle:** ~24 janelas carregadas (minimap, emote, dialogue, formation, social, leaderboard, seasonPass…) para um jogo que se joga sozinho. `[CÓDIGO]`
@@ -417,7 +417,7 @@ A exatidão é o colapso, item por item verificado `[CÓDIGO]`:
 - `AUDITORIA_SHAMBLETA.md` dá **9,2–9,5** a quase tudo, fundamentando em `sources/network/NetworkAuth.gd` e `NetworkSocial.gd` — **nenhum dos dois arquivos existe**.
 - `architecture.md:45` descreve `Network.gd` "fragmentado em NetworkAuth/NetworkEconomy/… (facade 177 linhas)"; o arquivo real tem **1.026 linhas** (o P4 foi revertido). Lista 7 autoloads inexistentes, incluindo o `MetricsServer` que justifica o healthcheck morto. `architecture.md:64` diz que a economia é "`EconomyService` único"; a realidade é **17 módulos** em `sources/economy/`, nunca documentados.
 - `setup.md`/`testing.md` ainda afirmam que `run_idle_tests.gd` está **bloqueado por Parse Error** — eu o executei verde, 1329/0. Documentação que declara quebrado o que funciona é tão cara quanto o contrário.
-- `README.md:69` aponta para `som-idle-docs/` (diretório **vazio**) como fonte de "architecture, economy study, roadmap"; `docs/game_bible/` também vazio.
+- **[FECHADO em 2026-09-28]** `README.md:69` apontava para `som-idle-docs/` (diretório **vazio**) como fonte de "architecture, economy study, roadmap"; `docs/game_bible/` também vazio. O README hoje não nomeia `som-idle-docs/` em nenhuma linha (grep do arquivo: zero ocorrências), e a :69 atual é outra frase — a contagem de linhas não mudou, o texto sim.
 - `coverage_report.md` commitado: 100%. Real: 77%.
 - `FEATURE_MATRIX` lista temporadas como "implementado, aguardando ativação" — tecnicamente verdadeiro, comercialmente enganoso: para o jogador a feature não existe (§7).
 - Comentários de código erram números que o próprio código contradiz (`FarmZoneData.gd:141` diz "96/h na z24"; a fórmula da linha vizinha dá 80/h).
@@ -462,7 +462,7 @@ Aplicando ao código: o design **já fecha parte** do enquadramento — odds pú
 
 **C1 — "O cap offline free não pode punir quem dorme."**
 *Hipótese da comunidade:* `[recorrente]` em r/incremental_games, multi-ano.
-*Implementação atual:* cap 1 h (free, +1 h por anúncio assistido desde a última coleta) / 24 h (qualquer tier de VIP, sem anúncio), fator 0,6→0,8, VIP ×1,2 e 2× de loot no tier 2 (`OfflineSettle.gd:12-29`).
+*Implementação atual:* cap 1 h (free, +1 h por anúncio assistido desde a última coleta) / 24 h (qualquer tier de VIP, sem anúncio), fator 0,6→0,8, VIP ×1,2 e 2× de loot no tier 2 (`OfflineSettle.gd:13-27`). **Re-lido em 2026-09-28:** a base F2P saiu de 1 h para 8 h (`BaseCapHours`) na P1-retenção de 2026-09-27, e o anúncio compra +3 h, não +1 h por view.
 *Verificação no código:* confirmado; é o mecanismo documentado. **A penalidade relativa é 24× de janela entre o F2P que não assiste nada e o VIP — e cai para 1× para quem assistiu 23 anúncios**, porque a hora tem preço de atenção, não de dinheiro.
 *Impacto:* churn no D2–D7 de F2P + percepção de P2W; também afeta a régua de D7.
 *Melhoria:* decidida em 2026-09-25 pelo dono, e por outro caminho — o cap free não subiu, ele ficou em 1 h e **passou a ser comprável com anúncio** (+1 h por view, sem teto de views/dia), em vez de ser dado de graça. Continua aberta a segunda metade: **mostrar XP/h real** no relatório AFK em vez de o número só existir na doc.
@@ -478,7 +478,7 @@ Aplicando ao código: o design **já fecha parte** do enquadramento — odds pú
 
 **C3 — "Renascimento precisa ser claramente acelerador."**
 *Hipótese:* `[recorrente]`, condição bem documentada pela comunidade.
-*Implementação:* bônus composto 1,05^n vs custo 1,7^n, ciclo 17–21 dias, série converge ~3,5 meses sem zerar (`RebirthData.gd:9-49`).
+*Implementação:* bônus composto 1,05^n vs custo 1,7^n, ciclo 17–21 dias, série converge ~3,5 meses sem zerar (`RebirthData.gd:9-48`).
 *Verificação:* **confirmado no lado certo** — a matemática acelera.
 *Impacto:* positivo, mas invisível: nada na UI diz "este ciclo foi X% mais rápido que o anterior".
 *Melhoria:* expor tempo-para-reconquistar-a-zona-anterior como número no pós-rebirth. Custo S.
@@ -644,7 +644,7 @@ o que parsear.)
 
 | # | Item | Estado | Evidência |
 |---|---|---|---|
-| 1 | S1 identidade derivada do transporte | **vulnerabilidade fechada; residual redefinido por medição** | `Network.gd:982 TransportSenderID()` varre as três interfaces e só aceita sender ≠ 0; `:990 AuthPeerID()` devolve o sender real e usa o `peerID` declarado apenas onde não há borda de rede (offline/servidor local). Regressão ao vivo em `tests/run_rpc_identity_test.gd` (dois peers WebSocket reais, forja no corpo recusada, verificação na direção inversa). ~~**Residual:** 106 assinaturas `@rpc` ainda declaram `peerID : int = PeerAuthorityID`. Elas não são mais enviadas no `Array` de args do `CallServer` — o parâmetro sobrevive só como o valor que `AuthPeerID` usa quando não há borda de rede. É cosmético, mas é superfície para uma regressão futura: um handler novo que ler `peerID` direto, sem passar por `AuthPeerID`, reabre a forja.~~ **A frase acima media errado e foi desfeita na passada seguinte, antes de servir de pauta:** os 106 parâmetros **estão** no fio. `CallServer` e `CallClient` acrescentam a identidade em `args + [identidade]` em **todas** as ramificações (`sources/network/Network.gd:994` dispatcher, `:1010` caminho do client) e o handler do servidor recebe exatamente esse último parâmetro — `Server.ArenaAttack(defenderAccountID, peerID)`, `Server.SetupTwoFactor(peerID)`. Logo a aridade é o protocolo: apagar os parâmetros não é limpeza cosmética, é quebrar 626 chamadas `Network.<envoltório>()` medidas no repositório e reescrever 106 assinaturas com 106 handlers de uma vez. O resíduo verdadeiro era outro, e menor: o guard de fronteira casava a **string literal** `peerID : int`, então um wrapper declarando `who : int = NetworkCommons.PeerAuthorityID` passava sem autenticar nada. Fechado na passada de 2026-09-25 por regra baseada no **marcador do slot** (` : int = NetworkCommons.PeerAuthorityID`, lido por String e não por regex) com `identitySites == anyPeerDispatch` como trava anti-degenerescência — 106/106 hoje, nenhum cru. |
+| 1 | S1 identidade derivada do transporte | **vulnerabilidade fechada; residual redefinido por medição** | `Network.gd:982 TransportSenderID()` varre as três interfaces e só aceita sender ≠ 0; `:990 AuthPeerID()` devolve o sender real e usa o `peerID` declarado apenas onde não há borda de rede (offline/servidor local). Regressão ao vivo em `tests/run_rpc_identity_test.gd` (dois peers WebSocket reais, forja no corpo recusada, verificação na direção inversa). ~~**Residual:** 106 assinaturas `@rpc` ainda declaram `peerID : int = PeerAuthorityID`. Elas não são mais enviadas no `Array` de args do `CallServer` — o parâmetro sobrevive só como o valor que `AuthPeerID` usa quando não há borda de rede. É cosmético, mas é superfície para uma regressão futura: um handler novo que ler `peerID` direto, sem passar por `AuthPeerID`, reabre a forja.~~ **A frase acima media errado e foi desfeita na passada seguinte, antes de servir de pauta:** os 106 parâmetros **estão** no fio. `CallServer` e `CallClient` acrescentam a identidade em `args + [identidade]` em **todas** as ramificações (`sources/network/Network.gd:1161-1171` dispatcher, `:1010` caminho do client) e o handler do servidor recebe exatamente esse último parâmetro — `Server.ArenaAttack(defenderAccountID, peerID)`, `Server.SetupTwoFactor(peerID)`. Logo a aridade é o protocolo: apagar os parâmetros não é limpeza cosmética, é quebrar 626 chamadas `Network.<envoltório>()` medidas no repositório e reescrever 106 assinaturas com 106 handlers de uma vez. O resíduo verdadeiro era outro, e menor: o guard de fronteira casava a **string literal** `peerID : int`, então um wrapper declarando `who : int = NetworkCommons.PeerAuthorityID` passava sem autenticar nada. Fechado na passada de 2026-09-25 por regra baseada no **marcador do slot** (` : int = NetworkCommons.PeerAuthorityID`, lido por String e não por regex) com `identitySites == anyPeerDispatch` como trava anti-degenerescência — 106/106 hoje, nenhum cru. |
 | 2 | D1 produção nos artefatos do deploy | **feito, e com um segundo defeito da mesma raiz encontrado ao verificar** | `export_presets.cfg` exporta `production`; `deploy/server/Dockerfile` liga `SHAMBLETA_PRODUCTION=1`; `EXPOSE 6108` == `NetworkCommons.WebSocketPort`; healthcheck sonda a porta que o servidor binda. Guard `SuiteDeployMode` compara `GetDBPath()` com o `--db` do companion por **igualdade derivada de `OS.get_user_data_dir()`**. Ao escrever esse guard descobriu-se que o caminho comparado antes era o layout `godot/app_userdata/` do **Godot 3** — `project.godot` usa `use_custom_user_dir`, então o real é `$HOME/.local/share/Shambleta` (medido). O companion abria arquivo inexistente (`server.py:1299` → exit 2): **nenhuma compra seria creditada**, e `tools/provision_tls.sh` gravava o certificado fora do `user://server.crt` que o bind cobra. Corrigidos os dois, mais TLS.md/COOLIFY.md/ROLLBACK.md/debugging.md/`scripts/test.sh clean`/exemplos do `server.py`. |
 | 3 | M1, C1, E3, M2 | **feito, com C1 e M2 reabertos e fechados de novo na passada de 2026-09-26** | 2FA: `SuiteTwoFactor`, `SuiteTwoFactorSetup`, `SuiteTwoFactorVectors` (janela ±1 step V2 incl.). Chat: `SuiteChatHardening` (texto puro + cap) e C1b/C1c (balão morto reativado; denúncia/bloqueio server-side). Grant: `SuiteGrantQueue` com status dentro da transação (E3). Anúncio: `SuiteAds` + stub fechado por default. ~~aberto só pelo compose (`SHAMBLETA_AD_STUB: "1"`), com guard que falha se a linha cair~~ **essa linha media o estado de antes e estava errada sobre o compose**: a env estava *ligada* no `deploy/docker-compose.yml` de produção, i.e. o default do beta era ligado — não fechado com exceção. Foi tirada de lá na passada de segurança e o guard passou a assentar o contrário ("compose de produção não abre o credential auto-declarado", `SuiteDeployMode`); a harness liga a env ela mesma. O credential em si mudou de natureza em (w): linha `ad_slot` de uso único mintada pelo servidor, cap contando views + reservas pendentes. |
 | 4 | T1 apagar `gut_runner.gd` e rebaixar as notas | **feito** | Arquivo removido; notas rebaixadas em `RELATORIO_FINAL_2026-09-21.md`, `auditoria-tecnica-shambleta.md` (claims 1193 checks e E2E de multiplayer riscados) e nos arquivos citados em §13. |
@@ -654,7 +654,7 @@ o que parsear.)
 | 8 | L1 healthcheck real + CI com grep | **feito — e a metade dos spans resolvida como "remover a ficção"** | Bind `:9400` (`MetricsServer`), probe HTTP ao vivo em `SuiteMetrics` (200/404/405/400/431 e `Destroy()` liberando a porta), `test:` na forma lista sem operador de shell, `curl` instalado na imagem (sem ele o `service_healthy` nunca passa). O item pedia "spans de verdade, **ou** remover a ficção": `git log --all -S"func StartSpan"` retorna **zero** commits (`StartSpan`/`FinishSpan`/`ActiveSpans` só existiam no texto do `archive/FEATURE_MATRIX.md`), e o único `RecordSpan` que chegou a ser declarado nunca teve chamador — medição em `git grep RecordSpan HEAD` devolve apenas a própria linha 14 de `Monitoring.gd`. O código órfão saiu da árvore e ficou um aviso no topo do arquivo (`sources/system/Monitoring.gd:18`) dizendo onde medir de verdade (`tests/benchmarks.gd`, profiler do editor, `MetricsServer`). A retificação das notas que citavam spans como prova está publicada em `RELATORIO_FINAL_2026-09-21.md:88`, `CONCLUSAO_FINAL_ROUND_19.md:22`, `auditoria-tecnica-shambleta.md:131`, `plano-ui-ux.md:91` e `ROADMAP_COMERCIAL.md:131-145`. |
 | 9 | K1 dinheiro e coorte | **feito** | `044_grant_price_paid.sql` (`price_paid`/`currency`), eventos `checkout_intent`/`purchase`/`ah_*`/`trade`/`rebirth`/`pass_claim`, `045_cohort_view.sql` com a view `cohort_retention`; cobertos por `SuiteMoneyFunnel` (funil + coorte D1/D7/D30 na quinta metade) e `SuiteTelemetry`. |
 | 10 | M3 + catálogo único | **feito** | `data/conf/paid_catalog.json` é a fonte, copiado para a imagem do companion e validado no boot (`EconomyCatalog.ValidatePaidCatalog`); `SuiteCatalogConsistency` bate os dois lados. As chaves de comentário do arquivo (`_note`, `_agreements_note`, `_agreements`) não são SKU para nenhum leitor: `load_catalog` pula na validação e preserva no dict, o validador do boot compara `_agreements` com os três consts, e nenhuma das portas de dinheiro aceita uma delas como `sku` — ver achado (i), que foi aberto por esta linha. |
-| 11 | Gate de idade | **metade em código feita; parecer jurídico em aberto** | `046_age_gate.sql` + `SQL.IsConsentAccepted/SetConsentAccepted` exigem igualdade com `AgreementAgeVersion` (`NetworkCommons.gd:277`, predicate em `sources/sql/SQL.gd:101` — a versão de idade não é parâmetro porque só existe uma vigente); login barra sem aceite (`Server.gd:79,:185`) e checkout recusa com `reason "consent_required"` (`CheckoutService.gd:74-75`). **É autodeclaração afirmativa, não verificação de idade** — o checkbox de `Login.gd:466` declara "18 years old or older", mas nada em código impede mentir a data. O enquadramento legal dos baús (§21/§25) continua com o advogado. **Segunda porta fechada nesta passada:** a recusa existia só no processo do jogo, enquanto `POST /checkout/intents`, `/checkout/preference` e `/checkout/simulate` do companion aceitavam qualquer `auth_token` válido — e o nginx do serviço `web` expõe `/checkout/` na mesma origem do jogo. Uma conta pré-046 (`consent_age_version = ''`) ou com token emitido antes de um bump não conseguia logar e conseguia pagar. Hoje as três rotas chamam `consent_currently_accepted` (espelho de `IsConsentAccepted`: igualdade com as versões vigentes, fail-closed sem coluna ou sem declaração), o `/webhooks/payments` fica deliberadamente sem gate — recusar ali descartaria entrega já paga — e os dois lados são medidos em `companion/test_security.py` (C1–C5). As versões vigentes passaram a viajar em `data/conf/paid_catalog.json` (`_agreements`), validadas contra os consts no boot e na suíte, e uma SKU de comentário (`_agreements`, `_note`) deixou de ser cobrável — ver achado (i). **A fiação das portas passou a ter guard** (12 checks em `SuiteLGPD`, nesta passada): até aqui só o predicate era medido, e as três portas `@rpc` não têm peer em harness — hoje o guard exige `IsConsentAccepted`+`ERR_CONSENT_REQUIRED` nas duas portas de login, o gate **antes** da derivação de `ERR_2FA_REQUIRED` (é a ordem que torna a porta de 2FA segura), a gravação depois de credencial validada em `AcceptConsent`, o ramo de cliente (`Login.gd:105` → `OpenReconsentDialog`) e `AuthPeerID` nos dois RPCs. |
+| 11 | Gate de idade | **metade em código feita; parecer jurídico em aberto** | `046_age_gate.sql` + `SQL.IsConsentAccepted/SetConsentAccepted` exigem igualdade com `AgreementAgeVersion` (`NetworkCommons.gd:330`, predicate em `sources/sql/SQL.gd:101` — a versão de idade não é parâmetro porque só existe uma vigente); login barra sem aceite (`Server.gd:79,:185`) e checkout recusa com `reason "consent_required"` (`CheckoutService.gd:74-75`). **É autodeclaração afirmativa, não verificação de idade** — o checkbox de `Login.gd:466` declara "18 years old or older", mas nada em código impede mentir a data. O enquadramento legal dos baús (§21/§25) continua com o advogado. **Segunda porta fechada nesta passada:** a recusa existia só no processo do jogo, enquanto `POST /checkout/intents`, `/checkout/preference` e `/checkout/simulate` do companion aceitavam qualquer `auth_token` válido — e o nginx do serviço `web` expõe `/checkout/` na mesma origem do jogo. Uma conta pré-046 (`consent_age_version = ''`) ou com token emitido antes de um bump não conseguia logar e conseguia pagar. Hoje as três rotas chamam `consent_currently_accepted` (espelho de `IsConsentAccepted`: igualdade com as versões vigentes, fail-closed sem coluna ou sem declaração), o `/webhooks/payments` fica deliberadamente sem gate — recusar ali descartaria entrega já paga — e os dois lados são medidos em `companion/test_security.py` (C1–C5). As versões vigentes passaram a viajar em `data/conf/paid_catalog.json` (`_agreements`), validadas contra os consts no boot e na suíte, e uma SKU de comentário (`_agreements`, `_note`) deixou de ser cobrável — ver achado (i). **A fiação das portas passou a ter guard** (12 checks em `SuiteLGPD`, nesta passada): até aqui só o predicate era medido, e as três portas `@rpc` não têm peer em harness — hoje o guard exige `IsConsentAccepted`+`ERR_CONSENT_REQUIRED` nas duas portas de login, o gate **antes** da derivação de `ERR_2FA_REQUIRED` (é a ordem que torna a porta de 2FA segura), a gravação depois de credencial validada em `AcceptConsent`, o ramo de cliente (`Login.gd:325-335` → `OpenReconsentDialog`) e `AuthPeerID` nos dois RPCs. |
 
 **Achados novos, fora da lista acima, descobertos ao verificar a lista:** (a) o cliente
 montava `TLSOptions.client_unsafe()` no canal por onde passam senha, token e código 2FA —
@@ -732,7 +732,7 @@ morto há sempre. **A limitação vira (j2) e é corrigida na mesma passada:** t
 porta do HUD idle — `ToggleIdleMode` tinha um chamador só no repositório, a tecla crua F12 dentro
 de `Gui._input` — e Web/touch não têm essa tecla, na plataforma em que o beta entrega o cliente.
 Entrou `IdleHudButton` na barra que `AddManualSkillButtons()` monta (a mesma função que o caminho
-de jogo chama em `Gui.gd:383`), `toggle_mode` para que o estado do modo apareça sem ler texto, e
+de jogo chama em `Gui.gd:425-438`), `toggle_mode` para que o estado do modo apareça sem ler texto, e
 a sincronia nos dois sentidos: `ToggleIdleMode` devolve `set_pressed_no_signal(idleMode)` no botão,
 porque sem isso F12 vira o HUD e o botão continua marcando o modo anterior — o jogador toca no
 "OFF" e não acontece nada, que é a mesma classe de defeito deste achado. Oito checks novos em
@@ -753,7 +753,7 @@ foi medido — e por isso a metade seguinte fica registrada como HIPÓTESE, sem 
 o caminho do servidor de produção: ele roda de um `.pck` exportado (`deploy/server/Dockerfile`) e
 a ordem dentro do pacote não é observável neste host (sem templates de export instalados), enquanto
 o teste de contrato (`boot: a base corrente chegou à versão do diretório de patches`,
-`tests/IdleTests.gd:5000`) enxerga só o source. Fechado por contrato explícito: `patches.sort()`
+`tests/IdleTests.gd:5002-5002`) enxerga só o source. Fechado por contrato explícito: `patches.sort()`
 em `sources/system/FileSystem.gd:250`, que tem exatamente dois consumidores — o `ApplyMigrations`
 e o teste — e não muda nada do que roda hoje nos dois caminhos medidos.
 
@@ -798,7 +798,7 @@ próprio arquivo), e os dois botões de HUD "AH"/"Leilão" (`sources/gui/ManualH
 `_on_ah_pressed`, que manda uma notificação dizendo para o jogador digitar `/ah list`, `/ah buy`,
 `/ah sell` (comando que não existia; a régua de 2026-09-25 passou o texto para
 `/ah cancel`). Não é bug e não foi "esquecido na passada": o servidor tem `BrowseListings`
-(`sources/economy/AuctionHouseService.gd:161`) mas a resposta sai por `Network.CommandFeedback` —
+(`sources/economy/AuctionHouseService.gd:171-186`) mas a resposta sai por `Network.CommandFeedback` —
 texto no chat, não estrutura — então ligar o painel exigiria **RPC novo de listagem**, e o §24 já
 colou isso como **U1, pós-beta** ("AH com RPC e botões"). Ligar agora seria embarcar uma UI sem
 canal de dados, que abre vazia e diz "nenhum anúncio" para sempre: pior que o comando de texto
@@ -817,7 +817,7 @@ está sob a régua (cinco checks em `tests/IdleTests.gd:3526-3531`: busca, orden
 filtro de tipo, teto de preço e histórico). Falta host, não falta teste.
 
 **(m) a porta do dinheiro não tinha maçaneta — um `_ready` que abortava, e o buraco de cobertura
-que o escondeu.** `sources/gui/Checkout.gd:63` era `_statusLabel.autowrap = true`. `autowrap` é
+que o escondeu.** `sources/gui/Checkout.gd:28-34` era `_statusLabel.autowrap = true`. `autowrap` é
 nome de propriedade do Godot 3; em 4 é `autowrap_mode`. Escrever numa propriedade que não existe
 não é warning — é `SCRIPT ERROR` no meio da função, e o erro **aborta a função**:
 
@@ -838,7 +838,7 @@ checkout do Mercado Pago abria com título, preço e detalhe, e **sem botão de 
 inteira do item 5 do §24 (chave PJ, `POST /checkout/preference`, intent assinado) terminava numa
 janela que não tinha o que apertar. Terceiro caso desta família registrado no repositório — os
 dois primeiros estão narrados na suíte que cuida do `Onboarding` (um `_label.autowrap` e um método
-que não existia, um em cima do outro): `tests/IdleTests.gd:1511-1517` narra
+que não existia, um em cima do outro): `tests/IdleTests.gd:1983-1992` narra
 exatamente a mesma coisa no `Onboarding` (`_label.autowrap` derrubando `_ready`, "os três botões
 nunca eram criados"), com uma segunda peça morta em cima (o `get_sessionfirstlogin` que não
 existia). Varredura da família em `sources/` — `.rect_*`, `.valign`, `.align =`, `.autowrap =`,
@@ -850,10 +850,16 @@ jogador pede compra (`Shop.gd:265`, `Launcher.GUI.checkoutWindow = CheckoutDialo
 `const CheckoutDialog = preload(...)` em `Shop.gd:9`; `Checkout.gd` não tem `class_name`, por isso o
 medidor de baixo o endereça por caminho). Dor de cabeça de cobertura é assim: dos seis painéis de
 `.new()` do repositório, quatro são montados dentro de `Gui._ready`
-(`Localizer` `Gui.gd:707`, `Onboarding` `Gui.gd:287`, `BossInterruptOverlay` `Gui.gd:722`,
-`UIHighlight` `Gui.gd:162) e portanto têm `_ready` rodado junto com o HUD; dois são adiados
-(`ActivitiesWindow` por `EnsureActivities()` `Gui.gd:75-77`, já montado na suíte em
-`tests/IdleTests.gd:863`, e `Checkout`). A fronteira é literal, e é o que dá peso à frase
+(`Localizer` `Gui.gd:568` e `BossInterruptOverlay` `Gui.gd:583`, os dois dentro de `Gui._ready`
+(`Gui.gd:562`), e `UIHighlight` como inicializador de membro (`Gui.gd:169`); três nascem sob
+requisição — `Onboarding` criado por `DisplayFirstLogin()` (`Gui.gd:261`, chamada de
+`Settings.gd:312` no primeiro login), `ActivitiesWindow` por `EnsureActivities()` `Gui.gd:38-43`
+(já montado na suíte em `tests/IdleTests.gd:958`), e `Checkout`. As três linhas deste bloco estavam
+erradas no dia em que a frase foi escrita (re-conferidas contra `HEAD` em 2026-09-27: a linha 707 de
+`Gui.gd` à época era `_on_arena_pressed`, a 287 era `ToggleChatNewLine`, a 722 o laço de highlight de skill),
+e a
+régua não as via porque o ponteiro de `UIHighlight` perdeu o backtick de fechamento — e o "quatro/dois"
+da frase, na árvore de hoje, é três/três. A fronteira é literal, e é o que dá peso à frase
 "rodado junto com o HUD": o boot do cliente faz `Root.add_child.call_deferred(Scene)` sobre a
 instância de `presets/Client.tscn` e depois **`await Scene.ready`** (`Launcher.gd:202-214`), com
 `Launcher.GUI = Scene.get_node("Canvas")` — `Canvas` é `presets/gui/Game.tscn`, que em
@@ -908,7 +914,7 @@ construídos por nenhum harness?" não merece uma resposta de memória, então v
 `_RuntimeBuiltGuiPanels()` varre `sources/**/*.gd` procurando `class_name` e os `preload` + `X.new()`
 correspondentes e devolve painel → construtores; o resultado (seis: `Activities`,
 `BossInterruptOverlay`, `Checkout`, `Localizer`, `Onboarding`, `UIHighlight`) está colado no const
-`runtimeBuiltGuiPanels` (`tests/IdleTests.gd:1117-1124`) e a suíte compara os dois. A primeira versão
+`runtimeBuiltGuiPanels` (`tests/IdleTests.gd:1530-1543`) e a suíte compara os dois. A primeira versão
 do medidor achou **um** dos seis: o PCRE do Godot não trata `^` como início de linha sem `(?m)`, e
 o padrão de `class_name` era ancorado. O const é a parte incômoda de propósito — nascer um painel
 novo em runtime faz a suíte falhar com os dois conjuntos impressos, e o que se faz quando ela falha
@@ -1006,20 +1012,21 @@ beta (`AUDITORIA_INDEPENDENTE_2026-09-24.md`, `ROADMAP_COMERCIAL.md`, `deploy/LA
 citam prova no formato `arquivo:linha`. Toda edição no arquivo citado desloca a linha citada, e esta
 passada levou `tests/IdleTests.gd` de **4.115** linhas (o arquivo em `HEAD`) para **7.018** — 2.903
 linhas no meio do caminho em que os ponteiros apontavam. A varredura manual achou oito números de
-linha fora do lugar e um caminho errado; uma das oito veio da régua nova no primeiro run:
+linha fora do lugar e um caminho errado; uma das oito veio da régua nova no primeiro run (os números do registro abaixo são os DA PASSADA, escritos sem a forma de ponteiro vivo — a régua lê só o que está entre backticks, e um histórico de correção não deve se apresentar como evidência atual):
 
-- `sources/sql/SQL.gd:71` → `:101` (o predicate `IsConsentAccepted`).
-- `tests/IdleTests.gd:4603` → `:4879` (o check de boot `boot: a base corrente chegou à versão do diretório de patches`).
-- `tests/IdleTests.gd:3163-3175` com "seis checks" → `:3405-3410`, **cinco**, e dentro de `SuiteChestOdds`. O caso pior da série: o ponteiro existia, caía numa suíte que a prosa não nomeia, e a contagem da prosa estava errada.
-- `tests/IdleTests.gd:1382-1388` → `:1411-1427` (narrativa + checks de `SuiteOnboarding`, `func` em `:1366`).
-- `SQL.gd:1245` → `:1275`, em `deploy/LAUNCH_HANDOFF.md`.
-- `tests/IdleTests.gd:2611` → `:3772`, em `ROADMAP_COMERCIAL.md` (a escrita de classe que mantém os knobs na fachada).
-- `ROADMAP_COMERCIAL.md:90` → a linha das metas declaradas é `:28`.
-- `auditoria-tecnica-shambleta.md:116-118` → `:123-125` (a retificação dos spans). **Esta não foi achada por leitura: foi o primeiro run da régua que a devolveu.**
-- `server/Peers.gd:270` → o caminho certo é `sources/network/server/Peers.gd:270`. A linha estava certa; achou-a a resolução por nome cru da régua, que é o item (1) abaixo.
-- As quatro ocorrências de `Gui.gd` na linha 681 (a tabela de mercado, os dois achados de UI e a própria nota desta régua) passaram para `Gui.gd:644`. Nenhum ponteiro era errado por acaso: a linha certa nunca esteve onde a prosa dizia, e a régua não podia achar — as strings citadas continham `/ah`, e o parser de mensagem pula citação com barra. A classe exata de defeito que deixa o portão verde enquanto a cobertura evapora. Corrigido junto do texto do botão, que anunciava `/ah sell` (subcomando que `WorldCommands.CommandAH` nunca conheceu) e agora anuncia `/ah cancel`.
+- sources/sql/SQL.gd linha 71 → `:101` (o predicate `IsConsentAccepted`).
+- tests/IdleTests.gd linha 4603 → `:4879` (o check de boot `boot: a base corrente chegou à versão do diretório de patches`).
+- tests/IdleTests.gd linha 3163-3175 com "seis checks" → `:3405-3410`, **cinco**, e dentro de `SuiteChestOdds`. O caso pior da série: o ponteiro existia, caía numa suíte que a prosa não nomeia, e a contagem da prosa estava errada.
+- tests/IdleTests.gd linha 1382-1388 → `:1411-1427` (narrativa + checks de `SuiteOnboarding`, `func` em `:1366`).
+- SQL.gd linha 1245 → `:1275`, em `deploy/LAUNCH_HANDOFF.md`.
+- tests/IdleTests.gd linha 2611 → `:3772`, em `ROADMAP_COMERCIAL.md` (a escrita de classe que mantém os knobs na fachada).
+- ROADMAP_COMERCIAL.md linha 90 → a linha das metas declaradas é `:28`.
+- `auditoria-tecnica-shambleta.md`, linhas 116-118 → `:123-125` (a retificação dos spans). **Esta não foi achada por leitura: foi o primeiro run da régua que a devolveu.**
+- server/Peers.gd linha 270 → o caminho certo é sources/network/server/Peers.gd linha 270. A linha estava certa; achou-a a resolução por nome cru da régua, que é o item (1) abaixo.
+- As quatro ocorrências de `Gui.gd` na linha 681 (a tabela de mercado, os dois achados de UI e a própria nota desta régua) passaram para a linha 644 de `Gui.gd` (hoje 87-88, o HISTÓRICO no código). Nenhum ponteiro era errado por acaso: a linha certa nunca esteve onde a prosa dizia, e a régua não podia achar — as strings citadas continham `/ah`, e o parser de mensagem pula citação com barra. A classe exata de defeito que deixa o portão verde enquanto a cobertura evapora. Corrigido junto do texto do botão, que anunciava `/ah sell` (subcomando que `WorldCommands.CommandAH` nunca conheceu) e agora anuncia `/ah cancel`.
 - Três mentiras de vitrine fechadas na mesma passada, cada uma com a suíte que a impede de voltar (`SuiteStorefrontHonesty`, `companion/test_webhook.py`): o rótulo impresso na cobrança (`starter.pack`/`founder.pack` diziam "pending entitlements" no Checkout Pro — e o fallback do companion tinha o mesmo texto, amarrado ao arquivo canônico por asserção nova); os dois botões de passe, que a Loja oferecia fora de temporada sabendo que o companion recusa intent/preferência/sandbox (`Storefront.ShopCatalog` filtra a payload, `season_active` viaja no estado); e a venda de cosmético sem renderizador (`rebirth_fx`, `rebirth_f5`, `rebirth_f10` — gate `not_rendered` no `BuyCosmetic`, colocada depois da leitura de saldo justamente para não canibalizar a cobertura de `insufficient_gems`).
-- **Cinco ponteiros que a régua não lê, e por quê.** A fatia de monetização idle inseriu linhas no meio de `tests/IdleTests.gd` e a remoção do Discord tinha inserido no meio de `sources/launcher/LauncherCommons.gd`; nenhum dos dois deslocamentos é visível para a regra (1), que só sabe que a linha cabe no arquivo. Re-medidos contra a árvore: o check de boot `boot: a base corrente chegou à versão do diretório de patches` saiu da linha 4879 para a 5000; `isWeb` saiu da 34 para `LauncherCommons.gd:33`; as duas ocorrências de `MetricsServer` em `Launcher.gd` estão agora nas linhas 25 e 83 (eram 26 e 75) e as três de `tests/IdleTests.gd` nas linhas 5348, 5502 e 5505 (eram 5314, 5468 e 5474); e o par que descreve a identidade chegando do transporte — linha 1208 de `sources/network/server/Server.gd` e linha 958 de `sources/network/Network.gd` — está hoje em `Server.gd:1297-1305` (de `func ConnectPeer` até `Peers.AddPeer`) e `Network.gd:994` (`func CallServer`). Três dos cinco nem chegavam à régua: dois são correntes de vírgula e um é parêntese sem backtick no fim, então o parser não os vê. O critério que achou a família toda custa menos que uma regra nova: ponteiro de linha única caindo em linha em branco é defeito certo, e o resto veio de reler a prosa contra o arquivo citado. Registrar aqui em vez de calar é o ponto: um portão verde sobre noventa por cento da evidência não é um portão sobre a evidência.
+- **Re-bate de 2026-09-28, por run e não por leitura.** A suíte nova `SuiteIdleDeathRevive` (fechar o farmer-estátua: `IdlePolicy` nunca entrava em `State.DEAD`, então `_tickDead` — o único revive do idle — era código morto) inseriu linhas em `tests/IdleTests.gd` e a régua de ponteiros devolveu **12 citações** deste documento fora do lugar, com três deslocamentos distintos no mesmo arquivo: +20 (`i18n`, `:1381-1382` → `:1401-1402`), +95 (`S5`, `:4451-4453` → `:4546-4548`; `SuiteAdNonce`, `:3279-3342` → `:3374-3437`; `SuiteDeployMode`, `:6176` → `:6271`) e +141 (`SuiteRefund`, `:7320-7392` → `:7461-7533`). O portão ficou vermelho em `run_idle_tests` (1 falha em 2.608 checks) e nenhum dos números acima foi escolhido à mão: cada um é o primeiro hit da mensagem citada numa linha de `Check`, lido da árvore no run que acusou. É o comportamento esperado da régua (1) — endereço de linha é fato derivado, e quem edita o arquivo citado é quem deve pagar a re-leitura.
+- **Cinco ponteiros que a régua não lê, e por quê.** A fatia de monetização idle inseriu linhas no meio de `tests/IdleTests.gd` e a remoção do Discord tinha inserido no meio de `sources/launcher/LauncherCommons.gd`; nenhum dos dois deslocamentos é visível para a regra (1), que só sabe que a linha cabe no arquivo. Re-medidos contra a árvore: o check de boot `boot: a base corrente chegou à versão do diretório de patches` saiu da linha 4879 para a 5000; `isWeb` saiu da 34 para `LauncherCommons.gd:33`; as duas ocorrências de `MetricsServer` em `Launcher.gd` estão agora nas linhas 25 e 83 (eram 26 e 75) e as três de `tests/IdleTests.gd` nas linhas 5348, 5502 e 5505 (eram 5314, 5468 e 5474); e o par que descreve a identidade chegando do transporte — linha 1208 de `sources/network/server/Server.gd` e linha 958 de `sources/network/Network.gd` — está hoje em `Server.gd:1786-1806` (de `func ConnectPeer` até `Peers.AddPeer`) e `Network.gd:994` (`func CallServer`). Três dos cinco nem chegavam à régua: dois são correntes de vírgula e um é parêntese sem backtick no fim, então o parser não os vê. O critério que achou a família toda custa menos que uma regra nova: ponteiro de linha única caindo em linha em branco é defeito certo, e o resto veio de reler a prosa contra o arquivo citado. Registrar aqui em vez de calar é o ponto: um portão verde sobre noventa por cento da evidência não é um portão sobre a evidência.
 
 Régua: `SuiteEvidencePointers` em `tests/IdleTests.gd` (registrada por último em
 `tests/run_idle_tests.gd`, porque não toca estado nenhum — só relê a documentação contra a árvore
@@ -1029,8 +1036,11 @@ atual). Três regras:
 citada tem que caber nele. A documentação escreve ponteiro das duas formas — re-medido nesta passada,
 contando nos três docs o mesmo regex que a régua usa: **161** ocorrências `arquivo:linha` no formato que
 ela parseia, **67** com caminho e **94** com nome cru (o exemplo cru é
-`Gui.gd:644`). Dessas, **159** resolvem contra a árvore e cabem no arquivo — as duas restantes são o par
-histórico do caminho errado, descrito acima de propósito. No começo a régua só resolvia caminho, ou seja:
+`Gui.gd:87-88`). Dessas, **159** resolvem contra a árvore e cabem no arquivo — as duas restantes são o par
+histórico do caminho errado, descrito acima de propósito. Tais contagens são snapshot do dia em que foram
+medidas: o número vivo é o que o harness imprime (`ponteiros: N referências arquivo:linha`), e é ele que a
+régua confere — uma contagem copiada para a prosa envelhece no commit seguinte, que é a classe de defeito
+que esta seção descreve. No começo a régua só resolvia caminho, ou seja:
 das 161 ocorrências de hoje ela veria 67 —
 um terço da evidência que dizia estar olhando. Por isso ela agora indexa a árvore (`res://`, pulando dot-dirs) e resolve nome
 cru quando o nome é **único** na árvore; ausente é histórico legítimo (a prosa sobre o `gut_runner.gd`
@@ -1124,7 +1134,7 @@ frente, e o corpo tem dois `[url=]` (`data/db/agreement.json:63`); e o botão do
 de quatro funções **de um arquivo** e afirmam que navegar mora num lugar só — régua de um arquivo para
 um problema de cliente inteiro.
 **O que entrou:** os dois ramos nos dois sites (mesma forma do checkout, sem abstração nova), e
-`SuiteExternalLinksWebBranch` (`tests/IdleTests.gd:7250-7282`, chamada em `tests/run_idle_tests.gd:272`
+`SuiteExternalLinksWebBranch` (`tests/IdleTests.gd:7252-7284`, chamada em `tests/run_idle_tests.gd:272`
 logo depois da régua de ponteiros, pelo mesmo motivo — só lê a árvore, nenhum estado tocado). A régua é
 por **bloco**: varre os `.gd` de `sources/`, e para cada `OS.shell_open(` exige que a função contenedora
 tenha `JavaScriptBridge` **e** `isWeb`; linha de comentário não conta como ramo. Medido: 3 sítios em
@@ -1154,7 +1164,7 @@ Consequência para o jogador brasileiro: a caixa que ele marca está em portugu�
 idioma. Não escrevo texto legal inventado nesta casa.
 
 **(r) Os dois destinos de suporte que o produto oferece não são o mesmo destino, e nenhum é verificável
-aqui.** `[HIPÓTESE]` — **não reduz nota.** ~~`sources/launcher/LauncherCommons.gd:6` fixa um Discord
+aqui.** `[HIPÓTESE]` — **não reduz nota.** ~~sources/launcher/LauncherCommons.gd linha 6 fixa um Discord
 numérico (servidor + canal), usado pelo botão e pela mensagem de erro de rede; `data/db/agreement.json:63`
 fixa um invite vanity e um canal Libera (`#sourceofmana`).~~ A hipótese foi **confirmada pelo dono em
 2026-09-25 e resolvida por remoção**: nenhum dos destinos é do projeto — os links eram do upstream do
@@ -1173,7 +1183,7 @@ o chamador está no caminho de autenticação de `sources/network/server/Server.
 gravava em `telemetry_event.fingerprint` o hash do hardware da máquina que serve o jogo, não o do
 jogador. Daí descia o resto — a consulta de 7 dias por `fingerprint LIKE` casava com todas as outras
 contas, `FlagMultiAccount` abria `fraud_flag` `kind='multi_account'` para quem logava **mais até dez
-outras contas**, a cada login, e `multi_account_suspicions` do companion (`companion/server.py:765`), que
+outras contas**, a cada login, e `multi_account_suspicions` do companion (`companion/server.py:1119`), que
 agrupa por fingerprint e exige três ou mais contas, só podia devolver um balde. Quatro efeitos lidos no
 código antes de qualquer execução: a fila de revisão manual em que o beta se apoia nasceria 100 %
 falsa; um `LIKE` com curinga inicial — que nenhum índice atende — no caminho crítico do login; o
@@ -1185,8 +1195,8 @@ removeu o coletor, que ficou sem chamador. Amarrei a volta dele por fonte, em `S
 defeito era justamente uma chamada que *parecia* certa e nenhum comportamento desta suíte a distingue de
 uma coleta honesta. Dois checks, cada mensagem inteira na mesma linha do ponteiro — quebrada entre duas
 linhas a régua não acha na fonte e **pula a citação em silêncio**:
-`tests/IdleTests.gd:4373-4375` "S5: o servidor não coleta hardware próprio como identidade do jogador"
-e `tests/IdleTests.gd:4373-4375` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
+`tests/IdleTests.gd:4722-4724` "S5: o servidor não coleta hardware próprio como identidade do jogador"
+e `tests/IdleTests.gd:4722-4724` "S5: o evento de login continua registrado (funil d1_return vivo)". A API
 `EconomyService.FlagMultiAccount` ficou (fila, dedupe e validação já cobertos por check), e o que falta
 agora é o produtor — o que não é fiação: exige entropia por instalação (um id persistido no cliente),
 coleta no cliente e base legal para levar esses campos. Decisão de dono, e pós-beta: sem detector, a fila
@@ -1215,9 +1225,9 @@ créditos no GitHub Actions e a CI não roda** (decisão registrada em 2026-09-2
 Espelhei o gate dentro do `all` pelo mesmo quádruplo de §24-8
 (`gate_sh`, marcador `Gate anti-god-node:` com a contagem de falhas lida DA LINHA de resultado,
 `scripts/check_god_nodes.sh:57`) e amarrei a divergência por fonte, em `SuiteOpsA2`:
-`tests/IdleTests.gd:5335` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
+`tests/IdleTests.gd:5337-5337` "portão: todo gate de script da CI também roda no scripts/test.sh" varre o yaml
 atrás de `scripts/*.sh`, descarta os dois que não são gate (o avaliador do quádruplo e o próprio `test.sh`)
-e exige o resto no runner; `tests/IdleTests.gd:5334` "portão: a CI roda exatamente um gate de script próprio"
+e exige o resto no runner; `tests/IdleTests.gd:5336-5336` "portão: a CI roda exatamente um gate de script próprio"
 é o âncora do número, para o guard não passar verde por varredura vazia nem continuar verde quando alguém
 abre um segundo gate na CI. Verificado contra o estado que produziu a CI vermelha: com o `scripts/test.sh`
 de HEAD, a varredura devolve `mirrored=1`, `missing=[scripts/check_god_nodes.sh]` — o guard falha; com o
@@ -1239,16 +1249,16 @@ O buraco é o catálogo por dentro, e nenhum dos dois lados (nem o `tr()`, nem o
 Tirei as quatro linhas repetidas, regerei os dois `.translation` pelo mesmo passo da CI
 (`godot --headless --path . --import`) e bati no compilado: `Attack` → **Ataque**, zero `Atacar`.
 Amarrei por censo na mesma passada, com o tamanho ancorado de always-green que é a regra da casa:
-`tests/IdleTests.gd:1378-1379` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `tests/IdleTests.gd:1379`
+`tests/IdleTests.gd:1493-1494` "i18n: o censo do ui.csv olhou um catálogo inteiro" e `tests/IdleTests.gd:1494`
 "i18n: nenhuma chave repetida no ui.csv". Re-medido no fim: **971** chaves, **971** distintas.
 
 **(v) C1 — a chave do dicionário era SQL; só o valor era parâmetro.** `[CÓDIGO]` `[TESTE]` —
 **corrigido por whitelist lida do schema, com recusa antes de qualquer escrita.**
-`SQL.AddCharacter` (`sources/sql/SQL.gd:343-365`) recebe três dicionários do RPC de criação de
+`SQL.AddCharacter` (`sources/sql/SQL.gd:471-494`) recebe três dicionários do RPC de criação de
 personagem (`sources/network/server/Server.gd:327`), e o addon **interpola as chaves** no statement
 que monta: o bind cobre o valor, nunca o nome de coluna. Uma chave hostil carregava duas
 instruções. Medido na árvore antes do corte, com o payload de
-`tests/IdleTests.gd:4691-4761`: o personagem era criado **e** o
+`tests/IdleTests.gd:5344-5349`: o personagem era criado **e** o
 `UPDATE account SET permission = 3` escondido dentro da chave ia a frente, com `AddCharacter`
 devolvendo `true` — "c1: permission da vítima inalterada" é a régua do que não pode voltar a
 acontecer. Trocar de helper não era a correção: a mesma chave pelo caminho cru da casa, com o
@@ -1273,22 +1283,22 @@ banco: sem esses checks a suíte certificaria um guard que recusa tudo.
 O V3 de §12 media o formato: `stub:<placement>:<dia>` era forjável **e** revalidável à vontade — o
 mesmo token credita toda vez que for reenviado. E o cap diário contava só **views**, então doze
 cliques sem assistir nenhum reservavam o dia inteiro de `afkhoras`. Hoje o cliente não escreve
-credential nenhum: `MintAdSlot` (`sources/economy/AdsCosmeticsService.gd:55-70`) reserva a cota no
+credential nenhum: `MintAdSlot` (`sources/economy/AdsCosmeticsService.gd:77-98`) reserva a cota no
 servidor, gera 16 bytes de CSPRNG (`sources/economy/AdsCosmeticsService.gd:79-83` — `randi()`/`hash()`
  são previsíveis e colidem em 32 bits, e o nonce é a única coisa entre um client forjado e a cota de
 outra conta) e grava a linha em `ad_slot` (migration `data/conf/migrations/048_ad_slot_nonce.sql`)
 com `expires_at` a 300 s (`sources/economy/EconomyCatalog.gd:313`). O prêmio só sai por
-`_ConsumeAdSlot` (`sources/economy/AdsCosmeticsService.gd:103-112`), um `DELETE` condicionado a
+`_ConsumeAdSlot` (`sources/economy/AdsCosmeticsService.gd:147-156`), um `DELETE` condicionado a
 nonce **e** conta **e** placement **e** vencimento, medido por `changes()`: a segunda tentativa acha
 0 linhas. O cap passou a somar as duas metades (`sources/economy/AdsCosmeticsService.gd:114-122`)
 — views do dia + slots ainda válidos —, que fecha os dois lados do truque: estocar autorização não
 dá prêmio extra, e clicar sem assistir já ocupou a cota. `AD_PLACEMENT_CAPS`
-(`sources/economy/EconomyCatalog.gd:294`) ganhou as duas chaves que faltavam (`afkhoras` 12,
+(`sources/economy/EconomyCatalog.gd:366-377`) ganhou as duas chaves que faltavam (`afkhoras` 12,
 `reroll` 3 — o 12 é o teto que a economia já tinha quando o cap de settle era 12 h, então o número
 não afrouxa o faucet, só devolve a origem da hora), e placement sem cap no dicionário é recusa
 explícita (`uncapped_placement`) e não licença.
 
-As propriedades do credential em si são medidas em `SuiteAdNonce` (`tests/IdleTests.gd:3173-3236`):
+As propriedades do credential em si são medidas em `SuiteAdNonce` (`tests/IdleTests.gd:3538-3601`):
 "credential tem prefixo próprio, não o formato público" confere que o token que sai é `slot:` e não
 o derivável; "replay do mesmo nonce não credita" e "replay não fabrica view" medem o uso único;
 "nonce de outra conta não credita" vem acompanhado de "roubo tentado não queima o slot do dono",
@@ -1302,8 +1312,8 @@ pelo resto do dia.
 O teto de abuso mudou de natureza, e a passada registrou o que isso **não** resolve: enquanto não
 houver verificação server-to-server do provedor, quem autoriza a mintagem é a declaração de exibição
 do próprio client. O que a env passou a ser é exatamente isso — `SHAMBLETA_AD_STUB` é autorização
-para mintar (`sources/economy/EconomyCatalog.gd:296-307`), default fechado, e o `AD_STUB` de antes
-era um `const true`. Medido e amarado em `SuiteDeployMode` (`tests/IdleTests.gd:5924-5926`):
+para mintar (`sources/economy/EconomyCatalog.gd:374-379`), default fechado, e o `AD_STUB` de antes
+era um `const true`. Medido e amarado em `SuiteDeployMode` (`tests/IdleTests.gd:6453-6453`):
 "compose de produção não abre o credential auto-declarado" — a linha `SHAMBLETA_AD_STUB: "1"` **saiu**
 do `deploy/docker-compose.yml`, onde estava desde o M2, o que significava que o default de produção
 era ligado. A harness liga a env ela mesma (`run_idle_tests.gd`), e o runbook mantém a env como
@@ -1327,7 +1337,7 @@ BEGIN interno falha e o END não chega a rodar), então a linha fica presa na tr
 honesto a leva — é a diferença entre as duas famílias de writer do addon, e nada no repositório a
 documentava além do check que agora a pino.
 
-A medição virou teste em `SuiteTransactionNesting` (`tests/IdleTests.gd:353-401`):
+A medição virou teste em `SuiteTransactionNesting` (`tests/IdleTests.gd:426-474`):
 "aninhado: lambda pedindo rollback devolve false" com "aninhado: o writer do addon devolve true (é
 assim que ele escapa)" e "aninhado: a escrita sobreviveu ao rollback pedido" são o defeito
 reproduzido; "raw: o rollback é respeitado" e "raw: tier comitado quando o lambda aprova" são o
@@ -1337,14 +1347,14 @@ por dicionário porque closure GDScript captura por valor — atribuir variável
 não chega fora (mesma razão do `result` em `ShopService`/`EconomyKernel.GrantBossKey`).
 
 Correção cirúrgica e declarada: `SetVIPUntil` e `SetVIPTier` passaram a `UpdateRowsRaw`
-(`sources/sql/SQL.gd:901-921`), que são os dois únicos writers do addon alcançados de dentro de um
+(`sources/sql/SQL.gd:1040-1051`), que são os dois únicos writers do addon alcançados de dentro de um
 `Transaction()` no código de produção. Os outros setters (`update_rows` atrás de `UpdatePowerScore`
 e companhia) rodam fora de transação — re-contado nesta passada: dos **24** métodos de `SQL.gd` que
 chamam `db.update_rows`/`db.delete_rows`, zero aparece como chamado (no mesmo arquivo, com closure
 por nome) dentro de um corpo de `Transaction()` — e as ~30 chamadas a `ExecuteBindings` dentro de
 lambda já são statement cru com bind: reescrevê-los seria risco sem defeito. Onde o guard entra é no
 `Transaction()`: se o ROLLBACK não acha transação ativa, `push_error` com o nome dos writers
-proibidos (`sources/sql/SQL.gd:530-548`). Nota de honestidade sobre o mutex: a NOTA antiga afirmava
+proibidos (`sources/sql/SQL.gd:658-698`). Nota de honestidade sobre o mutex: a NOTA antiga afirmava
 que `queryMutex` não era reentrante e que `QueryBindings` dentro de lambda deadlockava. Sondado
 (2026-09-26), o `Mutex` do Godot 4.7 **é** recursivo — a regra de só usar ops raw continua de pé,
 mas por outro motivo: recursão é detalhe de implementação, não promessa, e um lambda que sobreviver a
@@ -1363,11 +1373,11 @@ O corte é uma sub-conta: `wallet.gems_paid` (migration `data/conf/migrations/04
 creditada só quando o grant carrega `price_paid > 0`
 (`sources/economy/CheckoutService.gd:206` e a perna de 150 gems da oferta deluxe
 `sources/economy/CheckoutService.gd:279`), drenada **primeiro** por qualquer gasto e clampada no
-`SetGemsRaw` (`sources/sql/SQL.gd:953-1005`) — que é o único ponto de produção que escreve o saldo
+`SetGemsRaw` (`sources/sql/SQL.gd:1129-1141`) — que é o único ponto de produção que escreve o saldo
 de gems, por isso o dreno fica num lugar só. A coluna de preço já era escrita pelo webhook do
 companion (K1/044) — o que faltava era o jogo **ler** aquilo na hora de creditar, e é o que
 `_ApplyGrantRaw` passou a fazer; `EnqueueGrant` ganhou os dois parâmetros
-(`sources/economy/CheckoutService.gd:120-132`) para os grants enfileirados dentro do processo
+(`sources/economy/CheckoutService.gd:294-496`) para os grants enfileirados dentro do processo
 carregarem o preço quando houver preço, e sandbox/GM continuarem com 0 — que agora tem consequência:
 unidade de jogo não é estornável. O novo portão
 `not_paid` (`sources/economy/CheckoutService.gd:369-376`) vem **depois** de `gems_consumed` e é
@@ -1375,7 +1385,7 @@ re-checado dentro da transação, junto com o saldo total, para o reembolso não
 e a escrita. A ordem dos gates passou a ser
 `not_found / window_expired / already_refunded / gems_consumed / not_paid`.
 
-Amarado em `SuiteRefund` (`tests/IdleTests.gd:7053-7125`), que agora roda com preço em centavos
+Amarado em `SuiteRefund` (`tests/IdleTests.gd:7644-7716`), que agora roda com preço em centavos
 desde o primeiro grant: "refund: o preço creditou o saldo pago", "refund: o pago saiu junto",
 "gasto drena o saldo pago primeiro (não o de graça)" e o roteiro do exploit inteiro —
 "refund: gasta o saldo pago inteiro", "refund: faucet repõe o número", "refund: mas nada disso é

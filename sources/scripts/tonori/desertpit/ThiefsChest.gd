@@ -27,9 +27,11 @@ func OnTryOpen():
 	SetQuest(questID, ProgressCommons.SNAKE_PIT_THIEF.REWARDS_WITHDREW)
 
 	RemoveItem(thiefsKeyID, 1)
-	AddGP(200)
+	# Os 200 GP e os 50 EXP saíram daqui (crus, sem ledger) para `rewardGP` e
+	# `rewardEXP` em `presets/quests/SnakePitThief.tres`, pagos pelo `SetQuest`
+	# acima. O scimitar e o karma ficam neste script: o dado da quest declara
+	# dinheiro e experiência, não item nem karma.
 	AddItem(scimitarID, 1)
-	AddExp(50)
 	AddKarma(2)
 
 func OnEmpty():

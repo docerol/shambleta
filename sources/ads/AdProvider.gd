@@ -16,12 +16,23 @@
 # servidor (`Network.RequestAdSlot` → `Network.AdSlot`), e ela vale uma vez.
 # Trocar de portal/rede = trocar ads_bridge.js + SHAMBLETA_AD_PROVIDER; os
 # 4 placements, os RPCs e o servidor não mudam.
-# Ainda sem prova de exibição: o servidor aceita a declaração deste client
-# enquanto `SHAMBLETA_AD_STUB=1` estiver ligado **no servidor** (default:
-# desligado, e o compose de produção não o seta — `SuiteDeployMode` assenta
-# isso). O que o nonce mudou foi o teto do abuso, não a natureza da
-# confiança — com SSV real, `ShowRewarded` passa a entregar a assinatura do
-# portal no lugar do slot, e o servidor troca `_ConsumeAdSlot` pela verificação.
+# Prova de exibição, desde a rodada de SSV: o servidor deste repositório parou de
+# acreditar na palavra deste client. Com `SHAMBLETA_AD_SSV=1` **no servidor** o
+# slot mintado aqui nasce PENDENTE (`ad_slot.expires_at = 0`) e só vira crédito
+# depois que o portal chama `POST /webhooks/ads` com assinatura HMAC válida — a
+# AUTORIDADE DE PRODUÇÃO é o `activate()` de `companion/ad_ssv.py`, não este
+# arquivo. O segredo dessa assinatura nunca chega ao client: quem assina é o
+# portal, no servidor dele.
+# A declaração do client ainda credita sozinha em UM lugar: `SHAMBLETA_AD_STUB=1`
+# ligado **no servidor** (default desligado, e o compose de produção não o seta —
+# `SuiteDeployMode` assenta isso). Trocar de portal/rede = trocar ads_bridge.js +
+# SHAMBLETA_AD_PROVIDER; os 4 placements, os RPCs e o servidor não mudam.
+# Faltando no caminho real (follow-up desta rodada, e por isso não declarado como
+# pronto): o nonce deste slot precisa viajar ao portal como o `user_id` da chamada
+# SSV — `show_rewarded()` em deploy/web/ads_bridge.js recebe só o placement
+# hoje, e o SDK do portal ainda não existe (`crazyReal_show` devolve `done(false)`).
+# Enquanto isso, o modo SSV minte pendências que ninguém ativa: nenhum crédito,
+# exatamente como a env desligada.
 # Sem class_name de propósito: utilitário carregado por preload (não depende
 # do cache global de classes).
 extends RefCounted

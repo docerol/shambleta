@@ -79,9 +79,26 @@ literal no compose base e continua valendo em staging.
 
 ## CI Pipeline
 
-`.github/workflows/staging.yml` já existe (push em `develop` → `POST` na API de
-deploy do Coolify com `vars.COOLIFY_STAGING_URL` + `secrets.COOLIFY_STAGING_TOKEN`).
-Configurar os dois no repositório é o passo pendente, não escrever o arquivo.
+`.github/workflows/staging.yml` faz `POST` na API de deploy do Coolify com
+`vars.COOLIFY_STAGING_URL` + `secrets.COOLIFY_STAGING_TOKEN` (os dois entram no
+passo por `env:`, não interpolados na linha de comando). Configurar os dois no
+repositório é o passo pendente, não escrever o arquivo.
+
+Até 2026-09-27 o gatilho era `push: branches: [develop]`, ou seja: o deploy era
+chamado **sem esperar nenhum teste** — a suíte do mesmo commit rodava em paralelo
+no workflow `godot-ci export`, e um push com harness vermelho ia ao staging do
+mesmo jeito. Agora o gatilho é `workflow_run` sobre `godot-ci export`, com a
+conclusão conferida no `if:` do job (`workflow_run.conclusion == 'success'`) e a
+branch conferida também no `if:` (`workflow_run.head_branch == 'develop'`) —
+`branches:` no gatilho de `workflow_run` filtra a branch **padrão** do repositório
+(`master`), não a branch do run que terminou, então usá-lo desligava o deploy
+inteiro. `scripts/check_ci.sh` tem uma regra que falha se um job que publica lá
+fora voltar a ficar sem gate.
+
+Não medido nesta máquina: o run do workflow. GitHub Actions não roda aqui (sem
+créditos no Actions desde 2026-09-25, ver `scripts/export_web.sh`), então o que
+existe é o arquivo validado por parse YAML e pelas réguas estruturais do
+`check_ci.sh` — não um deploy de staging observado acontecendo.
 
 ## Database
 
@@ -150,8 +167,9 @@ Staging is used for:
   `ws://` plain na 6108 com `SHAMBLETA_PROXY_TLS=1`. O `healthcheck` do compose é um
   GET real em `http://127.0.0.1:9400/healthz` (plain) servido pelo próprio
   processo do jogo — ver `deploy/COOLIFY.md`. **`127.0.0.1` literal, nunca
-  `localhost`**: o `MetricsServer` binda somente IPv4 (`BindAddress = "127.0.0.1"`,
-  `sources/system/MetricsServer.gd:22`, porta `DefaultPort = 9400` em `:21`), então
+  `localhost`**: o `MetricsServer` binda somente IPv4 — a constante `BindAddress`
+  está em `sources/system/MetricsServer.gd:26` e a porta `DefaultPort` em
+  `sources/system/MetricsServer.gd:25`, então
   num container com `::1` no `/etc/hosts` o `localhost` tenta IPv6 primeiro e leva
   connection refused — o probe falha num servidor saudável. É por isto que o
   `healthcheck` declarado no compose (`deploy/docker-compose.yml`, bloco `test:` do

@@ -115,9 +115,9 @@ func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 		# provedor + re-fetch autoritativo na API, fail-closed, cobertura em
 		# `companion/test_security.py`), e publicar a afirmação como fato bastou
 		# para cinco documentos a citarem como evidência de "economia pronta"
-		# (AUDITORIA_INDEPENDENTE_2026-09-24.md §24). Sobrou o que este servidor
-		# garante e a suíte mede: `grant_queue` é idempotente pela chave, então a
-		# reentrega do webhook não credita duas vezes.
+		# (`archive/AUDITORIA_INDEPENDENTE_2026-09-24.md` §24). O que sobrou é o que
+		# este servidor garante e a suíte mede: `grant_queue` é idempotente pela
+		# chave, então a reentrega do webhook não credita duas vezes.
 		"grant_queue_idempotent": true}
 	# K1: `checkout_intent` = a pessoa viu o preço e abriu o checkout. Sem este
 	# evento só existe o lado da entrega, e a razão entre os dois é o que diz se o
@@ -126,6 +126,26 @@ func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 		Launcher.Telemetry.RecordMoney("checkout_intent", accountID, 0, JSON.stringify({
 			"sku" = sku, "price" = float(entry.get("price", 0.0)), "currency" = "BRL"}))
 	return intent
+
+# O SKU base do passe à venda AGORA, resolvido pela linha ativa do banco — nunca
+# por literal em código de transporte. "" = não há passe: sem temporada ativa, ou
+# com `rules_frozen` ilegível (ver `SeasonConfig.PremiumSkuOfRow`).
+func ActivePassSku() -> String:
+	return SeasonConfig.PremiumSkuOfRow(_eco.ActiveSeason())
+
+# Intent do botão do passe (`Server.BuyPass`). O defeito que aqui se fecha: o
+# transport escolhia o SKU por termo de condicional — `"pass.s1" if standard else
+# "pass.s1.deluxe"` — e com a sucessora agendada no ar o botão passava a pedir o
+# passe de OUTRA temporada: SKU cobrável nos quatro catálogos, preço certo, e um
+# grant que escreve premium na temporada ativa. A temporada decide o SKU; a porta
+# do dinheiro continua sendo `GetCheckoutIntent`, então um deluxe que o catálogo
+# não declara (hoje: `pass.s2.deluxe`) morre em `unknown_sku` antes de cobrar.
+func GetPassCheckoutIntent(accountID : int, tier : String) -> Dictionary:
+	var base : String = ActivePassSku()
+	if base.is_empty():
+		return {"ok": false, "reason": "no_season"}
+	var sku : String = "%s.deluxe" % base if tier == "deluxe" else base
+	return GetCheckoutIntent(accountID, sku)
 
 # ------------------------------------------------------------------ C1: companion grants (grant queue)
 

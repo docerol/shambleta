@@ -268,6 +268,13 @@ func _RecordSoldLocked(sql : SQLService, listing : Dictionary, buyerAccount : in
 func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : int) -> int:
 	if itemID <= 0 or count <= 0 or priceGold <= 0:
 		return 0
+	# SOM-CRAFT: matéria-prima não pisa no mercado. O carimbo bound na concessão
+	# já faria o ConsumeItemLotsRaw(allowBound=false) abaixo falhar; esta é a porta
+	# estrutural lida da célula — um lote de material criado por qualquer outro
+	# caminho (seed, migração, GM) continua sem anúncio, e o money math do leilão
+	# (fee em gem + sink do gold retido) não ganha uma segunda mercadoria.
+	if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)):
+		return 0
 	var out : Dictionary = {"id" = 0}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
@@ -520,6 +527,11 @@ func BuyOrderRow(orderID : int) -> Dictionary:
 # ordem sem ouro — o inverso seria demanda falsificada de graça.
 func PlaceBuyOrder(buyerChar : int, itemID : int, count : int, unitPrice : int) -> int:
 	if itemID <= 0 or count <= 0 or unitPrice <= 0:
+		return 0
+	# SOM-CRAFT: mesma porta do ListItemForSale, no lado da demanda — ordem de
+	# compra em material nunca cruzaria (não pode haver anúncio) e deixaria o
+	# gold do comprador sequestrado em escrow para sempre.
+	if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)):
 		return 0
 	if count > EconomyCatalog.AHMaxBidQuantity or unitPrice > EconomyCatalog.AHMaxBidUnitPrice:
 		return 0

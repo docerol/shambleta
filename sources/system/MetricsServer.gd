@@ -83,15 +83,23 @@ func Destroy() -> void:
 	listening = false
 	isInitialized = false
 
+# A decisão de "servindo", pura: é a única forma de a régua conferir o terceiro
+# estado (schema parado) sem quebrar a base real, e é a mesma função que `/healthz`
+# usa. O que mudou em relação ao probe antigo: boot em andamento (SQL abrindo) já
+# era 503, e agora schema parado também é. Com migration quebrada o processo está de
+# pé e o socket atende, mas nenhum login é servível — e um probe dizendo 200 nesse
+# estado faz o compose tratar como saudável um container que recusa gente.
+static func ServingFor(sqlInitialized : bool, hasTransport : bool, schemaBlocked : bool) -> bool:
+	return sqlInitialized and hasTransport and not schemaBlocked
+
 # O que o healthcheck responde: o server está de pé E servindo. Boot em andamento
 # (SQL abrindo, mundo não carregado) é 503 — é exatamente o que start_period
 # do compose existe para tolerar.
 func IsServing() -> bool:
-	if Launcher.SQL == null or not Launcher.SQL.isInitialized:
+	if Launcher.SQL == null:
 		return false
-	if Network.WebSocketServer == null and Network.ENetServer == null:
-		return false
-	return true
+	var hasTransport : bool = Network.WebSocketServer != null or Network.ENetServer != null
+	return ServingFor(Launcher.SQL.isInitialized, hasTransport, Launcher.SQL.MigrationBlocked())
 
 func UptimeSeconds() -> int:
 	if openedAt == 0:
@@ -127,6 +135,11 @@ func MetricsBody() -> String:
 	var mutexOver1ms : int = 0
 	var mutexOver10ms : int = 0
 	var mutexOver100ms : int = 0
+	var schemaVersion : int = 0
+	var migrationPatches : int = 0
+	var migrationFailures : int = 0
+	var migrationFailedPatch : int = -1
+	var migrationStalled : int = 0
 	if Launcher.SQL != null and Launcher.SQL.isInitialized:
 		var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT status, COUNT(*) AS n FROM grant_queue WHERE status IN ('pending','processing','failed','refunded') GROUP BY status;", [])
 		for row in rows:
@@ -163,6 +176,16 @@ func MetricsBody() -> String:
 		mutexOver1ms = int(waits.get("over1ms", 0))
 		mutexOver10ms = int(waits.get("over10ms", 0))
 		mutexOver100ms = int(waits.get("over100ms", 0))
+		# P0-STAMP: as migrations agora são fail-closed (sources/sql/SQL.gd), e um
+		# patch que falha PARA o boot em vez de virar carimbo falso. Isso só vale se
+		# alguém acordar — o número do patch travado e a versão gravada saem aqui,
+		# não só do `push_error` que ninguém lê no log do container.
+		var mig : Dictionary = Launcher.SQL.MigrationStats()
+		schemaVersion = int(mig.get("version", 0))
+		migrationPatches = int(mig.get("patches", 0))
+		migrationFailures = int(mig.get("failures", 0))
+		migrationFailedPatch = int(mig.get("failedPatch", -1))
+		migrationStalled = 1 if bool(mig.get("stalled", false)) else 0
 	var body : String = ""
 	body += "# HELP shambleta_up 1 quando o processo do server está servindo.\n"
 	body += "# TYPE shambleta_up gauge\n"
@@ -214,6 +237,27 @@ func MetricsBody() -> String:
 	body += "# HELP shambleta_sql_query_mutex_wait_over_100ms esperas individuais acima de 100 ms — um jogador travado.\n"
 	body += "# TYPE shambleta_sql_query_mutex_wait_over_100ms counter\n"
 	body += "shambleta_sql_query_mutex_wait_over_100ms %d\n" % mutexOver100ms
+	# P0-STAMP: saúde das migrations. O par que o alerta lê é
+	# `shambleta_schema_version` contra `shambleta_migration_patches_visible` — a
+	# diferença entre elas é "o binário tem patch que a base não tem", que é o
+	# mesmo sinal para patch que falhou, para pacote sem migrations e para
+	# rollback de deploy. `shambleta_migration_stalled` é a forma já resolvida,
+	# para quem pagina não ter que refazer a subtração entre dois gauges.
+	body += "# HELP shambleta_schema_version versão gravada na tabela migration.\n"
+	body += "# TYPE shambleta_schema_version gauge\n"
+	body += "shambleta_schema_version %d\n" % schemaVersion
+	body += "# HELP shambleta_migration_patches_visible patches .sql visíveis no boot do processo.\n"
+	body += "# TYPE shambleta_migration_patches_visible gauge\n"
+	body += "shambleta_migration_patches_visible %d\n" % migrationPatches
+	body += "# HELP shambleta_migration_stalled 1 quando há patch visível não carimbado (falhou, vazio ou binário velho).\n"
+	body += "# TYPE shambleta_migration_stalled gauge\n"
+	body += "shambleta_migration_stalled %d\n" % migrationStalled
+	body += "# HELP shambleta_migration_failures_total patches que falharam neste processo (carimbo não anda junto).\n"
+	body += "# TYPE shambleta_migration_failures_total counter\n"
+	body += "shambleta_migration_failures_total %d\n" % migrationFailures
+	body += "# HELP shambleta_migration_last_failed_patch índice 0-based do patch travado; -1 = nenhum.\n"
+	body += "# TYPE shambleta_migration_last_failed_patch gauge\n"
+	body += "shambleta_migration_last_failed_patch %d\n" % migrationFailedPatch
 	# OPS-4: o funil diário e a agenda de live ops entram AQUI porque este é o
 	# único leitor dos dois dentro do processo de jogo. Uma métrica que nada serve
 	# é uma métrica que ninguém pagina — `FunnelDaily`/`FunnelGaugeLines` e

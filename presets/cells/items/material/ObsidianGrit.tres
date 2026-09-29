@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ItemCell" format=3 uid="uid://cm4x8w2j6r3ty"]
+
+[ext_resource type="Texture2D" uid="uid://chohwstjqw5ow" path="res://data/graphics/items/common/powder.png" id="1_icon"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="2_script"]
+
+[resource]
+script = ExtResource("2_script")
+name = "Obsidian Grit"
+description = "Black glass ground coarse enough to bite into steel, pried out of the Tulimshar Western Cave."
+tier = 4
+material = true
+icon = ExtResource("1_icon")
+stackable = true

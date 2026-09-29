@@ -288,20 +288,35 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 	# servidor não volta.
 	if Launcher.Telemetry:
 		Launcher.Telemetry.Record("login", accountData.accountID, 0, 1, "{}")
-		# ROADMAP_COMERCIAL S2: funil d1_return — 2º dia distinto com login.
-		if Launcher.Telemetry.has_method("RecordFunnel") and Launcher.SQL != null:
-			var dayRows : Array = Launcher.SQL.QueryBindings(
-				"SELECT COUNT(DISTINCT date(created_at, 'unixepoch')) AS d FROM telemetry_event WHERE kind = 'login' AND account_id = ?;",
-				[accountData.accountID])
-			if not dayRows.is_empty() and int(dayRows[0].get("d", 0)) == 1:
-				Launcher.Telemetry.RecordFunnel("d1_return", accountData.accountID)
+		# P1-ANALYTICS — o defeito morava neste bloco, que existia para decidir o funil
+		# antes do funil: um SELECT `COUNT(DISTINCT date(created_at,'unixepoch')) == 1`
+		# sobre os logins JÁ gravados, chamado antes de `RecordFunnel`. Era um SEGUNDO
+		# predicado para o mesmo evento, e ele discordava da régua da view
+		# `cohort_retention` (`data/conf/migrations/045_cohort_view.sql`) — que é o que o
+		# operador lê como `d1_strict`. Errava nos dois sentidos:
+		#  - falso negativo, e é o caso que a régua QUER: conta criada ontem que loga HOJE
+		#    pela primeira vez tem 0 dias-distintos no banco neste instante — o login de
+		#    estreia ainda está no buffer (`TelemetryService.gd:45-55`) — então a
+		#    heurística dava 0 != 1 e não emitia. O funil saía sistematicamente baixo.
+		#  - falso positivo: re-login de conta antiga (dia-zero há mais de um dia) tem 1
+		#    dia-distinto, a heurística emitia e `IsD1Return` não.
+		# Agora não há pré-filtro nem predicado local: `RecordFunnel` é o único caminho e
+		# o gate `IsD1Return` dentro dele (`TelemetryService.gd:82`) é a autoridade única
+		# dos dois lados — emissor e métrica não têm como divergir. A consulta removida
+		# era SELECT puro, sem efeito colateral a realocar, e o guard `Launcher.SQL != null`
+		# caiu junto porque `IsD1Return` já fecha em false sem banco
+		# (`TelemetryService.gd:284`). Prova: `tests/d1_return_metric_test.gd`, que dirige
+		# este emissor real e confere o veredito contra `IsD1Return` na mesma base, para
+		# além da suíte B de `tests/ops_fix_test.gd`.
+		if Launcher.Telemetry.has_method("RecordFunnel"):
+			Launcher.Telemetry.RecordFunnel("d1_return", accountData.accountID)
 	if platform < 0 or platform >= NetworkCommons.Platform.COUNT:
 		platform = NetworkCommons.Platform.UNKNOWN
 	Launcher.SQL.UpdateAccount(peer.accountID, platform)
 
 	# #28 (AUDITORIA item 7 / G3): a copa semanal só nascia dentro do job diário, e
 	# esse job roda na thread de backup — que `SQL._post_launch` só cria
-	# `if not Launcher.Debug and not LauncherCommons.isWeb`. Numa build de debug o
+	# `if not LauncherCommons.DebugServiceLive() and not LauncherCommons.isWeb`. Numa build de debug o
 	# servidor sobe sem thread nenhuma e o meta game não roda nunca: o primeiro
 	# login garante a copa independentemente disso. Com o catch-up do boot
 	# (SQLBackups), no servidor de produção este caminho é um SELECT —

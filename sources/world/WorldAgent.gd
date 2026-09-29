@@ -142,8 +142,8 @@ static func _DeferredPush(agent : BaseAgent, inst : WorldInstance):
 # Uma instância é dividida em shards só na numeração "pública" do mapa. Acima de
 # `IdlePolicyService.ZoneInstanceBase` o id é CONTRATO de outro subsistema: a zona
 # de farm é procurada por `ZoneInstanceBase + zoneID`
-# (sources/idle/IdlePolicyService.gd:12-24) e a arena de boss é privada por char
-# (`BossInstanceBase + charID`, sources/idle/IdlePolicyService.gd:13) — mover o
+# (sources/idle/IdlePolicyService.gd:9-24) e a arena de boss é privada por char
+# (`BossInstanceBase + charID`, sources/idle/IdlePolicyService.gd:9) — mover o
 # jogador para outro id sem mover a policy dele é o que quebraria a sessão idle,
 # não a lotação. O cap que vale nesses ids é o do tick, medido em
 # `deploy/SCALING.md` / `tests/tick_capacity_test.gd`.

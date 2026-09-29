@@ -6,7 +6,7 @@
 # `.gitignore` é uma convenção que uma linha apaga. O buraco medido em 2026-09-27
 # era exatamente esse — o `.gitignore` não tinha NENHUMA regra de dotenv (só o
 # comentário `# linux env`), o `.env.example:1-4` mandava copiar para `.env` e não
-# versionar, e nos campos 19-20 daquele arquivo vivem
+# versionar, e nos campos 27-28 daquele arquivo vivem
 # `SHAMBLETA_MP_WEBHOOK_SECRET` / `SHAMBLETA_MP_ACCESS_TOKEN`. `git check-ignore -v
 # .env` saía 1 e nada entre o editor e o `git push` discordava. Régua que só vive
 # num arquivo de configuração é decoração: o portão é aqui, e ele é chamado por

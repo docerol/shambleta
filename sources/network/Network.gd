@@ -303,8 +303,19 @@ func TriggerChat(channelName : String, text : String, peerID : int = NetworkComm
 func ChatQuery(channelName : String, peerID : int = NetworkCommons.PeerOfflineID):
 	CallClient("ChatQuery", [channelName], peerID)
 
+# SOM-IDLE social: este é o ÚNICO ponto por onde uma linha de jogador sai do servidor
+# para UMA sessão (medido: local via NotifyNeighbours, global via NotifyArea, guild em
+# ChatModeration.FanoutGuildChat, whisper e o eco do próprio falante, NPC em
+# NpcCommons — todos chegam aqui com o peerID do destinatário já resolvido, porque
+# NotifyNeighbours/NotifyArea fazem `callv(ChatPlayer, args + [player.peerID])` por
+# jogador). Cobrar os dois portais aqui (ENet/WebSocket e o local), sem tocar o envio e sem
+# filtro de cliente, que é decoração: cliente modado ignora o próprio filtro e continua
+# lendo. É aqui que `SocialGraph.DeliveryBlocked` (ignore, uma consulta de chave primária
+# — EXPLAIN na migration 061) e `ChatModeration.GuildDeliveryAllowed` (guild) cobram.
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
 func ChatPlayer(channelName : String, callerName : String, text : String, agentRID : int, peerID : int = NetworkCommons.PeerOfflineID):
+	if SocialGraph.DeliveryBlocked(agentRID, peerID) or not ChatModeration.GuildDeliveryAllowed(channelName, agentRID, peerID):
+		return
 	CallClient("ChatPlayer", [channelName, callerName, text, agentRID], peerID)
 
 @rpc("authority", "call_remote", "reliable", EChannel.ACTION)
@@ -530,6 +541,24 @@ func ReferralState(state : Dictionary, peerID : int = NetworkCommons.PeerOffline
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func SetReferralCode(code : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("SetReferralCode", [code], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+# SOM-W5 (peça 6 da conjunção de `WebPushDelivery.DeliverParts()`): a subscription
+# que o navegador criou só chega ao servidor por aqui. Não há alternativa no repo:
+# o client web não tem rota HTTP para o servidor de jogo (o nginx proxya `/checkout/`,
+# `/webhooks/` e a leitura `GET /push/vapid`, e nada além disso), e o companion não
+# tem sessão de jogo — ele não sabe quem é o dono do token. `EChannel.CONNECT` e não
+# `ACTION`: isto é registro de sessão, uma vez por subscription, e não pode ser
+# descartado pelo rate-limit do canal de ação. O servidor ignora QUALQUER conta no
+# payload — a identidade sai do peer (`Server.gd`).
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func RegisterPushSubscription(endpoint : String, p256dh : String, auth : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("RegisterPushSubscription", [endpoint, p256dh, auth], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+# Par do "Off" do toggle. Sem esta linha o jogador recusa, a linha fica no banco e
+# o sweep continua notificando quem disse não.
+@rpc("any_peer", "call_remote", "reliable", EChannel.CONNECT)
+func UnregisterPushSubscription(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("UnregisterPushSubscription", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
@@ -811,6 +840,31 @@ func LevelUpGuildFast(peerID : int = NetworkCommons.PeerAuthorityID):
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyVaultSlots(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyVaultSlots", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+# As cinco ESCRITAS do painel de guild (CreateGuildNamed/JoinGuildByID/
+# LeaveCurrentGuild/DepositItem/WithdrawItem em sources/gui/GuildPanel.gd). O pacote
+# nomeia o que fazer, nunca quem: conta e personagem são do peer no servidor
+# (`sources/network/server/Server.gd`), porque um `accountID` aqui seria o jogador
+# escrevendo na guilda de outro.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func CreateGuild(guildName : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("CreateGuild", [guildName], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func JoinGuild(guildID : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("JoinGuild", [guildID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func LeaveGuild(peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("LeaveGuild", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func DepositToVault(itemID : int, count : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("DepositToVault", [itemID, count], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func WithdrawFromVault(itemID : int, count : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("WithdrawFromVault", [itemID, count], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func GetTournaments(peerID : int = NetworkCommons.PeerAuthorityID):

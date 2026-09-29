@@ -158,6 +158,9 @@ func _MoveStackUIDs(charFrom : int, charTo : int, itemID : int, count : int) -> 
 func _UIDList(uids : Array) -> String:
 	return kernel._UIDList(uids)
 
+func _DecayStackRaw(charID : int, itemID : int, count : int) -> bool:
+	return kernel._DecayStackRaw(charID, itemID, count)
+
 func _GrantStackRaw(charID : int, accountID : int, itemID : int, count : int, ledgerReason : String, grantReason : String = "", bound : int = 0, parentUID : int = 0, creatorAccountID : int = 0) -> int:
 	return kernel._GrantStackRaw(charID, accountID, itemID, count, ledgerReason, grantReason, bound, parentUID, creatorAccountID)
 
@@ -245,6 +248,12 @@ func GetPendingGrants(accountID : int) -> Array:
 
 func GetCheckoutIntent(accountID : int, sku : String) -> Dictionary:
 	return checkoutService.GetCheckoutIntent(accountID, sku)
+
+func GetPassCheckoutIntent(accountID : int, tier : String) -> Dictionary:
+	return checkoutService.GetPassCheckoutIntent(accountID, tier)
+
+func ActivePassSku() -> String:
+	return checkoutService.ActivePassSku()
 
 # ------------------------------------------------------------------ Fase B: loja diária + ofertas (Fatia 5 → ShopService.gd)
 # Rotação determinística server-side, reroll pago em gems (3×/dia) e ofertas
@@ -420,6 +429,15 @@ func LevelUpGuild(accountID : int, charID : int) -> bool:
 func PromoteMember(leaderAccount : int, targetAccount : int) -> bool:
 	return guildService.PromoteMember(leaderAccount, targetAccount)
 
+# Administração de roster (AUDITORIA 2026-09-28): a política está em `GuildRoster.gd`,
+# a ESCRITA continua no dono da tabela. A fachada existe para o chamador não depender do
+# campo interno `guildService` — mesma forma de `PromoteMember` acima.
+func DemoteMember(leaderAccount : int, targetAccount : int) -> bool:
+	return guildService.DemoteMember(leaderAccount, targetAccount)
+
+func RemoveMember(guildID : int, targetAccount : int) -> bool:
+	return guildService.RemoveMember(guildID, targetAccount)
+
 func SetGuildTag(accountID : int, tag : String) -> Dictionary:
 	return guildService.SetGuildTag(accountID, tag)
 
@@ -481,16 +499,6 @@ static func IsValidGuildTag(tag : String) -> bool:
 	return EconomyCatalog.IsValidGuildTag(tag)
 static func AchievementByID(achievementID : String) -> Dictionary:
 	return EconomyCatalog.AchievementByID(achievementID)
-static func CraftBudgetCap(tier : int, slot : int) -> int:
-	return CraftCatalog.BudgetCap(tier, slot)
-static func CraftRarityForUsage(pct : float) -> String:
-	return CraftCatalog.RarityForUsage(pct)
-static func CraftSubmitFee(tier : int) -> int:
-	return CraftCatalog.SubmitFee(tier)
-static func CraftNormName(name : String) -> String:
-	return CraftCatalog.NormName(name)
-static func CraftEditDistance(a : String, b : String) -> int:
-	return CraftCatalog.EditDistance(a, b)
 
 func EnsureSeasonS1() -> int:
 	return seasonService.EnsureSeasonS1()
@@ -694,6 +702,18 @@ func TickTournaments() -> Dictionary:
 func ReconcileDaily() -> int:
 	return tournamentArenaService.ReconcileDaily() + int(kernel.ReconcileWalletDaily().get("total", 0))
 
+# Diagnóstico do contador acima: TODAS as pernas que o produzem, com nome
+# (pilha, soma de ledger, carteira). `ReconcileDaily` é o número que o painel e os
+# gates leem; estas são as LINHAS que o produziram, para o plantão e para o
+# harness que falhou saberem QUAL personagem. Um contador sem nome não abre
+# incidente — foi o que custou uma execução inteira de portão. A suíte de reconcile
+# confere `size() == ReconcileDaily()`: as réãs são textos de SQL gêmeos, e sem
+# essa conferência é exatamente aí que elas divergiriam.
+func ReconcileDetail() -> Array[Dictionary]:
+	var rows : Array[Dictionary] = tournamentArenaService.Divergences()
+	rows.append_array(kernel.DivergingWallets())
+	return rows
+
 # O job diário (SQLBackups → Launcher.Economy.RunReconcileJob). A perna de
 # carteira entra na MESMA linha de `reconcile_run` que a arena abriu hoje — o
 # painel lê `divergences`, e duas corridas no mesmo dia inventariam um reconciliar que não houve.
@@ -702,6 +722,17 @@ func RunReconcileJob() -> int:
 	var walletDivergences : int = int(kernel.ReconcileWalletDaily().get("total", 0))
 	if walletDivergences > 0:
 		Launcher.SQL.ExecuteBindings("UPDATE reconcile_run SET divergences = divergences + ? WHERE id = (SELECT MAX(id) FROM reconcile_run);", [walletDivergences])
+		# O job da arena já imprimiu os nomes dela; a perna de carteira é somada
+		# AQUI, então é aqui que ela precisa dar nome — senão o painel sobe de 0 para
+		# 3 e o plantão não tem para onde olhar. O NÚMERO continua o do contador
+		# (`ReconcileWalletDaily`); a lista é só o rodapé, e a suíte de reconcile
+		# confere que os dois são o mesmo tamanho.
+		var named : int = 0
+		for offender in kernel.DivergingWallets():
+			if named >= 3:
+				break
+			named += 1
+			Util.PrintLog("Economy", "Reconcile offender: " + JSON.stringify(offender))
 	return arenaDivergences + walletDivergences
 
 # ------------------------------------------------------------------ conquistas + R1 referral (Fatia 10 -> CommunityService.gd)
@@ -729,17 +760,8 @@ func GrantReferralBonuses() -> int:
 func RunFraudScan() -> int:
 	return communityService.RunFraudScan()
 
-func _FlagOpen(accountID : int, charID : int, kind : String, detail : String) -> bool:
-	return communityService._FlagOpen(accountID, charID, kind, detail)
-
 func FlagMultiAccount(accountID : int, detail : String) -> bool:
 	return communityService.FlagMultiAccount(accountID, detail)
-
-func _FlagTradeBursts(now : int) -> int:
-	return communityService._FlagTradeBursts(now)
-
-func _FlagLevelVelocity(now : int) -> int:
-	return communityService._FlagLevelVelocity(now)
 
 func _FlagFlipTrades(now : int) -> int:
 	return communityService._FlagFlipTrades(now)

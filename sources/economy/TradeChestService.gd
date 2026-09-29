@@ -49,15 +49,22 @@ func ExecuteTrade(charIDFrom : int, charIDTo : int, itemsFrom : Array, itemsTo :
 			return false
 
 		# Escrow check: every offered stack must exist with the offered count
+		# SOM-CRAFT: e nenhuma pilha pode ser matéria-prima — a forja é o único
+		# consumidor dela. (O consume de lote unbound em _MoveStackUIDs já barraria
+		# o lote bound; barrar aqui barra a stack, antes de queimar a fee em gem.)
 		for stack : Dictionary in itemsFrom:
 			var itemID : int = int(stack.get("item_id", 0))
 			var count : int = int(stack.get("count", 0))
 			if itemID <= 0 or count <= 0 or _eco._ItemCountRaw(charIDFrom, itemID) < count:
 				return false
+			if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)):
+				return false
 		for stack : Dictionary in itemsTo:
 			var itemID : int = int(stack.get("item_id", 0))
 			var count : int = int(stack.get("count", 0))
 			if itemID <= 0 or count <= 0 or _eco._ItemCountRaw(charIDTo, itemID) < count:
+				return false
+			if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)):
 				return false
 
 		# Fee burn first (all-or-nothing: a failed fee aborts the whole trade).
@@ -167,7 +174,13 @@ func GetChestOdds(zoneID : int) -> Dictionary:
 		var item : ItemCell = DB.ItemsDB.get(itemHash, null)
 		var tier : int = item.tier if item != null else 0
 		tiers[tier] = int(tiers.get(tier, 0)) + 1
-	return {"zone" = zoneID, "pool" = pool.size(), "tiers" = tiers, "pity_every" = EconomyCatalog.ChestPityEvery}
+	# SOM-CRAFT: compliance de loot box é sobre a chance REAL do roll, e a chance
+	# do material é de peso, não de contagem (6% da massa da faixa). Publicamos os
+	# dois números: `tiers` continua sendo o censo de células do pool e
+	# `material_share` é a fração do roll que cai em matéria-prima.
+	return {"zone" = zoneID, "pool" = pool.size(), "tiers" = tiers,
+		"material_share" = FarmZoneData.GetMaterialDropShare(zoneID),
+		"pity_every" = EconomyCatalog.ChestPityEvery}
 
 func GetChestOddsForCharacter(charID : int) -> Dictionary:
 	var zoneID : int = 1
@@ -198,7 +211,7 @@ func FormatChestOdds(odds : Dictionary) -> String:
 	keys.sort()
 	for tier in keys:
 		parts.append("T%d %.1f%%" % [int(tier), 100.0 * float(tiers[tier]) / float(total)])
-	return "Zona %d (pool %d: %s; pity T3+ a cada %d)" % [int(odds.get("zone", 1)), int(odds.get("pool", 0)), ", ".join(parts), int(odds.get("pity_every", EconomyCatalog.ChestPityEvery))]
+	return "Zona %d (pool %d: %s; insumo %.1f%% do roll; pity T3+ a cada %d)" % [int(odds.get("zone", 1)), int(odds.get("pool", 0)), ", ".join(parts), 100.0 * float(odds.get("material_share", 0.0)), int(odds.get("pity_every", EconomyCatalog.ChestPityEvery))]
 
 # Deterministic chest roll: pity forces a T3+ band, otherwise the zone band.
 func _RollChestItem(zoneID : int, roll : int, pity : bool) -> int:
@@ -207,7 +220,11 @@ func _RollChestItem(zoneID : int, roll : int, pity : bool) -> int:
 		var rare : Array[int] = []
 		for itemHash in pool:
 			var item : ItemCell = DB.ItemsDB.get(itemHash, null)
-			if item != null and item.tier >= 3:
+			# SOM-CRAFT: o pity é "raro garantido" — a promessa é peça de
+			# equipamento, não insumo. Matéria-prima sai do roll do pity e
+			# continua no roll normal da faixa (GetDropForRoll), onde paga o
+			# próprio peso de 6%.
+			if item != null and item.tier >= 3 and not CellCommons.IsMaterial(item):
 				rare.append(itemHash)
 		if not rare.is_empty():
 			return rare[roll % rare.size()]

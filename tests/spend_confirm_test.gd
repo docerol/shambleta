@@ -21,7 +21,8 @@ extends SceneTree
 # load() pós-boot e tudo que vem deles é chamado via call()/set()/get().
 #
 # POR QUE é comportamental e não "olha o texto do arquivo": cada painel expõe a
-# costura `SendHook` (a mesma do leilão, provada em IdleTests SuiteAuction), e
+# costura `SendHook` (a mesma do leilão, medida em `tests/IdleTests.gd:1250-1254`
+# dentro de `SuiteGuiPanels`), e
 # "emitiu" é MEDIDO pela lista de envios. O driver abaixo exercita o handler
 # REAL que o botão conecta (`_on_*`), exige zero envios até o `ConfirmPending()`
 # rodar, o RPC certo com os args certos depois dele, idempotência no segundo

@@ -99,6 +99,41 @@ static func FanoutGuildChat(senderAccount : int, senderNick : String, channel : 
 		delivered += 1
 	return delivered
 
+# AUDITORIA 2026-09-28 (administração de guilda, decisão nº 5): o canal de guild é
+# filiação, e filiação muda — um kick tira alguém da fileira com o chat já em voo. Esta
+# é a cobrança na ENTREGA, chamada por `Network.ChatPlayer` (o único ponto por onde uma
+# linha de jogador chega a uma sessão) ao lado de `SocialGraph.DeliveryBlocked`.
+#
+# Por que aqui e não só no fan-out: `ResolveGuildPeers` já desenha a lista de quem deve
+# receber, e um kick anterior à chamada já a deixaria correta. O que esta função fecha é
+# outra coisa — qualquer caminho que entregue num canal `guild:` (o fan-out de hoje, um
+# push futuro de histórico, um reenvio de sistema) obedece à fileira atual, sem precisar
+# lembrar de consultar `GetGuildForAccount`. É a mesma lição do mute: sanção aplicada só
+# no caminho bonito é sanção decorativa.
+#
+# Fail-open por construção, com o mesmo criteriozinho do ignore: canal que não é de
+# guild, falante que não é PlayerAgent (NPC), ponta sem conta (cliente puro, onde `Peers`
+# não é populated — filtrar ali seria filtrar no cliente) e o eco do próprio falante todos
+# passam. Um `false` aqui só acontece quando as duas contas existem e NÃO dividem guilda,
+# ou quando quem recebe já não está na guilda que o canal nomeia.
+static func GuildDeliveryAllowed(channel : String, senderRID : int, peerID : int) -> bool:
+	if not IsGuildChannel(channel) or Launcher.Economy == null:
+		return true
+	var speaker : BaseAgent = WorldAgent.GetAgent(senderRID)
+	if speaker == null or not (speaker is PlayerAgent):
+		return true
+	var senderAccount : int = Peers.GetAccount((speaker as PlayerAgent).peerID)
+	var recipientAccount : int = Peers.GetAccount(peerID)
+	if senderAccount <= 0 or recipientAccount <= 0 or senderAccount == recipientAccount:
+		return true
+	var senderGuild : int = Launcher.Economy.GetGuildForAccount(senderAccount)
+	if senderGuild <= 0:
+		# O falante saiu/foi chutado depois de a linha nascer: continua vendo a própria
+		# fala (o eco é regra), mas canal de guild de quem não tem guild não entrega em
+		# ninguém.
+		return false
+	return senderGuild == Launcher.Economy.GetGuildForAccount(recipientAccount)
+
 static var muted : Dictionary[int, int] = {}
 static var log : Array[Dictionary] = []
 

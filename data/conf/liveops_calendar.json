@@ -2,9 +2,9 @@
   "_note": "OPS-3 (AUDITORIA_2026-09-27 §15, Live Ops 5/10): agenda DECLARATIVA de eventos, resolvida por timestamp em sources/ops/LiveOpsCalendar.gd — sem job, sem escrita no banco, sem código. `data/conf/` vem no pacote do servidor (mesma vinda de paid_catalog.json/seasons.json) e o módulo relê com TTL de 60 s: editar este arquivo muda o estado no ar na próxima consulta. Onde o .pck é só leitura, aponte o arquivo editado com SHAMBLETA_LIVEOPS_FILE=/caminho/liveops_calendar.json.",
   "_formato": "uma linha por evento: {kind, key, start_unix, end_unix, value, label?}. kind ∈ double_xp | chest_bonus | tournament. key é o identificador da campanha, única no arquivo ([a-z][a-z0-9_]*). A janela é[start_unix, end_unix) — o fim é exclusivo, então duas janelas encadeadas nunca se sobrepõem e não há segundo perdido. value dos kinds de bônus é MULTIPLICADOR e tem que estar em 1.0..4.0: abaixo de 1.0 um 'bônus' é nerf disfarçado, acima do teto é dedo no teclado pagando faucet. Sobreposição do MESMO kind não compõe: vence a que começa depois (empate: a que termina depois, empate: a última do arquivo) — duas janelas de double_xp cruzadas pagam ×2, nunca ×4. Arquivo ausente ou inválido = nenhum evento no ar (neutro 1.0) + push_error no log: fail-closed no sentido seguro de um multiplicador de faucet.",
   "_o_que_consome": "os TRÊS kinds têm consumidor de verdade, cada um num eixo diferente, e um kind declarado sem consumidor faz o arquivo INTEIRO ser recusado na validação (`ImplementedKinds`): (1) `double_xp` → OfflineSettle.LiveOpsXpMods → GetModsForAccount — o MESMO eixo do VIP 1.2×, do buff de guild e do drops_mod do motor de live_event: multiplica XP, ouro e as chaves de boss da liquidação; NÃO dobra baús nem o ×2 do tier 2 (é adMult, eixo separado); (2) `chest_bonus` → OfflineSettle.LiveOpsChestMods, na linha do `chestWanted` de _ApplyFormula, ABAIXO do teto diário (`EconomyCatalog.ChestsPerDayFromSettle` em _ChestBudgetToday): a campanha enche o dia de baús mais cedo, nunca mintar mais baús por dia; (3) `tournament` → TournamentArenaService.PrizePoolMod, aplicado ao pool de gems CONGELADO em tournament.prizes_json na criação da copa e liquidado no SettleTournament. A âncora do (3) é o ends_at da copa, não o instante do job: a campanha que cobriu a competição é a que paga, e um job atrasado não reescreve prêmio nenhum.",
-  "_cuidado_com_a_suite": "Nenhuma janela deste arquivo pode cobrir o instante em que tests/run_idle_tests.gd roda: SuiteSettleGolden calcula a expectativa com mods = 1.0 (IdleTests.gd:238), então um double_xp ativo na hora do run deixava a suíte vermelha por agenda, não por bug. As duas campanhas abaixo abrem em novembro de 2026 — o harness tests/ops_fix_test.gd as confere POR TIMESTAMP (janela no futuro), nunca ligando bônus no presente.",
+  "_cuidado_com_a_suite": "Nenhuma janela deste arquivo pode cobrir o instante em que tests/run_idle_tests.gd roda: SuiteSettleGolden calcula a expectativa com mods = 1.0 (IdleTests.gd:238), então um double_xp ativo na hora do run deixava a suíte vermelha por agenda, não por bug. Toda campanha abaixo abre no FUTURO (duas em novembro de 2026, três na abertura da S2 em janeiro de 2027) e o harness tests/ops_fix_test.gd as confere POR TIMESTAMP, nunca ligando bônus no presente. É também por isso que a janela de uma temporada não pode ser empurrada para cobrir o run: as duas réguas — tests/season_schedule_test.gd e tests/season_campaign_alignment_test.gd — leem o mesmo instante.",
   "_exemplo_de_campanha_futura": "{\"kind\": \"double_xp\", \"key\": \"xp_double_abertura_s2\", \"start_unix\": 1793664000, \"end_unix\": 1794268800, \"value\": 2.0, \"label\": \"Abertura da S2: XP em dobro\"}",
-  "_estado_atual": "Uma campanha encerrada (fim de semana de 19–20/09/2026, preservada como histórico) e DUAS janelas futuras reais: a Semana do Cofre Cheio (chest_bonus ×2, 04–10/11/2026) e a Copa de Novembro com prêmio turbinado (tournament ×1.5 na mesma semana, que é onde a copa que encerra em 10/11 é liquidada). Data de bônus é decisão do dono: o que este arquivo prova é que o motor alcança os três kinds e que o servidor RECUSA prometer o que não alcança.",
+  "_estado_atual": "Uma campanha encerrada (fim de semana de 19–20/09/2026, preservada como histórico), DUAS janelas futuras em novembro de 2026 (Semana do Cofre Cheio, chest_bonus ×2, 04–10/11/2026, e a Copa de Novembro com prêmio ×1,5 na mesma semana, que é onde a copa que encerra em 10/11 é liquidada) e TRÊS janelas cobrindo a ABERTURA DA S2, o marco que data/conf/seasons.json declara em start_unix 1799971200 = 2027-01-15T00:00Z (fim 1802563200 = 2027-02-14T00:00Z): double_xp ×2 no primeiro fim de semana (15–17/01), chest_bonus ×1,5 na semana inicial (15–21/01) e tournament ×1,5 na quinzena de abertura (15–28/01). As três começam no instante do marco, então a temporada NÃO abre com a agenda vazia — é isso que tests/season_campaign_alignment_test.gd mede por season, resolvendo timestamp, e não comparando string. O porquê de cada uma: a abertura é o único momento da temporada em que o jogador novo e o que voltou estão no mesmo dia de jogo, então o eixo do faucet (XP/ouro/chaves) e o eixo do cofre ligam juntos; a copa entra porque o consumidor dela ancora no ends_at da competição, e uma janela que só cobrisse o primeiro dia não pagaria copa nenhuma. Valores: 2.0 e 1.5 e 1.5, todos dentro da banda que o validador do produto cobra (1.0..4.0) e bem abaixo do teto — nada aqui é faucet novo, é o mesmo dia entregue mais cedo. Data de bônus continua sendo decisão do dono: o que este arquivo prova é que o motor alcança os três kinds, que o servidor RECUSA prometer o que não alcança, e que nenhuma temporada sai do papel sem campanha no marco.",
   "events": [
     {
       "kind": "double_xp",
@@ -29,6 +29,30 @@
       "end_unix": 1794355200,
       "value": 1.5,
       "label": "Copa de Novembro: pool de gems ×1,5 para quem competir na semana"
+    },
+    {
+      "kind": "double_xp",
+      "key": "xp_double_abertura_s2",
+      "start_unix": 1799971200,
+      "end_unix": 1800230400,
+      "value": 2.0,
+      "label": "Abertura da S2: primeiro fim de semana com XP, ouro e chaves da liquidação em dobro (15–17/01/2027)"
+    },
+    {
+      "kind": "chest_bonus",
+      "key": "baus_primeira_semana_s2",
+      "start_unix": 1799971200,
+      "end_unix": 1800576000,
+      "value": 1.5,
+      "label": "Semana inicial da S2: baús da liquidação ×1,5, sempre abaixo do teto diário (15–21/01/2027)"
+    },
+    {
+      "kind": "tournament",
+      "key": "copa_abertura_s2_premio_maior",
+      "start_unix": 1799971200,
+      "end_unix": 1801180800,
+      "value": 1.5,
+      "label": "Copa de abertura da S2: pool de gems ×1,5 para a copa cujo ends_at cai na quinzena 15–28/01/2027"
     }
   ]
 }

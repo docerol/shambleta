@@ -6,6 +6,12 @@ class_name CommandManager
 # régua agora é sempre conferida; a única saída é o operador declarar
 # SHAMBLETA_GM_MODE=1 (dev/staging). Lido por função porque um static var só
 # seria atualizado por um bootstrap que não existe para esta classe.
+#
+# Que a env NÃO chegue à produção não é mais afirmação de revisão: é assert de
+# máquina. `tests/admission_gate_test.gd` varre `deploy/**` (composes, Dockerfiles,
+# runbooks, COOLIFY.md) e `.github/**` e reprova qualquer exposição do nome, e
+# `.env.example` é o único lugar do repo onde ele pode aparecer — declarado com o
+# motivo e com o "nunca em produção" escrito.
 const GM_MODE_ENV : String = "SHAMBLETA_GM_MODE"
 
 static func GMModeEnabled() -> bool:

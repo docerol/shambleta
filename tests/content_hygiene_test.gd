@@ -1,8 +1,12 @@
 extends SceneTree
 
 # SOM-CONTENT: régua de higiene de conteúdo (juiz 2026-09-27: "os sistemas
-# correm na frente do conteúdo"). Duas classes de defeito que HOJE nada lê no
+# correm na frente do conteúdo"). Quatro classes de defeito que HOJE nada lê no
 # portão:
+#
+#  (0) CATÁLOGO PELA METADE — `.tres` de entidade que não chega ao `EntitiesDB`.
+#      A fonte desta régua é o DIRETÓRIO, não o dicionário: quem só olha o
+#      `EntitiesDB` julga o que sobreviveu ao parse. Ver `_suiteEntityCensus`.
 #
 #  (1) ROSTER SUJO — zona apontando para um spawn cujo id não existe no
 #      EntitiesDB. Medido no dump de 24 zonas: a zona 17 (Drazil) renderizava
@@ -18,7 +22,10 @@ extends SceneTree
 #      errado. O fallback foi deletado e as faixas cheias com conteúdo real.
 #      Agora: a pool de cada zona É exatamente o conjunto de itens da própria
 #      faixa — e um item fora da faixa (ou o Apple-stand-in numa zona funda) é
-#      falha.
+#      falha. Desde SOM-CRAFT (2026-09-27) a faixa carrega duas classes — peça
+#      vestível e matéria-prima (ItemCell.material) — e cobertura de material por
+#      tier é conteúdo obrigatório; a PROPORÇÃO do roll é régua de
+#      tests/balance_test.gd, que é dona das curvas.
 #
 #  (3) ESCADA — a perna nova de boss (índices 4..9) tem de ser conteúdo, não
 #      string: entidade real no EntitiesDB, sala real no MapsDB e o MOB daquela
@@ -68,7 +75,7 @@ func _asInt(value : Variant) -> int:
 	return 0
 
 func _run():
-	print("== content hygiene harness (rosters + faixas de drop + escada de boss) ==")
+	print("== content hygiene harness (censo de entidades + rosters + faixas de drop + escada de boss) ==")
 	_launcher = root.get_node_or_null(^"Launcher")
 	if _launcher == null:
 		print("FATAL: Launcher autoload missing")
@@ -104,10 +111,99 @@ func _run():
 		return
 
 	_farm.SyncWithDB()
+	_suiteEntityCensus()
 	_suiteRosters(worldNode)
 	_suiteDropBands()
 	_suiteBossLadder(worldNode)
 	_finish()
+
+# ------------------------------------------------------- (0) censo do EntitiesDB
+
+# O predicates da acusação, soltos do laço para poderem ser controlados.
+func _censusDrops(ids : Array, db : Dictionary) -> int:
+	var drops : int = 0
+	for id in ids:
+		if not db.has(id):
+			drops += 1
+	return drops
+
+func _censusDupes(ids : Array) -> int:
+	var seen : Dictionary = {}
+	var dupes : int = 0
+	for id in ids:
+		if seen.has(id):
+			dupes += 1
+		else:
+			seen[id] = true
+	return dupes
+
+# Por que esta suíte existe: `DB.ParseEntitiesDB` varre `presets/entities/` e, se
+# um `.tres` traz `_id` diferente de `_name.hash()`, ele é pulado com `push_error`.
+# Até 2026-09-28 aquele ramo era `return`, não `continue` — legado da reescrita de
+# `0c5cb56` — então o PRIMEIRO `.tres` com id stale abortava o parse e toda entidade
+# depois dele sumia do catálogo sem nenhuma outra pista no log. Nenhuma régua lia o
+# diretório: as suítes olhavam o que já estava no `EntitiesDB` (roster, escada de
+# boss), e catálogo incompleto é exatamente o que esse tipo de leitura não enxerga,
+# porque ela julga apenas o que sobreviveu. Aqui a fonte é o DIRETÓRIO, não o dicionário.
+func _suiteEntityCensus():
+	print("[suite] censo: todo .tres de entidade do diretório está no EntitiesDB")
+	var pathScript : GDScript = load("res://sources/system/Path.gd")
+	var fsScript : GDScript = load("res://sources/system/FileSystem.gd")
+	var entityPst : String = str(pathScript.get_script_constant_map().get("EntityPst", ""))
+	if not _check(not entityPst.is_empty() and entityPst.ends_with("/"), "Path.EntityPst é legível pelo harness (%s) — sem ele o censo varreria um caminho vazio e daria verde" % entityPst):
+		_finish()
+		return
+	var files : PackedStringArray = fsScript.call("ParseResources", entityPst)
+	_check(files.size() > 0, "o diretório de entidades lista arquivos (%d encontrados)" % files.size())
+
+	var ids : Array = []
+	var scanned : int = 0
+	for filePath in files:
+		var resource : Object = fsScript.call("LoadResource", filePath, false)
+		# Nenhum `is EntityData` / `: EntityData` aqui, e isso é projeto do harness, não
+		# estilo: amarrar o nome global de um recurso ao script do `SceneTree` coloca a
+		# árvore de dependências dele no COMPILE do main loop, que roda antes dos
+		# autoloads — e o boot inteiro cai com `Compile Error: Identifier not found:
+		# Launcher` em `Peers.gd`, `DB.gd`, `World.gd` (medido 2026-09-28: 25 erros, e o
+		# harness nunca chegava ao `DB.isInitialized`). O nome global lido do script dá a
+		# mesma classificação sem esse vínculo de compilação.
+		if resource == null or resource.get_script() == null:
+			continue
+		if str((resource as Object).get_script().get_global_name()) != "EntityData":
+			continue
+		var entityName : String = str(resource.get("_name"))
+		var entityId : int = int(resource.get("_id"))
+		var expect : int = int(entityName.hash())
+		scanned += 1
+		_check(entityId == expect and expect != int(_dbScript.UnknownHash),
+			"entidade '%s' (%s): `_id` (%d) é o hash de `_name` (%d) — senão o parse a pula" % [entityName, filePath, entityId, expect])
+		ids.append(expect)
+
+	var db : Dictionary = _dbScript.EntitiesDB
+	print("  [info] censo: %d arquivos de entidade no diretório, %d chaves no EntitiesDB" % [scanned, db.size()])
+	# O piso é folga, não régua: 96 arquivos/96 chaves medidos verdes em 2026-09-28, e
+	# quem pega drop de verdade são as duas réguas de baixo. A mordida também é medida:
+	# trocando um dígito do `_id` de `presets/entities/Andi.tres`, o harness acusou
+	# exatamente 3 falhas (a linha da entidade, `1 de fora`, `95 vs 96`) e saiu exit 3.
+	_check(scanned >= 90, "o censo varreu conteúdo real, não um diretório vazio (%d entidades)" % scanned)
+	_checkEq(_censusDupes(ids), 0, "censo: nenhum `_id` duplicado entre as %d entidades do diretório" % scanned)
+	_checkEq(_censusDrops(ids, db), 0, "censo: toda entidade do diretório está no EntitiesDB (%d varridas, %d de fora)" % [scanned, _censusDrops(ids, db)])
+	_checkEq(db.size(), scanned, "censo: |EntitiesDB| == número de arquivos de entidade varridos (sem drop nem chave órfã)")
+
+	# Controles nos dois sentidos: sem eles as quatro réguas acima são a frase que
+	# sai de uma varredura que não olhou nada.
+	var sampleIds : Array = [101, 202, 303]
+	var sampleDb : Dictionary = {101: true, 202: true, 303: true}
+	_checkEq(_censusDrops(sampleIds, sampleDb), 0, "controle: censo completo não acusa nada")
+	# O dicionário capado é escrito chave por chave, não por remoção de uma chave do
+	# `sampleDb`: a régua D1 de tests/aggro_cap_test.gd varre `tests/` procurando a
+	# forma «erase com literal inteiro» e não distingue o receptor — ela caça o no-op
+	# de tirar por índice de uma Array de Dictionaries, e um controle que só existe
+	# usando a forma proibida é o controle errado.
+	var doctored : Dictionary = {101: true, 303: true}
+	_checkEq(_censusDrops(sampleIds, doctored), 1, "controle: uma entidade a menos no dicionário É acusada — é o shape do `return` que sumia com o resto do catálogo")
+	_checkEq(_censusDupes([5, 5, 6]), 1, "controle: `_id` repetido É acusado")
+	_checkEq(_censusDupes([5, 6]), 0, "controle: ids distintos não acusam")
 
 # ------------------------------------------------------------------ (1) rosters
 
@@ -197,12 +293,22 @@ func _suiteDropBands():
 			tierOf[int(cellHash)] = int(item.tier)
 			nameOf[int(cellHash)] = str(item.name)
 	# Toda faixa da escada tem item de verdade (a raiz do defeito).
+	# SOM-CRAFT: a faixa agora tem DUAS classes de conteúdo — peça vestível e
+	# matéria-prima da forja — e as duas são conteúdo, não decoração. Cobertura de
+	# material por tier entra aqui (proporção do roll é régua de
+	# tests/balance_test.gd, que é dona das curvas).
+	var materialTiers : Dictionary = {}
+	for cellHash in _dbScript.ItemsDB:
+		var item = _dbScript.ItemsDB[cellHash]
+		if item != null and bool(item.material):
+			materialTiers[int(item.tier)] = int(materialTiers.get(int(item.tier), 0)) + 1
 	for t in range(1, int(_farm.MAX_TIER) + 1):
 		var inTier : int = 0
 		for h in tierOf.keys():
 			if int(tierOf[h]) == t:
 				inTier += 1
 		_check(inTier > 0, "tier %d tem item próprio na pool (%d cells)" % [t, inTier])
+		_check(int(materialTiers.get(t, 0)) > 0, "tier %d tem matéria-prima própria (%d cells)" % [t, int(materialTiers.get(t, 0))])
 	var zoneCount : int = int(_farm.ZONE_COUNT)
 	for z in range(1, zoneCount + 1):
 		var zone = _farm.GetZone(z)

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ItemCell" format=3 uid="uid://cz6h1p9d4xmsl"]
+
+[ext_resource type="Texture2D" uid="uid://c6gr8jmwnrgni" path="res://data/graphics/items/common/bone.png" id="1_icon"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="2_script"]
+
+[resource]
+script = ExtResource("2_script")
+name = "Hollow Fang"
+description = "A tooth with nothing inside it, filed clean by the Drazil burrows. It takes a core of anything."
+tier = 6
+material = true
+icon = ExtResource("1_icon")
+stackable = true

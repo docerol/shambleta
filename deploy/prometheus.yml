@@ -7,7 +7,7 @@
 # regra de alerta sem evaluator é texto morto — dispara nunca, e ausência de
 # incêndio é indistinguível de ausência de fogo. Este arquivo é o pedaço que
 # faltava declarar; as regras em si continuam no arquivo que já era conferido por
-# `tests/deploy_ops_test.gd:129-154` (toda métrica citada tem de existir no corpo
+# `tests/deploy_ops_test.gd:167-192` (toda métrica citada tem de existir no corpo
 # que o server emite).
 #
 # Embarque: `deploy/monitoring/prometheus.Dockerfile` copia ESTE arquivo e o
@@ -61,7 +61,7 @@ scrape_configs:
 
   # A frente do dinheiro (companion) escuta 0.0.0.0:8901 e já publica /metrics —
   # este é alcançável pela rede interna do compose sem truque nenhum
-  # (deploy/companion/Dockerfile:34, companion/server.py:1165-1209).
+  # (deploy/companion/Dockerfile:46, companion/server.py:1432).
   - job_name: shambleta-companion
     static_configs:
       - targets: ["companion:8901"]

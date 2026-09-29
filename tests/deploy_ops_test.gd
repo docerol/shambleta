@@ -3,9 +3,12 @@ extends SceneTree
 # Gate de deploy conferido contra o MOTOR, não contra o doc.
 #
 # Uso:  godot --headless --path . -s tests/deploy_ops_test.gd
-#       (`scripts/test.sh:103-113` descobre `tests/*_test.gd` sozinho e
-#        `harness_marker` (:115-120) lê o marcador da própria linha `== RESULT:`
-#        abaixo — nada precisa ser acrescentado em arquivo de outro dono.)
+#       (`harnesses_extra()` (`scripts/test.sh:423-433`) descobre
+#        `tests/*_test.gd` sozinho e `harness_marker()` (`scripts/test.sh:435-440`)
+#        lê o marcador da própria linha `== RESULT:` abaixo — nada precisa ser
+#        acrescentado em arquivo de outro dono. Os dois números são conferidos pela
+#        régua de identidade de ponteiro (seção 23 de `scripts/check_doc_drift.sh`),
+#        não copiados de memória.)
 #
 # O que só este harness sabe responder é o caminho absoluto que o Godot produz
 # para `user://`. Todo o resto do deploy depende dele: `deploy/server/Dockerfile`
@@ -85,6 +88,41 @@ func _initialize() -> void:
 	var companion_db: String = _regex(companion_dockerfile, r'"--db",\s*"([^"]+)"')
 	Check(companion_db == container_db,
 		"o --db do companion (%s) É o live.db que o game abre (%s)" % [companion_db, container_db])
+
+	# --- 2b. o fechamento de imports do sender VAPID tem que estar NA IMAGEM ----
+	# companion/server.py:877 faz `import push_vapid` por nome nu, na mesma pasta de
+	# companion/server.py; push_vapid importa push_common/push_p256/push_aesgcm, que se
+	# importam entre si. `load_push_vapid()` só devolve o módulo se TODOS estiverem
+	# no WORKDIR — falta um, ele devolve None e o sender levanta NotImplementedError
+	# MESMO com chave VAPID configurada: entrega morta na origem do deploy, não do
+	# runtime. A régua DERIVA o fechamento transitivo dos `import`/`from push_*` e
+	# exige que o Dockerfile COPY cada arquivo — assim um quinto módulo novo sem
+	# cópia quebra o gate, e não o contrário.
+	var import_re: RegEx = RegEx.create_from_string(r'(?:import|from)\s+(push_[a-z0-9_]+)')
+	var comp_src: String = _read("res://companion/server.py")
+	var push_closure: Dictionary = {}
+	var frontier: Array[String] = []
+	for m in import_re.search_all(comp_src):
+		frontier.append(m.get_string(1))
+	while not frontier.is_empty():
+		var mod: String = String(frontier.pop_back())
+		if push_closure.has(mod):
+			continue
+		push_closure[mod] = true
+		var mod_src: String = _read("res://companion/%s.py" % mod)
+		for c in import_re.search_all(mod_src):
+			if not push_closure.has(c.get_string(1)):
+				frontier.append(c.get_string(1))
+	var mods: Array = push_closure.keys()
+	mods.sort()
+	Check(not mods.is_empty(),
+		"o companion importa o sender push (fechamento derivado: %s)" % [mods])
+	var not_copied: Array[String] = []
+	for mod in mods:
+		if not companion_dockerfile.contains(String(mod) + ".py"):
+			not_copied.append(String(mod))
+	Check(not_copied.is_empty(),
+		"deploy/companion/Dockerfile COPY cada módulo do fechamento push; faltando na imagem: %s" % [not_copied])
 
 	# --- 3. estado e backup no mesmo lugar (e o segundo volume, separado) -----
 	var backup_dir: String = _regex(sql_commons, r'const\s+BackupPath\s*:\s*String\s*=\s*"([^"]+)"')

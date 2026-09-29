@@ -46,7 +46,6 @@ func AddTrigger():
 	if triggerObject:
 		push_error("Support only one trigger object per NPC (%s)" % nick)
 		return
-		return
 
 	triggerObject = TriggerObject.new()
 	triggerObject.linkedNpc = self

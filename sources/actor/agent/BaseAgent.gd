@@ -86,15 +86,6 @@ func SetSkillCastID(skillID : int):
 		if self is AIAgent:
 			set_physics_process(true)
 
-func AddItem(item : BaseCell, proba : float):
-	if item and inventory:
-		while proba > 0.0:
-			if proba >= 1.0 or randf_range(0.0, 1.0) <= proba:
-				inventory.PushItem(item, 1)
-				proba -= 1.0
-			else:
-				break
-
 func SetRelativeMode(enable : bool, givenDirection : Vector2):
 	if isRelativeMode != enable:
 		isRelativeMode = enable

@@ -5,11 +5,13 @@ extends SceneTree
 # agenda de live ops (`data/conf/liveops_calendar.json` + `sources/ops/LiveOpsCalendar.gd`).
 #
 # O que ele prova, nas FUNÇÕES REAIS (sem reimplementar nada):
-#   A  a temporada VIGENTE resolve por timestamp, e uma S2 hipotética assume o ar
-#      editando SÓ o JSON (inclusive anexando a entrada no arquivo real do repo);
-#      janela materializa em `starts_at`/`ends_at`, `config_id` viaja no
-#      `rules_frozen` que já existe (linhas antigas continuam resolvendo);
-#      preempção da temporada de rotação quando a sucessora agendada entra.
+#   A  a temporada VIGENTE resolve por timestamp, e uma sucessora anexada ao
+#      arquivo assume o ar editando SÓ o JSON (inclusive anexando a entrada no
+#      arquivo real do repo); janela materializa em `starts_at`/`ends_at`,
+#      `config_id` viaja no `rules_frozen` que já existe (linhas antigas continuam
+#      resolvendo); preempção da temporada de rotação quando a sucessora agendada
+#      entra. A agenda embarcada no arquivo (`s1` rotação + `s2` com janela futura)
+#      é medida por `tests/season_schedule_test.gd`, não aqui.
 #   B  arquivo ausente/quebrado/typo = fail-closed com erro claro e nenhuma
 #      temporada abre (a mesma régua de `EconomyCatalog.ValidatePaidCatalog`), e o
 #      positivo: os dois arquivos do repo validam limpos.
@@ -155,7 +157,7 @@ func _suiteConfigFiles():
 	# A S1 do beta continua descrita como era: rolling de 30 dias, etiqueta "S1".
 	# `SuiteSeasonBootstrap` (IdleTests) congela exatamente essa régua.
 	var repo : Array = _cfg.call("Entries")
-	_checkEq(repo.size(), 1, "o arquivo nasce com uma entrada (a S1 de rotação)")
+	_check(repo.size() >= 2, "o arquivo traz a rotação e ao menos uma sucessora agendada (%d entradas)" % repo.size())
 	var s1 : Dictionary = repo[0] if not repo.is_empty() else {}
 	_checkStr(str(_cfg.call("ConfigID", s1)), "s1", "a entrada vigente é a s1")
 	_checkStr(str(_cfg.call("Label", s1)), "S1", "label S1 preservado (é o que a GUI e as linhas antigas mostram)")
@@ -212,7 +214,7 @@ func _suiteSeasonResolution():
 # ------------------------------------------------------------------ suite A2: linhas do banco + preempção
 
 func _suiteSeasonS2ByJSON():
-	print("[suite] A2: S2 existe editando só o JSON (anexo no arquivo real do repo)")
+	print("[suite] A2: uma sucessora existe editando só o JSON (anexo no arquivo real do repo)")
 	var text : String = FileAccess.get_file_as_string(SeasonsResPath)
 	_check(not text.is_empty(), "o arquivo real do repo foi lido")
 	var parsed : Variant = JSON.parse_string(text)
@@ -226,15 +228,25 @@ func _suiteSeasonS2ByJSON():
 	s2["premium_sku"] = "pass.s2"
 	s2["pass_tiers"] = {"max_level": 25, "bonus_start": 21, "bonus_gems": 30,
 		"free": {"2": {"gems": 7}}, "premium": {"4": {"cosmetics": ["skin_manto"]}}}
-	var withSKU : String = _seasonsRaw(list + [s2])
-	var errorsS2 : PackedStringArray = _cfg.call("ValidateSeasons", withSKU)
+	# A s2 que o arquivo já traz (janela futura, agendada de verdade desde OPS-2)
+	# sai do Anexo: anexar a mesma id duas vezes seria um erro de agenda, não a
+	# demonstração de que anexo é o único passo. `tests/season_schedule_test.gd` é
+	# quem mede a linha agendada do arquivo.
+	var base : Array = []
+	for item in list:
+		if str((item as Dictionary).get("id", "")) != "s2":
+			base.append(item)
 	# O passo que ainda é código está amarrado aqui: sem o SKU no catálogo cobrável
 	# o lançamento NÃO passa — é o oposto de estrear uma temporada que o servidor
 	# não sabe cobrar.
-	_checkEq(errorsS2.size(), 1, "S2 com premium_sku inexistente é recusada (1 erro, não um aviso)")
+	var ghost : Dictionary = (s2 as Dictionary).duplicate(true)
+	ghost["premium_sku"] = "pass.s2.ninguem.cobra"
+	var errorsS2 : PackedStringArray = _cfg.call("ValidateSeasons", _seasonsRaw(base + [ghost]))
+	_checkEq(errorsS2.size(), 1, "S2 com premium_sku que ninguém cobra é recusada (1 erro, não um aviso)")
 	_checkHas(errorsS2, "SHOP_CATALOG", "o erro diz onde falta o SKU")
+	_checkEq(_cfg.call("ValidateSeasons", _seasonsRaw(base + [s2])).size(), 0, "o mesmo anexo com o SKU cobrável do catálogo passa (é o que a S2 agendada usa)")
 	s2.erase("premium_sku")
-	var withoutSKU : String = _seasonsRaw(list + [s2])
+	var withoutSKU : String = _seasonsRaw(base + [s2])
 	var errors : PackedStringArray = _cfg.call("ValidateSeasons", withoutSKU)
 	if not _checkEq(errors.size(), 0, "S2 anexada ao arquivo real valida limpa sem tocar em GDScript: %s" % [str(errors)]):
 		return

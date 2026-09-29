@@ -16,6 +16,38 @@ var readPoolEnabled : bool			= SQLCommons.ReadPoolDefaultEnabled
 var readTxnDepth : int				= 0
 
 # Migrations
+#
+# O estado do último plano mora aqui e sai por `MigrationStats()`. Existe porque
+# até 2026-09-28 o carimbo era cego: `ApplyMigrations()` avançava o contador na
+# memória e gravava a versão no fim com o resultado de `Query()` jogado fora, e a
+# única pista era um `push_error` no log do container — que ninguém pagina. Um
+# contador lido pelo `/metrics` é o que transforma o mesmo fato em sinal.
+#
+# `migrationDir` é o seam do harness (mesma ideia do `telemetryService` de
+# MetricsServer): vazio = o caminho do pacote. `SHAMBLETA_MIGRATIONS_DIR` aponta
+# para outra árvore sem recompilar, que é o botão do ops para ensaio de migration
+# em staging e o que `tests/migration_atomicity_test.gd` usa para não tocar no
+# `live.db` nem no `data/conf/migrations/` de verdade.
+var migrationDir : String			= OS.get_environment(SQLCommons.MigrationsDirEnv).strip_edges()
+var migrationSchemaVersion : int	= 0
+var migrationPatchCount : int		= 0
+var migrationFailures : int			= 0
+var migrationFailedPatch : int		= -1
+var migrationFailedFile : String	= ""
+var migrationLastError : String		= ""
+var migrationPlanState : String		= "pending"
+
+# Sucesso de verdade de uma statement que não devolve linhas. `Query()` devolve
+# Array e descarta o bit do handle, então para DDL as duas respostas são `[]` e
+# "aplicou" fica indistinguível de "estourou" — é exatamente o buraco do carimbo.
+# Mesma `queryMutex` e mesma contagem de `Query()`.
+func TryExec(query : String) -> bool:
+	_LockQueryMutex()
+	queryCounter += 1
+	var ok : bool = db.query(query)
+	_UnlockQueryMutex()
+	return ok
+
 func HasVersion() -> bool:
 	var result = Query("SELECT name FROM sqlite_master WHERE type=\"table\" AND name=\"migration\"")
 	return not result.is_empty()
@@ -27,8 +59,39 @@ func GetVersion() -> int:
 			return result[0].get("version", 0)
 	return 0
 
-func SetVersion(version : int):
-	Query("UPDATE migration SET version = %d;" % version)
+func SetVersion(version : int) -> bool:
+	if not TryExec("UPDATE migration SET version = %d;" % version):
+		migrationLastError = str(db.error_message)
+		return false
+	migrationSchemaVersion = version
+	return true
+
+# A decisão, pura. `stalled` é a palavra que virou alerta: a base tem patches
+# visíveis que o carimbo NÃO cobre — porque um deles falhou, porque o pacote não
+# traz migration nenhuma, ou porque o binário em execução é mais velho que o schema
+# (rollback de deploy). Antes desta função, nos três casos o servidor subia verde no
+# `/healthz` e errava no primeiro login que tocava a tabela que não existe. Pura de
+# propósito: é a única forma de a régua conferir os três estados de recusa sem quebrar
+# a base real, e é a mesma função que `/healthz` e a porta pré-auth consultam, então
+# "saudável" e "recusa login" não podem mais divergir.
+static func MigrationBlockedState(plan : String, patches : int, version : int) -> bool:
+	return plan == "failed" or plan == "empty" or plan == "stale" or patches > version
+
+func MigrationBlocked() -> bool:
+	return MigrationBlockedState(migrationPlanState, migrationPatchCount, migrationSchemaVersion)
+
+func MigrationStats() -> Dictionary:
+	var stalled : bool = MigrationBlocked()
+	return {
+		"version": migrationSchemaVersion,
+		"patches": migrationPatchCount,
+		"failures": migrationFailures,
+		"failedPatch": migrationFailedPatch,
+		"failedFile": migrationFailedFile,
+		"error": migrationLastError,
+		"plan": migrationPlanState,
+		"stalled": stalled,
+	}
 
 # O que o boot faz com o diretório de patches que ele enxerga. Puro de propósito:
 # `patchCount` e `currentVersion` são as duas entradas e a decisão é verificável
@@ -55,27 +118,85 @@ static func MigrationPlan(patchCount : int, currentVersion : int) -> String:
 	return "apply"
 
 func ApplyMigrations():
+	var dir : String = migrationDir if not migrationDir.is_empty() else Path.MigrationRsc
 	var currentVersion : int = GetVersion()
-	var patches : PackedStringArray = FileSystem.ParseSQL(Path.MigrationRsc)
+	migrationSchemaVersion = currentVersion
+	var patches : PackedStringArray = FileSystem.ParseSQL(dir)
 	var patchCount : int = patches.size()
+	migrationPatchCount = patchCount
 	var plan : String = MigrationPlan(patchCount, currentVersion)
+	migrationPlanState = plan
 	if plan == "uptodate":
 		return
 	if plan == "empty":
-		push_error("SQL: nenhum patch visível em %s — o pacote não traz as migrations. Nada aplicado." % Path.MigrationRsc)
+		push_error("SQL: nenhum patch visível em %s — o pacote não traz as migrations. Nada aplicado." % dir)
 		return
 	if plan == "stale":
 		push_error("SQL: %d patches visíveis contra a base na versão %d — binário mais velho que o schema. Nada aplicado." % [patchCount, currentVersion])
 		return
 	while patchCount > currentVersion:
-		ApplyMigration(patches[currentVersion])
+		var patchFile : String = patches[currentVersion]
+		# FAIL-CLOSED, e o carimbo anda junto com o schema — patch a patch, não no
+		# fim do laço. O código até aqui avançava o contador e gravava a versão com
+		# o sucesso do patch ignorado: um `ALTER TABLE` que estourava (tabela que
+		# ainda não existe, lock timeout, coluna duplicada) virava "aplicado", e no
+		# boot seguinte aquele patch não rodava de novo — o objeto de schema nunca
+		# existiu, e as tabelas do dinheiro vivem justamente nesses patches.
+		# Carimbar por patch é também o que torna o PARAR seguro: o que passou fica
+		# marcado e não reaplica; o que falhou fica para trás e roda de novo na
+		# próxima subida, com a causa consertada.
+		if not ApplyMigration(patchFile):
+			migrationFailures += 1
+			migrationFailedPatch = currentVersion
+			migrationFailedFile = patchFile
+			migrationPlanState = "failed"
+			push_error("SQL: migration %s (patch %d de %d) FALHOU: %s — a base para na versão %d e nada além dela é estampado." % [patchFile, currentVersion + 1, patchCount, migrationLastError, currentVersion])
+			return
 		currentVersion += 1
-	SetVersion(currentVersion)
-	_tableColumns.clear()
+		if not SetVersion(currentVersion):
+			migrationFailures += 1
+			migrationFailedPatch = currentVersion - 1
+			migrationFailedFile = patchFile
+			migrationPlanState = "failed"
+			push_error("SQL: o patch %s aplicou mas a versão %d não foi gravada: %s — para aqui, sem carimbo." % [patchFile, currentVersion, migrationLastError])
+			return
+		_tableColumns.clear()
 
-func ApplyMigration(migrationFile : String):
+# Aplica UM patch e devolve se ele virou schema. É o único lugar do boot que sabe
+# separar as duas coisas, porque é o único que lê o bit do handle (`Query()`
+# descartava, e DDL não devolve linha nenhuma para comparar).
+#
+# Atomicidade: `sqlite3_exec` para na statement que falha e NÃO desfaz as
+# anteriores, então um patch de 20 `CREATE TABLE` que estoura no 12 deixaria 11
+# objetos órfãos contra uma versão que diz "nada aplicado". Envelopar em
+# transação fecha isso. Os patches que já trazem o próprio `BEGIN TRANSACTION`
+# (001, 002, 003, 008) correm crus — SQLite recusa transação dentro de transação
+# — e um `BEGIN` de corpo de trigger (009, 056) não é transação, por isso a
+# detecção exige a palavra `TRANSACTION`.
+func ApplyMigration(migrationFile : String) -> bool:
 	var migration : String = FileAccess.get_file_as_string(migrationFile)
-	Query(migration)
+	if migration.is_empty():
+		# "" não é "patch que não faz nada": é arquivo que não leu (faltou no .pck,
+		# acesso negado). Estampar isso é o defeito antigo em miniatura.
+		migrationLastError = "arquivo ilegível ou vazio: " + migrationFile
+		return false
+	var wrapped : bool = not _HasOwnTransaction(migration)
+	if wrapped:
+		migration = "BEGIN TRANSACTION;\n" + migration + "\nCOMMIT;"
+	if not TryExec(migration):
+		migrationLastError = str(db.error_message)
+		# Fechar o que ficou aberto: com transação envolta (ou com o `BEGIN` do
+		# próprio patch abortado no meio) o handle do writer segue segurando lock e
+		# o processo leria schema pela metade. Aqui o ROLLBACK é esperado FALHAR
+		# quando o patch não tinha transação nenhuma, por isso não grita — quem
+		# grita é o chamador, com o `migrationLastError` acima.
+		TryExec("ROLLBACK;")
+		return false
+	return true
+
+static func _HasOwnTransaction(migration : String) -> bool:
+	var rx : RegEx = RegEx.create_from_string(r"(?i)\bBEGIN\s+TRANSACTION\b")
+	return rx != null and rx.search(migration) != null
 
 # Accounts
 func AddAccount(username : String, password : String, email : String, tosVersion : String = "", privacyVersion : String = "", consentIp : String = "") -> bool:
@@ -196,6 +317,10 @@ func EraseAccount(accountID : int) -> bool:
 		db.query_with_bindings("DELETE FROM character WHERE account_id = ?;", [accountID])
 
 		# 2) dados por conta (auth, telemetria, preferências, wallet, fraude, AH)
+		# `social_graph` sai nos DOIS papéis: arestas que a conta donou e arestas que
+		# apontam para ela. Sobrou a segunda metade, o grafico de outra pessoa passaria a
+		# citar um `deleted_%d` (e, pior, um account_id reciclado) como alvo vivo — é o
+		# DELETE que o índice `idx_social_graph_target` da migration 061 serve.
 		for accountSql in [
 			"DELETE FROM auth_token WHERE account_id = ?;",
 			"DELETE FROM telemetry_event WHERE account_id = ?;",
@@ -203,6 +328,8 @@ func EraseAccount(accountID : int) -> bool:
 			"DELETE FROM wallet WHERE account_id = ?;",
 			"DELETE FROM fraud_flag WHERE account_id = ?;",
 			"DELETE FROM auction_listing WHERE seller_account = ?;",
+			"DELETE FROM social_graph WHERE account_id = ?;",
+			"DELETE FROM social_graph WHERE target_account_id = ?;",
 		]:
 			db.query_with_bindings(accountSql, [accountID])
 
@@ -747,7 +874,11 @@ func AddItemToCharacter(charID : int, itemID : int, count : int, reason : String
 		ok = UpdateRowsRaw("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemID, charID], {"count" = int(existing[0]["count"]) + count})
 	else:
 		ok = db.insert_row("item", {"item_id" = itemID, "char_id" = charID, "count" = count, "storage" = 0, "customfield" = ""})
-	return ok and GrantItemLotRaw(charID, itemID, count, reason) != 0
+	# SOM-CRAFT: o drop do settle é a pia das matérias-primas e entra por aqui —
+	# mesmo carimbo bound da regra de _GrantStackRaw (ver EconomyKernel), lido da
+	# célula (ItemCell.material), nunca do nome.
+	var bound : int = 1 if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)) else 0
+	return ok and GrantItemLotRaw(charID, itemID, count, reason, bound) != 0
 
 # SOM-IDLE: F2 settle — anchor + efficiency reset
 func UpdateSettleAnchor(charID : int, lastSettledAt : int, efficiency : float) -> bool:
@@ -1040,10 +1171,16 @@ func AddItem(charID : int, itemID : int, customfield : String, itemCount : int =
 	var data : Dictionary = GetItem(charID, itemID, customfield, storageType)
 	# Increment item count
 	if not data.is_empty():
-		if not ExecuteBindings("UPDATE item SET count = ? WHERE item_id = ? AND char_id = ? AND storage = ? AND customfield = ?;", [data["count"] + 1, itemID, charID, storageType, customfield]):
+		# `itemCount`, não 1: o ramo de cima é o da pilha existente e quem chama
+		# passa quantidade (`NpcCommons.AddItem` dos baús/NPC: `AddItem(appleID, 5)`,
+		# Nina dá 10 poções). Somar 1 aqui deixava a memória do agente com 6 e o
+		# banco com 2 — no relog o item desaparecia, e o `RemoveItem` de 5 era
+		# rejeitado por falta de lote enquanto o inventário em memória já o
+		# tinha jogado fora. O journal registra a mesma quantidade: soma de lotes
+		# == soma de pilhas é a reconciliação B1.
+		if not ExecuteBindings("UPDATE item SET count = ? WHERE item_id = ? AND char_id = ? AND storage = ? AND customfield = ?;", [data["count"] + itemCount, itemID, charID, storageType, customfield]):
 			return false
-		# SOM-IDLE B1: journal da concessão (upstream incrementa de 1 em 1 aqui).
-		return true if storageType != 0 else GrantItemLotRaw(charID, itemID, 1, "world", 0, customfield) != 0
+		return true if storageType != 0 else GrantItemLotRaw(charID, itemID, itemCount, "world", 0, customfield) != 0
 
 	# Insert new item
 	data = {
@@ -1609,7 +1746,7 @@ func _post_launch():
 			# de ~427 ms, ~1,0 ms amortizado por settle contra ~2,5 ms do default. O
 			# pico unitário é maior de propósito: é nessa troca que a curva tem joelho.
 			Query("PRAGMA wal_autocheckpoint=4000;")
-			if not Launcher.Debug and not LauncherCommons.isWeb:
+			if not LauncherCommons.DebugServiceLive() and not LauncherCommons.isWeb:
 				backups = SQLBackups.new()
 
 	ApplyMigrations()
@@ -1628,6 +1765,13 @@ func _post_launch():
 	Peers.bannedIPRanges = LoadIPBans()
 	ChatModeration.Reset(LoadMutes())
 	CleanExpiredTokens()
+	# AUDITORIA_2026-09-27 §12: presença durável. Linha com o MEU `server_id` no boot
+	# só pode ter vindo de um processo que não passou por `DisconnectCharacter` —
+	# inclusive este, na vida anterior. Está ao lado das limpezas de token vencidos
+	# acima pelo mesmo motivo: é trabalho de expiração do boot, e só o processo
+	# `--server` escreve presença, então só ele reclama a própria cauda.
+	if "--server" in OS.get_cmdline_args():
+		Presence.ReclaimServer(self)
 
 	isInitialized = true
 

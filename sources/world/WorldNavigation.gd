@@ -25,7 +25,7 @@ static func GetPathLengthSquared(agent : BaseAgent, pos : Vector2) -> float:
 		var inst : WorldInstance = WorldAgent.GetInstanceFromAgent(agent)
 		if inst:
 			var path : PackedVector2Array = NavigationServer2D.map_get_path(inst.map.mapRID, agent.position, pos, true)
-			return Util.UnrollPathLength(path)
+			return UnrollPathLength(path)
 	return INF
 
 static func GetDistanceSquaredSafe(agent : BaseAgent, pos : Vector2) -> float:
@@ -37,6 +37,25 @@ static func GetDistanceSquaredSafe(agent : BaseAgent, pos : Vector2) -> float:
 	return pathLengthSquared
 
 # Utils
+# Comprimento de caminho em coordenadas isométricas — mora aqui, e não em `Util`,
+# porque precisa de `SkillCommons.PerspectiveIncrease`. A direção dessa dependência
+# não é estilo: `SkillCommons` puxa o grafo do mundo inteiro (`BaseAgent`,
+# `WorldInstance`, `Formula`, `DB`, ...) e `Util` é folha — chamado por `Conf`, por
+# `LauncherCommons` e por cada log do projeto. Medido: com esta linha em `Util`,
+# tocar `Util` ou `Conf` num `godot -s` derramava 41 `SCRIPT ERROR: Compile Error`
+# antes do `_init`, porque o grafo compilava com os autoloads ainda não registrados
+# (`Identifier not found: Launcher`). Sem ela, o mesmo probe dá 0. Um utilitário que
+# conhece a projeção do mundo cobra esse preço em todo processo que o usa.
+static func UnrollPathLength(path : PackedVector2Array) -> float:
+	var pathSize : int = path.size()
+	if pathSize < 2:
+		return INF
+	var unrolledPos : Vector2 = Vector2.ZERO
+	for i in (pathSize-1):
+		unrolledPos += (path[i] - path[i+1]).abs()
+	unrolledPos *= SkillCommons.PerspectiveIncrease
+	return unrolledPos.length_squared()
+
 static func GetRandomPosition(inst : WorldInstance) -> Vector2i:
 	if inst == null or inst.map == null or inst.map.navPoly == null or inst.map.navPoly.get_polygon_count() == 0:
 		push_error("No triangulation available")

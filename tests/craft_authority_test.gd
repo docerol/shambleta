@@ -14,9 +14,14 @@ extends SceneTree
 #   C1  identidade: o RPC (`Server.SubmitCraft`) não tem parâmetro de char/conta —
 #       char e conta vêm do PEER. Peer sem sessão não forja nada; a linha gravada é da
 #       conta da sessão, não de quem escreveu o pacote;
-#   C2  material: com o char a ZERO itens a forja ACEITA e cobra só o pedágio em ouro
-#       (500×tier²) — prova dura de que a forja não é uma segunda atividade consumindo
-#       drops da fazenda; o único insumo é gold;
+#   C2  insumo: a forja cobra DOIS preços — ouro (`SubmitFee`) e a matéria-prima
+#       declarada da faixa do tier (`CraftCatalog.MaterialPerCraft`). Sem material o
+#       `pending` não nasce (motivo `no_stock`, e o ouro fica no char), o lote
+#       consumido é o BOUND que o drop produz, e a grandeza é régua de tempo de
+#       fazenda: recomputamos a taxa de material/h das três constantes de
+#       `FarmZoneData` e exigimos que um craft de tier 1 custe entre 1 e 3 horas.
+#       Até 2026-09-27 esta suíte asserava o contrário ("zero material e a forja
+#       aceita"), que é como o repo registrou que o segundo eixo não existia;
 #   C3  porta de e-mail e teto diário (`CraftCatalog.MAX_PER_DAY`) decididos no
 #       servidor, com o ouro intacto na recusa;
 #   C4  `pending` não é item: submeter não cria `craft_item_template` nem entrega
@@ -41,6 +46,7 @@ var _eco : Object = null
 var _netServer : Object = null
 var _dbScript : GDScript = null
 var _craft : GDScript = null
+var _farm : GDScript = null
 var _actorCommons : GDScript = null
 var _skillCommons : GDScript = null
 var _networkCommons : GDScript = null
@@ -89,10 +95,17 @@ func _sourceText(path : String) -> String:
 	file.close()
 	return text
 
+# Constante lida pelo NOME do script (não copiada para cá): as taxas de oferta que
+# a régua de tempo de fazenda recompra vêm da tabela viva em `FarmZoneData`, então
+# mexer numa constante de drop move a régua em vez de deixá-la mentindo.
+func _const(script : GDScript, constantName : String) -> float:
+	var raw : Variant = script.get_script_constant_map().get(constantName, null)
+	return float(raw) if (raw is int or raw is float) else -1.0
+
 # ------------------------------------------------------------------ boot
 
 func _run():
-	print("== Craft authority harness (peer decide conta / zero material / GM decide saída) ==")
+	print("== Craft authority harness (peer decide conta / matéria-prima cobra hora de fazenda / GM decide saída) ==")
 	_launcher = root.get_node_or_null(^"Launcher")
 	if _launcher == null:
 		print("FATAL: Launcher autoload missing")
@@ -119,6 +132,7 @@ func _run():
 	_network = root.get_node_or_null(^"Network")
 	_eco = _launcher.get("Economy")
 	_craft = load("res://sources/economy/CraftCatalog.gd")
+	_farm = load("res://sources/idle/FarmZoneData.gd")
 	_actorCommons = load("res://sources/actor/ActorCommons.gd")
 	_skillCommons = load("res://sources/skill/SkillCommons.gd")
 	_networkCommons = load("res://sources/network/NetworkCommons.gd")
@@ -133,7 +147,7 @@ func _run():
 		_finish()
 		return
 	_suiteIdentity()
-	_suiteNoMaterial()
+	_suiteMaterialSink()
 	_suiteEmailAndCap()
 	_suiteApprovalNeedsGM()
 	_finish()
@@ -180,6 +194,11 @@ func _setupFixture() -> bool:
 		return false
 	if not _check(_maxPerDay >= 1, "o catálogo declara um teto diário (%d)" % _maxPerDay):
 		return false
+	# Pilha para as suítes que PRECISAM forjar (C1, C3, C4): C2 mede o consumo com
+	# conta exata e reabastece no fim, então o resto do harness não depende de
+	# quanto insumo a suíte de insumo deixou.
+	if _matHash() != int(_dbScript.UnknownHash):
+		_grantMaterial(_matNeed() * (_maxPerDay + 4))
 	return true
 
 func _openSession(accountID : int, charID : int, peerID : int):
@@ -205,8 +224,12 @@ func _gp() -> int:
 	var rows : Array = _sql.db.select_rows("stat", "char_id = %d" % _charID, ["gp"])
 	return int(rows[0]["gp"]) if not rows.is_empty() and rows[0].get("gp", null) != null else 0
 
+# Linhas do ITEM FORJADO no inventário, não "qualquer item": desde que o craft
+# cobra matéria-prima, o char da sessão tem linha de insumo por definição, e contar
+# tudo faria "nada foi entregue" mentir sem nada ter mudado no produto.
 func _itemRows() -> int:
-	var rows : Array[Dictionary] = _sql.QueryBindings("SELECT COUNT(*) AS n FROM item WHERE char_id = ?;", [_charID])
+	var rows : Array[Dictionary] = _sql.QueryBindings(
+			"SELECT COUNT(*) AS n FROM item WHERE char_id = ? AND item_id = ?;", [_charID, _baseHash])
 	return int(rows[0]["n"]) if not rows.is_empty() else 0
 
 func _subs() -> Array[Dictionary]:
@@ -234,10 +257,59 @@ func _dropFixture():
 	_sql.db.delete_rows("craft_submission", "account_id = %d" % _accountID)
 	_sql.db.delete_rows("craft_item_template", "creator_account_id = %d" % _accountID)
 	_sql.db.delete_rows("item", "char_id = %d" % _charID)
-	_sql.db.delete_rows("ledger_transaction", "account_id = %d" % _accountID)
+	# Lotes também: desde que a fixture concede matéria-prima, sobrar `item_instance`
+	# de um personagem apagado é órfão que o reconcile dos outros harnesses conta.
+	_sql.DeleteRowsRaw("item_instance", "char_id = %d" % _charID)
+	# Ledger fica: `ledger_transaction_no_delete` recusa o DELETE (056:103) e a
+	# forja grava taxa atestada, então esta linha era o erro que o gate ainda não
+	# via. A perna de carteira do reconcile dá JOIN em wallet/account — apagar o
+	# account aposenta a série inteira.
 	_sql.db.delete_rows("character", "nickname = 'CafrCharA'")
 	_sql.db.delete_rows("account", "username = 'cafr_a'")
 	_accountID = 0
+
+# ------------------------------------------------------------------ insumo
+# A matéria-prima é resolvida pelo NOME canônico da faixa (`BandMaterialNames`,
+# via `GetBandMaterialHash`), nunca por hash regravado aqui: é a MESMA função que o
+# roll de drop usa, então "a faixa entrega" e "o craft cobra" são a mesma
+# identidade por construção, e conteúdo renomeado quebra as duas pontas juntas.
+
+func _matHash() -> int:
+	return int(_farm.call("GetBandMaterialHash", _baseTier))
+
+func _matNeed() -> int:
+	return int(_craft.call("MaterialPerCraft", _baseTier))
+
+# Saldo em LOTES com bound incluso — a unidade que o consumidor do craft usa.
+func _matBalance() -> int:
+	return int(_sql.GetLotBalanceRaw(_charID, _matHash(), true))
+
+# Concede pelo caminho de produção: `AddItemToCharacter` espelha agregado + lote e
+# carimba bound = 1 porque a célula é matéria-prima (regra de
+# `EconomyKernel._GrantStackRaw`). Conceder unbound testaria um estado que o jogo
+# não fabrica — e é exatamente o estado que os caminhos de trade recusam.
+func _grantMaterial(units : int) -> void:
+	if units > 0:
+		_sql.AddItemToCharacter(_charID, _matHash(), units, "craft_authority_fixture")
+
+func _dropMaterial() -> void:
+	_sql.db.delete_rows("item", "item_id = %d AND char_id = %d AND storage = 0;" % [_matHash(), _charID])
+	_sql.DeleteRowsRaw("item_instance", "char_id = %d AND item_id = %d AND storage = 0" % [_charID, _matHash()])
+
+# Linhas de ledger do insumo lidas como DELTA: a suíte C1 já forjou uma vez antes
+# daqui, então contar absolutos chamaria o craft anterior de bug.
+func _matLedgerAmounts() -> Array[Dictionary]:
+	return _sql.QueryBindings(
+			"SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason = ?;",
+			[_accountID, "craft_material:%d" % _matHash()])
+
+# Unidades de matéria-prima por hora de fazenda na zona 1, recompradas das três
+# constantes da oferta: kills/h × drops/kill × fatia do roll que é insumo.
+func _materialPerHour() -> float:
+	var killsPerHour : float = 3600.0 / float(_const(_farm, "ParBaseSeconds"))
+	var dropsPerKill : float = float(_const(_farm, "DefaultDropRatePPM")) / 1000000.0
+	var share : float = float(_const(_farm, "MaterialDropSharePPM")) / 1000000.0
+	return killsPerHour * dropsPerKill * share
 
 # ------------------------------------------------------------------ C1 identidade
 
@@ -252,13 +324,15 @@ func _suiteIdentity():
 	# Peer com sessão: o pacote nomeia SLOT + BASE + NOME + MODS; ninguém escreve
 	# "essa submissão é da conta X" — quem decide a conta é o servidor.
 	var before : int = _gp()
+	var matBefore : int = _matBalance()
 	_netServer.call("SubmitCraft", _slot, _baseHash, subName, mods, _peerID)
 	var row : Dictionary = _subRow(subName)
 	_check(not row.is_empty(), "a submissão do peer logado foi gravada")
 	_checkEq(int(row.get("account_id", -1)), _accountID, "account_id da linha vem da SESSÃO do peer")
 	_checkEq(int(row.get("char_id", -1)), _charID, "char_id da linha vem da SESSÃO do peer")
 	_checkEq(str(row.get("status", "")), "pending", "nasce pendente (nenhum item no mundo ainda)")
-	_checkEq(before - _gp(), _fee(), "o único insumo cobrado até aqui é o pedágio em ouro (500×tier²)")
+	_checkEq(before - _gp(), _fee(), "o pedágio em ouro saiu (500×tier²)")
+	_checkEq(matBefore - _matBalance(), _matNeed(), "e a matéria-prima da faixa saiu junto (o RPC do peer paga os dois preços)")
 	var serverSrc : String = _sourceText("res://sources/network/server/Server.gd")
 	_check(serverSrc.contains("func SubmitCraft(slot : int, baseItemHash : int, name : String, modifiers : Dictionary, peerID : int)"),
 			"Server.SubmitCraft só recebe slot/base/nome/mods + peerID (char e conta NÃO são parâmetros)")
@@ -267,14 +341,57 @@ func _suiteIdentity():
 
 # ------------------------------------------------------------------ C2 material
 
-func _suiteNoMaterial():
-	print("[suite] C2: zero material no inventário e a forja ACEITA — não há loop de drops")
-	_checkEq(_itemRows(), 0, "o char da sessão não tem NENHUM item (nenhuma matéria-prima)")
-	var res : Dictionary = _eco.SubmitCraft(_charID, _accountID, _slot, _baseHash, "Kethrik Vowsunder", {"FireDamage": 1})
-	_check(bool(res.get("ok", false)), "sem material algum a submissão é aceita (motivo: %s)" % str(res.get("reason", "")))
-	_checkEq(_itemRows(), 0, "e nada foi consumido nem entregue (submissão segue pendente)")
-	var row : Dictionary = _subRow("Kethrik Vowsunder")
-	_check(int(row.get("budget_used", -1)) >= 0, "o custo medido é o BUDGET do design (%s), não itens" % str(row.get("budget_used", "?")))
+func _suiteMaterialSink():
+	print("[suite] C2: o craft cobra matéria-prima da faixa — e o preço é hora de fazenda")
+	var mat : int = _matHash()
+	if not _check(mat != int(_dbScript.UnknownHash), "a faixa do tier %d declara uma matéria-prima" % _baseTier):
+		return
+	var need : int = _matNeed()
+	_check(need > 0, "o catálogo cobra %d unidades por craft no tier %d" % [need, _baseTier])
+
+	# (a) sem insumo, com ouro de sobra: a recusa tem motivo PRÓPRIO, nada é gravado,
+	# nada é cobrado. Ouro e insumo são dois motivos distintos na tela, e a única
+	# forma de provar isso é deixar o char rico e quebrado de material.
+	_dropMaterial()
+	_checkEq(_matBalance(), 0, "o char da sessão está sem NENHUMA unidade de insumo")
+	var gpBefore : int = _gp()
+	var subsBefore : int = _subs().size()
+	var ledgerBefore : int = _matLedgerAmounts().size()
+	var refused : Dictionary = _eco.SubmitCraft(_charID, _accountID, _slot, _baseHash, "Kethrik Vowsunder", {"FireDamage": 1})
+	_check(not bool(refused.get("ok", false)), "sem matéria-prima a submissão é recusada")
+	_checkEq(str(refused.get("reason", "")), "no_stock", "com ouro sobrando o motivo é no_stock, nunca insufficient_gold")
+	_checkEq(gpBefore, _gp(), "na recusa o ouro NÃO saiu")
+	_checkEq(_subs().size(), subsBefore, "e a recusa não gravou linha nenhuma")
+	_checkEq(_matLedgerAmounts().size(), ledgerBefore, "nem o ledger do insumo viu a recusa")
+
+	# (b) preço exato, pago em lote BOUND — o estado que o drop produz. Saldo zero e
+	# agregado drenado: metade do invariante que o `ReconcileDaily` confere.
+	_grantMaterial(need)
+	_checkEq(_matBalance(), need, "a pilha concedida é exatamente um preço de craft")
+	ledgerBefore = _matLedgerAmounts().size()
+	var accepted : Dictionary = _eco.SubmitCraft(_charID, _accountID, _slot, _baseHash, "Kethrik Vowsunder", {"FireDamage": 1})
+	_check(bool(accepted.get("ok", false)), "com o insumo exato a mesma submissão passa (motivo: %s)" % str(accepted.get("reason", "")))
+	_checkEq(_matBalance(), 0, "as %d unidades saíram — nem uma sobrou para esconder consumo parcial" % need)
+	_checkEq(_sql.db.select_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [mat, _charID], ["count"]).size(),
+			0, "o agregado do insumo desceu junto (nenhum item fantasma na tela)")
+	var matLedger : Array[Dictionary] = _matLedgerAmounts()
+	_checkEq(matLedger.size() - ledgerBefore, 1, "cada craft escreve UMA linha de ledger para o insumo, razoada com o hash do item")
+	var wrongAmounts : int = 0
+	for entry in matLedger:
+		if int(entry["amount"]) != -need:
+			wrongAmounts += 1
+	_checkEq(wrongAmounts, 0, "todo lançamento de insumo é DÉBITO exato do preço (%d unidades; sink, nunca crédito)" % need)
+
+	# (c) grandeza: o preço é TEMPO DE FAZENDA, recomprado das três constantes de
+	# oferta (`ParBaseSeconds`, `DefaultDropRatePPM`, `MaterialDropSharePPM`). A
+	# banda 1..3 h é a decisão: abaixo de 1 h o insumo é burocracia, acima de 3 h
+	# "farmar para forjar" deixa de caber num dia de jogo.
+	var perHour : float = _materialPerHour()
+	_check(perHour > 0.0, "a taxa de insumo/h sai das constantes (%.2f/h)" % perHour)
+	var hours : float = float(need) / perHour
+	_check(hours >= 1.0 and hours <= 3.0, "um craft de tier %d custa %.1f h de fazenda — banda 1..3 h" % [_baseTier, hours])
+
+	# (d) dar um segundo preço ao craft não o transformou em fonte de ouro.
 	var ledgers : Array[Dictionary] = _sql.QueryBindings(
 			"SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason LIKE ?;",
 			[_accountID, "craft_submit_fee:tier%"])
@@ -284,6 +401,9 @@ func _suiteNoMaterial():
 		if int(entry["amount"]) >= 0:
 			positive += 1
 	_checkEq(positive, 0, "todo lançamento de forja é DÉBITO de ouro (sink, nunca crédito)")
+	var row : Dictionary = _subRow("Kethrik Vowsunder")
+	_check(int(row.get("budget_used", -1)) >= 0, "o budget do design continua sendo do design, não do insumo (%s)" % str(row.get("budget_used", "?")))
+	_grantMaterial(need * (_maxPerDay + 2))
 
 # ------------------------------------------------------------------ C3 e-mail + teto
 

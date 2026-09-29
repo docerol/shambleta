@@ -246,10 +246,21 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   precedência entre `customized_files={"res://": "strip"}` e o `include_filter`. Desde
   2026-09-24 o boot reclama sozinho se o diretório não vier
   (`SQL: nenhum patch visível em res://data/conf/migrations/`). Confirmar no primeiro deploy:
-  `docker compose logs game | grep "nenhum patch"` vazio **e**
-  `sqlite3 /data/.local/share/Shambleta/live.db "SELECT version FROM migration;"` = 46. O 46 no
-  primeiro boot é a prova de que o pacote trouxe o schema; número menor é o filtro de export,
-  não o código.
+  `docker compose logs game | grep "nenhum patch"` vazio **e** a versão da base lida
+  com o probe read-only do companion (a imagem do `game` não traz `sqlite3` —
+  `deploy/server/Dockerfile:27` instala só `ca-certificates` e `curl`; quem abre o
+  banco aqui é o `python3` do companion, que monta o mesmo `game-data`):
+  `docker compose -f deploy/docker-compose.yml run --rm --no-deps --entrypoint python3 companion -c 'import sqlite3;c=sqlite3.connect("file:/data/.local/share/Shambleta/live.db?mode=ro",uri=True);print(c.execute("SELECT version FROM migration").fetchone()[0])'`
+  devolvendo o número de patches de `data/conf/migrations/` — âncora
+  <!-- DRIFT migration_max 062 --> (hoje 62), derivada do diretório por
+  `scripts/check_doc_drift.sh`: se cair um patch novo e esta linha não for lida, o
+  portão fica vermelho em CI, então o número aqui é âncora conferida, não memória de
+  doc. Não é segunda verdade: o laço que aplica os patches em `SQL.ApplyMigration()`
+  endereça `patches[currentVersion]` por posição (o arquivo é citado por nome, sem número
+  de linha, porque ele se move a cada migração e linha aqui apodrece), e a sequência
+  001..N contínua é régua do mesmo gate. Número MENOR que a âncora no primeiro boot é
+  o filtro de export, não o código; número MAIOR que os patches do build é binário mais
+  velho que o schema (ver `deploy/ROLLBACK.md`, "A fronteira do schema").
 - **Destinos de suporte: a hipótese confirmar-se, e o destino resolveu-se por remoção.**
   Em 2026-09-25 o dono confirmou que **nenhum** dos caminhos é do projeto: os links são do
   upstream de que Shambleta fez fork, e não existe servidor Discord próprio. A função saiu
@@ -412,8 +423,9 @@ novo do portão — preflight de parse dos seis harnesses, ~1 s, local e no job 
 CI — existe porque um `CheckEq` com `String` derrubava o `load()`/`.new()` do runner e o gate
 só descobria no timeout de 1200 s; três execuções foram perdidas assim nesta passada.
 
-Dos 19 untracked, um é documentação e um é scratch: `AUDITORIA_INDEPENDENTE_2026-09-24.md`
-e `build/` (saída do `scripts/export_web.sh` — pacote gerado, nunca se commita).
+Dos 19 untracked, um é documentação (hoje `archive/AUDITORIA_INDEPENDENTE_2026-09-24.md`,
+na raiz quando isto foi escrito) e um é scratch: `build/` (saída do `scripts/export_web.sh`
+— pacote gerado, nunca se commita).
 Os 17 restantes são o que o boot e o portão exigem (cada linha conferida contra os
 chamadores na árvore): `scripts/ci_gate_log.sh` (o quádruplo que `scripts/test.sh`
 chama), `scripts/export_web.sh` + `scripts/qa_web.mjs` (os produtores locais do
@@ -510,7 +522,9 @@ não abre frame nenhum (sondado nesta máquina com um `Node` contador: 400 ms de
 SQLite e fechou vermelho na régua: `p99 249273 µs` contra orçamento de 200000 µs, 2 de 200 settles a
 249 ms e 270 ms (`/tmp/shambleta-all.log`, `== Benchmarks: 1 failures ==`, `wrapper exit=1`). Ou seja:
 o verde anterior era verde sobre a ausência do remédio. O tick saiu e virou
-`PRAGMA wal_autocheckpoint=4000` no bloco do servidor (`sources/sql/SQL.gd:1316`), junto das outras três
+`PRAGMA wal_autocheckpoint=4000` no bloco do servidor (`Query("PRAGMA wal_autocheckpoint=4000;")`
+em `sources/sql/SQL.gd`, citado por statement porque o arquivo ganha linhas a cada migration e
+número de linha aqui apodrece), junto das outras três
 pragmas. A cadeia de medição completa — 64 páginas (pior: 26 de 200 hitches), 4000 páginas com 200
 iterações (verde **cego**: `max 667 µs`, nunca cruza a fronteira do checkpoint), e 4000 com 800
 (`p50 382 µs / p99 527 µs / max 427118 µs`, 2 hitches de 800, orçamento 16, reproduzido em
@@ -553,7 +567,8 @@ com o vivo, benchmarks 0 falhas (`p50 442 µs / p99 1268 µs / max 437354 µs`, 
 `deploy/STAGING.md`: `002→049` limpo sobre o template, landing 54 tabelas, 1 view e 367 pares
 `table.column` — os dois objetos novos estão lá (`ad_slot` da 048, `wallet.gems_paid` da 049). Os
 quatro achados fechados nesta passada e o que cada um deixou de provado estão em
-`ROADMAP_COMERCIAL.md` (bullet "Passada de segurança") e em `AUDITORIA_INDEPENDENTE_2026-09-24.md`
+`ROADMAP_COMERCIAL.md` (bullet "Passada de segurança") e em
+`archive/AUDITORIA_INDEPENDENTE_2026-09-24.md`
 (itens (v) a (y) do §Reparos executados).
 
 **Peso de pacote, medido depois:** quatro padrões a mais no `exclude_filter` do preset Web (`tests/*`
@@ -592,9 +607,10 @@ Compra apenas na versão web (o sandbox do companion responde 403 no nativo).` c
 **Leitura desta transcrição em 2026-09-27: os números de teto acima já valem só para o dia da sonda.**
 Ela registra o que a tela mostrava em 2026-09-25, quando o piso F2P era 1h. A regra mudou no mesmo dia
 para **8h** (`sources/idle/OfflineSettle.gd:22` — `BaseCapHours = 8.0`, com o porquê escrito logo
-acima), e o letreiro da loja passou a ser gerado do código em vez de ser texto chumbado: a régua
-`SuiteStorefrontHonesty` (`tests/IdleTests.gd:8142`) falha se qualquer hora de offline aparecer literal
-no `.tscn` (`tests/IdleTests.gd:8190`), então `VIP: inactive (offline cap 1h + 1h per ad)` e
+acima), e o letreiro da loja passou a ser gerado do código em vez de ser texto chumbado: a suíte
+`SuiteStorefrontHonesty`, em `tests/IdleTestsFrontier.gd` — citada por nome e não por número, porque
+o span daquele arquivo anda a cada rodada de correção e um número que anda é anti-evidência —, falha se qualquer hora de offline aparecer
+literal nos letreiros que `Shop.gd` monta em `ShowState`, e assim `VIP: inactive (offline cap 1h + 1h per ad)` e
 `Ausente: 1.0h (teto 1h)` não são mais o que a tela diz — são o que ela dizia. Não reescrevi a transcrição
 porque ela é evidência datada; o que ela não pode é virar especificação lida fora da data.
 

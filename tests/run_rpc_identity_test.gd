@@ -28,6 +28,10 @@ func probe(claimed : int):
 
 const PROBE_NODE_NAME := "NetworkRpcProbe"
 
+# Orçamento de relógio wall da espera de boot em `_tickBootWait`. Em frames seria
+# a régua errada: é exatamente o pacing de frame que a contenção de CPU muda.
+const DB_BOOT_BUDGET_MS : int = 20000
+
 var checks : int = 0
 var failures : int = 0
 var frames : int = 0
@@ -41,6 +45,11 @@ var probe : Node = null
 var seen : Array = []
 var idA : int = 0
 var idB : int = 0
+
+var dbScript : GDScript = null
+var waitingForBoot : bool = false
+var bootDeadlineMs : int = 0
+var bootStartMs : int = 0
 
 func Check(condition : bool, label : String) -> bool:
 	checks += 1
@@ -60,6 +69,8 @@ func _makeClient() -> Node:
 
 func _process(_delta):
 	frames += 1
+	if waitingForBoot:
+		return _tickBootWait()
 	if net == null:
 		net = root.get_node_or_null(NodePath("Network"))
 	if net == null:
@@ -138,6 +149,56 @@ func _process(_delta):
 	return false
 
 func _finish():
+	# DRENAR NÃO BASTAVA. A contagem de teardown deste runner não era propriedade
+	# do harness: medido em 2026-09-28, vazava 30 dentro do `all` e 1747 rodado
+	# sozinho (`one run_rpc_identity_test`), três vezes seguidas. O
+	# `DrainPendingPreloads()` de `sources/db/DB.gd` só junta os caminhos que já
+	# estão em `preloadPaths`, e `preloadPaths` é preenchido por `Preload()` —
+	# quanto do boot tinha materializado quando o `quit()` chegava dependia da
+	# carga da máquina (LOGIN_SCREEN a 4,494 s no `all` contra 1,865 s sozinho).
+	# A frase que estava aqui, "com o dreno o caminho é sempre o do boot completo",
+	# é falsa por essa medição: `load_threaded_get` bloqueia por um caminho pedido,
+	# e caminho ainda não pedido não é juntado por ninguém.
+	#
+	# O que existe agora é espera de estado. Terminada a máquina de passos, o
+	# runner entra em `waitingForBoot` e `_tickBootWait` continua girando em
+	# `_process` até `DB.isInitialized` virar true — o mesmo sinal que
+	# `multi_instance_tick_test` lê, posto por `PreloadUpdate`, que na mesma
+	# emissão de `process_frame` chama o `Load()` síncrono. A linha de veredito só
+	# é impressa quando a espera fecha, com o check do boot dentro da contagem. O
+	# teto da espera é relógio wall (`Time.get_ticks_msec()`), não frames: o pacing
+	# de frame é justamente o que a contenção muda. Estourado o orçamento sem o
+	# sinal, `Check(false, ...)` vai vermelho e o `quit()` leva a falha — não é
+	# silêncio. O invariante que a mudança cria é nenhum `quit()` deste harness
+	# alcançar o teardown com o boot do DB por fechar.
+	#
+	# Medido depois da mudança, host com Steam em execução (load 8 a 18 em 12
+	# núcleos): dez runs de `bash scripts/test.sh one run_rpc_identity_test 600`
+	# deram 1747 sete vezes e 1748 três vezes — um regime só: 1066 ObjectDB + 641
+	# recursos + 40 RIDs de `NavRegion2D`, e o +1 é uma instância ObjectDB a mais
+	# (1067) ou um RID de `RendererDummy…DummyTexture`, nunca o outro regime. Um
+	# dos dez rodou com 20 loops de CPU extras (`nice -n 19`) competindo e
+	# LOGIN_SCREEN a 3,439 s, e vazou 1747 igual. A espera custou de 1 a 19 ms:
+	# `DB.isInitialized` já era true quando o passo 4 pousou, então a espera é
+	# piso, não custo. O teto gravado é 2247 e a régua de rebaixa de
+	# `scripts/ci_gate_log.sh` não acusa: 2247 não é maior que 1747 + 1747/2 + 64.
+	# O caminho do `all` não foi remedido aqui (20+ min, e o lock global de boot
+	# serializa); dele se sabe o invariante do parágrafo anterior.
+	dbScript = load("res://sources/db/DB.gd")
+	waitingForBoot = true
+	bootStartMs = int(Time.get_ticks_msec())
+	bootDeadlineMs = bootStartMs + DB_BOOT_BUDGET_MS
+	return false
+
+func _tickBootWait():
+	if dbScript != null and bool(dbScript.get("isInitialized")):
+		Check(true, "boot do DB fechado antes do quit (DB.isInitialized em %d ms de espera)" % (int(Time.get_ticks_msec()) - bootStartMs))
+	elif int(Time.get_ticks_msec()) >= bootDeadlineMs:
+		Check(false, "DB.isInitialized seguiu false por %d ms: o boot parou no preload threadado e o veredito deste runner deixaria de ser lido no regime do boot completo" % DB_BOOT_BUDGET_MS)
+	else:
+		return false
+	if dbScript != null:
+		dbScript.call("DrainPendingPreloads")
 	print("== RPC IDENTITY: %d checks, %d failures ==" % [checks, failures])
 	quit(failures)
 	return true

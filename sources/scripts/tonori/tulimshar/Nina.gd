@@ -141,7 +141,9 @@ func OnCroissantTurnIn():
 	RemoveItem(DB.GetCellHash("Croissant"))
 	SetQuest(ProgressCommons.Quest.NINA_HUNGRY, ProgressCommons.NINA_HUNGRY.REWARDS_WITHDREW)
 	AddItem(DB.GetCellHash("Cactus Potion"), 10)
-	AddGP(100)
+	# Os 100 GP saíram daqui (eram `AddGP(100)` cru, soma em `stat.gp` sem linha de
+	# ledger) para `rewardGP` em `presets/quests/NinaHungry.tres`, pagos pelo
+	# funil `NpcCommons.SetQuest` da linha acima.
 	Mes("Please, take these Cactus Potions and a bit of gold to cover what you spent.")
 
 # Desert Seed quest

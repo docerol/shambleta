@@ -607,6 +607,12 @@ func GuildFeedback(ok : bool, reason : String, _peerID : int):
 		Launcher.GUI.notificationLabel.AddNotification(("Guild: " if ok else "Guild rejected: ") + reason)
 		if ok and Launcher.GUI.socialWindow and Launcher.GUI.socialWindow.has_method("RefreshGuild"):
 			Launcher.GUI.socialWindow.RefreshGuild()
+		# O veredito das cinco ESCRITAS de guild (`CreateGuild`/`JoinGuild`/
+		# `LeaveGuild`/`DepositToVault`/`WithdrawFromVault`) não pode terminar mudo no
+		# painel que apertou o botão: mesmo espelho do `GuildState` acima.
+		var feedbackPanel : Variant = Launcher.GUI.get("guildWindow")
+		if feedbackPanel != null and feedbackPanel.has_method("ShowNetworkFeedback"):
+			feedbackPanel.call("ShowNetworkFeedback", ok, reason)
 
 func Tournaments(data : Dictionary, _peerID : int):
 	LastTournaments = data

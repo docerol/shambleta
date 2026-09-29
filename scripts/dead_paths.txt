@@ -1,0 +1,18 @@
+# Caminhos `.md` citados na prosa que NÃO existem na árvore e não devem existir.
+#
+# A seção 24 de `scripts/check_doc_drift.sh` exige todo caminho de `.md` citado entre
+# backticks resolva no repositório (com barra: o caminho exato; sem barra: o nome tem
+# que existir em algum lugar da árvore). Este arquivo é a única exceção, e exceção sem
+# motivo é licença para mentir — por isso cada linha precisa de `| <motivo>`.
+#
+# Entrada que volta a existir é acusada: o registro apodrece junto com o caminho.
+#
+# Por que este arquivo existe ao lado de `scripts/doc_drift_allowlist.txt`: aquele é o
+# registro da seção 4, que julga caminho de qualquer extensão mas só nos documentos
+# vivos (README, `docs/development/`, `deploy/`) e não exige motivo por linha. Este é o
+# da seção 24, que julga `.md` em toda a árvore — inclusive comentário de código — e por
+# isso cobra motivo na mesma linha e confere se o caminho voltou a existir. Um `.md`
+# declarado morto vai AQUI; um diretório ou `.json` morto vai no outro.
+# Formato: <caminho> | <motivo>; `#` inicia comentário.
+
+.kilo/plans/1789659178562-audit-commercial-launch.md | plano de auditoria comercial removido do repositório pelo dono em 2026-09-25 (commit 6277671, que o tinha); a citação vive em `deploy/WEB_SLIM.md` e `scripts/export_web.sh` porque é de lá que veio o número dos 26 MB de música, e o corpo se lê com `git show 6277671^:.kilo/plans/1789659178562-audit-commercial-launch.md`

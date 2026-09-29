@@ -9,7 +9,15 @@ func LoadMapLayers(mapID : int) -> Node2D:
 	var mapInstance : Node2D = GetMap(mapID)
 	if mapInstance == null:
 		mapInstance = Instantiate.LoadMapLayers(mapID)
-		pool[mapID] = mapInstance
+		# Um `null` ENTRADO no pool é pior que o próprio fracasso, e por dois caminhos:
+		# `RefreshPool` decide se tenta um mapa adjacente por `mapID not in pool`, então a
+		# chave fantasma bloqueia toda tentativa futura; e `ClearUnused` conta a chave
+		# fantasma no tamanho do pool, mas `FreeMap` não a apaga (não há nó para liberar),
+		# então o teto `LauncherCommons.MapPoolMaxSize` fica estourado para sempre. A
+		# régua que achou isto é `tests/map_load_test.gd`, que percorre os 40 mapas do DB
+		# e um id inexistente.
+		if mapInstance != null:
+			pool[mapID] = mapInstance
 	return mapInstance
 
 #

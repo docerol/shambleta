@@ -96,7 +96,7 @@ ninguém juntou é destruído no meio do parse, sob um cache de scripts que o
 teardown já está libertando, e o sintoma era `script = ExtResource(...)` falhando
 na saída seguida de crash. `DrainPendingPreloads` existe para isso
 (`sources/db/DB.gd:232-239`) e é chamado no último hook de árvore ainda viva do
-autoload — `sources/launcher/Launcher.gd:253-258` —, o que cobre produção e
+autoload — `sources/launcher/Launcher.gd:254-258` —, o que cobre produção e
 qualquer harness que suba o `Launcher`, mesmo os que não o chamam por conta própria.
 Os que chamam explicitamente (`grep -rn DrainPendingPreloads tests`) são os que
 precisam do dreno **antes** de fechar o próprio `SQLite`, não só antes de morrer.
@@ -120,15 +120,15 @@ P4 de fragmentar `Network.gd` em seis módulos (revertida). Na ordem:
    faltando". Esta foi a causa raiz real da suíte bloqueada.
 2. Confirme que nenhum `class_name` novo colide com os seis autoloads de
    `project.godot` (`Launcher`, `Network`, `FSM`, `Monitoring`, `WebPush`,
-   `PwaUpdate` — `[autoload]` em `project.godot:31-36`). <!-- DRIFT autoload_count 6 -->
+   `PwaUpdate` — `[autoload]` em `project.godot:29-36`). <!-- DRIFT autoload_count 6 -->
    <!-- DRIFT autoload_names FSM,Launcher,Monitoring,Network,PwaUpdate,WebPush -->
 3. Não procure guard `Engine.has_singleton` em `FSM.gd` `EnterState` nem em
    `Network.gd` `_init()`: eles **foram removidos**, e a razão está escrita no
    próprio fonte — `sources/launcher/FSM.gd:41-47` registra que o guard nunca foi
    verdadeiro (`Util` é `class_name`, não autoload), então o log de transição de
    estado — a primeira linha que você procura quando o cliente não chega em
-   `IN_GAME` — não saía em build nenhum; `sources/network/Network.gd:1104-1108` é um
-   `_init()` sem guard; e `sources/web/WebPush.gd:11-20` descreve o mesmo defeito
+   `IN_GAME` — não saía em build nenhum; `sources/network/Network.gd:1190-1194` é o
+   `_init()` sem guard (e o estado que faltava logar é `States.IN_GAME`, `sources/launcher/FSM.gd:16`); e `sources/web/WebPush.gd:11-20` descreve o mesmo defeito
    nos guards de `Conf`/`LauncherCommons`, que também saíram. Chamada estática
    direta resolve também sob `godot -s` (é como os testes sobem), que era o
    pretexto do guard. **Consequência para debugging:** se um `class_name` novo

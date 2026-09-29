@@ -40,6 +40,23 @@ que muda o código (regra preamble de `TECH_SPEC_CORE.md`).
 | [REBIRTH_BC_REPORT.md](REBIRTH_BC_REPORT.md) | Entrega do híbrido B+C: cap L60, essência de overflow (online+offline, ledger 1ª classe), loja `1.7^n`, ato de renascimento com agente vivo, migração 021, bugs fechados no meio-do-caminho e re-rodagem dos gates D1 (651 checks / 0 falhas) |
 | [I18N_PHASE2_REPORT.md](I18N_PHASE2_REPORT.md) | Fase 2 da tradução: conteúdo pt-BR dos NPCs/quests (lotes 2A/2B/2C com mapas versionados), corpus 100%, regras editoriais + pendência de nomes de item (2D) |
 
+## Auditorias datadas (fotografia de um dia, não contrato)
+
+Movidas da raiz em 2026-09-28. São registros do que foi medido numa data, com
+seções nomeadas (`§7.1`, `§12`, `C2`) que o código cita como procedência da
+decisão. Não são especificação: os números de linha que eles citam apontavam
+para o código daquele dia e envelheceram, e nada neste diretório é julgado pela
+régua de ponteiros de evidência (`tests/IdleTestsFrontier.gd`, que varre a doc
+viva — `docs/`, `deploy/`, `README.md`, comentário de código).
+
+| Documento | O que fotografa |
+|---|---|
+| [AUDITORIA_INDEPENDENTE_2026-09-24.md](AUDITORIA_INDEPENDENTE_2026-09-24.md) | Auditoria independente de 2026-09-24: 20 categorias com nota, §C1–C2 e §21/§24 (gate de idade, preço pago no grant) — é a origem das migrations 044/046/048/049 |
+| [AUDITORIA_2026-09-27.md](AUDITORIA_2026-09-27.md) | Auditoria de 2026-09-27: os quatro achados de §7.1 (WAL e ouro em memória), §10 (takeover de conta), §12 (presença/escala), §13 (razões vazando no toast), §14 (social), §15 (live ops) |
+| [AUDITORIA_SHAMBLETA.md](AUDITORIA_SHAMBLETA.md) | Auditoria anterior às duas acima |
+| [auditoria-tecnica-shambleta.md](auditoria-tecnica-shambleta.md) | Fotografia técnica (fragmentação, compilação, GUT, WAL) — premissa de nota superseded pela auditoria independente |
+| [RELATORIO_FINAL_2026-09-21.md](RELATORIO_FINAL_2026-09-21.md), [CONCLUSAO_ROUND_14.md](CONCLUSAO_ROUND_14.md), [CONCLUSAO_FINAL_ROUND_19.md](CONCLUSAO_FINAL_ROUND_19.md) | Fechos de rodada: o que foi entregue em cada corte |
+
 ## Onde está o resto
 
 - **Relatórios de fases antigas** (F2 spike, F3, F4, beta deploy) e as

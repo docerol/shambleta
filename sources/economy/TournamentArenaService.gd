@@ -403,6 +403,53 @@ func ReconcileDaily() -> int:
 
 	return divergences
 
+# SOM-IDLE D2 (2026-09-28): o contador nomeado das pernas de PILHA.
+# `ReconcileDaily` devolve QUANTO está divergente — certo para o dashboard e para
+# o gate, inútil para quem abre o incidente: "1 divergence" no log não diz qual
+# personagem, nem se é uma pilha contando de mais ou um lote sem agregado, e um
+# harness que falha com "1 vs 0" deixa a próxima pessoa caçando em 90 suítes. Foi
+# exatamente assim que a régua de pilha do `SuiteItemSinks` passou uma execução
+# inteira muda. É a mesma razão de `EconomyKernel.DivergingWallets` existir para a
+# perna de gp.
+# O predicado é o do contador, replicado com as colunas a mais: os dois textos
+# vivem colados, e as suítes de reconcile conferem contador e diagnóstico na MESMA
+# base — texto de SQL gêmeo em dois lugares sem essa conferência é o que diverge.
+func DivergingStacks() -> Array[Dictionary]:
+	var out : Array[Dictionary] = []
+	var mismatch : Array[Dictionary] = Launcher.SQL.Query(
+		"SELECT i.char_id AS char_id, c.nickname AS nickname, i.item_id AS item_id, i.customfield AS customfield, i.count AS aggregate, (SELECT SUM(x.count) FROM item_instance x WHERE x.char_id = i.char_id AND x.item_id = i.item_id AND x.storage = i.storage AND x.customfield = i.customfield) AS lots FROM item i INNER JOIN character c ON c.char_id = i.char_id WHERE i.storage = 0 AND i.count != COALESCE((SELECT SUM(count) FROM item_instance WHERE item_instance.char_id = i.char_id AND item_instance.item_id = i.item_id AND item_instance.storage = i.storage AND item_instance.customfield = i.customfield), -1);")
+	for row in mismatch:
+		row["kind"] = "stack_mismatch"
+		out.append(row)
+	var orphans : Array[Dictionary] = Launcher.SQL.Query(
+		"SELECT s.char_id AS char_id, c.nickname AS nickname, s.item_id AS item_id, s.customfield AS customfield, s.lots AS lots FROM (SELECT char_id, item_id, storage, customfield, SUM(count) AS lots FROM item_instance GROUP BY char_id, item_id, storage, customfield) AS s INNER JOIN character c ON c.char_id = s.char_id WHERE s.lots != 0 AND NOT EXISTS (SELECT 1 FROM item WHERE item.char_id = s.char_id AND item.item_id = s.item_id AND item.storage = s.storage AND item.customfield = s.customfield);")
+	for row in orphans:
+		row["kind"] = "orphan_lot"
+		out.append(row)
+	return out
+
+# As duas pernas de SOMA de ledger também precisam de nome: conta com soma
+# vitalícia de gold (ou xp) negativa não é incidente de pilha, é incidente de
+# fraude/banco, e `ReconcileDaily` as conta junto. Mesmo predicado do contador,
+# com o `account_id` e o total ao lado.
+func DivergingLedgerNegatives() -> Array[Dictionary]:
+	var out : Array[Dictionary] = []
+	for ledgerKind : String in [EconomyCatalog.LedgerKindGold, EconomyCatalog.LedgerKindXP]:
+		var rows : Array[Dictionary] = Launcher.SQL.QueryBindings(
+			"SELECT account_id AS account_id, SUM(amount) AS total FROM ledger_transaction WHERE kind = ? AND EXISTS (SELECT 1 FROM account WHERE account.account_id = ledger_transaction.account_id) GROUP BY account_id HAVING total < 0;",
+			[ledgerKind])
+		for row in rows:
+			row["kind"] = "ledger_negative:" + ledgerKind
+			out.append(row)
+	return out
+
+# As pernas que ESTA camada conta. O job imprime daqui; o painel (`EconomyService.
+# ReconcileDetail`) soma isto mais a carteira.
+func Divergences() -> Array[Dictionary]:
+	var rows : Array[Dictionary] = DivergingLedgerNegatives()
+	rows.append_array(DivergingStacks())
+	return rows
+
 # SOM-IDLE D2: daily reconcile job — roda após o backup diário (SQLBackups)
 # e registra a divergência para o dashboard. Best-effort, nunca derruba o loop.
 func RunReconcileJob() -> int:
@@ -410,6 +457,15 @@ func RunReconcileJob() -> int:
 	Launcher.SQL.ExecuteBindings("INSERT INTO reconcile_run (created_at, divergences) VALUES (?, ?);", [SQLCommons.Timestamp(), divergences])
 	if divergences > 0:
 		Util.PrintLog("Economy", "Reconcile found %d divergences" % divergences)
+		# Quem recebe a linha é um humano de plantão: os três primeiros nomes, com
+		# kind + dono + (gravado, esperado). O contador continua na linha acima — é
+		# o que o dashboard lê; estas são as linhas que o produziram.
+		var named : int = 0
+		for offender in Divergences():
+			if named >= 3:
+				break
+			named += 1
+			Util.PrintLog("Economy", "Reconcile offender: " + JSON.stringify(offender))
 	var flagged : int = _eco.RunFraudScan()
 	if flagged > 0:
 		Util.PrintLog("Economy", "Fraud scan opened %d flags" % flagged)

@@ -92,8 +92,8 @@ func CreateGuild(accountID : int, charID : int, guildName : String) -> int:
 	return int(out["id"])
 
 func JoinGuild(accountID : int, guildID : int) -> bool:
-	if GetGuildForAccount(accountID) != 0 or GetGuild(guildID).is_empty():
-		return false
+	if GuildRoster.JoinReason(accountID, guildID) != GuildRoster.ReasonOk:
+		return false	# o motivo é um token do catálogo; `GuildRoster.RefusalFor` o devolve para a tela
 	return Launcher.SQL.ExecuteBindings("INSERT INTO guild_member (guild_id, account_id, rank, joined_at) VALUES (?, ?, 'member', ?);", [guildID, accountID, SQLCommons.Timestamp()])
 
 func LeaveGuild(accountID : int) -> bool:
@@ -172,6 +172,11 @@ func WithdrawFromVault(accountID : int, charID : int, itemID : int, count : int)
 	var guildID : int = GetGuildForAccount(accountID)
 	if guildID == 0 or itemID <= 0 or count <= 0:
 		return false
+	# §14, metade do SERVIDOR. O teto por ação é checável sem banco, então ele vai
+	# antes do lock: um cliente modado que manda `count = 10^9` recebe `false` sem
+	# nem abrir transação.
+	if count > GuildVaultLimits.MaxWithdrawPerAction:
+		return false
 	var rank : String = GetMemberRank(accountID)
 	if rank != "leader" and rank != "officer":
 		return false
@@ -179,6 +184,15 @@ func WithdrawFromVault(accountID : int, charID : int, itemID : int, count : int)
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
+		# A janela é contada no RASTRO, não em memória de processo: um limitador em
+		# dicionário morre no restart, e reconectar é a primeira coisa que um oficial
+		# modado tenta. `guild_vault_log` já é escrito por este próprio caminho
+		# (append-only), então a contagem da janela é a MESMA evidência que o painel
+		# mostra em `GuildVaultTrail`. Dentro da transação de propósito: conferir
+		# antes e gravar depois, fora da transação, deixaria duas abas simultâneas
+		# gastarem o mesmo crédito de janela.
+		if _WithdrawsInWindowLocked(sql, accountID) >= GuildVaultLimits.MaxWithdrawActionsInWindow:
+			return false
 		var vault : Array = sql.db.select_rows("guild_vault", "guild_id = %d AND item_id = %d" % [guildID, itemID], ["count"])
 		if vault.is_empty() or int(vault[0]["count"]) < count:
 			return false
@@ -194,6 +208,19 @@ func WithdrawFromVault(accountID : int, charID : int, itemID : int, count : int)
 		ok = true
 	_eco.settleMutex.unlock()
 	return ok
+
+# Quantos saques DA CONTA caem na janela anti-dreno. Falha de leitura é recusa
+# (`999`), nunca licença: o caminho já é o do dinheiro, e um SELECT que quebra não
+# pode virar "deixa passar" — mesmo contrato de `SQL.TradeCountTodayRaw`.
+# O índice que sostiene a consulta é `idx_vault_log_window`, criado em
+# data/conf/migrations/060_vault_withdraw_gate.sql e asserido como SEARCH por
+# `tests/guild_vault_gate_test.gd` (sem ele seria um SCAN num log append-only que
+# cresce para sempre — o gate mais caro da casa).
+func _WithdrawsInWindowLocked(sql : SQLService, accountID : int) -> int:
+	if not sql.db.query_with_bindings("SELECT COUNT(*) AS n FROM guild_vault_log WHERE account_id = ? AND kind = 'withdraw' AND created_at >= ?;", [accountID, SQLCommons.Timestamp() - GuildVaultLimits.WindowSec]):
+		return 999
+	var res : Array = sql.db.query_result
+	return int(res[0].get("n", 999)) if not res.is_empty() else 999
 
 func LevelUpGuild(accountID : int, charID : int) -> bool:
 	var guildID : int = GetGuildForAccount(accountID)
@@ -238,7 +265,61 @@ func PromoteMember(leaderAccount : int, targetAccount : int) -> bool:
 		return false
 	if GetGuildForAccount(targetAccount) != GetGuildForAccount(leaderAccount) or GetGuildForAccount(leaderAccount) == 0:
 		return false
+	if GetMemberRank(targetAccount) == "leader":
+		# O líder não tem posto acima dele para onde ser "promovido", e deixá-lo sem
+		# linha de líder seria a guilda órfã por um clique. `GuildRoster.Kick` recusa o
+		# mesmo caso por outro motivo (ninguém se chuta); aqui é a tabela se protegendo.
+		return false
 	return Launcher.SQL.ExecuteBindings("UPDATE guild_member SET rank = 'officer' WHERE account_id = ?;", [targetAccount])
+
+# Rebaixa a `member`. É o avesso de `PromoteMember` e existe pelo mesmo motivo do
+# outro lado da política: sem rebaixar, promover é um depósito — um posto errado fica
+# errado para sempre. O líder não é rebaixável pela mesma razão de acima.
+func DemoteMember(leaderAccount : int, targetAccount : int) -> bool:
+	if GetMemberRank(leaderAccount) != "leader":
+		return false
+	if GetGuildForAccount(targetAccount) != GetGuildForAccount(leaderAccount) or GetGuildForAccount(leaderAccount) == 0:
+		return false
+	if GetMemberRank(targetAccount) == "leader":
+		return false
+	return Launcher.SQL.ExecuteBindings("UPDATE guild_member SET rank = 'member' WHERE account_id = ?;", [targetAccount])
+
+# Tira um account da fileira. ESCREVE só em `guild_member`: dissolver a guilda não é
+# remoção, é `LeaveGuild` (que exige vault vazio e promove o mais antigo quando sobra
+# gente) — um kick que sumisse com a última linha deixaria um `guild` sem dono e um
+# vault sem ninguém para esvaziá-lo. O `rank <> 'leader'` na WHERE é o teto da decisão
+# nº 3 da política dentro do dono da tabela: quem chuta não é o líder, e quem é o líder
+# não sai por aqui. `changes()` confere que a linha caiu mesmo (um UPDATE/DELETE que não
+# casa linha nenhuma é sucesso de query — precedente `SQL.gd`, `ResolveReport`).
+func RemoveMember(guildID : int, targetAccount : int) -> bool:
+	if guildID <= 0 or targetAccount <= 0:
+		return false
+	if not Launcher.SQL.ExecuteBindings("DELETE FROM guild_member WHERE guild_id = ? AND account_id = ? AND rank <> 'leader';", [guildID, targetAccount]):
+		return false
+	var changed : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT changes() AS c;", [])
+	return not changed.is_empty() and int(changed[0].get("c", 0)) > 0
+
+# Trilha de auditoria da GOVERNANÇA (AUDITORIA 2026-09-28, item 3): cada promote/demote/
+# kick que o SERVIDOR aceitou fica reviewável depois, na MESMA forma append-only do
+# `guild_vault_log` — tabela própria (`guild_governance_log`, migration 062), uma linha por
+# ação, lida por guild+ação+tempo via `idx_governance_log_review`. O ator é o
+# `actorAccount` autenticado que os verbos de `GuildRoster` já conferiram CONTRA O RANK
+# LIDO DO BANCO (nunca um role declarado pelo cliente) — o contrato de autorização da casa.
+# A ESCRITA mora aqui, no dono das tabelas de guild: quem chama (`GuildRoster`) chega por
+# `Launcher.Economy.guildService`, o mesmo acesso direto ao service que `ChatModeration`
+# usa para `GetMemberAccounts`. Best-effort por desenho: um INSERT de rastro que falha não
+# desfaz a governança já aplicada (o rastro é evidência, não a decisão), mas nunca aceita
+# args inválidos — registro sem ator/alvo/ação é ruído, não trilha.
+func LogGovernance(guildID : int, actorAccount : int, targetAccount : int, action : String) -> bool:
+	if guildID <= 0 or actorAccount <= 0 or targetAccount <= 0 or action.is_empty():
+		return false
+	return Launcher.SQL.ExecuteBindings("INSERT INTO guild_governance_log (guild_id, actor_account, target_account, action, created_at) VALUES (?, ?, ?, ?, ?);", [guildID, actorAccount, targetAccount, action, SQLCommons.Timestamp()])
+
+# §14, metade do SERVIDOR: o rastro de governança sai do banco por um accessor do serviço,
+# não por quem desenha a tela (mesmo contrato de `VaultTrail`). Read-only; LIMIT 20 porque
+# é uma janela de revisão, não um extrato completo.
+func GovernanceTrail(guildID : int) -> Array[Dictionary]:
+	return Launcher.SQL.QueryBindings("SELECT actor_account, target_account, action, created_at FROM guild_governance_log WHERE guild_id = ? ORDER BY id DESC LIMIT 20;", [guildID])
 
 # Follow-up G3: tag da guild (2–5 chars A-Z0-9, só líder). Exibida no board,
 # no painel e nas corridas ([TAG] Nome) — identidade sem poder.

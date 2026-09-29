@@ -29,8 +29,10 @@ var targetMax : float						= 0.0
 func _ready():
 	if bar == null:
 		push_error("ProgressBar: Bar node is missing")
+		return
 	if label == null:
 		push_error("ProgressBar: Label node is missing")
+		return
 
 	bar.fill_mode = fillMode
 	if textureProgress:
@@ -57,6 +59,7 @@ func SetUnit(unit : String):
 func SetStat(value : float, maxValue : float):
 	if bar == null or label == null:
 		push_error("ProgressBar: children are missing")
+		return
 
 	var newPercent : float = value / maxValue * 100.0 if maxValue > 0.0 else 0.0
 	var duration : float = initDuration if currentPercent == 0.0 else fillDuration

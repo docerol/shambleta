@@ -11,5 +11,6 @@ giver = "Riskim"
 giverLocation = "Tulmshar Center"
 target = "Barrel"
 targetLocation = "Tulimshar Bay"
-reward = "Unknown"
+reward = "Croissant x5, Cactus Sour Candy x5, 30 EXP"
+rewardEXP = 30
 metadata/_custom_type_script = "uid://bqxdwogial88g"

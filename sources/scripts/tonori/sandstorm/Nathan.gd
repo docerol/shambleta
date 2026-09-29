@@ -86,8 +86,9 @@ func OnDeliverWater():
 		Mes("Thank you, friend! It's good to have some relief, finally!")
 		Think("Nathan quickly pours all the water you have brought to him all over himself.")
 		Think("You watch as the water you carefully carried all the way here runs down his body and soaks into the sand below.")
-		AddExp(50)
-		AddGP(100)
+		# Os 50 EXP e os 100 GP saíram daqui (`AddExp`/`AddGP` sem ledger) para
+		# `rewardEXP`/`rewardGP` em `presets/quests/SandstormNathanWater.tres`, pagos
+		# pelo `SetQuest` do topo do ramo.
 		Action(OnComplete)
 	else:
 		Action(Farewell)

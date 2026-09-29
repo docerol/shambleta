@@ -30,6 +30,12 @@ const MaxChests : int = 3
 const ChestHoursPerChest : int = 4
 const EfficiencyDecayPerDeath : float = 0.05
 const MinEfficiency : float = 0.5
+# Reason das quatro linhas de ledger que a liquidação escreve (gold, xp, essence,
+# boss_key). É a chave pela qual a régua golden do settle identifica A PRÓPRIA
+# perna no ledger: contar "a única linha de gold do personagem" parou de ser uma
+# descrição do mundo quando o seed do fixture passou a correr pelo caminho
+# atestado (EconomyKernel.MoveGold) e deixou linha. Uma string só, dos dois lados.
+const LedgerReason : String = "offline_settle"
 
 # SOM-IDLE: F3 — settle mods (TECH_SPEC_CORE §3; MONETIZATION §2.2). VIP active
 # window multiplies the offline faucet by +20%; guild hook stays at 1.0 (F4).
@@ -303,8 +309,21 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	if eff < 1.0:
 		report.goldTaxed = roundi(float(report.goldEarned) * float(DeathTaxPct) / 100.0)
 
-	# Drops: rate_ppm * h * 3600 * eff * factor / 1e6 (expected value, deterministic in spike)
-	var dropExpected : float = float(zone.dropRatePPM) * h * 3600.0 * eff * offFactor / 1000000.0
+	# Kills equivalentes da janela: a MESMA régua do XP/ouro logo acima — par de
+	# kills/hora × horas × eficiência × fator offline × modificadores da conta. Todo
+	# faucet derivado de farm sai daqui (drop de item e chave de boss), então não
+	# existe mais um segundo eixo de tempo para uma das linhas descalibrar.
+	# Os modificadores entram nos drops por coerência com as chaves: a campanha
+	# `weekend_drops` (`GetLiveEventMods`, :229) entortava XP, ouro e chaves e não
+	# entortava o item que ela diz dobrar.
+	var equivKills : float = float(zone.parKillsPerHour) * h * eff * offFactor * report.mods
+
+	# Drops: ppm de KILLS (a unidade de `BossService.KeyDropPPM`) × kills
+	# equivalentes — expected value, deterministic in spike. Antes disto a linha
+	# multiplicava o ppm por `h * 3600` e dividia por 1e6, isto é, tratava ppm como
+	# partes-por-milhão de SEGUNDOS: 0,54 drop/h na zona 1 contra os ~105/h do farm
+	# ao vivo (par 150 kills/h × 0,7 drop/kill medido em `SuiteIdleLootPipeline`).
+	var dropExpected : float = float(zone.dropRatePPM) * equivKills / 1000000.0
 	var dropCount : int = floori(dropExpected)
 	var frac : float = dropExpected - float(dropCount)
 	# Deterministic fractional carry (no RNG in the golden path)
@@ -338,8 +357,8 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 
 	# SOM-IDLE: chaves de boss também acumulam offline (idle-first) — kills
 	# equivalentes da sessão × KeyDropPPM, com o mesmo carry determinístico de
-	# fração (>=0.5) usado nos drops de item. Sem RNG no caminho golden.
-	var equivKills : float = float(zone.parKillsPerHour) * h * eff * offFactor * report.mods
+	# fração (>=0.5) usado nos drops de item. Sem RNG no caminho golden. As
+	# `equivKills` são as mesmas do drop: uma régua de farm, dois faucet.
 	var keyExpected : float = float(BossService.KeyDropPPM) * equivKills / 1000000.0
 	var keyCount : int = floori(keyExpected)
 	if keyExpected - float(keyCount) >= 0.5:
@@ -415,11 +434,11 @@ static func _Apply(sql : SQLService, report : SettleReport) -> bool:
 		var accountID : int = int(fresh.get("account_id", 0))
 		var economy : EconomyService = _economy()
 		if economy:
-			if goldNet != 0 and not economy.LedgerAppend(report.charID, accountID, "gold", goldNet, newGold, "offline_settle"):
+			if goldNet != 0 and not economy.LedgerAppend(report.charID, accountID, "gold", goldNet, newGold, LedgerReason):
 				return false
-			if report.xpEarned > 0 and not economy.LedgerAppend(report.charID, accountID, "xp", report.xpEarned, progressXP, "offline_settle"):
+			if report.xpEarned > 0 and not economy.LedgerAppend(report.charID, accountID, "xp", report.xpEarned, progressXP, LedgerReason):
 				return false
-			if report.essenceEarned > 0 and not economy.LedgerAppend(report.charID, accountID, "essence", report.essenceEarned, sqlNode.GetCharacterEssence(report.charID), "offline_settle"):
+			if report.essenceEarned > 0 and not economy.LedgerAppend(report.charID, accountID, "essence", report.essenceEarned, sqlNode.GetCharacterEssence(report.charID), LedgerReason):
 				return false
 
 		# 5) chests (rows only; opening is F4 scope)
@@ -434,7 +453,7 @@ static func _Apply(sql : SQLService, report : SettleReport) -> bool:
 			if sqlNode.AddCharacterBossKeys(report.charID, report.bossKeysEarned) < 0:
 				return false
 			if economy != null:
-				if not economy.LedgerAppend(report.charID, accountID, "boss_key", report.bossKeysEarned, sqlNode.GetCharacterBossKeys(report.charID), "offline_settle"):
+				if not economy.LedgerAppend(report.charID, accountID, "boss_key", report.bossKeysEarned, sqlNode.GetCharacterBossKeys(report.charID), LedgerReason):
 					return false
 
 		# 6) anchor update

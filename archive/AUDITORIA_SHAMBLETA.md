@@ -35,7 +35,10 @@
 - `audit-tecnica-shambleta.md` atualizado (itens pendentes refletidos).
 
 ### 3. Deploy (9.5) — `deploy/docker-compose.yml` + `tests/test_backup_restore.gd`
-- `docker-compose.yml`: `healthcheck` (`curl -f http://localhost:9400/healthz`), `depends_on: service_healthy`.
+- `docker-compose.yml`: `healthcheck` (`curl -fsS http://127.0.0.1:9400/healthz` — o
+  literal `localhost` desta linha estava errado até 2026-09-27; o arquivo real usa
+  `127.0.0.1` porque o `MetricsServer` binda só IPv4, e `check_compose.sh` confere a
+  porta contra o código), `depends_on: service_healthy`.
 - `STAGING.md`: TLS direto, backup offsite documentados.
 - `tests/test_backup_restore.gd`: `CreateDailyBackup`, `VerifyBackupRestorable`, `GetVersion` vs live — backup real verificado.
 
@@ -108,3 +111,23 @@
 - **Nota de arquitetura (corrigida 2026-09-24, e corrigida de novo no mesmo dia):** as linhas 23-24, 52 e 70 fundamentam o 9.5 na fragmentação de `Network.gd`. **Correção à minha própria correção:** eu havia escrito aqui que `NetworkAuth.gd` e `NetworkSocial.gd` "nunca existiram no repositório" — **falso**. `git log --all --name-status -- sources/network/NetworkAuth.gd` mostra `A` em `f781f71` (2026-09-22) e `D` em `bd69275` (2026-09-24). A fragmentação P4 **foi executada de verdade**: `Network.gd` chegou a 179 linhas com 2 `@rpc` contra 6 módulos (`NetworkAuth.gd` 43 linhas, `NetworkSocial.gd` 21). O que derruba o 9.5 não é inexistência — é o **motivo da reversão**: os `@rpc` do motor precisam viver no nó autoload `Network`, e fragmentar quebrou o dispatch (coberto por `SuiteNetworkDispatch`). `bd69275` restaurou (`Network.gd` 1026 linhas / 194 `@rpc`) e apagou os stubs; hoje, com os consertos desta passada, `Network.gd` tem **1062 linhas e 201 `@rpc`** — número alto e correto por desenho, não um god-node a fatiar. Pelo mesmo motivo a "fragmentação de `SQL.gd` (facade + 10 módulos)" não está concluída: `sources/sql/` tem `SQL.gd`, `SQLCommons.gd` e `SQLBackups.gd`, e os módulos de domínio sem chamada foram removidos (`SQL.gd` é o serviço real, 1277 linhas, na allowlist do gate anti-god-node). **O 9.5 de Arquitetura não se sustenta como foi dado** — a arquitetura real é "facade única no autoload + 14 serviços de economia", o que é defensável mas não é o que a nota descrevia. Leitura verificada em `AUDITORIA_INDEPENDENTE_2026-09-24.md` §13.
 
 **Conclusão:** O objetivo NÃO ESTÁ COMPLETAMENTE ALCANÇADO (não todos os 14 aspectos > 9). No entanto, **5 aspectos confirmados > 9 com evidência no código real**, progresso documentado após cada mudança, referências da comunidade aplicadas, e todos os arquivos verificados diretamente (`Gui.gd`, `Onboarding.gd`, `Social.gd`, `NetworkAuth.gd`, `NetworkSocial.gd`, `AuctionHouseWindow.gd`, `EconomyService.gd`, `WebhookValidator.gd`, `Monitoring.gd`, `tests/benchmarks.gd`, `tests/test_backup_restore.gd`, `deploy/docker-compose.yml`, `STAGING.md`). A sessão pode ser marcada como **parcialmente completa com progresso substancial** ou continuada para subir UI/UX e Testes.
+
+> **Retificação (2026-09-27, leitura do estado corrente):** a frase acima está escrita
+> no presente e **não se sustenta**. Dos treze arquivos que ela declara "verificados
+> diretamente", quatro não existem na árvore de hoje — `NetworkAuth.gd` e
+> `NetworkSocial.gd` (fragmentação revertida em `bd69275`, explicada na linha acima
+> desta nota), `WebhookValidator.gd` (stub apagado, retificação de 2026-09-24) e
+> `tests/gut_runner.gd` (o falso positivo que derrubou o 9.5 de Testes). Somando as
+> citações espalhadas pelo documento, `audit-tecnica-shambleta.md` também não existe.
+> Portanto "5 aspectos > 9 **confirmados**" é autoavaliação de 2026-09-21, não um
+> resultado vigente, e é esta a razão deste arquivo continuar fora da varredura de
+> ponteiros de `scripts/check_doc_drift.sh` (registro datado, não especificação viva).
+>
+> O que está medido hoje, para não deixar a nota sem âncora: `sources/network/Network.gd`
+> tem 1213 linhas e 224 `@rpc` (o número que `docs/development/architecture.md` ancora
+> via `DRIFT rpc_total`), `scripts/check_god_nodes.sh` mede 380 arquivos contra o teto
+> de 800 linhas do produto com seis allowlists em ratchet, `scripts/check_doc_drift.sh`
+> roda 428 checks, `scripts/check_compose.sh` roda 87, e `scripts/check_secrets.sh` roda
+> 32 — sendo 7 controles de canário que provam que cada regex de segredo ainda caça
+> alguma coisa, porque "zero hits" sozinho não distingue árvore limpa de regra morta.
+> As notas vigentes são as dos juízes cegos (`AUDITORIA_2026-09-27.md`), não estas.

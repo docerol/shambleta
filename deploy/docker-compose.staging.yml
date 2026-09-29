@@ -12,6 +12,14 @@
 # production vs testing. O que torna esta pilha staging é o volume próprio e o
 # webhook sandbox. Um `SHAMBLETA_ENV=staging` aqui seria um knob que ninguém lê —
 # ele já existiu neste arquivo e era exatamente isso.
+#
+# Teto de log NÃO é repetido aqui de propósito: nenhum bloco deste override toca
+# em `logging:`, e o merge do Compose Spec é por chave — os seis `json-file` com
+# `max-size`/`max-file` do base continuam valendo no doc resolvido. Repetir seria
+# criar um segundo lugar onde o teto existe, que é exatamente o tipo de par que
+# diverge quando alguém mexe só num. O que garante isso não é esta frase: é o gate
+# rodar a régua de teto de log sobre o doc MESCLADO (`-f base -f staging`), além do
+# base, então apagar o teto do base quebra o portão mesmo com staging intacto.
 services:
   web:
     # O endereço do game server NÃO é lido em runtime por este serviço: o container

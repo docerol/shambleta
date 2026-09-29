@@ -105,3 +105,45 @@ groups:
         annotations:
           summary: "round trip de SQL esperou a queryMutex mais de 100 ms"
           description: "{{ $value }} esperas >100 ms nos últimos 10 min. Antes de encostar no teto do tick, o processo encosta aqui."
+
+  - name: shambleta-schema
+    rules:
+      # P0-STAMP: desde 2026-09-28 o carimbo de versão é fail-closed — um patch que
+      # estoura no SQLite PARA a sequência em vez de ser gravado como aplicado. O
+      # motivo de ser página: até aqui a falha era um `push_error` no log do
+      # container e a base subia sem o objeto de schema. As tabelas do dinheiro
+      # vivem nesses patches, e o `/healthz` não olha schema — o sintoma chegava
+      # como erro de login de jogador, dias depois do deploy que o causou.
+      - alert: MigrationFalhou
+        expr: shambleta_migration_failures_total > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "patch de migration falhou e a base parou na versão anterior"
+          description: "Patch travado: {{ $value }} (índice 0-based, -1 = nenhum). Rodar `docker compose exec game curl -s localhost:9400/metrics`, conferir `shambleta_migration_last_failed_patch` e o arquivo correspondente em `data/conf/migrations/`; depois disso reiniciar o `game` para o patch rodar de novo."
+
+      # "Binário mais novo que o schema": é a mesma diferença vista pelo lado do
+      # deploy. Sem o `for`, todo boot que aplica patches dispara no meio da janela
+      # normal de migration; 10 min é o tempo de o apply terminar. Cobre também o
+      # `stale` (binário velho demais, rollback) e o `empty` (o .pck sem
+      # data/conf/migrations), que são os dois casos em que nada roda e nada era
+      # dito.
+      - alert: SchemaAtrasadoVsBinario
+        expr: shambleta_migration_stalled == 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "binário com patch que a base não aplicou há mais de 10 min"
+          description: "Base em `shambleta_schema_version`, binário com `shambleta_migration_patches_visible` patches. Rodar `docker compose logs --since 30m game | grep -i migration` para ver o patch e o motivo; se não houver, o pacote não traz `data/conf/migrations` (ver o `include_filter` do preset de servidor)."
+
+      # O counter só anda em boot novo, então "parado" aqui é ausência de scrape ou
+      # processo que não reiniciou nunca — a régua que impede o verde por inércia.
+      - alert: SchemaSemMedida
+        expr: shambleta_schema_version < 1
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "schema version lida do /metrics é 0 (base sem tabela migration)"
+          description: "Nenhuma versão gravada. Rodar `docker compose exec game curl -s localhost:9400/metrics | grep shambleta_schema_version`; zero aqui é banco novo sem apply, não banco saudável."

@@ -52,11 +52,11 @@ tentativa de fragmentação do `Network` (ver abaixo).
 
 | Arquivo | Papel |
 |---|---|
-| `sources/network/Network.gd` | Nó autoload: dispatcher (`CallServer`/`CallClient`/`Bulk`/`Notify*`), transporte (`ENet`, `WebSocket`, `WebRTC`), sinais **e os `@rpc`** <!-- DRIFT rpc_total 212 20 --> |
+| `sources/network/Network.gd` | Nó autoload: dispatcher (`CallServer`/`CallClient`/`Bulk`/`Notify*`), transporte (`ENet`, `WebSocket`, `WebRTC`), sinais **e os `@rpc`** <!-- DRIFT rpc_total 224 20 --> |
 | `sources/network/server/Server.gd` | Autoridade: sessão, mundo, economia, chat, guild, torneios |
 | `sources/network/client/Client.gd` | Lado do cliente |
 | `sources/network/NetworkCommons.gd` | Constantes de protocolo + `ComputeProtocolVersion(network)` — hash dos `@rpc` do nó, usado no handshake |
-| `sources/network/server/` | `Peers.gd`, `OnlineList.gd`, `ChatModeration.gd` (mute/denúncia), `EmailService.gd` |
+| `sources/network/server/` | `Peers.gd`, `OnlineList.gd` (metade quente da presença), `Presence.gd` (metade durável: `presence_session`, migration 057, heartbeat/poda/TTL), `ChatModeration.gd` (mute/denúncia), `EmailService.gd` |
 | `sources/network/Interface.gd` | `class_name NetInterface` |
 
 A coluna de linhas saiu daqui de propósito, pela mesma razão declarada na §SQL:
@@ -69,7 +69,7 @@ contagem de linha apodrece em dias e o teto real é medido no run por
 revertida: `RefCounted` não vira autoload no Godot 4 e os `class_name` colidiam com
 os nomes globais, travando a compilação de tudo que tocava rede. As docs antigas
 descreviam a fragmentação como concluída — ver `ROADMAP_COMERCIAL.md` §S3 e
-`AUDITORIA_INDEPENDENTE_2026-09-24.md` §20.
+`archive/AUDITORIA_INDEPENDENTE_2026-09-24.md` §20.
 
 **Transportes**: `ENet` (UDP), `WebSocket`, `WebRTC` (web). Canais: `CONNECT`, `ACTION`, `MAP`, `MAP_UNRELIABLE`, `NAVIGATION`, `NAVIGATION_UNRELIABLE`, `ENTITY`, `ENTITY_UNRELIABLE`, `BULK`.
 
@@ -154,7 +154,7 @@ A fronteira de dinheiro não tem módulo GDScript para o webhook: assinatura é
 validada no companion (`companion/server.py`, HMAC + re-fetch autoritativo,
 fail-closed). A `grant_queue` tem os dois lados: o companion escreve o que o
 pagador confirmou, e o servidor do jogo escreve o que ele próprio concedeu —
-`CheckoutService.gd:151` insere com `price_paid`/`currency` da migration 044, que
+`CheckoutService.gd:181` insere com `price_paid`/`currency` da migration 044, que
 é a coluna que separa dinheiro real de sandbox. Consumir a fila é o que o servidor
 faz com o resto.
 

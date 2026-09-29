@@ -20,6 +20,25 @@
 # pagamento) para companion:8901 na rede interna. É por isso que a URL que se
 # registra no painel do Mercado Pago é https://seudominio.com/webhooks/payments
 # — mesma origem do jogo, sem CORS e sem segundo certificado.
+#
+# ----------------------------------------------------------------------------- log
+# Todo serviço abaixo declara `logging:` com `max-size`/`max-file`. Não é higiene,
+# é o disco do banco: o driver padrão do docker (json-file) escreve
+# <data-root>/containers/<id>/<id>-json.log sem teto nenhum — o teto NÃO existe por
+# default, e num host com um único disco os logs e os volumes nomeados (`game-data`
+# = live.db + `-wal` + sql-backups, `game-backups`) caem no mesmo filesystem, pois
+# o volume nomeado vive em <data-root>/volumes/. Um log verboso enche o disco e o
+# próximo commit do SQLite falha em fsync: o `mem_limit` do serviço `game` protege
+# a RAM e não protege nada disso. Com o teto abaixo o pior caso é 3 × 10 MiB por
+# serviço ≈ 180 MiB no total, e o custo de trocar log por disponibilidade do banco
+# é decidido aqui, não num 3h da manhã.
+#
+# O valor não é medida, é orçamento: 10 MiB/serviço cabe ~50 mil linhas de log de
+# nginx (o primeiro load do client é ~36 MiB gzip, deploy/WEB_SLIM.md:69) e uma
+# semana de `--server` ocioso; não foi medido o volume real de log deste stack em
+# beta **[NÃO MEDIDO]** — conferir com o comando de deploy/OPS_RUNBOOK.md §4.4 e
+# ajustar `max-file` (o arquivo que gira é o único número que muda o teto de disco)
+# antes de tocar em `max-size`.
 services:
   web:
     build:
@@ -28,7 +47,18 @@ services:
       args:
         SHAMBLETA_SERVER_ADDRESS: ${SHAMBLETA_SERVER_ADDRESS:-}
         SHAMBLETA_SERVER_PORT: ${SHAMBLETA_SERVER_PORT:-0}
+    image: shambleta/web:${SHAMBLETA_TAG:-local-unpinned}
+    pull_policy: never
     restart: unless-stopped
+    # É o serviço mais loguento do stack: o log de acesso do nginx é uma linha por
+    # request (deploy/web/nginx.conf não desliga access_log), e um beta com scraper
+    # ou health-probe escreve sozinho bem mais que 10 MiB/dia. Ver o bloco
+    # "log" no cabeçalho deste arquivo para o porquê do teto.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # PORQUÊ só reserva, sem teto: este é o serviço que serve o primeiro load de
     # ~35 MiB (deploy/WEB_SLIM.md:69) e não medimos nginx aqui (a máquina do
     # gate não tem docker). Teto sem medida vira causa de indisponibilidade — o
@@ -39,7 +69,7 @@ services:
     healthcheck:
       # O probe anterior (o HEALTHCHECK da imagem, deploy/web/Dockerfile:50) era
       # `wget -qO- http://127.0.0.1/` — e `location /` termina em
-      # `try_files $uri $uri/ /index.html` (deploy/web/nginx.conf:194), então
+      # `try_files $uri $uri/ /index.html` (deploy/web/nginx.conf:298), então
       # QUALQUER caminho devolve 200: o check não conseguia falhar, nem com o
       # html/ vazio de build, nem com a landing page no lugar do jogo. Aqui o
       # probe exige o marcador do export no corpo realmente servido:
@@ -47,7 +77,7 @@ services:
       # existe em deploy/web/landing/index.html. Continua sem tocar no upstream:
       # o `web` não pode ficar unhealthy por culpa do companion (ver
       # depends_on abaixo). A porta é a que o nginx binda (`listen 80;` em
-      # deploy/web/nginx.conf:31) e 127.0.0.1 porque `listen 80;` é IPv4.
+      # deploy/web/nginx.conf:43) e 127.0.0.1 porque `listen 80;` é IPv4.
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/index.html | grep -q 'index\\.js'"]
       interval: 30s
       timeout: 5s
@@ -69,7 +99,19 @@ services:
     build:
       context: .
       dockerfile: deploy/server/Dockerfile
+    image: shambleta/game:${SHAMBLETA_TAG:-local-unpinned}
+    pull_policy: never
     restart: unless-stopped
+    # O log deste serviço é o único que fala com o jogador no terminal: cada
+    # conexão, cada comando broadcast do drain e todo `print` do server caem aqui.
+    # Com teto de 3 arquivos o histórico de uma sessão de beta ainda cabe no
+    # orçamento de disco do §log do cabeçalho — sem teto, ele come o mesmo
+    # filesystem do live.db.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # O teto de memória existe para proteger o HOST, não o jogo: SIGKILL num
     # processo que é o único writer do SQLite custa até `BackupPlayersSec` = 600 s
     # de ouro que só existe em memória (sources/sql/SQLCommons.gd:11; o efeito é o
@@ -85,15 +127,19 @@ services:
     # (migrations + mundo, que tem de caber no start_period de 40 s abaixo) e a
     # thread do worker de backup (sources/sql/SQLBackups.gd:183).
     cpus: "2"
-    # 75 s = 30 s + 15 s dos avisos de drain (sources/world/ShutdownCanary.gd:10-13)
-    # + até 2 s do join do worker (`BackupCheckIntervalSec`, sources/sql/SQLCommons.gd:10
-    # lido em sources/sql/SQLBackups.gd:172-176) + folga de fsync no `db.close_db()`
-    # (sources/sql/SQL.gd:1562-1569). HONESTO: o grace NÃO fecha o banco por
-    # conta própria — nada no código trata SIGTERM e foi medido: `kill -TERM` no
-    # server headless sai com 143 sem nenhum teardown. Quem fecha o SQLite
-    # direito é o caminho do canary (tocar `user://canary` =
-    # /data/.local/share/Shambleta/canary), que derruba os jogadores e chama
-    # Launcher.Quit(). Procedimento em deploy/OPS_RUNBOOK.md §3.
+    # 75 s cobrem o drain inteiro: até 10 s para o `CheckCanary` ver o arquivo
+    # (duas batidas de `checkInternalSec` = 5 s, sources/world/ShutdownCanary.gd:5)
+    # + 30 s e 15 s dos avisos (sources/world/ShutdownCanary.gd:10-13) + até 2 s do join do worker
+    # (`BackupCheckIntervalSec`, sources/sql/SQLCommons.gd:10 lido em
+    # sources/sql/SQLBackups.gd:187) + folga de fsync no `db.close_db()`
+    # (sources/sql/SQL.gd:1785) = 57 s de pior caso, com 18 s de folga.
+    # QUEM aciona o drain mudou em 2026-09-28: o `ENTRYPOINT` da imagem
+    # (deploy/server/Dockerfile, deploy/server/entrypoint.sh) intercepta SIGTERM e
+    # toca o canary — `docker compose stop`, `down` e o redeploy do Coolify agora
+    # derrubam os jogadores e chamam `Launcher.Quit()` em vez de sair com 143 no
+    # meio de um `BackupPlayersSec`. Este grace é o teto do qual o entrypoint tem de
+    # sair antes; se ele não sair, é o docker quem mata, e a régua do §3 de
+    # deploy/OPS_RUNBOOK.md diz como distinguir os dois no log.
     stop_grace_period: 75s
     healthcheck:
       # P1 Deploy / Performance: healthcheck de produção confirma estabilidade da sessão.
@@ -101,9 +147,9 @@ services:
       # passado como argumento ao curl. Agora é um GET real no /healthz do
       # MetricsServer (127.0.0.1:9400, servido pelo próprio processo do game).
       # start_period cobre o boot (migrations + mundo), que é quando o probe
-      # deliberadamente responde 503.
+      # responde 503; esquema parado é o outro 503, e desse o start_period não salva.
       # 127.0.0.1 literal, não `localhost`: o MetricsServer binda SOMENTE IPv4 em
-      # 127.0.0.1 (sources/system/MetricsServer.gd:22 BindAddress, porta em :21
+      # 127.0.0.1 (sources/system/MetricsServer.gd:26 BindAddress, porta em :25
       # DefaultPort) — com `localhost` e `::1` em /etc/hosts o primeiro try é
       # connection refused. A porta 9400 é conferida contra o código por
       # `scripts/check_compose.sh`, junto com as demais.
@@ -149,8 +195,8 @@ services:
       # live.db + sql-backups ficam aqui (user:// com HOME=/data →
       # /data/.local/share/Shambleta/, layout conferido por
       # tests/deploy_ops_test.gd). ATENÇÃO: é por isto que o backup nasce
-      # DENTRO do volume do banco — `GetBackupPath()` é `user://sql-backups/`
-      # (sources/sql/SQLCommons.gd:8 + sources/system/Path.gd:55).
+      # DENTRO do volume do banco: o `GetBackupPath()` (sources/sql/SQLCommons.gd:102)
+      # vale `user://sql-backups/` (sources/sql/SQLCommons.gd:8 + sources/system/Path.gd:55).
       - game-data:/data
       # Segunda cópia em volume próprio: `docker compose down -v`, um rebuild com
       # `-v` ou um rm -rf no /data não podem apagar o histórico e o banco no mesmo
@@ -162,17 +208,29 @@ services:
     build:
       context: .
       dockerfile: deploy/companion/Dockerfile
+    image: shambleta/companion:${SHAMBLETA_TAG:-local-unpinned}
+    pull_policy: never
     restart: unless-stopped
+    # Log da frente do dinheiro: cada webhook tem uma linha de acesso e o
+    # ThreadingHTTPServer imprime stack trace de request falho no stderr. É o
+    # serviço cujo log mais interessa numa post-mortem de pagamento, então o teto
+    # gira 3 arquivos em vez de 1: `max-file: 3` é o que preserva o webhook
+    # anterior ao incidente, não um número decorativo.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
-      # Não existia: o `/health` do companion (companion/server.py:1167-1171) já
+      # Não existia: o `/health` do companion (companion/server.py:1414-1416) já
       # respondia 200 `{"ok": true, "pending": N}` e ninguém probeava — ou seja,
       # a frente do dinheiro podia estar em crash-loop e o único sintoma era
       # webhook 502 no nginx. É um probe honesto: a rota abre a MESMA conexão
       # SQLite do grant, então 200 quer dizer "banco certo e alcançável", não
-      # apenas "processo vivo". Porta 8901 = `EXPOSE 8901` + `--port 8901` do CMD
-      # (deploy/companion/Dockerfile:26,41), bind 0.0.0.0 (mesmo arquivo:34), e
-      # busybox wget sai !=0 em 4xx/5xx. O timeout é 6 s, acima do
-      # `PRAGMA busy_timeout=5000` (companion/server.py:841): um lock de WAL tem
+      # apenas "processo vivo". Porta: `EXPOSE 8901` (`deploy/companion/Dockerfile:38`),
+      # CMD `"--port", "8901"` (`deploy/companion/Dockerfile:53`) e bind `0.0.0.0`
+      # (`deploy/companion/Dockerfile:46`); busybox wget sai !=0 em 4xx/5xx. O timeout
+      # é 6 s, acima do `PRAGMA busy_timeout=5000` (companion/server.py:1073): um lock
       # de esperar, não ficar unhealthy.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8901/health"]
       interval: 30s
@@ -196,7 +254,7 @@ services:
       # webhook.
       # (exit 2 conferido nesta máquina: `python3 companion/server.py --db
       # /tmp/nao-existe.db --port 8940 ...` → "database not found", exit=2 — o
-      # `companion/server.py:2032-2034` que este comentário afirma.)
+      # `companion/server.py:2174-2176` que este comentário afirma.)
       game:
         condition: service_healthy
     environment:
@@ -223,6 +281,15 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    # cloudflared é o mais tagarela dos seis: loga cada conexão do túnel, cada
+    # retry e cada reject no stderr, e é binário de terceiro que ninguém patcheia
+    # aqui. Sem teto, é ele que enche o disco primeiro — e o volume que ele enche
+    # é o filesystem do live.db (ver o bloco "log" no cabeçalho deste arquivo).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Reserva sem teto, de propósito: é binário de terceiro, não medimos aqui e a
     # falha dele (túnel derrubado) é justamente o que um OOM-kill causaria. Só o
     # `depends_on` curto (service_started): o túnel não tem nada que probear — a
@@ -249,6 +316,8 @@ services:
     build:
       context: .
       dockerfile: deploy/monitoring/prometheus.Dockerfile
+    image: shambleta/prometheus:${SHAMBLETA_TAG:-local-unpinned}
+    pull_policy: never
     # O /metrics do jogo binda SÓ 127.0.0.1:9400, sem auth e sem TLS
     # (sources/system/MetricsServer.gd:21-22). De outro container isso é
     # inalcançável — não há firewall a liberar. Compartilhar o namespace do `game` é
@@ -260,6 +329,15 @@ services:
     # neste bloco — por isso nenhum dos dois aparece aqui.
     network_mode: service:game
     restart: unless-stopped
+    # O log do Prometheus não é opcional: é a única coisa que responde "por que
+    # esta regra não disparou" depois do fato (série de scrape, reload de config,
+    # regra com erro de template). Fica em volume próprio (prometheus-data) para o
+    # TSDB, mas o stdout vai para o json-file do host como o dos outros seis.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Binário com `/bin/sh`+`wget` (variante -busybox do Dockerfile): o probe pode
     # existir de verdade. A porta 9090 é conferida contra o `--web.listen-address`
     # da própria linha abaixo.
@@ -293,16 +371,44 @@ services:
     build:
       context: .
       dockerfile: deploy/monitoring/alertmanager.Dockerfile
+    image: shambleta/alertmanager:${SHAMBLETA_TAG:-local-unpinned}
+    pull_policy: never
     restart: unless-stopped
-    # Sem healthcheck: a imagem oficial do Alertmanager não traz shell nem wget
-    # (conferido: não existe variante -busybox do `prom/alertmanager`), então um
-    # probe aqui seria o ruído que o `cloudflared` acima evita de propósito. Vive
-    # verificável por fora: `docker compose exec game curl -s
-    # http://alertmanager:9093/api/v2/alerts` (comando em OPS_RUNBOOK §2).
+    # O log dele é o que responde "o alerta chegou e para onde foi": o
+    # alertmanager imprime cada grupo silenciado/roteado. Teto igual aos outros
+    # seis (ver o bloco "log" no cabeçalho deste arquivo).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # correção de fato, 2026-09-28: o comentário antigo dizia "sem healthcheck
+    # porque a imagem oficial não traz shell nem wget". A base do
+    # prom/alertmanager:v0.34.1 é `quay.io/prometheus/busybox` (linha 3 do
+    # Dockerfile de release upstream), então shell existe — e é justamente por
+    # isso que a imagem tem entrypoint agora
+    # (deploy/monitoring/alertmanager.Dockerfile). O probe abaixo é a mesma forma
+    # do probe do `prometheus` acima, na mesma família de base; se um dia a base
+    # trocar para distroless, o sintoma é o container não subir (o entrypoint é
+    # /bin/sh), não um probe falso.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --web.listen-address=:9093
       - --storage.path=/alertmanager
+    environment:
+      # Os dois destinos humanos do `severity: page`. Vindos de env porque a URL de
+      # webhook é credencial e o repositório é open source; o render da imagem os
+      # materializa no config no boot (deploy/monitoring/render-alertmanager-config.sh).
+      # Sem as duas, o stack sobe e o alerta não acorda ninguém — o caso é chamado
+      # pelo nome em scripts/check_compose.sh e em deploy/OPS_RUNBOOK.md §2.1.
+      SHAMBLETA_ALERT_PAGE_WEBHOOK_URL: ${SHAMBLETA_ALERT_PAGE_WEBHOOK_URL:-}
+      SHAMBLETA_ALERT_TICKET_WEBHOOK_URL: ${SHAMBLETA_ALERT_TICKET_WEBHOOK_URL:-}
     volumes:
       - alertmanager-data:/alertmanager
     depends_on:

@@ -200,15 +200,29 @@ func _FactComposeServices() -> void:
 			var m : RegExMatch = RegEx.create_from_string("^  ([a-z0-9_-]+):$").search(line)
 			if m != null:
 				services.append(m.get_string(1))
-	CheckEq(services.size(), 4, "deploy/docker-compose.yml declara 4 serviços")
-	Check(services.has("cloudflared"),
-		"cloudflared É serviço do compose (serviços: %s)" % [services])
+	# Census por NOME, não número lembrado. O que o deploy exige são estes seis
+	# serviços; um `4` solto aqui ficou obsoleto no dia em que `prometheus` e
+	# `alertmanager` entraram no stack — e régua que grita por contagem em vez de
+	# nome é a que a primeira pessoa achateixa apagando o serviço de verdade.
+	var required : Array[String] = ["web", "game", "companion", "cloudflared", "prometheus", "alertmanager"]
+	var missing : String = ""
+	for want in required:
+		if not services.has(want):
+			missing += want + " "
+	Check(missing.is_empty(), "deploy/docker-compose.yml declara cada serviço que o deploy exige (faltam: %s)" % (missing if missing != "" else "nenhum"))
 	var coolify : String = _read("res://deploy/COOLIFY.md")
+	# E o sentido contrário, que a lista acima não cobre: serviço novo no disco sem
+	# nome no documento é o operator do Coolify subindo um stack que ninguém descreveu.
+	var unnamed : String = ""
+	for have in services:
+		if not coolify.contains("`%s`" % have):
+			unnamed += String(have) + " "
+	Check(unnamed.is_empty(), "todo serviço do compose é nomeado em COOLIFY.md (sem nome: %s)" % (unnamed if unnamed != "" else "nenhum"))
 	var stated : String = RegEx.create_from_string("Stack: ([0-9]+) servi").search(coolify).get_string(1) if RegEx.create_from_string("Stack: ([0-9]+) servi").search(coolify) != null else "?"
 	CheckEq(stated, str(services.size()),
 		"COOLIFY.md diz a contagem de serviços que o arquivo tem")
 	Check(coolify.contains("`cloudflared`"),
-		"COOLIFY.md nomeia o quarto serviço em vez de omiti-lo")
+		"COOLIFY.md nomeia o serviço do túnel em vez de omiti-lo")
 
 # --- 4. o default do offsite é o que o gate exige ------------------------------
 func _FactOffsiteDefault() -> void:

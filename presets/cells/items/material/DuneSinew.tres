@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ItemCell" format=3 uid="uid://c8f2rxm5d0qnl"]
+
+[ext_resource type="Texture2D" uid="uid://dna3fwfrhp4od" path="res://data/graphics/items/common/snakeskin.png" id="1_icon"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="2_script"]
+
+[resource]
+script = ExtResource("2_script")
+name = "Dune Sinew"
+description = "Tough pale fibres pulled from desert serpents. It holds a seam until the metal cools."
+tier = 2
+material = true
+icon = ExtResource("1_icon")
+stackable = true

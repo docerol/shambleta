@@ -1,6 +1,13 @@
 {
-	"_note": "Botões base da economia, em dados (JUIZ ECONOMIA 2026-09-27). Eram consts: preço/cap do baú (EconomyCatalog.gd:64,67) e a fricção da troca direta (EconomyService.gd:208-212). Fonte validada fail-closed no boot por EconomyCatalog.ValidateBaseCatalog: chave desconhecida, número não-positivo, SKU fora do catálogo cobrável e QUALQUER divergência contra a referência congelada do código (EconomyCatalog.BASE_KNOBS_REF / ShopCatalogRef) são erros de boot. Isto é mudança de REPRESENTAÇÃO, não de equilíbrio: os números abaixo são, um a um, os mesmos de antes do corte, e trocá-los aqui sem trocar o código não muda o jogo — derruba a carga (o arquivo inválido não entra). O companheiro de moeda paga é data/conf/paid_catalog.json.",
-	"_source": "EconomyCatalog.ShopCatalogRef + EconomyCatalog.BASE_KNOBS_REF",
+	"_note": "Botões base da economia, em dados (JUIZ ECONOMIA 2026-09-27). Eram consts: preço/cap do baú (EconomyCatalog.gd:64,67) e a fricção da troca direta (EconomyService.gd:208-212). Fonte validada fail-closed no boot por EconomyCatalog.ValidateBaseCatalog: chave desconhecida, número não-positivo e SKU fora do catálogo cobrável são erros de boot. O regime do NÚMERO mudou: cada knob traz sua faixa aceita em _knob_ranges e o validador cobra a faixa, não a igualdade contra o const (a antiga jaula 'representação, não rebalance' deixava este arquivo uma cópia dos consts, incapaz de mover um número). Dentro da banda um valor diferente do default é aceito — é o rebalance sem rebuild; fora dela, ou sem banda declarada, é erro de boot e nada do arquivo entra (o default do código fica de pé, com o desvio no log). Os valores em knobs são hoje os defaults do código e batem com a banda; trocá-los dentro dela já muda o jogo sem tocar GDScript. O companheiro de moeda paga é data/conf/paid_catalog.json.",
+	"_source": "EconomyCatalog.ShopCatalogRef (loja, ainda igualdade) + defaults EconomyCatalog.BASE_KNOBS_REF, com banda em _knob_ranges",
+	"_knob_ranges": {
+		"chest_cost_gems": {"min": 60, "max": 240},
+		"max_chests_per_purchase": {"min": 1, "max": 20},
+		"trade_cooldown_sec": {"min": 30, "max": 600},
+		"trade_daily_cap": {"min": 5, "max": 100},
+		"trade_daily_cap_vip": {"min": 10, "max": 200}
+	},
 	"knobs": {
 		"chest_cost_gems": 120,
 		"max_chests_per_purchase": 10,
@@ -18,6 +25,7 @@
 		{"sku": "founder.pack", "label": "Founder: 1200 gems + VIP 30d + title", "price": 39.90},
 		{"sku": "donate.support", "label": "Support: Apoiador title", "price": 4.90},
 		{"sku": "pass.s1", "label": "Pass S1 Premium: trilha premium da temporada", "price": 24.90},
-		{"sku": "pass.s1.deluxe", "label": "Pass S1 Deluxe: premium + 10 levels + gems", "price": 44.90}
+		{"sku": "pass.s1.deluxe", "label": "Pass S1 Deluxe: premium + 10 levels + gems", "price": 44.90},
+		{"sku": "pass.s2", "label": "Pass S2 Premium: trilha premium da temporada", "price": 24.90}
 	]
 }

@@ -44,8 +44,10 @@ func OnDeliverWater():
 	Mes("Here, take this. It's all I have left.")
 	SetQuest(WaterPondGlobal.QUEST_ID, ProgressCommons.SNAKE_PIT_BITING_THIRST.REWARDS_WITHDREW)
 	AddItem(DB.GetCellHash("Pitaya"), 10)
-	AddExp(50)
-	AddGP(1000)
+	# EXP e GP saíram daqui (`AddExp(50)`/`AddGP(1000)`, soma em memória sem ledger)
+	# para `rewardEXP`/`rewardGP` em `presets/quests/SnakePitBitingThrist.tres`,
+	# pagos pelo `SetQuest` acima. Karma e item continuam sendo deste diálogo: o
+	# catálogo da quest declara dinheiro e experiência, não os outros eixos.
 	AddKarma(1)
 	Mes("I will go back to Damasco now, this area is way too dangerous.")
 	Mes("We will keep relying on the much safer wells inside the city. I guess this water belongs to the snakes now.")

@@ -50,7 +50,7 @@ Métrica: FPS 60 | Load < 3s | 30min zero crash | Comerciais end-to-end
 Plano executável em `ROADMAP_COMERCIAL.md` (3 semanas: Cobrar → Reter → Escalar).
 
 - [x] S1 código: funil `onboarding_done/first_boss/first_chest/d1_return` (`TelemetryService.RecordFunnel` + emits best-effort) + `FunnelSummary()` + migration 042 (covering index)
-- [x] S2 código: Skip onboarding + `TradeDailyCapVIP` (20→40) + `GetTradeFeeState()` + `SeasonS1Rules()`/`EnsureSeasonS1()` (respeita trava T5)
+- [x] S2 código: Skip onboarding + `TradeDailyCapVIP` (20→40) + GetTradeFeeState() + SeasonS1Rules()/EnsureSeasonS1() (respeita trava T5)
 - [x] S3 código: load probe real 200 settles P99<200ms (`benchmarks.gd`) + `.graphifyignore` (remove Sentry vendorado + sprites do grafo)
 - [x] Correções: `EconomyService.gd` linha 2264 (newline) + `Onboarding.gd:161` (walrus inválido) — parse OK isolado
 - [ ] S1 dono: ligar 1 gateway (Stripe OU MP) + `refund-sweep --dry-run` em staging

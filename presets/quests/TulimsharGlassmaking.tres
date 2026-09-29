@@ -12,4 +12,5 @@ giverLocation = "Tulimshar Center"
 target = "Salt x12, Bone x12, Sulphur Powder x12"
 targetLocation = "Tonori Desert"
 reward = "Bottle x3, 100 EXP"
+rewardEXP = 100
 metadata/_custom_type_script = "uid://bqxdwogial88g"

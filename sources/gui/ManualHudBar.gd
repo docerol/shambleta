@@ -86,4 +86,15 @@ static func Build(gui : Node) -> Dictionary:
 	idleBtn.set_pressed_no_signal(gui.idleMode)
 	idleBtn.pressed.connect(Callable(gui, "_on_idle_hud_pressed"))
 	bar.add_child(idleBtn)
+	# Forja — o painel que EMITE a submissão (`CraftPanel.gd`, aberto por
+	# `Gui.EnsureCraftPanel`). A economia já existia atrás de um comando de GM; sem
+	# botão nenhum jogador alcançava o catálogo.
+	if not bar.has_node("CraftAccess"):
+		var craftBtn : Button = Button.new()
+		craftBtn.name = "CraftAccess"
+		craftBtn.text = "Forja"
+		craftBtn.custom_minimum_size = touchSize
+		craftBtn.mouse_filter = Control.MOUSE_FILTER_STOP
+		craftBtn.pressed.connect(Callable(gui, "_on_craft_pressed"))
+		bar.add_child(craftBtn)
 	return {"bar": bar, "skillButtons": skillButtons, "idleButton": idleBtn}

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ItemCell" format=3 uid="uid://bk2q7v8f5t3nz"]
+
+[ext_resource type="Texture2D" uid="uid://demorpiugdi6s" path="res://data/graphics/items/common/splatina-key2.png" id="1_icon"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="2_script"]
+
+[resource]
+script = ExtResource("2_script")
+name = "Star Iron Sand"
+description = "Magnetic black sand swept from the Desert Pit. Panned, it leaves a metal that remembers the sky."
+tier = 7
+material = true
+icon = ExtResource("1_icon")
+stackable = true

@@ -12,4 +12,5 @@ giverLocation = "Tulimshar Center"
 target = "Ben"
 targetLocation = "Tulimshar West Wall Pathway"
 reward = "1000 GP"
+rewardGP = 1000
 metadata/_custom_type_script = "uid://bqxdwogial88g"

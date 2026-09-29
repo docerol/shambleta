@@ -116,9 +116,10 @@ echo "  composição: engine $(mib $engine) MiB · pck $(mib $assets) MiB · she
 # e a causa dela já foi executada: ela veio da linha P1 do plano de auditoria
 # comercial ("Web build ~32MB gzip (meta <25MB)"), cujo remedo escrito na própria
 # linha era tirar a música (`data/music/`, 26 MB) de dentro do `.pck` — corte
-# feito e medido em deploy/WEB_SLIM.md (−44%). O arquivo de origem
+# feito e medido em `deploy/WEB_SLIM.md` (−44%). O arquivo de origem
 # (`.kilo/plans/1789659178562-audit-commercial-launch.md`) foi removido do
-# repositório pelo dono em 2026-09-25, então a citação está preservada lá.
+# repositório pelo dono em 2026-09-25, no commit 6277671 — em `HEAD` ele não está,
+# e o corpo (a linha P1, linha 39 de lá) se lê com `git show 6277671^` daquele caminho.
 # E o piso medido sem mexer em arte é ~32 MiB (engine + pck), ou seja: o número
 # estava abaixo do que dá para alcançar com mudança segura. Não há limite técnico
 # de tamanho para abrir ou instalar no navegador — sem cota de instalação por
@@ -132,6 +133,18 @@ echo "::nota::piso medido sem tocar em arte: ~32 MiB (engine 10 MiB side.wasm + 
 if [ "$total" -lt $((25 * 1024 * 1024)) ]; then
 	echo "  meta histórica de 25 MB atingida."
 fi
+# O ratchet, não a meta. Os 25 MB continuam `::nota::` pela razão escrita acima,
+# mas "nota que ninguém paga" foi exatamente o defeito do passo de CI (um
+# `::warning::` com o pacote estourado deixava o job verde). O que barra é o
+# número de hoje: subir peso quebra o export, baixar só pode melhorar. O teto é
+# o mesmo da CI (`.github/workflows/godot-ci.yml`) e `scripts/check_ci.sh` confere
+# os dois contra `deploy/WEB_SLIM.md`, para o número não subir numa porta só.
+CEILING=$((36*1024*1024))
+if [ "$total" -ge "$CEILING" ]; then
+	echo "::error::pacote Web em $total B acima do ratchet de $CEILING B (deploy/WEB_SLIM.md) — emagrecer antes de piorar."
+	exit 1
+fi
+echo "ratchet de peso: $total B < $CEILING B — ok"
 # Boot real do pacote num navegador. Fecha a lacuna que nenhuma suíte daqui cobria:
 # `scripts/test.sh` roda `godot --headless -s` (sem navegador) e o export media
 # bytes — a plataforma de lançamento não era executada por teste nenhum.

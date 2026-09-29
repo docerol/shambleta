@@ -9,7 +9,6 @@ const SET_INGREDIENT : int			= 4
 const QUEST_SETS : int				= 3
 const QUEST_INGREDIENT : int			= SET_INGREDIENT * QUEST_SETS
 const QUEST_REWARD : int			= QUEST_SETS
-const QUEST_EXP : int				= 100
 const TRADE_MAX : int				= 20
 
 # Quest items
@@ -83,7 +82,12 @@ func OnGathering():
 	Mes("Meanwhile, I used up my last resources to make these. Take them.")
 
 	AddItem(bottleID, QUEST_REWARD)
-	AddExp(QUEST_EXP)
+	# Os 100 EXP saíram daqui (um `AddExp` cru, sem ledger, e o `QUEST_EXP` que o
+	# alimentava saiu junto) para `rewardEXP` em
+	# `presets/quests/TulimsharGlassmaking.tres`, pagos pelo `SetQuest` acima. A
+	# entrega repetida de material continua dando garrafa (`OnComplete`, para quem
+	# já fechou a quest), sem EXP — como era, porque `OnGathering` só é alcançável
+	# com a quest ainda aberta.
 
 	Mes("%d bottles. Don't break them, they're fine Eridu glass!" % QUEST_REWARD)
 	Think("Eridu laughs.")

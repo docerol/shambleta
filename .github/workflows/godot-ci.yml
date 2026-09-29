@@ -127,12 +127,12 @@ jobs:
   # SOM-IDLE code health: gate anti-god-node (>800 linhas, legado em allowlist).
   code-health:
     runs-on: ubuntu-latest
-    name: Code Health (god-node + doc drift)
+    name: Code Health (structure gates)
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Os dois gates de estrutura pela mesma porta do `test.sh structure`: o job
+      # Os nove gates de estrutura pela mesma porta do `test.sh structure`: o job
       # chamava check_god_nodes.sh direto e o check_doc_drift.sh, escrito nesta
       # rodada, não era chamado por ninguém — régua sem execução é régua sem efeito.
       - name: Run structure gates
@@ -149,12 +149,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Run companion gates (webhook, security, refund CLI)
-        # Mesmo `gate_py` do test.sh local: os três arquivos passam pelo quádruplo
-        # de §24-8 (marcador de resultado presente, contagem de falhos lida do log,
-        # exit code conferido à parte). Rodar python solto aqui deixava CI e local
-        # provando coisas diferentes. Não precisa de Godot: o case `companion` só
-        # chama python3.
+      - name: Run every companion gate companion_gates() lists
+        # O mesmo `gate_py` do test.sh local: cada suíte passa pelo quádruplo de
+        # §24-8 (marcador de resultado presente, contagem de falhos lida do log, exit
+        # code conferido à parte). A lista é o diretório `companion/test_*.py`, e uma
+        # suíte sem `gate_py` derruba o portão antes de rodar: o job ganha suíte nova
+        # sem depender de alguém lembrar de nomeá-la aqui. Não precisa de Godot.
         run: ./scripts/test.sh companion
 
   # SOM-IDLE: F2 idle-spike headless test suite (XP curve, zones, settle, ledger)
@@ -201,7 +201,7 @@ jobs:
           # ladder, probe realtime 300s), 300s matava o job no meio (timeout, não
           # falha). 1200s dá margem em runners lentos.
           timeout 1200 godot --headless --path . -s tests/run_idle_tests.gd > /tmp/idle-tests.log 2>&1
-          bash scripts/ci_gate_log.sh /tmp/idle-tests.log "== RESULT:" "$?"
+          bash scripts/ci_gate_log.sh /tmp/idle-tests.log "== RESULT:" "$?" run_idle_tests
 
       # Harness que não roda é garantia falsa — o repositório já morreu duas
       # vezes desse mal (gut_runner.gd e test_e2e_implementation sem job). A
@@ -220,7 +220,7 @@ jobs:
           set +e
           cd "$PROJECT_PATH"
           timeout 180 godot --headless --path . -s tests/run_rpc_identity_test.gd > /tmp/rpc-identity.log 2>&1
-          bash scripts/ci_gate_log.sh /tmp/rpc-identity.log "== RPC IDENTITY:" "$?"
+          bash scripts/ci_gate_log.sh /tmp/rpc-identity.log "== RPC IDENTITY:" "$?" run_rpc_identity_test
 
       # Este harness existia no repositório sem job nenhum: tabela de
       # chamador→método entre arquivos (Gui → Settings.get_sessionfirstlogin,
@@ -233,7 +233,7 @@ jobs:
           set +e
           cd "$PROJECT_PATH"
           timeout 120 godot --headless --path . -s tests/test_e2e_implementation.gd > /tmp/e2e-api.log 2>&1
-          bash scripts/ci_gate_log.sh /tmp/e2e-api.log "== RESULT:" "$?"
+          bash scripts/ci_gate_log.sh /tmp/e2e-api.log "== RESULT:" "$?" test_e2e_implementation
 
   # SOM-IDLE A2: backup restore probe — monthly gate (runs on every push for now).
   backup-restore:
@@ -255,7 +255,7 @@ jobs:
           set +e
           cd "$PROJECT_PATH"
           timeout 120 godot --headless --path . -s tests/test_backup_restore.gd > /tmp/backup.log 2>&1
-          bash scripts/ci_gate_log.sh /tmp/backup.log "== Backup Restore Probe:" "$?"
+          bash scripts/ci_gate_log.sh /tmp/backup.log "== Backup Restore Probe:" "$?" test_backup_restore
 
   # SOM-IDLE P2: performance benchmark gate
   benchmarks:
@@ -277,7 +277,7 @@ jobs:
           set +e
           cd "$PROJECT_PATH"
           timeout 120 godot --headless --path . -s tests/benchmarks.gd > /tmp/bench.log 2>&1
-          bash scripts/ci_gate_log.sh /tmp/bench.log "== Benchmarks:" "$?"
+          bash scripts/ci_gate_log.sh /tmp/bench.log "== Benchmarks:" "$?" benchmarks
 
   # SOM-IDLE beta deploy: export Web (pivô idle é web-first). O artifact é
   # servido com COOP/COEP pelo nginx do deploy/web/Dockerfile (Coolify).
@@ -327,23 +327,88 @@ jobs:
           # sentry-bundle.js no export_begin e aborta se o dir não existe.
           godot --headless --path . --export-release "Web" build/Web/index.html
 
-      - name: Measure gzip weight (meta < 25 MB)
+      - name: Measure gzip weight (ratchet 36 MiB; meta 25 MiB não alcançada — deploy/WEB_SLIM.md)
         run: |
           cd "$PROJECT_PATH/build/Web"
+          # A régua antiga somava uma lista lembrada de artefatos (`.pck`, `.js`,
+          # os `.wasm`) e por isso deixava de fora `index.png` — o splash que o
+          # próprio shell baixa em `<img id="status-splash" src="index.png">`,
+          # 2,5 MB que o navegador paga e o gate não via (a correção está escrita
+          # em deploy/WEB_SLIM.md, "Re-medição 2026-09-25"). Somar o diretório
+          # inteiro é a forma que não esquece arquivo: nada entra no pacote de
+          # graça sem subir o número.
           total=0
-          for f in index.pck index.wasm index.js index.side.wasm libgdsqlite*.wasm; do
+          for f in *; do
             [ -f "$f" ] || continue
-            gz=$(gzip -9 -c "$f" | wc -c)
-            total=$((total+gz))
+            total=$((total + $(gzip -9 -c "$f" | wc -c)))
           done
-          echo "First-load gzip: $((total/1024/1024)) MB"
-          test "$total" -lt $((25*1024*1024)) || echo "::warning::first-load gzip acima da meta de 25 MB (ver deploy/COOLIFY.md §6)"
+          # Medido neste pacote (build/Web de 2026-09-26, gzip -9): 36.735.388 B
+          # = 35,03 MiB. A meta de 25 MiB NÃO é alcançada hoje, e a causa está
+          # escrita em deploy/WEB_SLIM.md; trocar o aviso por `exit 1` na meta
+          # deixaria a pipeline permanentemente vermelha, que dá no mesmo que
+          # nenhum gate. O que barra é o ratchet no número de hoje: subir peso
+          # passa a quebrar o build, baixar só pode melhorar.
+          CEILING=$((36*1024*1024))
+          echo "Pacote Web (gzip -9, diretório inteiro): $total B = $((total/1024/1024)) MiB; ratchet $((CEILING/1024/1024)) MiB; meta 25 MiB"
+          if [ "$total" -ge "$CEILING" ]; then
+            echo "::error::pacote Web em $total B acima do ratchet de $CEILING B — emagrecer antes de piorar (deploy/WEB_SLIM.md)"
+            exit 1
+          fi
 
       - name: Upload Artifact - Web
         uses: actions/upload-artifact@v5
         with:
           name: Web
           path: build/Web
+
+  # As imagens que o compose builda SÃO o produto que roda no servidor, e até aqui
+  # nenhum job as construía: Dockerfile quebrado (FROM que não existe, `COPY` de
+  # arquivo renomeado, estágio que não fecha, `.dockerignore` cortando o que o
+  # build precisa) aparecia no Coolify, no meio de um deploy. O job usa
+  # `docker compose build`, não `docker build` na mão: é o mesmo contexto, os
+  # mesmos `build.args` e o mesmo merge de override que a produção resolve, então
+  # o que a CI prova é o deploy, não uma aproximação dele.
+  # Nada sobe para registry — o gate é "builda", publicar continua sendo decisão
+  # de release (deploy/COOLIFY.md). Roda fora de container porque o job precisa do
+  # daemon Docker do runner: dentro de um container não haveria socket.
+  # O tag do artefato É pisado aqui: os cinco serviços `build:` do compose resolvem
+  # o `image:` como `shambleta/<svc>:${SHAMBLETA_TAG:-local-unpinned}`, então sem
+  # este passo a CI produziria `local-unpinned` — um deploy sem nome, que é
+  # exatamente o estado que `deploy/ROLLBACK.md` existe para evitar. `scripts/check_ci.sh`
+  # quebra o gate se algum job com `docker compose build|config` perder o knob.
+  container-images:
+    runs-on: ubuntu-latest
+    name: Build Deploy Images
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      # Mesmo formato do deploy manual (`git rev-parse --short=12 HEAD`), para que a
+      # lista de `docker images` e o histórico do Coolify nomeiem a mesma coisa.
+      # Vai no environment do passo: assim `config -q` resolve a interpolacão com o
+      # tag real, não com o sentinel de fallback.
+      - name: Stamp the image tag from the commit
+        run: echo "SHAMBLETA_TAG=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+
+      # `config -q` é o validador do arquivo: resolve merge, interpolação de
+      # `${VAR:-default}` e referências cruzadas, sem ligar container nenhum. É o
+      # mesmo caminho que scripts/check_compose.sh usa quando o binário existe.
+      - name: Resolve compose (prod)
+        run: docker compose -f deploy/docker-compose.yml config -q
+
+      - name: Resolve compose (staging overlay sobre o prod)
+        run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml config -q
+
+      - name: Build every image the prod compose declares
+        run: docker compose -f deploy/docker-compose.yml build --progress=plain
+
+      # O overlay de staging troca os `build.args` do serviço `web` (o endereço do
+      # game server entra compilado no pacote). Buildar só com o prod deixaria o
+      # caminho que o staging usa sem prova nenhuma.
+      - name: Build the web image with the staging args
+        run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml build --progress=plain web
 
   snap:
     runs-on: ubuntu-latest

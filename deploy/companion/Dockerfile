@@ -21,6 +21,18 @@
 FROM python:3.12-alpine
 WORKDIR /app
 COPY companion/server.py .
+# O verificador SSV de anúncio recompensado (rota POST /webhooks/ads) é um módulo
+# próprio porque companion/server.py está no teto de linhas do ratchet. Copiado
+# junto com server.py: sem ele o `import ad_ssv` cai no guard e a rota responde
+# 503 — fail-closed, nenhum anúncio credita, e o webhook de pagamento segue vivo.
+COPY companion/ad_ssv.py .
+# O sender VAPID é uma fachada de QUATRO arquivos (server.py:699) e o `import
+# push_vapid` dele resolve por nome nu na mesma pasta de server.py — sem copiar o
+# fechamento inteiro (`push_vapid`→`push_common`/`push_p256`/`push_aesgcm`), um
+# deploy com chave VAPID configurada ainda morre em NotImplementedError porque a
+# camada cripto não está na imagem. Cópia explícita, não `companion/*`: só estas
+# quatro acompanham server.py (o resto de companion/ é ferramenta de CI).
+COPY companion/push_vapid.py companion/push_common.py companion/push_p256.py companion/push_aesgcm.py ./
 # Fonte única do catálogo pago: o mesmo arquivo que o jogo valida no boot.
 COPY data/conf/paid_catalog.json .
 EXPOSE 8901

@@ -51,7 +51,12 @@ static func ParseEntitiesDB():
 			var entity : EntityData = resource as EntityData
 			if entity._id != entity._name.hash():
 				push_error("ID for entity %s is not set, add: %d" % [entity._name, entity._name.hash()])
-				return
+				# `continue`, não `return`: isto mora dentro do laço que varre o catálogo
+				# inteiro, e o `return` que a reescrita de `0c5cb56` deixou aqui (auditoria
+				# 2026-09-28) abortava o parse no primeiro `.tres` com id stale — toda
+				# entidade depois dela simplesmente não existia, sem outra pista além da
+				# linha de push_error no log.
+				continue
 			if entity._parent:
 				entity = entity.GetMergedEntity()
 
@@ -69,7 +74,7 @@ static func ParseEntitiesDB():
 			if entity._id != UnknownHash:
 				if EntitiesDB.has(entity._id):
 					push_error("Duplicated entity in EntitiesDB: " + entity._name)
-					return
+					continue
 				EntitiesDB[entity._id] = entity
 
 static func ParseCellDB(db : Dictionary, path : String):
@@ -240,7 +245,11 @@ static func DrainPendingPreloads():
 
 static func _FinishPreload():
 	preloadPaths = []
-	if Launcher == null or Launcher.get_tree() == null:
+	# `is_inside_tree()`, não `get_tree() == null`: pedir a árvore de um nó que já
+	# saiu dela imprime `ERROR: Parameter "data.tree" is null` no log do run — e é
+	# desse log que o veredito de todo harness é lido, só que o ruído de teardown não
+	# é um veredito. Medido em 2026-09-28 no meio do `run_idle_tests`.
+	if Launcher == null or not Launcher.is_inside_tree():
 		return
 	if Launcher.get_tree().process_frame.is_connected(PreloadUpdate):
 		Launcher.get_tree().process_frame.disconnect(PreloadUpdate)

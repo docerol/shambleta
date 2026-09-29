@@ -120,6 +120,9 @@ func OnReward():
 	AddItem(cactusSourCandyID, 5)
 	AddItem(croissantID, 5)
 	AddKarma(1)
-	AddExp(30)
+	# Os 30 EXP saíram daqui (`AddExp(30)` sem ledger) para `rewardEXP` em
+	# `presets/quests/GrainInTheDesert.tres`, pagos pelo `SetQuest` acima. O ramo
+	# só é alcançável em SEARCHED_CRATES (Riskim.gd:16), então a transição para 255
+	# acontece uma vez — o total entregue ao jogador é o mesmo de antes.
 
 	Mes("Here, take some of my best. Croissants and cactus candy. One is a family recipe and the other one is a specialty of Damasco!")

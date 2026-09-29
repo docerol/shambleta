@@ -3,6 +3,9 @@ extends WindowPanel
 var platformSection : String					= Util.GetPlatformName()
 const defaultSection : String					= "Default"
 const userSection : String						= "User"
+# Índice do "On" na OptionButton de web push (0 = "Off", 1 = "On") — o sinal
+# `item_selected` entrega exatamente esse inteiro, nunca um bool.
+const WebPushOnIndex : int = 1
 
 const creditsJson : JSON						= preload("res://data/db/credits.json")
 
@@ -422,12 +425,22 @@ func init_webpush(apply : bool):
 	if apply:
 		WebPushService.Initialize()
 
+# O toggle de web push não é mais uma preferência: "On" é o gesto que cria a
+# subscription no navegador e a entrega ao servidor de jogo (permissão → subscribe
+# → submit, nessa ordem, e nada enviado sem permissão — `WebPushService.EnablePush`);
+# "Off" desassina e pede a remoção da linha (`DisablePush`). O fluxo mora inteiro em
+# `sources/web/WebPush.gd` — este corpo é fino de propósito (teto anti-god-node).
 func set_webpush(enabled : bool):
-	WebPushService.SetEnabled(enabled)
-	if enabled and WebPushService.GetPermission() == "default":
-		var perm : String = WebPushService.RequestPermission()
-		if perm != "granted":
-			WebPushService.SetEnabled(false)
+	if enabled:
+		WebPushService.EnablePush()
+	else:
+		WebPushService.DisablePush()
+
+# `OptionButton.item_selected` emite o ÍNDICE (int), e `set_webpush` quer um bool —
+# ligar o sinal direto era um `int` → `bool` que o GDScript estrito não converte.
+# 0 = "Off", 1 = "On", pela ordem dos `add_item` da linha de web push.
+func _on_webpush_selected(index : int) -> void:
+	set_webpush(index == WebPushOnIndex)
 
 func apply_webpush(enabled : bool):
 	pass
@@ -550,13 +563,27 @@ func _ready():
 
 	renderAccessors["Network-Local"][ACC_TYPE.LABEL].set_visible(OS.is_debug_build())
 
-	# SOM-IDLE F3: web push toggle (web-only, created at runtime).
-	# AUDITORIA_INDEPENDENTE W5: gated on actual delivery capability, not just on
-	# the platform. O sender (VAPID + subscription + companion) não existe, e com
-	# a aba em background o main loop do export web para — ou seja, o toggle
-	# prometia o re-engajamento e não entregava nem um balão. WebPushService
-	# .CanDeliver() volta a ser true quando o sender landar; ver o comentário lá.
-	if LauncherCommons.isWeb and WebPushService.CanDeliver():
+	# SOM-IDLE F3: web push toggle (web-only, criado em runtime).
+	# AUDITORIA_INDEPENDENTE W5: a linha é desenhada por OFERTA, não por
+	# entrega-agora. `CanDeliver()` é a conjunção das seis peças
+	# (sources/web/WebPushDelivery.gd:299) e uma delas — o navegador assinando — só
+	# nasce quando o jogador LIGA o toggle: cobrar as duas perguntas uma da outra é
+	# o deadlock que deixava a linha invisível para sempre num client novo, com o
+	# achado "push não entrega" aberto por construção. `WebPushService.CanOfferToggle()`
+	# (sources/web/WebPush.gd) responde true quando o único que falta é peça que o
+	# gesto cria (`not_web`/`no_bridge`/`not_subscribed_yet`/`companion_not_probed`)
+	# e continua exigindo, duro, o que o deploy tem de ter: a chave VAPID observada,
+	# o servidor que persiste a subscription (no client web, a sessão + o RPC do outro
+	# lado) e o RPC que a entrega — `RegisterPushSubscription`/`UnregisterPushSubscription`
+	# em sources/network/Network.gd:543 com a conta saindo do PEER
+	# (sources/network/server/Server.gd:1111). O resto do caminho tem caminho desde
+	# 2026-09-27: `location = /push/vapid` no nginx do serviço `web`
+	# (deploy/web/nginx.conf), e só esse caminho exato — a fila continua fora
+	# (sources/web/WebPushSubscription.gd:63).
+	# O argumento antigo — "com a aba em background o main loop para, logo nada chega" —
+	# deixou de ser motivo: quem acorda o jogador é o service worker (`deploy/web/sw.js`),
+	# não o loop do jogo parado.
+	if LauncherCommons.isWeb and WebPushService.CanOfferToggle():
 		var pushBox : HBoxContainer = HBoxContainer.new()
 		pushBox.name = "WebPushRow"
 		var pushLabel : Label = Label.new()
@@ -566,7 +593,7 @@ func _ready():
 		pushOption.name = "WebPushOption"
 		pushOption.add_item("Off")
 		pushOption.add_item("On")
-		pushOption.item_selected.connect(set_webpush)
+		pushOption.item_selected.connect(_on_webpush_selected)
 		pushBox.add_child(pushLabel)
 		pushBox.add_child(pushOption)
 		visualVBox.add_child(pushBox)

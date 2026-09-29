@@ -40,7 +40,30 @@ static func ResolveCompanionURL(envValue : String, confValue : String, pageOrigi
 static var ProxyTLS : bool				= OS.get_environment("SHAMBLETA_PROXY_TLS").strip_edges() == "1"
 
 const LocalServerAddress : String		= "127.0.0.1"
+# TETO ÚNICO de conexões simultâneas do processo servidor — os DOIS transportes,
+# não só o que aceita um número. A auditoria de 2026-09-28 mediu a divergência:
+# `ENetMultiplayerPeer.create_server(port, max_clients)` cobra o teto no próprio
+# transporte, e `WebSocketMultiplayerPeer.create_server(port, bind_address, tls)`
+# NÃO tem parâmetro de clientes na API do motor (o 2º argumento sempre foi o
+# endereço de bind, o `"*"`), então o transporte por onde o WEB — alvo do produto —
+# entra nunca teve teto nenhum: quem aceita conexão ganha um slot de graça.
+# `ConnectionCeiling()` é o LEITOR ÚNICO do número (`Admission.OpenTransport` abre
+# os dois caminhos, um abaixo do outro): trocar um lado é trocar os dois, e
+# tests/admission_gate_test.gd compara o que cada transporte efetivamente aplicou.
 const MaxPlayerCount : int				= 128
+
+# Orçamento de handshake ANTES de qualquer credencial (ver `Admission`). Cada
+# tentativa consome um slot até `LoginAttemptTimeout` e um objeto no motor; sem
+# cota, o custo de martelar a porta era zero. Generoso de propósito com NAT/lar:
+# uma casa reconectando depois de um restart faz dezenas de handshakes em segundos.
+# Atrás do proxy reverso (`ProxyTLS`) todos os jogadores compartilham o endereço do
+# proxy, então a cota por endereço sobe para o teto de conexões — ela continua
+# segurando o spray que nunca autentica sem trancar a porta na casa inteira.
+const PreAuthPerAddress : int			= 32
+const PreAuthWindowSec : int			= 60
+
+static func ConnectionCeiling() -> int:
+	return MaxPlayerCount
 
 # Visibility
 const VisibilityBorder : float			= 64.0

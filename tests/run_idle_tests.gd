@@ -73,7 +73,12 @@ func _run_tests():
 	# SOM-IDLE: elemental combat — pre-load ElementCommons so the class_name
 	# is registered before IdleTests.gd parses (it uses ElementCommons directly).
 	load("res://sources/combat/ElementCommons.gd")
-	var suitesScript : GDScript = load("res://tests/IdleTests.gd")
+	# A FOLHA da hierarquia de suítes: `IdleTests.gd` é o kernel (fixtures,
+	# contadores, helpers) e `IdleTestsFrontier.gd` estende ele com as suítes de
+	# fronteira. Uma instância só, porque o placar (`checks`/`failures`) e o
+	# fixture de mundo (`lastCharID`) são estado da instância — ver o cabeçalho da
+	# folha. Harnesses que só usam os helpers continuam carregando o kernel.
+	var suitesScript : GDScript = load("res://tests/IdleTestsFrontier.gd")
 	var suites : RefCounted = suitesScript.new()
 
 	suites.SuiteXpCurve()
@@ -248,6 +253,12 @@ func _run_tests():
 		# §7.4 deterministic live farm sim (zone 1) — after the DB suites so the
 		# fixture character is already leveled by the settle
 		await suites.SuiteIdlePolicySim(suites.lastCharID)
+		# SOM-IDLE: morte do farmer no idle tem que custar downtime e terminar em
+		# revive que volta a matar — o State.DEAD não tinha produtor nenhum até aqui.
+		await suites.SuiteIdleDeathRevive(suites.lastCharID)
+		# SOM-IDLE: a esteira de item do farm vivo, elo a elo — mob derruba, farmer
+		# coleta, bebereira abastece, banco grava pilha e lote na mesma quantidade.
+		await suites.SuiteIdleLootPipeline(suites.lastCharID)
 		# Agent lifecycle: the instance list is the authority, not the tree, and an
 		# empty instance closes by identity. Both regressions are use-after-free in
 		# teardown, so they run right after the sim that exercises the same path.
@@ -273,9 +284,14 @@ func _run_tests():
 		# SuiteGuiPanels montou, e a suíte aperta as teclas de verdade no `_input`
 		# do serviço — nada nesta casa provava que um atalho anunciado abria algo.
 		suites.SuiteInputHotkeys()
-		# Ponteiros de evidência por último: não toca estado nenhum, só relê a
-		# documentação do beta contra a árvore atual.
+		# Ponteiros de evidência primeiro dos três leitores de doc: não toca estado
+		# nenhum, só relê a documentação do beta contra a árvore atual.
 		suites.SuiteEvidencePointers()
+		# No mesmo espírito, e com o mesmo tipo de mentira como alvo: a doc nomeia
+		# harnesses. Aqui é conferido que todo harness que o gate roda tem nome na
+		# doc, que nenhuma linha da tabela nomeia harness que o gate não roda e que
+		# toda citação `tests/<nome>.gd` na prosa aponta para arquivo que existe.
+		suites.SuiteHarnessCitations()
 		# Depois da régua de ponteiros, no mesmo espírito: leitura da árvore, nenhum
 		# estado tocado. Varre `sources/` procurando navegação externa sem o ramo Web.
 		suites.SuiteExternalLinksWebBranch()

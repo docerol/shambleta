@@ -92,13 +92,17 @@ func DisplayEmote(emoteID : int):
 	if emoteFx == null:
 		push_error("No emote particle found, could not display emote")
 		return null
-		if DB.EmotesDB and emoteID in DB.EmotesDB:
-			var emote : BaseCell = DB.EmotesDB[emoteID]
-			emoteFx.texture = emote.icon
-			emoteFx.lifetime = ActorCommons.emoteDelay
-			emoteFx.restart()
-			if entity == Launcher.Player:
-				emote.used.emit()
+
+	# SOM-IDLE (auditoria 2026-09-28): corpo inteiro dentro do ramo de erro, do mesmo
+	# `0c5cb56` que já tinha feito isto com `DisplaySpeech` (:212) — nenhum emote
+	# aparecia e o `emote.used` que a economia escuta nunca disparava.
+	if DB.EmotesDB and emoteID in DB.EmotesDB:
+		var emote : BaseCell = DB.EmotesDB[emoteID]
+		emoteFx.texture = emote.icon
+		emoteFx.lifetime = ActorCommons.emoteDelay
+		emoteFx.restart()
+		if entity == Launcher.Player:
+			emote.used.emit()
 
 #
 func DisplayMorph(callback : Callable, args : Array):

@@ -20,6 +20,12 @@ const MaxCatchUpSeconds : float = 2.0	# D1 (b): cap pathological pumps at 8 subs
 
 const SeekInterval : float = 0.4			# re-evaluate target every 0.4s
 const LootInterval : float = 0.4
+# Raio de coleta: o drop nasce na posição do mob ± `_radius` (`WorldDrop.PushDrop`)
+# e o farmer está em alcance de melee quando o mata, então a própria presa está
+# sempre aqui. Sem teto, `_findNearestDrop` varre a instância inteira e um drop
+# distante de outro jogador arrastava o farmer para fora do farm — e LOOT virava
+# o novo estado-presa que DEAD era.
+const LootSearchRadius : float = 192.0
 const PotionCheckInterval : float = 1.0
 const StuckTimeout : float = 8.0
 const AttackRangeBuffer : float = 8.0		# walk slightly inside skill range
@@ -53,6 +59,12 @@ var metricLootTicks : int						= 0
 var metricNoTargetTicks : int					= 0
 var metricAttacksCast : int					= 0
 var metricWalkDistance : float					= 0.0
+# A esteira de item do farm vivo tem dois elos que já foram código morto (o mob
+# não derrubava nada e o farmer não coletava nada), e cada um tem que ter número
+# próprio no snapshot: sem `drops_picked` e `potions_used`, "loot_ticks > 0" era
+# a única evidência de que o item chegou em alguém.
+var metricDropsPicked : int					= 0
+var metricPotionsUsed : int					= 0
 var _metricLastPos : Vector2					= Vector2.ZERO
 
 var currentTargetRID : int					= 0
@@ -121,6 +133,8 @@ func Setup(pAgent : PlayerAgent, pZoneID : int):
 	metricNoTargetTicks = 0
 	metricAttacksCast = 0
 	metricWalkDistance = 0.0
+	metricDropsPicked = 0
+	metricPotionsUsed = 0
 	_lastPosition = agent.position if agent else Vector2.ZERO
 	_metricLastPos = _lastPosition
 
@@ -166,6 +180,19 @@ func _tickStep(delta : float):
 		InterruptBossReset()
 		IdlePolicyService.OnBossResult(agent, lostIndex, false)
 		return
+
+	# A morte do ATOR é a única autoridade de DEAD. Sem esta linha ninguém entrava
+	# em State.DEAD (não havia produtor no arquivo) e `_tickDead` — o único revive
+	# do idle — era código morto: o farmer caía, `ActorCommons.State.DEATH` é
+	# absorvente na tabela, `_velocity_computed` trava currentVelocity em ZERO para
+	# estado != WALK, e a policy ficava COMBAT mandando WalkToward para um corpo.
+	# Medido 2026-09-27 com `tests/diag_pacing.gd` a 1× (L1, zona 1): 4 kills e
+	# estátua pelo resto da sessão (pos congelado, input≠0, navpath válido, vel=0).
+	if state != State.DEAD and not ActorCommons.IsAlive(agent):
+		state = State.DEAD
+		currentTargetRID = 0
+		_attackedTarget = false
+		_respawnAccumulator = 0.0
 
 	match state:
 		State.IDLE:
@@ -337,7 +364,13 @@ func _tickCombat(delta : float):
 			_killRegistered = true
 		_attackedTarget = false
 		currentTargetRID = 0
-		state = State.SEEK
+		# Kill NOSSO → o mob acabou de derrubar a mesa dele em `inst.drops`
+		# (`MonsterAgent.Killed` → `_RollDrops` → `WorldDrop.PushDrop`). Sem ir a
+		# LOOT aqui, o estado era inalcançável: o `state = State.LOOT` do fim da
+		# função só pega quem morre dentro do mesmo tick, e no tick seguinte o
+		# alvo já entra morto pelo topo — loot apodrecia no chão e o farmer não
+		# coletava item nenhum (medido: `loot_ticks` = 0 em 41 kills).
+		state = State.LOOT if _killRegistered else State.SEEK
 		return
 
 	# SOM-IDLE: janela de interrupt só existe em duelo de boss (nunca no farm).
@@ -458,7 +491,8 @@ func _tickLoot(delta : float):
 		var dist : float = agent.position.distance_squared_to(drop.position)
 		if dist <= ActorCommons.PickupSquaredDistance:
 			var dropID : int = drop.get_instance_id()
-			WorldDrop.PickupDrop(dropID, agent)
+			if WorldDrop.PickupDrop(dropID, agent):
+				metricDropsPicked += 1
 			state = State.SEEK
 		else:
 			agent.WalkToward(drop.position)
@@ -471,13 +505,14 @@ func _findNearestDrop() -> Drop:
 	if inst == null or inst.drops.is_empty():
 		return null
 
+	var limit : float = LootSearchRadius * LootSearchRadius
 	var best : Drop = null
 	var bestDist : float = INF
 	for dropID in inst.drops:
 		var drop : Drop = inst.drops[dropID]
 		if drop and is_instance_valid(drop):
 			var dist : float = agent.position.distance_squared_to(drop.position)
-			if dist < bestDist:
+			if dist <= limit and dist < bestDist:
 				bestDist = dist
 				best = drop
 	return best
@@ -543,10 +578,17 @@ func _usePotion():
 		return
 	if agent.inventory.HasItem(cell, 1):
 		agent.inventory.UseItem(cell)
+		metricPotionsUsed += 1
 
 # ------------------------------------------------------------------ metrics
 
 func ComputeSessionEfficiency() -> float:
+	return clampf(ComputeSessionEfficiencyRaw(), MinEfficiency, 1.0)
+
+# Sem clamp, de propósito: o clamp do valor publicado tem o MESMO piso do gate
+# (MinEfficiency), então uma régua que lê a versão clampada não pode falhar —
+# 1 morte ou 100, o número é 0.5. Quem quer aferir pacing lê esta.
+func ComputeSessionEfficiencyRaw() -> float:
 	if agent == null:
 		return MinEfficiency
 
@@ -554,8 +596,7 @@ func ComputeSessionEfficiency() -> float:
 		return 1.0
 
 	var downtimeRatio : float = sessionDowntimeSecs / sessionGameTime
-	var efficiency : float = 1.0 - downtimeRatio - float(sessionDeaths) * DeathPenalty
-	return clampf(efficiency, MinEfficiency, 1.0)
+	return 1.0 - downtimeRatio - float(sessionDeaths) * DeathPenalty
 
 func GetSessionDuration() -> float:
 	return sessionGameTime
@@ -566,12 +607,17 @@ func SnapshotMetrics() -> Dictionary:
 	return {
 		"kills" = sessionKills,
 		"kills_per_hour" = float(sessionKills) / hours,
+		"deaths" = sessionDeaths,
+		"downtime_secs" = sessionDowntimeSecs,
+		"efficiency_raw" = ComputeSessionEfficiencyRaw(),
 		"seek_ticks" = metricSeekTicks,
 		"combat_ticks" = metricCombatTicks,
 		"loot_ticks" = metricLootTicks,
 		"no_target_ticks" = metricNoTargetTicks,
 		"attacks_cast" = metricAttacksCast,
 		"walk_distance" = metricWalkDistance,
+		"drops_picked" = metricDropsPicked,
+		"potions_used" = metricPotionsUsed,
 		"secs_per_kill" = sessionGameTime / maxf(1.0, float(sessionKills)),
 		"attacks_per_kill" = float(metricAttacksCast) / maxf(1.0, float(sessionKills)),
 	}

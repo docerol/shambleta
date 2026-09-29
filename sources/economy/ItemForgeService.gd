@@ -98,6 +98,11 @@ func CorruptItem(charID : int, itemID : int, forceOutcome : String = "") -> Dict
 		if consumed.is_empty():
 			result["reason"] = "consume_failed"
 			return false
+		# O lote saiu, então o agregado sai junto — sem isto `item.count` fica
+		# contando um item que não existe mais e o reconcile marca divergência.
+		if not _eco._DecayStackRaw(charID, itemID, 1):
+			result["reason"] = "storage_failed"
+			return false
 		if not _BurnGoldRaw(sql, charID, accountID, fee, "corrupt_fee:%d" % itemID):
 			result["reason"] = "insufficient_gold"
 			return false
@@ -157,6 +162,10 @@ func CubeUpcycle(charID : int, itemID : int, forceResultID : int = 0) -> Diction
 		if consumed.is_empty():
 			result["reason"] = "consume_failed"
 			return false
+		# Mesmo dreno de agregado da corrupção: 3 lotes saem, 3 saem do `item.count`.
+		if not _eco._DecayStackRaw(charID, itemID, EconomyCatalog.CUBE_COUNT):
+			result["reason"] = "storage_failed"
+			return false
 		var prize : int = forceResultID
 		if prize <= 0 or DB.GetItem(prize) == null:
 			prize = _RollUpgradeReward(charID, itemID, cell.tier)
@@ -198,6 +207,9 @@ func SalvageItem(charID : int, itemID : int) -> Dictionary:
 		if consumed.is_empty():
 			result["reason"] = "consume_failed"
 			return false
+		if not _eco._DecayStackRaw(charID, itemID, 1):
+			result["reason"] = "storage_failed"
+			return false
 		var tier : int = maxi(cell.tier, 1)
 		var gain : int = EconomyCatalog.SALVAGE_GOLD_PER_TIER2 * tier * tier
 		var gp : int = _eco._CharGoldRaw(charID)
@@ -224,6 +236,12 @@ func SalvageItem(charID : int, itemID : int) -> Dictionary:
 	return result
 
 # ------------------------------------------------------------------ Fase H: criação de itens (ITEM_CRAFTING.md, v1 gold)
+#
+# Dois insumos, dois débitos de ledger: `CraftCatalog.MaterialPerCraft(tier)`
+# unidades da matéria-prima da faixa do item (`craft_material:<hash>`, permitindo
+# lote bound) e `CraftCatalog.SubmitFee(tier)` de ouro (`craft_submit_fee:...`).
+# Antes de 2026-09-28 só existia o ouro, e a matéria-prima do drop não tinha
+# consumo nenhum no repo — ver o bloco de `MATERIAL_UNITS_PER_TIER` no catálogo.
 #
 # Teto = melhor item REAL por (tier, slot), extraído por tools/extract_budget.py
 # (soma só de valores positivos; negativos são drawback livre). Célula 0 = sem
@@ -328,6 +346,33 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 				result["reason"] = "name_duplicate"
 				return false
 
+		# SOM-CRAFT: a matéria-prima da faixa é o segundo insumo do craft, e a
+		# checagem vem ANTES do ouro de propósito — "sem insumo" e "sem ouro" são
+		# motivos diferentes na tela, e cobrar ouro para depois faltar material só
+		# faria sentido se o rollback não existisse (existe: o `return false` abaixo
+		# desfaz os dois, e a suíte C3 mede isso no lado do ouro).
+		# `allowBound = true`: matéria-prima nasce bound por regra
+		# (`EconomyKernel._GrantStackRaw`), e os caminhos de trade consomem só
+		# unbound. Sem permitir bound aqui o faucet do drop não teria sink nenhum —
+		# a forja é justamente o dreno de que o item preso no char precisa.
+		var matHash : int = FarmZoneData.GetBandMaterialHash(tier)
+		if matHash == DB.UnknownHash:
+			# Faixa sem conteúdo declarado é catálogo quebrado, não pedido do
+			# jogador: o mesmo `catalog_invalid` do fail-closed de pesos no topo.
+			result["reason"] = "catalog_invalid"
+			return false
+		var matNeed : int = CraftCatalog.MaterialPerCraft(tier)
+		if Launcher.SQL.GetLotBalanceRaw(charID, matHash, true) < matNeed:
+			result["reason"] = "no_stock"
+			return false
+		var matLots : Array = Launcher.SQL.ConsumeItemLotsRaw(charID, matHash, matNeed, true)
+		if matLots.is_empty():
+			result["reason"] = "consume_failed"
+			return false
+		if not _eco._DecayStackRaw(charID, matHash, matNeed):
+			result["reason"] = "storage_failed"
+			return false
+
 		# Gold fee sink
 		var statRows : Array = dbNode.select_rows("stat", "char_id = %d" % charID, ["gp"])
 		if statRows.is_empty():
@@ -358,9 +403,17 @@ func SubmitCraft(charID : int, accountID : int, slot : int, baseItemHash : int, 
 			result["reason"] = "ledger_failed"
 			return false
 
+		# O material sai do inventário E deixa rastro: sem esta linha o ledger conta
+		# o gold do dia e não explica cadê as unidades que o jogador farmou.
+		if not _eco._LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindItem, -matNeed, 0, "craft_material:%d" % matHash):
+			result["reason"] = "ledger_failed"
+			return false
+
 		result["ok"] = true
 		result["reason"] = "pending"
 		result["fee"] = fee
+		result["material"] = matHash
+		result["material_count"] = matNeed
 		return true):
 		pass
 	_eco.settleMutex.unlock()

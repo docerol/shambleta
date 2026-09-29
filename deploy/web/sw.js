@@ -1,17 +1,26 @@
 // Shambleta — worker de web push (SOM-W5/B). NÃO É o service worker do engine.
 //
 // O export Godot registra `index.service.worker.js` no escopo "/" — é ele que
-// traz COOP/COEP e o cache offline dos assets (.pck/.wasm). Este arquivo aqui é
-// um segundo worker, fino, só de push: trata `push` e `notificationclick` e
-// NUNCA instala handler de `fetch` — interceptar requests por cima do worker
-// do engine quebraria o streaming/caching do build e o cabeçalho CORS-Origem
-// compartilhada. Um worker substitui o outro no MESMO escopo: por isso o
-// registro disto (`navigator.serviceWorker.register('/sw.js', {scope:'/'})`,
-// chamado do lado do jogo via WebPush/_register_service_worker) fica atrás de
-// WebPush.CanDeliver(), ainda false — só ligar quando existir entrega real
-// (chave VAPID + subscription + sender no companion). Enquanto CanDeliver() é
-// false, este arquivo está servido (Dockerfile/nginx) mas jamais registrado, e
-// o worker do engine continua no controle de tudo.
+// cuida do cache offline dos assets (.pck/.wasm). Este arquivo aqui é um segundo
+// worker, fino, só de push: trata `push` e `notificationclick` e NUNCA instala
+// handler de `fetch` — interceptar requests por cima do worker do engine
+// quebraria o streaming/caching do build.
+//
+// Um worker substitui o outro no MESMO escopo, então o registro deste é feito com
+// escopo ESTREITO — `register('/sw.js', {scope:'/sw/'})`, na ponte do jogo
+// (ShambletaPush.register_sw, chamada por WebPush._register_service_worker) — e o
+// engine continua dono de '/'. O arquivo precisa morar na raiz mesmo assim: é o
+// teto do escopo que um script controla, e '/sw/' está dentro dele. COOP/COEP
+// vêm do nginx (deploy/web/nginx.conf), não do worker, então o escopo estreito não
+// custa threads. Custo real: clients.matchAll só enxerga janelas dentro do escopo,
+// e '/sw/' não contém página nenhuma — notificationclick abaixo quase sempre vai
+// openWindow em vez de focar a aba existente.
+//
+// O registro continua atrás de WebPushDelivery.CanDeliver() — a conjunção de
+// cinco peças (sender implementado, chave VAPID configurada, navegador capaz de
+// assinar, servidor que persiste a subscription, caminho client->server). Assim
+// este arquivo só é registrado quando a entrega inteira existir; enquanto
+// CanDeliver() é false ele fica servido (Dockerfile/nginx) e jamais registrado.
 //
 // Regra de manutenção: nada daqui pode tocar em requests. Se um dia precisar
 // de fetch, é o worker do engine que cresce — não este.

@@ -12,4 +12,5 @@ giverLocation = "Tulimshar Gates"
 target = "Croissant x1"
 targetLocation = "Tulimshar Market"
 reward = "Cactus Potion x10, 100 GP"
+rewardGP = 100
 metadata/_custom_type_script = "uid://bqxdwogial88g"

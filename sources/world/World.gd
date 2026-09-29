@@ -11,6 +11,12 @@ var _autoIdleAccum : float							= 0.0
 func _process(delta : float) -> void:
 	_autoIdleAccum += delta
 	if _autoIdleAccum >= 1.0:
+		# §12 (AUDITORIA_2026-09-27): presença durável no MESMO acumulador de 1 s — o
+		# heartbeat e a poda dele são uma statement cada e só disparam na própria
+		# cadência, então o tick não acrescenta trabalho por frame. Não mora no worker
+		# de backup: `SQLBackups.new()` (`sources/sql/SQL.gd:1750`) não roda sob debug
+		# nem na build web, e presença tem que viver enquanto o mundo roda.
+		Presence.Tick(Launcher.SQL, _autoIdleAccum, int(Time.get_unix_time_from_system()))
 		_autoIdleAccum = 0.0
 		IdlePolicyService.TickAutoIdle()
 	# Drena o passe de persistência em slices curtos (um chunk por frame). O worker
@@ -97,11 +103,11 @@ func Spawn(map : WorldMap, agent : BaseAgent, instanceID : int = 0):
 		# aqui ele NÃO valia: `Spawn` pegava `map.instances[instanceID]` e empurrava
 		# o player na lista fosse qual fosse a lotação. Como todo warp de NPC/porta
 		# cai em `NpcCommons.Warp` com instanceID 0
-		# (sources/actor/agent/NpcCommons.gd:153-156) — e `PlayerAgent.WarpTo` com
-		# `dest.instance`, que nunca é preenchido
-		# (sources/actor/agent/variants/PlayerAgent.gd:39-45) — o caminho de login
-		# era o único que respeitava o teto. Mesma busca limitada do `CreateAgent`,
-		# então os dois caminhos concordam por construção e não por cópia.
+		# (sources/actor/agent/NpcCommons.gd:153-156) — e `PlayerAgent.WarpTo` passa
+		# `dest.instance` (sources/actor/agent/variants/PlayerAgent.gd:280), campo que
+		# `GetDestinationFromData` (`sources/actor/agent/variants/PlayerAgent.gd:39-45`)
+		# nunca preenche: só o caminho de login respeitava o teto. Mesma busca do
+		# `CreateAgent`, então os dois caminhos concordam por construção e não por cópia.
 		if agent is PlayerAgent:
 			var target : WorldInstance = WorldAgent.ResolvePlayerInstance(map, instanceID)
 			if target == null:

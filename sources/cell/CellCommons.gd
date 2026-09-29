@@ -27,6 +27,21 @@ static func IsSameCell(cellA : BaseCell, cellB : BaseCell) -> bool:
 static func IsEquipment(cell : ItemCell) -> bool:
 	return cell.slot >= ActorCommons.Slot.FIRST_EQUIPMENT and cell.slot < ActorCommons.Slot.LAST_EQUIPMENT
 
+# SOM-CRAFT: a matéria-prima é definida pela célula, não pelo nome nem pelo slot
+# (item de quest também tem slot fora do range de equipamento). Tudo que consome
+# ou bloqueia insumo na economia lê isto: ItemForgeService (receita), SQL (carimbo
+# bound na concessão), AuctionHouseService/TradeChestService (porta de trade),
+# FarmZoneData (peso de drop).
+static func IsMaterial(cell : ItemCell) -> bool:
+	return cell != null and cell.material
+
+# Porta de equipar, em um só lugar: Server.EquipItem e Inventory.EquipItem validam
+# por aqui. NONE continua sendo o "nada vestível" de sempre (item de quest tem
+# slot próprio e continua vestindo); matéria-prima entra na régua por CLASSE, não
+# por acaso de slot — um material com slot errado continua sem vestir.
+static func IsEquippable(cell : ItemCell) -> bool:
+	return cell != null and not cell.material and cell.slot != ActorCommons.Slot.NONE
+
 static func IsEquipped(cell : BaseCell) -> bool:
 	return cell and cell is ItemCell and IsEquipment(cell) and \
 	Launcher.Player and Launcher.Player.inventory and Launcher.Player.inventory.equipment and \

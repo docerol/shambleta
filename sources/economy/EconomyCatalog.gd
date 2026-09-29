@@ -5,46 +5,46 @@ class_name EconomyCatalog
 # extraídos de EconomyService.gd (fatia 1 — zero mudança de comportamento).
 # EconomyService mantém aliases/wrappers p/ compatibilidade.
 
-# (de EconomyService.gd:9)
+# (de EconomyService.gd, antes da divisao)
 const LedgerKindGold : String = "gold"
 
-# (de EconomyService.gd:10)
+# (de EconomyService.gd, antes da divisao)
 const LedgerKindXP : String = "xp"
 
-# (de EconomyService.gd:11)
+# (de EconomyService.gd, antes da divisao)
 const LedgerKindItem : String = "item"
 
-# (de EconomyService.gd:12)
+# (de EconomyService.gd, antes da divisao)
 const LedgerKindGems : String = "gems"
 
-# (de EconomyService.gd:13)
+# (de EconomyService.gd, antes da divisao)
 const LedgerKindBossKey : String = "boss_key"
 
-# (de EconomyService.gd:14)
+# (de EconomyService.gd, antes da divisao)
 const LedgerKindEssence : String = "essence"
 
-# (de EconomyService.gd:19)
+# (de EconomyService.gd, antes da divisao)
 const SHARD_COUNT : int = 8
 
-# (de EconomyService.gd:34)
+# (de EconomyService.gd, antes da divisao)
 const GrantPollSec : float = 30.0
 
-# (de EconomyService.gd:507)
+# (de EconomyService.gd, antes da divisao)
 const TradeFeeGems : int = 10
 
-# (de EconomyService.gd:514)
+# (de EconomyService.gd, antes da divisao)
 const TradeRequireVerifiedEmail : bool = true
 
-# (de EconomyService.gd:605)
+# (de EconomyService.gd, antes da divisao)
 const ChestPityEvery : int = 10		# guaranteed rare (T3+) every N opens
 
-# (de EconomyService.gd:702)
+# (de EconomyService.gd, antes da divisao)
 const VIP1CostGems : int = 440
 
-# (de EconomyService.gd:703)
+# (de EconomyService.gd, antes da divisao)
 const VIP2CostGems : int = 880
 
-# (de EconomyService.gd:704)
+# (de EconomyService.gd, antes da divisao)
 const VIPDays : int = 30
 
 # Os cinco primeiros são dinheiro entrando. `chargeback` é o reverso (P1-6): o
@@ -55,20 +55,26 @@ const VIPDays : int = 30
 # escreve o INSERT direto no banco e não passa por esta lista.
 const GrantKinds : Array[String] = ["gems", "gold", "vip_days", "pass_premium", "cosmetic", "chargeback"]
 
-# (de EconomyService.gd:732)
+# (de EconomyService.gd, antes da divisao)
 const VIP_GRANT_TIERS : Dictionary = {
 	"vip.1mo": 1, "vip.3mo": 2, "founder.pack": 1, "starter.pack": 1,
 }
 
-# FATIA 13 (gate anti-god-node): a REFERÊNCIA CONGELADA dos botões base
-# (`ChestCostGemsRef`, `MaxChestsPerPurchaseRef`, `TradeCooldownSecRef`,
-# `TradeDailyCapRef`, `TradeDailyCapVIPRef`, `BASE_KNOBS_REF`) e o espelho do
-# catálogo cobrável (`ShopCatalogRef`) — que eram consts aqui, linha a linha os
-# mesmos números de antes do corte — passaram a morar em
-# `EconomyBaseCatalog.gd`, junto do validador fail-closed que os amarra a
-# `data/conf/economy_base_catalog.json`. Decisão de quem lê o número e de quem
-# confere o arquivo no mesmo arquivo; nenhum valor mudou. O que paga continua
-# saindo daqui pelo estado em runtime abaixo.
+# FATIA 13 (gate anti-god-node): os botões base (`ChestCostGemsRef`,
+# `MaxChestsPerPurchaseRef`, `TradeCooldownSecRef`, `TradeDailyCapRef`,
+# `TradeDailyCapVIPRef`, `BASE_KNOBS_REF`) e o espelho do catálogo cobrável
+# (`ShopCatalogRef`) — que eram consts aqui, linha a linha os mesmos números de
+# antes do corte — passaram a morar em `EconomyBaseCatalog.gd`, junto do
+# validador fail-closed que os amarra a `data/conf/economy_base_catalog.json`.
+# O que eles SÃO mudou depois disso, e a palavra "congelada" já não descrevia:
+# o número cobrável hoje é o do arquivo, e o que o `ValidateBaseCatalog` confere
+# é a FAIXA declarada em `_knob_ranges` (um rebalance entra sem tocar no código);
+# `ShopCatalogRef` é a exceção, essa continua amarrada por igualdade. Estes
+# consts ficaram sendo o DEFAULT de cada knob — o valor de reserva do processo
+# que nunca carregou o catálogo — e a lista de nomes que tem leitor, que é o que
+# recusa banda de knob órfão e o que faz a régua de ordem entre pares
+# (`KnobOrderings`: quem paga não pode receber menos troca que quem não paga).
+# O que paga continua saindo daqui pelo estado em runtime abaixo.
 const ChestCostGemsRef : int = EconomyBaseCatalog.ChestCostGemsRef
 
 const MaxChestsPerPurchaseRef : int = EconomyBaseCatalog.MaxChestsPerPurchaseRef
@@ -85,20 +91,21 @@ const ShopCatalogRef : Array = EconomyBaseCatalog.ShopCatalogRef
 
 # Estado em runtime: os consumidores (`Storefront`, `CheckoutService`,
 # `ShopService`, `EconomyService.GetEconomyState`) leem daqui e passam a ler o
-# arquivo depois de `LoadBaseCatalog()`. O default é a própria referência
-# congelada, então um processo que nunca carrega o catálogo (ferramenta de
-# janela, harness isolado) continua com os números do código — nunca com lista
-# vazia. `LoadBaseCatalog` só sobrescreve quando o validador devolveu zero
-# erros (fail-closed: arquivo inválido não entra, e o erro vai para o log).
+# arquivo depois de `LoadBaseCatalog()`. O default é a referência do código
+# (o fallback descrito acima), então um processo que nunca carrega o catálogo
+# (ferramenta de janela, harness isolado) continua com os números do código —
+# nunca com lista vazia. `LoadBaseCatalog` só sobrescreve quando o validador
+# devolveu zero erros (fail-closed: arquivo inválido não entra, e o erro vai
+# para o log).
 static var ChestCostGems : int = ChestCostGemsRef
 
 static var MaxChestsPerPurchase : int = MaxChestsPerPurchaseRef
 
 static var SHOP_CATALOG : Array = ShopCatalogRef
 
-# Os dois `static var` de velocity de troca viviam em `EconomyService.gd:208`
-# e continuam lá (são sintonizáveis em runtime por decisão do SOM-IDLE D3); o
-# que mudou é a ORIGEM do default, agora lida daqui por `ApplyBaseCatalog`.
+# Os três `static var` de velocity de troca (`EconomyService.gd:177/178/181`)
+# continuam lá (são sintonizáveis em runtime por decisão do SOM-IDLE D3); o
+# que mudou é a ORIGEM do default, agora lida daqui por `ApplyVelocityKnobs`.
 static func BaseKnob(key : String, fallback : int) -> int:
 	if not BaseKnobs.has(key):
 		return fallback
@@ -140,25 +147,25 @@ const AHMaxBuyOrderGold : int = 1000000000
 
 const AHMaxBidFillRounds : int = 25
 
-# (de EconomyService.gd:793)
+# (de EconomyService.gd, antes da divisao)
 const STARTER_SKU : String = "starter.pack"
 
-# (de EconomyService.gd:794)
+# (de EconomyService.gd, antes da divisao)
 const STARTER_MAX_AGE_SEC : int = 3 * 86400
 
-# (de EconomyService.gd:855)
+# (de EconomyService.gd, antes da divisao)
 const DAILY_REROLL_COST : int = 20
 
-# (de EconomyService.gd:856)
+# (de EconomyService.gd, antes da divisao)
 const DAILY_REROLLS_MAX : int = 3
 
-# (de EconomyService.gd:857)
+# (de EconomyService.gd, antes da divisao)
 const DAILY_OFFERS_SHOWN : int = 3
 
-# (de EconomyService.gd:859)
+# (de EconomyService.gd, antes da divisao)
 const SHOP_DAY_UTC_OFFSET : int = 6 * 3600
 
-# (de EconomyService.gd:860)
+# (de EconomyService.gd, antes da divisao)
 const DAILY_POOL : Array = [
 	{"id": "deal_chest1", "label": "1 chest", "kind": "chests", "count": 1, "cost": 120},
 	{"id": "deal_chests5", "label": "5 chests (save 120)", "kind": "chests", "count": 5, "cost": 480},
@@ -166,25 +173,25 @@ const DAILY_POOL : Array = [
 	{"id": "deal_vip3", "label": "VIP 3-day trial", "kind": "vip_days", "count": 3, "cost": 150},
 ]
 
-# (de EconomyService.gd:868)
+# (de EconomyService.gd, antes da divisao)
 const BOSS_PACK_COST : int = 240
 
-# (de EconomyService.gd:869)
+# (de EconomyService.gd, antes da divisao)
 const BOSS_PACK_CHESTS : int = 3
 
-# (de EconomyService.gd:870)
+# (de EconomyService.gd, antes da divisao)
 const FINALE_CHESTS : int = 5
 
-# (de EconomyService.gd:871)
+# (de EconomyService.gd, antes da divisao)
 const FINALE_COST : int = 400
 
-# (de EconomyService.gd:872)
+# (de EconomyService.gd, antes da divisao)
 const FINALE_WINDOW_SEC : int = 2 * 86400
 
-# (de EconomyService.gd:1056)
+# (de EconomyService.gd, antes da divisao)
 const VENDOR_STOCK_PER_DAY : int = 20
 
-# (de EconomyService.gd:1057)
+# (de EconomyService.gd, antes da divisao)
 const VENDOR_CATALOG : Array = [
 	{"id": "apple", "label": "Apple x1", "item": "Apple", "count": 1, "cost": 50},
 	{"id": "water", "label": "Water Bottle x1", "item": "WaterBottle", "count": 1, "cost": 80},
@@ -195,7 +202,7 @@ const VENDOR_CATALOG : Array = [
 	{"id": "potion", "label": "Cactus Potion x1", "item": "CactusPotion", "count": 1, "cost": 500},
 ]
 
-# (de EconomyService.gd:1131)
+# (de EconomyService.gd, antes da divisao)
 const LIVE_EVENT_DEFAULT_MOD : float = 1.0
 
 # #27 (AUDITORIA item 7 / G2): o mecanismo de live events existia, o catálogo de
@@ -224,106 +231,106 @@ const AH_BOT_LISTINGS : Array = [
 	{"item": "CactusPotion", "count": 3, "price": 600},
 ]
 
-# (de EconomyService.gd:1226)
+# (de EconomyService.gd, antes da divisao)
 const ARENA_TICKETS_PER_DAY : int = 3
 
-# (de EconomyService.gd:1227)
+# (de EconomyService.gd, antes da divisao)
 const ARENA_TICKETS_VIP_BONUS : int = 1
 
-# (de EconomyService.gd:1228)
+# (de EconomyService.gd, antes da divisao)
 const ARENA_BASE_ELO : int = 1000
 
-# (de EconomyService.gd:1229)
+# (de EconomyService.gd, antes da divisao)
 const ARENA_ELO_K : int = 32
 
-# (de EconomyService.gd:1341)
+# (de EconomyService.gd, antes da divisao)
 const CORRUPT_FEE_BASE : int = 500		# gold × tier², queimado mesmo se brickar
 
-# (de EconomyService.gd:1342)
+# (de EconomyService.gd, antes da divisao)
 const CORRUPT_BRICK_W : float = 0.25
 
-# (de EconomyService.gd:1343)
+# (de EconomyService.gd, antes da divisao)
 const CORRUPT_SEALED_W : float = 0.30
 
-# (de EconomyService.gd:1344)
+# (de EconomyService.gd, antes da divisao)
 const CORRUPT_BLESSED_W : float = 0.30
 
-# (de EconomyService.gd:1346)
+# (de EconomyService.gd, antes da divisao)
 const CUBE_COUNT : int = 3
 
-# (de EconomyService.gd:1347)
+# (de EconomyService.gd, antes da divisao)
 const SALVAGE_GOLD_PER_TIER2 : int = 25	# gold = tier² × 25
 
-# (de EconomyService.gd:1348)
+# (de EconomyService.gd, antes da divisao)
 const SALVAGE_ESSENCE_TIER_MIN : int = 4
 
-# (de EconomyService.gd:1349)
+# (de EconomyService.gd, antes da divisao)
 const SALVAGE_ESSENCE_PER_TIER : int = 2	# essência (loop do rebirth)
 
-# (de EconomyService.gd:1549)
+# (de EconomyService.gd, antes da divisao)
 const FRONTIER_KEY_CHANCE : float = 0.30
 
-# (de EconomyService.gd:1550)
+# (de EconomyService.gd, antes da divisao)
 const BOSS_KEY_GOLD_PRICE : int = 10000
 
-# (de EconomyService.gd:1551)
+# (de EconomyService.gd, antes da divisao)
 const BOSS_RUSH_ESCALATION : int = 2
 
-# (de EconomyService.gd:1834)
+# (de EconomyService.gd, antes da divisao)
 const RefundWindowSeconds : int = 7 * 86400
 
-# (de EconomyService.gd:1880)
+# (de EconomyService.gd, antes da divisao)
 const GuildCreateCostGold : int = 5000
 
-# (de EconomyService.gd:1881)
+# (de EconomyService.gd, antes da divisao)
 const GuildMaxLevel : int = 10
 
-# (de EconomyService.gd:1884)
+# (de EconomyService.gd, antes da divisao)
 const GuildLevelCostGold : Array[int] = [0, 5000, 15000, 40000, 100000, 250000, 600000, 1500000, 4000000, 10000000]
 
-# (de EconomyService.gd:1885)
+# (de EconomyService.gd, antes da divisao)
 const GuildLevelCostGems : Array[int] = [0, 50, 120, 300, 700, 1500, 3000, 6000, 12000, 25000]
 
-# (de EconomyService.gd:1886)
+# (de EconomyService.gd, antes da divisao)
 const GuildBuffPerLevel : float = 0.02
 
-# (de EconomyService.gd:2120)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_POINT_PER_SETTLE_HOUR : int = 1
 
-# (de EconomyService.gd:2121)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_POINT_PER_BOSS_WIN : int = 5
 
-# (de EconomyService.gd:2122)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_VAULT_BASE_SLOTS : int = 10
 
-# (de EconomyService.gd:2123)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_VAULT_PER_LEVEL : int = 2
 
-# (de EconomyService.gd:2124)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_VAULT_SLOT_COST : int = 200
 
-# (de EconomyService.gd:2125)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_VAULT_SLOTS_MAX : int = 20
 
-# (de EconomyService.gd:2126)
+# (de EconomyService.gd, antes da divisao)
 const GUILD_PRIZE_GEMS : Array[int] = [1000, 600, 300]
 
-# (de EconomyService.gd:2254)
+# (de EconomyService.gd, antes da divisao)
 const SeasonsBetaLock : bool = true
 
-# (de EconomyService.gd:2341)
+# (de EconomyService.gd, antes da divisao)
 const SEASON_KINDS : Array[String] = ["power", "spend", "boss_kills", "guild_points"]
 
-# (de EconomyService.gd:2345)
+# (de EconomyService.gd, antes da divisao)
 const SeasonPrizeGems : Array[int] = [3000, 1800, 1200, 700, 500, 400, 300, 300, 200, 200]
 
-# (de EconomyService.gd:2432)
+# (de EconomyService.gd, antes da divisao)
 const AD_CHEST : String = "chest"
 
-# (de EconomyService.gd:2433)
+# (de EconomyService.gd, antes da divisao)
 const AD_REROLL : String = "reroll"
 
-# (de EconomyService.gd:2434)
+# (de EconomyService.gd, antes da divisao)
 const AD_BOSSKEY : String = "bosskey"
 
 # Regra do dono 2026-09-25: o rewarded ad do AFK passou a COMPRAR HORA de
@@ -331,7 +338,7 @@ const AD_BOSSKEY : String = "bosskey"
 # único multiplicador que restou é o ×2 do tier 2, que não vem de anúncio.
 const AD_AFKHOURS : String = "afkhoras"
 
-# (de EconomyService.gd:2435)
+# (de EconomyService.gd, antes da divisao)
 const AD_PLACEMENTS : Array[String] = ["afkhoras", "chest", "reroll", "bosskey"]
 
 # Horas de offline por view de afkhoras.
@@ -377,7 +384,7 @@ static func AdStubEnabled() -> bool:
 # pendentes e a cota do placement volta a estar disponível no próximo clique.
 const AD_SLOT_TTL_SECONDS : int = 300
 
-# (de EconomyService.gd:2539)
+# (de EconomyService.gd, antes da divisao)
 const COSMETIC_CATALOG : Dictionary = {
 	# Passe S1 (fonte: trilha; volta na Loja do Legado após ≥2 temporadas —
 	# live-ops futuro, por isso price 0 aqui).
@@ -409,34 +416,34 @@ const COSMETIC_CATALOG : Dictionary = {
 	"emote_coroa": {"type": "emote", "label": "Coroa do Sol", "price": 0, "req_rebirths": 0},
 }
 
-# (de EconomyService.gd:2696)
+# (de EconomyService.gd, antes da divisao)
 const PASS_DAILY_PT : int = 40
 
-# (de EconomyService.gd:2697)
+# (de EconomyService.gd, antes da divisao)
 const PASS_WEEKLY_PT : int = 120
 
-# (de EconomyService.gd:2698)
+# (de EconomyService.gd, antes da divisao)
 const PASS_MILESTONE_PT : int = 50
 
-# (de EconomyService.gd:2699)
+# (de EconomyService.gd, antes da divisao)
 const PASS_SKIP_COST : int = 50
 
-# (de EconomyService.gd:2700)
+# (de EconomyService.gd, antes da divisao)
 const PASS_SKIP_MAX : int = 10
 
-# (de EconomyService.gd:2701)
+# (de EconomyService.gd, antes da divisao)
 const PASS_MAX_LEVEL : int = 40
 
-# (de EconomyService.gd:2702)
+# (de EconomyService.gd, antes da divisao)
 const PASS_BONUS_START : int = 31
 
-# (de EconomyService.gd:2703)
+# (de EconomyService.gd, antes da divisao)
 const PASS_BONUS_GEMS : int = 20
 
-# (de EconomyService.gd:2704)
+# (de EconomyService.gd, antes da divisao)
 const PASS_DOUBLEXP_LAST_DAYS : int = 3
 
-# (de EconomyService.gd:2707)
+# (de EconomyService.gd, antes da divisao)
 const PASS_FREE : Dictionary = {
 	3: {"gems": 10}, 5: {"chests": 1}, 8: {"gems": 10},
 	10: {"cosmetics": ["emote_tocha"]}, 13: {"gems": 15}, 16: {"chests": 1},
@@ -444,7 +451,7 @@ const PASS_FREE : Dictionary = {
 	30: {"gems": 30, "cosmetics": ["title_redescobridor"]},
 }
 
-# (de EconomyService.gd:2715)
+# (de EconomyService.gd, antes da divisao)
 const PASS_PREMIUM : Dictionary = {
 	1: {"cosmetics": ["skin_manto"]}, 3: {"gems": 25}, 5: {"vip_days": 3},
 	6: {"gems": 25}, 8: {"cosmetics": ["fx_faisca"]}, 9: {"gems": 25},
@@ -455,7 +462,7 @@ const PASS_PREMIUM : Dictionary = {
 	30: {"gems": 100, "cosmetics": ["title_veterano", "banner_guilda"]},
 }
 
-# (de EconomyService.gd:2728)
+# (de EconomyService.gd, antes da divisao)
 const PASS_DAILY_POOL : Array = [
 	{"id": "d_settle2", "label": "Collect AFK 2×", "goal": 2},
 	{"id": "d_chest1", "label": "Open 1 chest", "goal": 1},
@@ -467,7 +474,7 @@ const PASS_DAILY_POOL : Array = [
 	{"id": "d_shop1", "label": "Open the shop (SUB ad)", "goal": 1},
 ]
 
-# (de EconomyService.gd:2740)
+# (de EconomyService.gd, antes da divisao)
 const PASS_WEEKLY_POOL : Array = [
 	{"id": "w_boss1", "label": "Defeat 1 zone boss", "goal": 1},
 	{"id": "w_eff3", "label": "3 sessions ≥ 90% efficiency", "goal": 3},
@@ -477,34 +484,34 @@ const PASS_WEEKLY_POOL : Array = [
 	{"id": "w_farm8h", "label": "Settle 8h", "goal": 8},
 ]
 
-# (de EconomyService.gd:3204)
+# (de EconomyService.gd, antes da divisao)
 const AHListFeeGems : int = 5
 
-# (de EconomyService.gd:3205)
+# (de EconomyService.gd, antes da divisao)
 const AHMaxOpenPerAccount : int = 5
 
-# (de EconomyService.gd:3208)
+# (de EconomyService.gd, antes da divisao)
 const AHHighlightFeeGems : int = 15
 
-# (de EconomyService.gd:3209)
+# (de EconomyService.gd, antes da divisao)
 const AHSlotBaseCost : int = 50
 
-# (de EconomyService.gd:3210)
+# (de EconomyService.gd, antes da divisao)
 const AHSlotsMaxExtra : int = 5
 
-# (de EconomyService.gd:3338)
+# (de EconomyService.gd, antes da divisao)
 const TOURNAMENT_ENTRY_GOLD : int = 1000
 
-# (de EconomyService.gd:3339)
+# (de EconomyService.gd, antes da divisao)
 const TOURNAMENT_DAYS : int = 7
 
-# (de EconomyService.gd:3340)
+# (de EconomyService.gd, antes da divisao)
 const TOURNAMENT_PRIZES : Array[int] = [2000, 1200, 800, 500, 300]
 
-# (de EconomyService.gd:3341)
+# (de EconomyService.gd, antes da divisao)
 const TOURNAMENT_CHAMPION_TITLE : String = "title_campeao"
 
-# (de EconomyService.gd:3622)
+# (de EconomyService.gd, antes da divisao)
 const ACHIEVEMENTS : Array = [
 	{"id": "slayer_100", "label": "Exterminador iniciante", "desc": "Derrote 100 monstros", "counter": "kills_total", "goal": 100, "gems": 25},
 	{"id": "slayer_1000", "label": "Exterminador", "desc": "Derrote 1.000 monstros", "counter": "kills_total", "goal": 1000, "gems": 50, "cosmetic": "emote_tocha"},
@@ -518,25 +525,25 @@ const ACHIEVEMENTS : Array = [
 	{"id": "rebirth_1", "label": "Renascer", "desc": "Renasça 1 vez", "counter": "rebirths", "goal": 1, "gems": 50},
 ]
 
-# (de EconomyService.gd:3737)
+# (de EconomyService.gd, antes da divisao)
 const REFERRAL_BONUS_GEMS : int = 200
 
-# (de EconomyService.gd:3738)
+# (de EconomyService.gd, antes da divisao)
 const REFERRAL_MIN_LEVEL : int = 10
 
-# (de EconomyService.gd:3739)
+# (de EconomyService.gd, antes da divisao)
 const REFERRAL_WINDOW_SEC : int = 3 * 86400
 
-# (de EconomyService.gd:3740)
+# (de EconomyService.gd, antes da divisao)
 const REFERRAL_WEEKLY_CAP : int = 10
 
-# (de EconomyService.gd:3820)
+# (de EconomyService.gd, antes da divisao)
 const FraudTradeBurstPerDay : int = 10
 
-# (de EconomyService.gd:3821)
+# (de EconomyService.gd, antes da divisao)
 const FraudLevelJump : int = 20
 
-# (de EconomyService.gd:3822)
+# (de EconomyService.gd, antes da divisao)
 const FraudLevelJumpHours : float = 2.0
 
 # Fatia do forjeiro movida inteira para `CraftCatalog.gd` em 2026-09-27: budget
@@ -545,12 +552,12 @@ const FraudLevelJumpHours : float = 2.0
 # nome. Nisto aqui só fica o que é contrato entre domínios — o forjeiro tem dono
 # de decisão próprio agora.
 
-# (de EconomyService.gd:874)
+# (de EconomyService.gd, antes da divisao)
 static func ShopDay(now : int) -> int:
 	return (now - SHOP_DAY_UTC_OFFSET) / 86400
 
 
-# (de EconomyService.gd:2750)
+# (de EconomyService.gd, antes da divisao)
 static func PassThresholds() -> Array:
 	var cum : Array = []
 	var total : int = 0
@@ -561,7 +568,7 @@ static func PassThresholds() -> Array:
 	return cum
 
 
-# (de EconomyService.gd:2759)
+# (de EconomyService.gd, antes da divisao)
 static func PassLevelForPT(pt : int) -> int:
 	var cum : Array = PassThresholds()
 	var level : int = 0
@@ -574,7 +581,7 @@ static func PassLevelForPT(pt : int) -> int:
 
 # Linha da conta/temporada (cria zerada). Leitura crua p/ uso em transações.
 
-# (de EconomyService.gd:2817)
+# (de EconomyService.gd, antes da divisao)
 static func PassDailies(day : int) -> Array:
 	var out : Array = []
 	var n : int = PASS_DAILY_POOL.size()
@@ -584,7 +591,7 @@ static func PassDailies(day : int) -> Array:
 	return out
 
 
-# (de EconomyService.gd:2825)
+# (de EconomyService.gd, antes da divisao)
 static func PassWeeklies(weekIdx : int) -> Array:
 	var out : Array = []
 	var n : int = PASS_WEEKLY_POOL.size()
@@ -594,24 +601,24 @@ static func PassWeeklies(weekIdx : int) -> Array:
 	return out
 
 
-# (de EconomyService.gd:2833)
+# (de EconomyService.gd, antes da divisao)
 static func PassWeekIndex(season : Dictionary, now : int) -> int:
 	return maxi(0, (ShopDay(now) - ShopDay(int(season.get("starts_at", now)))) / 7)
 
 
-# (de EconomyService.gd:2836)
+# (de EconomyService.gd, antes da divisao)
 static func PassDayStartTS(day : int) -> int:
 	return day * 86400 + SHOP_DAY_UTC_OFFSET
 
 
-# (de EconomyService.gd:2570)
+# (de EconomyService.gd, antes da divisao)
 static func CosmeticLabel(cosmeticID : String) -> String:
 	if COSMETIC_CATALOG.has(cosmeticID):
 		return str((COSMETIC_CATALOG[cosmeticID] as Dictionary).get("label", cosmeticID))
 	return ""
 
 
-# (de EconomyService.gd:2287)
+# (de EconomyService.gd, antes da divisao)
 static func SeasonS1Rules() -> String:
 	return JSON.stringify({
 		"season" = "S1", "days" = 30,
@@ -621,12 +628,12 @@ static func SeasonS1Rules() -> String:
 	})
 
 
-# (de EconomyService.gd:3742)
+# (de EconomyService.gd, antes da divisao)
 static func ReferralCodeFor(accountID : int, username : String) -> String:
 	return "%s#%04d" % [username, accountID % 10000]
 
 
-# (de EconomyService.gd:2094)
+# (de EconomyService.gd, antes da divisao)
 static func IsValidGuildTag(tag : String) -> bool:
 	if tag.length() < 2 or tag.length() > 5:
 		return false
@@ -636,7 +643,7 @@ static func IsValidGuildTag(tag : String) -> bool:
 	return true
 
 
-# (de EconomyService.gd:3635, renomeado sem underscore)
+# (de EconomyService.gd, antes da divisao; renomeado sem underscore)
 static func AchievementByID(achievementID : String) -> Dictionary:
 	for entry in ACHIEVEMENTS:
 		if str(entry.get("id", "")) == achievementID:

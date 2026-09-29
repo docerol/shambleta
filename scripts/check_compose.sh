@@ -9,8 +9,11 @@
 # com diff claro.
 #
 # Uso:   bash scripts/check_compose.sh          # ou ./scripts/check_compose.sh
-# Saída: uma linha por regra ([PASS]/[FAIL] com ESPERADO/ENCONTRADO) e, no fim,
-#        `== COMPOSE GATE: N checks, M failures ==` — o formato é o que
+# Saída: uma linha por regra ([PASS]/[FAIL] com ESPERADO/ENCONTRADO, mais [SKIP]
+#        com MOTIVO para cada fumaça externa que esta máquina não pode rodar) e, no
+#        fim, `== COMPOSE GATE: N checks, M failures == (validação: …; fumaça:
+#        N rodaram, N falharam, N pulados)` — o `== COMPOSE GATE: N checks, M
+#        failures ==` é o formato que
 #        scripts/ci_gate_log.sh:42 lê, então o script entra no gate §24-8 pela
 #        mesma porta de scripts/check_god_nodes.sh:
 #            gate_sh /tmp/shambleta-compose.log "== COMPOSE GATE:" scripts/check_compose.sh
@@ -48,6 +51,21 @@ COMPOSE_BIN=""
 docker compose version >/dev/null 2>&1 && COMPOSE_BIN="docker compose"
 [ -z "$COMPOSE_BIN" ] && command -v docker-compose >/dev/null 2>&1 && COMPOSE_BIN="docker-compose"
 
+# ---------------------------------------------------------------- fumaça externa
+# Duas ferramentas valem mais que qualquer asserção minha sobre YAML: `docker
+# compose config` (o parser real, que é o que o `up` vai comer) e `amtool
+# check-config` (o validador real do schema do Alertmanager). Nenhuma das duas é
+# obrigatória nesta máquina — e é justamente aí que mora o defeito que este bloco
+# existe para matar: um smoke que não rodou e não disse nada é indistinguível de
+# um smoke que passou. Todo veredito externo vai para um arquivo TSV que o python
+# replays por `check()`: falha entra na contagem e no exit code, e ausência vira
+# `[SKIP]` com o MOTIVO impresso e contado na última linha.
+SMOKE="$(mktemp)"
+printf '' > "$SMOKE"
+smoke() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$SMOKE"; }
+on_smoke_exit() { [ -n "${SMOKE:-}" ] && rm -f "$SMOKE"; }
+trap on_smoke_exit EXIT
+
 RESOLVED_PROD=""
 RESOLVED_MERGED=""
 if [ -n "$COMPOSE_BIN" ]; then
@@ -56,13 +74,54 @@ if [ -n "$COMPOSE_BIN" ]; then
 		echo "[FAIL] \`$COMPOSE_BIN -f $PROD config\` não resolveu:"; sed 's/^/       /' "$RESOLVED_PROD.err"
 		echo "== COMPOSE GATE: 1 checks, 1 failures =="; exit 1
 	fi
+	smoke pass "smoke: \`$COMPOSE_BIN -f $PROD config\` resolveu (produção)" \
+		"o parser real aceitando o arquivo que o \`up\` vai ler" "exit 0"
 	if ! $COMPOSE_BIN -p shamgatestg -f "$PROD" -f "$STG" config > "$RESOLVED_MERGED" 2>"$RESOLVED_MERGED.err"; then
 		echo "[FAIL] \`$COMPOSE_BIN -f $PROD -f $STG config\` não resolveu:"; sed 's/^/       /' "$RESOLVED_MERGED.err"
 		echo "== COMPOSE GATE: 1 checks, 1 failures =="; exit 1
 	fi
+	smoke pass "smoke: \`$COMPOSE_BIN -f $PROD -f $STG config\` resolveu (base+staging mesclados)" \
+		"o parser real aceitando a mesclagem" "exit 0"
+else
+	smoke skip "smoke: \`docker compose config\` nos dois arquivos" \
+		"binário docker/compose ausente nesta máquina — o gate caiu no fallback yaml.safe_load + merge emulado, que NÃO é o parser do \`up\`" ""
+fi
+
+# `amtool check-config`: o schema do Alertmanager é maior que o YAML. Uma rota com
+# chave errada parseia lindo e é rejeitada pelo binário no boot — container em
+# crash-loop com "config válido" no review. Ordem de tentativa: binário no PATH,
+# depois o `/bin/amtool` da própria imagem (a base do prom/alertmanager é busybox
+# e o Dockerfile upstream copia o binário — ver deploy/monitoring/alertmanager.Dockerfile),
+# e só então o motivo escrito.
+AMCFG="deploy/alertmanager.yml"
+AMIMAGE="prom/alertmanager:v0.34.1"
+verdict() { # $1=saída captured; decide pass/fail/skip pelo veredito do próprio amtool
+	local out="$1"
+	if printf '%s' "$out" | grep -q 'FAILED'; then
+		smoke fail "smoke: \`amtool check-config $AMCFG\`" \
+			"o validador do schema aceitando o config (SUCCESS)" \
+			"$(printf '%s' "$out" | tr '\t\n' '  ' | cut -c1-300)"
+	elif printf '%s' "$out" | grep -q 'SUCCESS'; then
+		smoke pass "smoke: \`amtool check-config $AMCFG\`" \
+			"o validador do schema aceitando o config" "SUCCESS"
+	else
+		smoke skip "smoke: \`amtool check-config $AMCFG\`" \
+			"amtool indisponível aqui (sem binário no PATH e sem docker/daemon para rodar $AMIMAGE): $(printf '%s' "$out" | tr '\t\n' '  ' | cut -c1-160)" ""
+	fi
+}
+if command -v amtool >/dev/null 2>&1; then
+	verdict "$(amtool check-config "$AMCFG" 2>&1)"
+elif ! command -v docker >/dev/null 2>&1; then
+	verdict "sem amtool no PATH e sem binário docker"
+elif ! docker info >/dev/null 2>&1; then
+	verdict "docker instalado mas sem daemon acessível (runner sem docker-in-docker)"
+else
+	verdict "$(docker run --rm --entrypoint /bin/amtool -v "$PWD:/cfg:ro" "$AMIMAGE" \
+		check-config "/cfg/$AMCFG" 2>&1)"
 fi
 
 COMPOSE_BIN="$COMPOSE_BIN" RESOLVED_PROD="$RESOLVED_PROD" RESOLVED_MERGED="$RESOLVED_MERGED" \
+SMOKE="$SMOKE" \
 PY="$PY" "$PY" - "$PROD" "$STG" <<'PYEOF'
 import os, re, sys, yaml
 
@@ -77,12 +136,58 @@ failures = 0
 def check(ok, title, expected, found):
     global checks, failures
     checks += 1
-    print("[PASS] %s" % title)
-    if not ok:
-        failures += 1
-        print("[FAIL] %s" % title)
-        print("       ESPERADO: %s" % expected)
-        print("       ENCONTRADO: %s" % found)
+    if ok:
+        print("[PASS] %s" % title)
+        return
+    # Um log que imprime `[PASS]` e `[FAIL]` na mesma regra é duas coisas: o
+    # `ci_gate_log.sh` ainda conta os falhos, mas quem lê o log a olho vê um
+    # veredito que o run não tem. A contagem de checks continua a mesma.
+    failures += 1
+    print("[FAIL] %s" % title)
+    print("       ESPERADO: %s" % expected)
+    print("       ENCONTRADO: %s" % found)
+
+# ------------------------------------------------------------------ fumaça: replay
+# O bloco bash acima escreve um veredito por ferramenta externa neste TSV, e o
+# `trap` apaga o arquivo na saída. Este é o único leitor: sem ele, o veredito do
+# parser real e do `amtool` nunca chega a log nem a contagem, e o gate recai no
+# defeito que o bloco existe para matar — um smoke que não rodou indistinguível
+# de um que passou. Por isso o próprio replay é vigiado: TSV ausente, vazio, com
+# linha malformada ou sem veredito das duas ferramentas é ACUSAÇÃO, não silêncio.
+SMOKE_PATH = os.environ.get("SMOKE") or ""
+smoke_rows, smoke_bad = [], []
+if SMOKE_PATH and os.path.exists(SMOKE_PATH):
+    with open(SMOKE_PATH) as fh:
+        for raw in fh:
+            raw = raw.rstrip("\n")
+            if not raw:
+                continue
+            cols = raw.split("\t")
+            if len(cols) < 4 or cols[0] not in ("pass", "fail", "skip") or not cols[1].strip():
+                smoke_bad.append(raw.replace("\t", " | ")[:200])
+                continue
+            smoke_rows.append(cols[:4])
+check(bool(SMOKE_PATH) and not smoke_bad and len(smoke_rows) >= 2,
+      "a fumaça externa entregou veredito estruturado para cada ferramenta que tentou",
+      "TSV legível com >= 2 linhas nos quatro campos (compose config + amtool)",
+      ("TSV %r não existe" % SMOKE_PATH) if not SMOKE_PATH or not os.path.exists(SMOKE_PATH)
+      else ("linhas malformadas: %s" % "; ".join(smoke_bad) if smoke_bad
+            else "só %d vereditos: %s" % (len(smoke_rows), ", ".join(r[1] for r in smoke_rows))))
+smoke_ran = smoke_failed = smoke_skipped = 0
+for verdict, title, expected, found in smoke_rows:
+    if verdict == "skip":
+        # Pular é visível: conta como check, imprime o MOTIVO e nunca vira falha —
+        # a máquina não tem o binário, e fingir falha aqui trocaria uma mentira por
+        # outra (um gate vermelho por ambiente também é um gate que ninguém conserta).
+        smoke_skipped += 1
+        checks += 1
+        print("[SKIP] %s" % title)
+        print("       MOTIVO: %s" % (found.strip() or expected))
+        continue
+    smoke_ran += 1
+    if verdict == "fail":
+        smoke_failed += 1
+    check(verdict == "pass", title, expected, found)
 
 def load(path):
     with open(path) as fh:
@@ -617,8 +722,460 @@ check(not copy_missing, "todo COPY explícito dos Dockerfiles existe e não é e
       "nenhum COPY apontando para caminho ausente ou ignorado",
       "; ".join(copy_missing) if copy_missing else "COPYs conferidos")
 
-# (5) Auto-evidência: toda citação `arquivo:linha` escrita pelos arquivos desta
+# (8) Artefato versionado — o alvo do rollback. Um serviço com `build:` e sem
+# `image:` não tem o que voltar: `docker compose up -d` reconstroi o fonte
+# corrente e o "rollback" escrito em deploy/ROLLBACK.md vira prosa. A régua lê o
+# YAML BRUTO (não o resolvido) porque o que importa é a forma do knob: imagem
+# nomeada por serviço, tag vinda de UMA variável (o knob do release,
+# `SHAMBLETA_TAG`), default que não é `latest` — tag mutável não endereça build
+# nenhum — e `pull_policy: never`, já que não existe registry: `pull` num serviço
+# buildado ou dá 404 no Docker Hub ou finge que baixou versão. Os cinco serviços
+# buildados de hoje (web, game, companion, prometheus, alertmanager) são o chão
+# da contagem; um serviço novo que nasça sem imagem cai aqui, não num 3h da manhã.
+raw_services = (prod_doc.get("services") or {}) if isinstance(prod_doc, dict) else {}
+built_names = sorted(n for n, s in raw_services.items()
+                     if isinstance(s, dict) and s.get("build"))
+check(len(built_names) >= 5,
+      "rollback: o gate identificou %d serviços buildados pelo compose (%s)" % (
+          len(built_names), " ".join(built_names)),
+      "ao menos os cinco de hoje: alertmanager companion game prometheus web",
+      "nenhum serviço com `build:` — ou o parse falhou, ou o stack foi reescrito")
+UNPINNED_TAG = "local-unpinned"
+TAG_VAR = "SHAMBLETA_TAG"
+IMG_RX = re.compile(r'^([a-z0-9._-]+(?:/[a-z0-9._-]+)+):\$\{([A-Z0-9_]+):-([a-zA-Z0-9._-]+)\}$')
+for svc in built_names:
+    spec = raw_services.get(svc) or {}
+    img = str(spec.get("image") or "")
+    m = IMG_RX.match(img)
+    check(bool(m), "rollback/%s: serviço buildado declara imagem versionável" % svc,
+          "`image: shambleta/%s:${%s:-%s}` (deploy/ROLLBACK.md \"Artefato versionado\")" % (svc, TAG_VAR, UNPINNED_TAG),
+          "image=%s" % (("ausente" if not img else "não-parseável: %r" % img)))
+    if not m:
+        continue
+    repo, var, default = m.group(1), m.group(2), m.group(3)
+    check(repo == "shambleta/%s" % svc,
+          "rollback/%s: o repositório da imagem é um só por serviço" % svc,
+          "repo=shambleta/%s" % svc, "repo=%s" % repo)
+    check(var == TAG_VAR, "rollback/%s: a tag vem do knob único %s" % (svc, TAG_VAR),
+          "${%s:-...}" % TAG_VAR, "${%s:-...}" % var)
+    check(default not in ("latest", "master", "main", "stable"),
+          "rollback/%s: o default não é tag mutável (tag mutável não é alvo de rollback)" % svc,
+          "um default que se nomeie como o que ele é", "default=%s" % default)
+    check(default == UNPINNED_TAG,
+          "rollback/%s: o default é o sentinela %r que a doc manda o operator recusar" % (svc, UNPINNED_TAG),
+          "default=%s" % UNPINNED_TAG, "default=%s" % default)
+    pp = str(spec.get("pull_policy") or "")
+    check(pp == "never",
+          "rollback/%s: pull_policy never — não há registry para onde este serviço olhar" % svc,
+          "pull_policy: never (o artefato é local, nasce do `docker compose build`)",
+          "pull_policy=%s" % (pp or "ausente"))
+# Um serviço de terceiro (cloudflared) não pode tomar o namespace nem o knob do
+# release: se tomasse, `docker compose images` leria duas coisas iguais sendo uma
+# delas puxada de registry, e o `pull_policy: never` dele quebraria o boot.
+for svc, spec in sorted(raw_services.items()):
+    if isinstance(spec, dict) and not spec.get("build"):
+        img = str(spec.get("image") or "")
+        check(not img.startswith("shambleta/") and TAG_VAR not in img,
+              "rollback/%s: serviço não-buildado não usa o namespace nem o knob do release" % svc,
+              "imagem de terceiro com tag própria (cloudflare/cloudflared:latest)",
+              "image=%r" % img)
+# O caminho canônico, quando existe binário docker: o arquivo RESOLVIDO tem de
+# terminar com uma tag explícita. `image: shambleta/web` sem tag é `:latest` por
+# spec — exatamente a ficção que esta seção existe para matar.
+if resolved_prod:
+    for svc in built_names:
+        rimg = str((prod_services.get(svc) or {}).get("image") or "")
+        head, _, tail = rimg.rpartition(":")
+        check(bool(head) and "/" in head and tail not in ("", "latest"),
+              "rollback/%s: no compose resolvido a imagem tem repositório E tag explícita" % svc,
+              "shambleta/%s:<tag>, com tag não-vazia" % svc, "resolvido=%r" % rimg)
 
+# --------------------------- (9) TETO DE LOG em todo serviço que fala no stdout --
+# O driver padrão do docker (json-file) NÃO tem teto: o `<id>-json.log` cresce até
+# o filesystem acabar, e o filesystem é o mesmo do volume nomeado —
+# <data-root>/containers de um lado, <data-root>/volumes/ do outro, um disco só.
+# Ou seja: log sem cota come o espaço do live.db + `-wal` + sql-backups, e o
+# `mem_limit` do serviço `game` não protege nada disso. O teto é a única coisa
+# neste repo que faz um beta verboso não ser um incidente de disponibilidade.
+MAX_SIZE_RX = re.compile(r'^\d+[kKmMgG]?$')
+
+
+def log_ceiling_problems(services):
+    bad = []
+    for name, svc in sorted((services or {}).items()):
+        lg = (svc or {}).get("logging")
+        if not isinstance(lg, dict):
+            bad.append("%s: sem bloco logging:" % name)
+            continue
+        if lg.get("driver") != "json-file":
+            bad.append("%s: driver=%r (json-file precisa estar DECLARADO — o default silencioso é justamente o que não tem teto)"
+                       % (name, lg.get("driver")))
+            continue
+        opts = lg.get("options") or {}
+        ms = str(opts.get("max-size") or "")
+        mf = str(opts.get("max-file") or "")
+        if not MAX_SIZE_RX.match(ms):
+            bad.append("%s: max-size=%r" % (name, opts.get("max-size")))
+        if not re.match(r'^\d+$', mf) or int(mf) < 2:
+            bad.append("%s: max-file=%r (inteiro >= 2; com 1 o arquivo é riscado por cima do próprio histórico)"
+                       % (name, opts.get("max-file")))
+    return bad
+
+
+for label, services in (("produção", prod_services), ("mesclado(base+staging)", merged_services)):
+    probs = log_ceiling_problems(services)
+    check(not probs,
+          "%s: todo serviço tem json-file com max-size E max-file (%d serviços conferidos)" % (label, len(services)),
+          "logging.driver=json-file + options.max-size=<n>[kMG] + options.max-file>=2 em cada serviço",
+          "; ".join(probs) if probs else "todos com teto")
+
+# O staging não repete o bloco de propósito (o compose mescla `logging` por chave);
+# a régua acima roda no doc MESCLADO exatamente para isso continuar sendo escolha e
+# não esquecimento — se alguém apagar o teto do base, o mesclado cai aqui.
+check(not log_ceiling_problems({n: s for n, s in merged_services.items()
+                                if n in (stg_services or {})}),
+      "mesclado: os serviços que o staging toca continuam com teto de log",
+      "nenhum serviço do override sem logging resolvido",
+      "staging=%s" % sorted(stg_services or {}))
+
+NEG_LOG = {
+    "a-sem-bloco": {},
+    "b-driver-sem-opcoes": {"logging": {"driver": "json-file"}},
+    "c-sem-max-file": {"logging": {"driver": "json-file", "options": {"max-size": "10m"}}},
+    "d-max-file-1": {"logging": {"driver": "json-file", "options": {"max-size": "10m", "max-file": "1"}}},
+    "e-syslog": {"logging": {"driver": "syslog", "options": {}}},
+    "f-max-size-sem-unidade-grande": {"logging": {"driver": "json-file", "options": {"max-size": "10mb", "max-file": "3"}}},
+}
+neg_accused = sorted({p.split(":")[0] for p in log_ceiling_problems(NEG_LOG)})
+check(len(neg_accused) == len(NEG_LOG),
+      "controle negativo (teto de log): os %d serviços inventados SEM teto são acusados" % len(NEG_LOG),
+      "acusação em 100%% dos casos plantados (%s)" % " ".join(sorted(NEG_LOG)),
+      "acusados=%s" % " ".join(neg_accused))
+
+# O motivo tem de estar ESCRITO no arquivo que o operator abre às 3h — um teto sem
+# razão vira "número mágico" e é a primeira linha apagada num diff de performance.
+LOG_REASON_NEEDLES = ["json-file", "<data-root>/containers", "<data-root>/volumes/", "live.db"]
+
+
+def log_reason_missing(text):
+    return [n for n in LOG_REASON_NEEDLES if n not in text]
+
+
+compose_header = read(prod_path).split("\nservices:", 1)[0]
+missing_reason = log_reason_missing(compose_header)
+check(not missing_reason,
+      "%s: o cabeçalho diz POR QUE o teto existe (mesmo filesystem do banco)" % prod_path,
+      "o bloco antes de `services:` mencionando %s" % " ".join(LOG_REASON_NEEDLES),
+      "faltando: %s" % ", ".join(missing_reason))
+check(bool(log_reason_missing("logging:\n  options:\n    max-size: 10m\n    max-file: 3\n")),
+      "controle negativo (motivo do teto): um cabeçalho só com o número é acusado",
+      "o predito reclama quando a razão não está escrita", "ficou mudo")
+
+# ------------------ (10) DESTINO HUMANO do `severity: page` (a régua que acusa) --
+# O schema do Alertmanager não interpola env, e a URL de webhook É credencial — o
+# valor não pode morar num repo open source. A ponte é um marcador por receiver,
+# materializado no boot por deploy/monitoring/render-alertmanager-config.sh. O que
+# este bloco garante é que a ponte não é ficção: todo receiver que alguma rota
+# alcança tem exatamente UM marcador, com um nome que o render aceita, declarado
+# em `.env.example` e VAZIO lá (valor no template seria segredo committado).
+MARKER_PREFIX = "@@ALERTWEBHOOK:"
+MARKER_LINE = re.compile(r'^(\s*)webhook_configs:\s*\[\]\s*#\s*@@ALERTWEBHOOK:([A-Za-z0-9_]+)@@\s*$')
+MARKER_NAME = re.compile(r'^SHAMBLETA_ALERT_[A-Z0-9_]*WEBHOOK_URL$')
+ENV_TEMPLATE = ".env.example"
+
+
+def receiver_blocks(text):
+    """name -> linhas do bloco, lidas do TEXTO (o YAML descarta comentário)."""
+    blocks, cur, in_recv = {}, None, False
+    for ln in text.splitlines():
+        if re.match(r'^receivers:\s*$', ln):
+            in_recv = True
+            continue
+        if not in_recv:
+            continue
+        if ln.strip() and not ln[0].isspace():
+            break
+        m = re.match(r'^\s*-\s+name:\s*([A-Za-z0-9_.-]+)\s*$', ln)
+        if m:
+            cur = m.group(1)
+            blocks[cur] = []
+            continue
+        if cur is not None:
+            blocks[cur].append(ln)
+    return blocks
+
+
+def dotenv_values(path):
+    out = {}
+    for ln in read(path).splitlines():
+        m = re.match(r'^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)$', ln)
+        if m:
+            out[m.group(1)] = m.group(2).strip().strip('"').strip("'")
+    return out
+
+
+def destination_problems(text, routed, declared):
+    probs = []
+    blocks = receiver_blocks(text)
+    for name in sorted(routed):
+        if name not in blocks:
+            probs.append("%s: receiver roteado não existe em receivers:" % name)
+            continue
+        hits = [ln for ln in blocks[name] if MARKER_PREFIX in ln and not ln.lstrip().startswith("#")]
+        if len(hits) != 1:
+            probs.append("%s: %d marcadores de destino (precisa de exatamente 1, na linha do webhook_configs:)"
+                         % (name, len(hits)))
+            continue
+        m = MARKER_LINE.match(hits[0])
+        if not m:
+            probs.append("%s: marcador fora da forma `<espacos>webhook_configs: [] # @@ALERTWEBHOOK:<NOME>@@` -> %r"
+                         % (name, hits[0].strip()))
+            continue
+        var = m.group(2)
+        if not MARKER_NAME.match(var):
+            probs.append("%s: marcador aponta para %r, fora de SHAMBLETA_ALERT_*_WEBHOOK_URL (o render recusa o nome e o container não sobe)"
+                         % (name, var))
+            continue
+        if var not in declared:
+            probs.append("%s: %s não está declarado em %s — ninguém no deploy sabe que precisa preencher"
+                         % (name, var, ENV_TEMPLATE))
+            continue
+        if declared[var] != "":
+            probs.append("%s: %s tem VALOR em %s (URL de webhook é credencial; o repo é open source)"
+                         % (name, var, ENV_TEMPLATE))
+    for name in sorted(blocks):
+        if name not in routed and any(MARKER_PREFIX in ln for ln in blocks[name]):
+            probs.append("%s: tem marcador mas nenhuma rota aponta para ele (receiver órfão = destino que ninguém usa)" % name)
+    return probs
+
+
+DOTENV = dotenv_values(ENV_TEMPLATE)
+check(len(DOTENV) >= 20,
+      "%s: lido pelo gate (%d nomes declarados)" % (ENV_TEMPLATE, len(DOTENV)),
+      "o template existir e carregar os nomes que o compose usa", "nomes=%d" % len(DOTENV))
+
+am_text = read(am_path)
+routed_receivers = set(x for x in [route.get("receiver")] + [s.get("receiver") for s in (route.get("routes") or [])] if x)
+dest_probs = destination_problems(am_text, routed_receivers, DOTENV)
+marker_names = sorted({MARKER_LINE.match(ln).group(2)
+                       for blk in receiver_blocks(am_text).values() for ln in blk
+                       if MARKER_LINE.match(ln)})
+check(not dest_probs,
+      "%s: todo receiver roteado tem marcador de destino com env declarada e vazia (%s)" % (am_path, ", ".join(marker_names) or "nenhum"),
+      "1 marcador `@@ALERTWEBHOOK:SHAMBLETA_ALERT_*_WEBHOOK_URL@@` por receiver roteado, nome em %s com valor vazio" % ENV_TEMPLATE,
+      "; ".join(dest_probs) if dest_probs else "%d receivers roteados, %d marcadores" % (len(routed_receivers), len(marker_names)))
+
+NEG_DEST = [
+    ("sem-marcador", "route:\n  receiver: x\nreceivers:\n  - name: x\n    webhook_configs: []\n",
+     {"x"}, {"SHAMBLETA_ALERT_PAGE_WEBHOOK_URL": ""}),
+    ("marcador-na-linha-errada",
+     "route:\n  receiver: x\nreceivers:\n  - name: x\n    extra: []  # @@ALERTWEBHOOK:SHAMBLETA_ALERT_PAGE_WEBHOOK_URL@@\n",
+     {"x"}, {"SHAMBLETA_ALERT_PAGE_WEBHOOK_URL": ""}),
+    ("nome-fora-do-padrao",
+     "route:\n  receiver: x\nreceivers:\n  - name: x\n    webhook_configs: []  # @@ALERTWEBHOOK:MEU_WEBHOOK@@\n",
+     {"x"}, {"MEU_WEBHOOK": ""}),
+    ("nome-nao-declarado",
+     "route:\n  receiver: x\nreceivers:\n  - name: x\n    webhook_configs: []  # @@ALERTWEBHOOK:SHAMBLETA_ALERT_PAGE_WEBHOOK_URL@@\n",
+     {"x"}, {}),
+    ("declarado-com-valor",
+     "route:\n  receiver: x\nreceivers:\n  - name: x\n    webhook_configs: []  # @@ALERTWEBHOOK:SHAMBLETA_ALERT_PAGE_WEBHOOK_URL@@\n",
+     {"x"}, {"SHAMBLETA_ALERT_PAGE_WEBHOOK_URL": "https://hooks.invalid.test/nunca"}),
+    ("receiver-roteado-inexistente", "route:\n  receiver: fantasma\nreceivers:\n  - name: x\n    webhook_configs: []  # @@ALERTWEBHOOK:SHAMBLETA_ALERT_PAGE_WEBHOOK_URL@@\n",
+     {"fantasma"}, {"SHAMBLETA_ALERT_PAGE_WEBHOOK_URL": ""}),
+    ("marcador-orfao-sem-rota", "route:\n  receiver: x\nreceivers:\n  - name: x\n    webhook_configs: []\n  - name: y\n    webhook_configs: []  # @@ALERTWEBHOOK:SHAMBLETA_ALERT_TICKET_WEBHOOK_URL@@\n",
+     {"x"}, {"SHAMBLETA_ALERT_TICKET_WEBHOOK_URL": ""}),
+]
+neg_mute = [name for name, text, routed, declared in NEG_DEST
+            if not destination_problems(text, routed, declared)]
+check(not neg_mute,
+      "controle negativo (destino do pager): os %d casos inventados são acusados" % len(NEG_DEST),
+      "acusação em 100%% dos plantados (%s)" % " ".join(n[0] for n in NEG_DEST),
+      "ficaram mudos: %s" % ", ".join(neg_mute) if neg_mute else "%d/%d acusados" % (len(NEG_DEST), len(NEG_DEST)))
+
+# O veredito em voz alta — e é AQUI que este gate diz o que o repo não pode dizer.
+if dest_probs:
+    print("[AVISO] %s: destino do pager quebrado (%s) — veja o ENCONTRADO acima." % (am_path, "; ".join(dest_probs)))
+else:
+    sem_valor = [v for v in marker_names if not os.environ.get(v)]
+    print("[AVISO] %s: %d receivers roteados com destino vindo de env (%s). %s" % (
+        am_path, len(marker_names), " ".join(marker_names),
+        "ALERTA SEM DESTINO HUMANO É CONFIGURAÇÃO INCOMPLETA, NÃO É CONFIGURAÇÃO SEGURA: o `severity: page` "
+        "avalia, entra no /api/v2/alerts do alertmanager e morre lá sem acordar ninguém. O repositório não pode "
+        "conter o valor (URL de webhook é credencial e o repo é open source), então a medição honesta é no host: "
+        "`docker compose exec alertmanager sh -c 'grep -c \"      - url:\" /etc/alertmanager/alertmanager.yml'` — "
+        "zero é stack sem pager. A escolha registrada em deploy/OPS_RUNBOOK.md §2.1 é (b): a régua acusa, o "
+        "`docker compose up` não recusa subir. Ausente no ambiente deste gate: %s" % (" ".join(sem_valor) or "-")))
+
+# -------------- (11) ENV DE CREDENCIAL interpolada precisa estar DECLARADA -------
+# `${VAR:-}` num compose é um pedido de credencial que ninguém fez: o stack sobe
+# mudo com o valor vazio. O nome declarado em `.env.example` é o que transforma o
+# vazio em "falta preencher" — no painel do Coolify e na cabeça de quem faz o
+# primeiro deploy.
+CRED_NAME = re.compile(r'(SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|PRIVATE_KEY)|WEBHOOK_URL$')
+INTERP = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}')
+
+
+def undeclared_cred_problems(names, declared):
+    out = []
+    for n in sorted(set(names)):
+        if not CRED_NAME.search(n):
+            continue
+        if n not in declared:
+            out.append("%s: interpolada no compose e ausente de %s" % (n, ENV_TEMPLATE))
+        elif declared[n] != "":
+            out.append("%s: declarada com VALOR em %s (credencial versionada)" % (n, ENV_TEMPLATE))
+    return out
+
+
+interp_names = [m.group(1) for p in (prod_path, stg_path) for m in INTERP.finditer(read(p))]
+und_probs = undeclared_cred_problems(interp_names, DOTENV)
+check(not und_probs,
+      "toda env de credencial interpolada pelos composes está declarada vazia em %s (%d nomes vistos)" % (
+          ENV_TEMPLATE, len(set(interp_names))),
+      "nome presente no template com `=` vazio",
+      "; ".join(und_probs) if und_probs else " ".join(sorted({n for n in interp_names if CRED_NAME.search(n)})))
+neg_und = undeclared_cred_problems(["SHAMBLETA_NOVO_SECRET", "OUTRO_TOKEN", "SHAMBLETA_CATALOG_FILE"],
+                                   {"SHAMBLETA_NOVO_SECRET": "https://x.invalid/valor"})
+check(len(neg_und) == 2,
+      "controle negativo (env de credencial): ausente e com-valor são acusados, nome não-credencial é poupado",
+      "2 acusações de 3 inventados (SHAMBLETA_NOVO_SECRET com valor, OUTRO_TOKEN ausente, SHAMBLETA_CATALOG_FILE fora do padrão)",
+      "acusados=%d: %s" % (len(neg_und), "; ".join(neg_und)))
+
+# --------- (12) FIAÇÃO do pager e do SIGTERM: env -> render -> config -> binário --
+# Uma corrente dessas quebra no meio e continua parecendo inteira: o nome pode
+# estar no `.env.example` sem estar no `environment:` do serviço (aí o valor do
+# painel nunca chega ao container), o `--config.file` pode apontar para um caminho
+# que nada escreve, o `ENTRYPOINT` pode ficar sem o script. Cada uma das pontas
+# abaixo é uma dessas formas.
+RENDER_SH = "deploy/monitoring/render-alertmanager-config.sh"
+ENTRY_SH = "deploy/server/entrypoint.sh"
+AM_DF = "deploy/monitoring/alertmanager.Dockerfile"
+SRV_DF = "deploy/server/Dockerfile"
+render_text = read(RENDER_SH)
+entry_text = read(ENTRY_SH)
+am_df_text = read(AM_DF)
+srv_df_text = read(SRV_DF)
+
+
+def grab1(rx, text, default=""):
+    m = re.search(rx, text)
+    return m.group(1) if m else default
+
+
+render_out = grab1(r'ALERTMANAGER_CONFIG:-([^}]*)\}', render_text)
+render_tmpl = grab1(r'ALERTMANAGER_TEMPLATE:-([^}]*)\}', render_text)
+am_cmd_cfg = grab1(r'--config\.file=(\S+)', " ".join(str(x) for x in ((merged_services.get("alertmanager") or {}).get("command") or [])))
+check(render_out and am_cmd_cfg == render_out,
+      "o `--config.file` do compose é exatamente o caminho que o render escreve",
+      "config.file=%s (o default de ALERTMANAGER_CONFIG em %s)" % (render_out or "?", RENDER_SH),
+      "config.file=%r renderiza=%r" % (am_cmd_cfg, render_out))
+check(render_tmpl and ("COPY deploy/alertmanager.yml %s" % render_tmpl) in am_df_text,
+      "%s: o template do render é o config versionado, montado no caminho que o script lê" % AM_DF,
+      "uma linha `COPY deploy/alertmanager.yml %s`" % (render_tmpl or "?"),
+      "COPY encontrada=%s" % ("sim" if render_tmpl and render_tmpl in am_df_text else "não"))
+# O exemplo de HA que vem na imagem oficial mora no MESMO caminho do --config.file.
+# Sem o `rm`, um container que por qualquer motivo não rodasse o render subiria
+# configurado para falar com peers de outro cluster — pior que sem destino.
+check(re.search(r'RUN\s+rm\s+-f\s+/etc/alertmanager/alertmanager\.yml', am_df_text),
+      "%s: o config de exemplo da imagem oficial é apagado no build" % AM_DF,
+      "`RUN rm -f /etc/alertmanager/alertmanager.yml`",
+      "linha ausente — o container pode subir com o exemplo de HA dos docs")
+for needle, why in (('ENTRYPOINT ["/bin/sh", "/etc/alertmanager/render-config.sh"]' in am_df_text,
+                    "o render roda antes do binário"),
+                   ('"render-alertmanager-config.sh"' in am_df_text or "/etc/alertmanager/render-config.sh" in am_df_text,
+                    "o script é embarcado")):
+    check(bool(needle), "%s: %s" % (AM_DF, why), "a linha presente no Dockerfile", "não encontrada")
+# Nome no marcador sem env no serviço = o valor do painel nunca chega ao container.
+am_env_names = sorted({e.split("=", 1)[0] for e in env_pairs((merged_services.get("alertmanager") or {}).get("environment"))})
+check(all(v in am_env_names for v in marker_names),
+      "compose: o serviço `alertmanager` repassa ao container cada env que o marcador nomeia",
+      "environment com %s" % (" ".join(marker_names) or "(nenhum marcador)"),
+      "environment=%s" % (am_env_names or "ausente"))
+
+
+def env_marco_problems(env_names, wanted):
+    return ["%s: marcador exige a env, ausente no `environment:` do serviço" % w for w in wanted if w not in env_names]
+
+
+check(len(env_marco_problems(["SHAMBLETA_ALERT_PAGE_WEBHOOK_URL"], ["SHAMBLETA_ALERT_PAGE_WEBHOOK_URL",
+                                                                   "SHAMBLETA_ALERT_TICKET_WEBHOOK_URL"])) == 1,
+      "controle negativo (repassar a env): um marcador sem env no serviço é acusado",
+      "1 acusação de 2 nomes", "acusou %d" % len(env_marco_problems(["A"], ["A", "B"])))
+
+# ---- SIGTERM: o orçamento do entrypoint contra o stop_grace_period do compose ----
+canary_detect = grab1(r'SHAMBLETA_CANARY_DETECT_SEC:-([^}]*)\}', entry_text)
+drain_timeout = grab1(r'SHAMBLETA_DRAIN_TIMEOUT_SEC:-([^}]*)\}', entry_text)
+kill_grace = grab1(r'KILL_GRACE_SEC=(\d+)', entry_text)
+canary_internal = float(grab1(r'checkInternalSec\s*:\s*float\s*=\s*([\d.]+)', canary_src, "0"))
+entry_home = grab1(r'USER_DIR="\$\{HOME:-([^}]*)\}', entry_text)
+canary_file = grab1(r'CANARY_FILE="\$USER_DIR/([^"]+)"', entry_text)
+budget = drain_timeout and kill_grace and canary_detect
+check(budget, "%s: o gate leu detect/teto/grace do kill" % ENTRY_SH,
+      "SHAMBLETA_CANARY_DETECT_SEC, SHAMBLETA_DRAIN_TIMEOUT_SEC e KILL_GRACE_SEC no arquivo",
+      "detect=%r timeout=%r kill=%r" % (canary_detect, drain_timeout, kill_grace))
+if budget:
+    detect_s, timeout_s, kill_s = float(canary_detect), float(drain_timeout), float(kill_grace)
+    check(detect_s >= 2 * canary_internal,
+          "%s: a janela de detecção cobre 2 batidas do CheckCanary (%.0fs)" % (ENTRY_SH, 2 * canary_internal),
+          "SHAMBLETA_CANARY_DETECT_SEC >= %.0f (sources/world/ShutdownCanary.gd:5)" % (2 * canary_internal),
+          "%s" % canary_detect)
+    check(timeout_s >= detect_s + drain + join,
+          "%s: o teto de drain cabe o canary inteiro (detect %.0f + avisos %.0f + join %d)" % (
+              ENTRY_SH, detect_s, drain, join),
+          ">= %.0fs" % (detect_s + drain + join),
+          "SHAMBLETA_DRAIN_TIMEOUT_SEC=%s" % drain_timeout)
+    for label, services in (("produção", prod_services), ("mesclado", merged_services)):
+        grace = seconds((services.get("game") or {}).get("stop_grace_period"))
+        check(grace is not None and grace >= timeout_s + kill_s,
+              "%s: stop_grace_period sobrevive ao entrypoint inteiro (%.0f + %.0f = %.0fs de pior caso)" % (
+                  label, timeout_s, kill_s, timeout_s + kill_s),
+              ">= %.0fs — quem mata por fora tem de ser o docker, não este script" % (timeout_s + kill_s),
+              "stop_grace_period=%r" % ((services.get("game") or {}).get("stop_grace_period"),))
+
+
+def budget_problems(detect_s, timeout_s, kill_s, grace_s, drain_s, join_s, internal_s):
+    out = []
+    if detect_s < 2 * internal_s:
+        out.append("detect %.0f < 2 batidas de %.0fs" % (detect_s, 2 * internal_s))
+    if timeout_s < detect_s + drain_s + join_s:
+        out.append("teto %.0f < drain inteiro %.0fs" % (timeout_s, detect_s + drain_s + join_s))
+    if grace_s < timeout_s + kill_s:
+        out.append("grace %.0f < teto+kill %.0fs" % (grace_s, timeout_s + kill_s))
+    return out
+
+
+neg_budget = [budget_problems(*c) for c in (
+    (10, 62, 6, 75, 47, 2, 5),      # o estado de hoje: tem de ser o único LIMPO
+    (4, 62, 6, 75, 47, 2, 5),       # detecção menor que 2 batidas do timer
+    (10, 40, 6, 75, 47, 2, 5),      # teto menor que o drain que ele espera
+    (10, 74, 6, 75, 47, 2, 5),      # teto+kill estourando o grace do compose
+)]
+check(budget_problems(10, 62, 6, 75, 47, 2, 5) == [] and sum(1 for x in neg_budget[1:] if x) == 3,
+      "controle negativo (orçamento do drain): os 3 casos quebrados são acusados e o atual não",
+      "1 lote limpo + 3 acusados", "resultado=%s" % ([bool(x) for x in neg_budget],))
+
+# O entrypoint tem de ser o que o Dockerfile chama, e o compose não pode passar por
+# cima dele (um `entrypoint:` ou `user:` no serviço desarma o SIGTERM sem ninguém
+# ver — o sintoma é o exit 143 antigo, não um erro).
+check('ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]' in srv_df_text
+      and "COPY deploy/server/entrypoint.sh /app/entrypoint.sh" in srv_df_text,
+      "%s: o ENTRYPOINT é o script do drain (chamado por /bin/sh, sem depender de mode bit)" % SRV_DF,
+      "as duas linhas no Dockerfile", "uma delas falta")
+for label, services in (("produção", prod_services), ("mesclado", merged_services)):
+    g = services.get("game") or {}
+    check(not g.get("entrypoint") and not g.get("user"),
+          "%s: o compose não sobrescreve entrypoint/user do `game`" % label,
+          "nenhum dos dois (o override desligaria o drain)",
+          "entrypoint=%r user=%r" % (g.get("entrypoint"), g.get("user")))
+docker_home = grab1(r'ENV\s+HOME=(\S+)', srv_df_text)
+expected_user_dir = "%s/.local/share/%s" % (docker_home, user_dir)
+check(entry_home == docker_home and canary_file == os.path.basename(grab1(r'const\s+CanaryFile\s*:\s*String\s*=\s*Local\s*\+\s*"([^"]+)"', read("sources/system/Path.gd"), "canary")),
+      "%s: o canary que o script toca é o user:// que o container abre" % ENTRY_SH,
+      "USER_DIR=%s e arquivo %r (sources/system/Path.gd:56 + project.godot + ENV HOME em %s)" % (
+          expected_user_dir, "canary", SRV_DF),
+      "HOME no script=%r vs Dockerfile=%r; arquivo=%r" % (entry_home, docker_home, canary_file))
+
+# (5) Auto-evidência: toda citação `arquivo:linha` escrita pelos arquivos desta
 # posse tem de resolver para uma linha útil. sources/ e companion/ mudam de linha
 # o dia inteiro nas mãos de outros agentes; quando a linha citada some, o runbook
 # vira estória — e "cada afirmação com arquivo:linha" é justamente o que se
@@ -649,7 +1206,8 @@ check(not broken, "as citações arquivo:linha desta posse resolvem",
       "todo `arquivo:N` citado é um arquivo existente e o intervalo cai em linha com texto",
       "; ".join(broken) if broken else "%d citações conferidas" % cited)
 
-print("== COMPOSE GATE: %d checks, %d failures == (validação: %s)" % (checks, failures, mode))
+print("== COMPOSE GATE: %d checks, %d failures == (validação: %s; fumaça: %d rodaram, "
+      "%d falharam, %d pulados)" % (checks, failures, mode, smoke_ran, smoke_failed, smoke_skipped))
 sys.exit(failures)
 PYEOF
 status=$?

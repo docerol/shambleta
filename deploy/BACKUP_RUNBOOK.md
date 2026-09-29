@@ -8,13 +8,13 @@ não foi conferido no código está marcado como **[NÃO MEDIDO]**.
 
 | dado | caminho lógico | caminho no container | origem |
 |---|---|---|---|
-| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `sources/system/Path.gd:55` (`Local = "user://"`) + `ENV HOME=/data` (`deploy/server/Dockerfile:32`) |
+| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `sources/system/Path.gd:55` (`Local = "user://"`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
 | histórico de backup | `user://sql-backups/{DAILY,WEEKLY,MONTHLY}/AAAA-MM-DD_HH-MM-SS.db` | dentro do **mesmo** `/data` | `sources/sql/SQLCommons.gd:8` (`BackupPath`), `sources/sql/SQLBackups.gd:10-19` |
-| cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `sources/sql/SQLCommons.gd:88`, `sources/sql/SQLBackups.gd:35-51`, `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
+| cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `sources/sql/SQLCommons.gd:107-108`, `sources/sql/SQLBackups.gd:35-51`, `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
 
-Os diretórios são **MAIÚSCULOS** e isto não é cosmetismo: o nome vem de
-`SQLCommons.BackupFrequency.keys()` (`sources/sql/SQLCommons.gd:32` enum
-`{DAILY, WEEKLY, MONTHLY}`, usado em `sources/sql/SQLBackups.gd:12` e `:22`), e o
+Os diretórios são **MAIÚSCULOS** e isto não é cosmetismo: o nome vem das chaves do
+enum `BackupFrequency` (`sources/sql/SQLCommons.gd:43`, `{DAILY, WEEKLY, MONTHLY}`,
+usado em `sources/sql/SQLBackups.gd:12` e `:22`), e o
 container é case-sensitive. Um `ls` na variante minúscula desse caminho devolve vazio
 num banco que tem backups — a aparência de "o backup nunca rodou" vem do `ls`, não
 do worker. O `ls` do §3.1 de `ROLLBACK.md` já usa o caminho certo.
@@ -32,12 +32,12 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
 ## 2. Cadência real do worker
 
 - diário a cada `DailyBackupIntervalSec` = 24 h, semanal 7 d, mensal 28 d
-  (`sources/sql/SQLCommons.gd:13-15`, disparo em `sources/sql/SQLBackups.gd:149-163`).
+  (`sources/sql/SQLCommons.gd:13-15`, disparo em `sources/sql/SQLBackups.gd:149-162`).
 - A cópia é feita pela API de backup online do SQLite (`Launcher.SQL.db.backup_to`,
   `sources/sql/SQLBackups.gd:14`) — arquivo único e consistente **sem** o `-wal`.
 - Retensão local: 7 diários / 4 semanais / 12 mensais (`sources/sql/SQLCommons.gd:34-38`),
   podada por `PruneBackups()` (`sources/sql/SQLBackups.gd:66-88`).
-- O push offsite acontece **depois** do diário (`sources/sql/SQLBackups.gd:152-153`),
+- O push offsite acontece **depois** do diário (`sources/sql/SQLBackups.gd:54-64`),
   cria o diretório se faltar (`:39-42`) e só é anunciado como sucesso depois de
   `VerifyBackupRestorable()` abrir a cópia e ler `SELECT version FROM migration`
   (`:47-49`, `:54-64`).
@@ -76,7 +76,7 @@ não é volume), não disco cheio — confira o §3.2 antes de culpar o `df`.
 
 ## 4. Restauração (janela de manutenção)
 
-Migrations são **forward-only** (`ApplyMigrations()`, `sources/sql/SQL.gd:57`) e
+Migrations são **forward-only** (`ApplyMigrations()`, `sources/sql/SQL.gd:113-168`) e
 a auditoria de 2026-09-27 registra que as primeiras (`005_reset_positions_and_inventory.sql`,
 `006_reset_progress_veteran_legacy.sql`) são data-reset — restaurar um backup mais
 velho que a última migration aplicada **não** devolve o estado esperado se houver
@@ -127,14 +127,14 @@ Isso ainda é **mesmo host**. Para virar backup de verdade, aponte
 `SHAMBLETA_OFFSITE_BACKUPS` (painel do Coolify, não o repositório) para uma
 montagem NFS/S3-fuse e adicione o mount correspondente ao serviço `game` — o
 código só copia para o caminho que a env disser, sem inventar nada
-(`sources/sql/SQLCommons.gd:88`).
+(`sources/sql/SQLCommons.gd:108`).
 
 ## 6. O que nada aqui cobre
 
 - O snapshot de jogadores (`BackupPlayers`, cadência `BackupPlayersSec` = 600 s,
   `sources/sql/SQLCommons.gd:11` + `sources/sql/SQLBackups.gd:167-170`) não é
   backup: é o que se perde quando o processo morre sem drain. A causa raiz
-  (memória por cima do banco) está na AUDITORIA_2026-09-27.md §7.1, não é
+  (memória por cima do banco) está em `archive/AUDITORIA_2026-09-27.md` §7.1, não é
   resolvida por backup e não é deste runbook.
 - Nenhum teste deste repo restaura um backup **num servidor de jogo de verdade**
   (o probe abre a cópia e lê a versão). **[NÃO MEDIDO]** o tempo de restore num

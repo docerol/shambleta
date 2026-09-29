@@ -14,9 +14,32 @@ enum EdgeOrientation { NONE, RIGHT, BOTTOM_RIGHT, BOTTOM, BOTTOM_LEFT, LEFT, TOP
 @export var maxSize : Vector2		= Vector2(-1, -1)
 const edgeSize : int				= 6
 const cornerSize : int				= 10
+# SOM-IDLE UX/mobile (medido por `tests/panel_fit_test.gd`): as duas
+# constantes acima são a alça de resize de um MOUSE — 6 px de banda, 10 px de canto,
+# corretos num cursor. Num dedo a mesma chrome é um alvo de 6 px: o produto declara
+# 48 px de alvo de toque (`GuiUiScale.TouchTarget`, mesma régua dos botões da barra
+# manual) e um piso externo de 44 px; `chromeEdge`/`chromeCorner` começam no valor
+# de mouse e só mudam por `SetChromePixels`, chamado pelo módulo mobile/web
+# (`GuiUiScale.ApplyTouchChrome`) com o número que o produto promete. 0 volta para a
+# chrome de mouse — é por isso que os dois números ficam como const e não somem.
+var chromeEdge : int				= edgeSize
+var chromeCorner : int				= cornerSize
 var clickPosition : Vector2			= Vector2.INF
 var isResizing : bool				= false
 var selectedEdge : EdgeOrientation	= EdgeOrientation.NONE
+
+# Alvo de resize efetivo desta janela, em pixels: a menor distância da borda pela
+# qual um toque ainda pega a alça. O harness exige >= 44 no toque.
+func ChromePixels() -> int:
+	return chromeEdge
+
+func SetChromePixels(pixels : int) -> void:
+	if pixels <= 0:
+		chromeEdge = edgeSize
+		chromeCorner = cornerSize
+	else:
+		chromeEdge = pixels
+		chromeCorner = pixels
 
 #
 func ClampFloatingWindow(globalPos : Vector2, moveLimit : Vector2):
@@ -83,22 +106,22 @@ func GetEdgeOrientation(pos : Vector2) -> EdgeOrientation:
 	var edgesArray = []
 	var edge : EdgeOrientation = EdgeOrientation.NONE
 
-	if pos.y >= size.y - cornerSize:
+	if pos.y >= size.y - chromeCorner:
 		cornersArray.append(EdgeOrientation.BOTTOM)
-		if pos.y >= size.y - edgeSize:
+		if pos.y >= size.y - chromeEdge:
 			edgesArray.append(EdgeOrientation.BOTTOM)
-	elif pos.y <= cornerSize:
+	elif pos.y <= chromeCorner:
 		cornersArray.append(EdgeOrientation.TOP)
-		if pos.y <= edgeSize:
+		if pos.y <= chromeEdge:
 			edgesArray.append(EdgeOrientation.TOP)
 
-	if pos.x >= size.x - cornerSize:
+	if pos.x >= size.x - chromeCorner:
 		cornersArray.append(EdgeOrientation.RIGHT)
-		if pos.x >= size.x - edgeSize:
+		if pos.x >= size.x - chromeEdge:
 			edgesArray.append(EdgeOrientation.RIGHT)
-	elif pos.x <= cornerSize:
+	elif pos.x <= chromeCorner:
 		cornersArray.append(EdgeOrientation.LEFT)
-		if pos.x <= edgeSize:
+		if pos.x <= chromeEdge:
 			edgesArray.append(EdgeOrientation.LEFT)
 
 	if cornersArray.size() >= 2 && edgesArray.size() >= 1:
@@ -139,6 +162,18 @@ func _notification(what : int):
 	if what == NOTIFICATION_MOUSE_EXIT and clickPosition == Vector2.INF:
 		DeviceManager.ResetCursor()
 
+# Janela que entra na árvore num telefone/web já nasce com o alvo de toque prometido
+# (`GuiUiScale.TouchTarget`): sem isto, só as janelas existentes no boot recebiam a
+# chrome de toque — `Gui._ready` chama o ajuste uma vez, e `Gui.Ensure*Panel` monta
+# janela sob demanda muito depois disso. No desktop (mouse) nada muda: a chrome fica
+# nos `edgeSize`/`cornerSize` de sempre.
+func _enter_tree() -> void:
+	if GuiUiScale.IsTouch():
+		GuiUiScale.ApplyWindowTouchChrome(self, true)
+		# Os controles de decisão do painel (confirmar/cancelar/slot) também entram na
+		# varrida: no telefone eles eram o que ficava fora da tela e abaixo do alvo.
+		GuiUiScale.ApplyDecisionChrome(self, true, size.x - 12.0)
+
 func ResetWindowModifier():
 	clickPosition	= Vector2.INF
 	isResizing		= false
@@ -167,7 +202,7 @@ func CanBlockActions():
 
 #
 func IsWithinResizeMargin(pos : Vector2) -> bool:
-	return pos >= -Vector2.ONE * cornerSize && pos <= size + Vector2.ONE * cornerSize
+	return pos >= -Vector2.ONE * chromeCorner && pos <= size + Vector2.ONE * chromeCorner
 
 func OnGuiInput(event : InputEvent):
 	if event is InputEventMouseButton:

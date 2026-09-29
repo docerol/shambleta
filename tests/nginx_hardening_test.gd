@@ -6,8 +6,8 @@ extends SceneTree
 #  `deploy/web/nginx.conf` era o ÚNICO caminho de entrada do /checkout/ e do
 #  /webhooks/payments e não tinha rate-limit, nem teto de corpo, nem CSP, nem
 #  X-Frame-Options, nem `server_tokens off` — enquanto o companion lê
-#  `Content-Length` e aloca o buffer inteiro sem plafond (companion/server.py:1239
-#  e :1457). Ou seja: não havia NENHUM teto de alocação no caminho do dinheiro.
+#  `Content-Length` e aloca o buffer inteiro sem plafond (companion/server.py:1405
+#  e :1467). Ou seja: não havia NENHUM teto de alocação no caminho do dinheiro.
 #
 # ESCOPO DA VALIDAÇÃO (declarado, não implícito): esta máquina não tem o binário do
 # nginx, então nada aqui é `nginx -t`. O harness LÊ o arquivo, faz parse de
@@ -231,6 +231,10 @@ func _classify(loc : Dictionary) -> String:
 		return "webhooks"
 	if h.contains("checkout"):
 		return "checkout"
+	if h.contains("push"):
+		return "push"
+	if h.contains("catalog"):
+		return "catalog"
 	if h.contains("= /index.html"):
 		return "index"
 	if h.contains("= /sw.js"):
@@ -291,17 +295,25 @@ func _suiteShape() -> void:
 	# conf): mover COOP/COEP para o server e achatar as locations derruba o boot
 	# do client web (SharedArrayBuffer) — o defeito original que o arquivo carrega.
 	var docs : Array = []
-	var proxied : int = 0
+	var proxied : Array = []
 	for loc in locations:
 		if _dir(loc, "proxy_pass") != "":
-			proxied += 1
+			proxied.append(_classify(loc))
 			continue
 		var hh : String = str(loc["header"])
 		_check(_hasAny(loc, "Cross-Origin-Opener-Policy") and _hasAny(loc, "Cross-Origin-Embedder-Policy"),
 			"%s conserva COOP+COEP" % hh.replace("location ", ""))
 		if hh.contains(".html") or hh.contains(".js") or hh.contains("landing") or hh.strip_edges() == "location /":
 			docs.append(loc)
-	_check(proxied == 2, "dois blocos proxied (checkout + webhooks): %d" % proxied)
+	# Lista, não contagem: "3 proxied" passa igual quando o bloco do dinheiro sai e
+	# entra um terceiro caminho qualquer. O que se quer é exatamente este conjunto.
+	# `catalog` entrou em 2026-09-28: é a primeira rota proxied que é LEITURA DE
+	# PREÇO — nem dinheiro (checkout/webhooks), nem prontidão (push). A suíte G
+	# confere que ela não virou porta de escrita.
+	var wantProxied : Array = ["catalog", "checkout", "push", "webhooks"]
+	proxied.sort()
+	_check(proxied == wantProxied,
+		"os blocos proxied são exatamente catalog + checkout + push/vapid + webhooks: %s" % str(proxied))
 	for loc in docs:
 		var hh2 : String = str(loc["header"]).replace("location ", "")
 		_check(_hasAny(loc, "X-Frame-Options") and _hasAny(loc, "Content-Security-Policy"),
@@ -371,7 +383,14 @@ func _suiteMoneyRoutes() -> void:
 		_check(str(loc["header"]).contains("^~"), "%s: prefixo com `^~` (regex posterior não rouba a rota)" % tag)
 	for z in _dirs(froot, "limit_req_zone"):
 		var nm : String = _zoneName(str(z))
-		_check(usedZones.has(nm), "zona %s é usada por alguma location (zona declarada e não usada é enfeite)" % nm)
+		# Zona órfã é rate-limit de fachada — e a régua tem de olhar TODAS as
+		# locations, não só as do dinheiro: desde que a rota de prontidão do push
+		# entrou, uma zona declarada e usada apenas por ela passaria como morta.
+		var usedSomewhere : bool = usedZones.has(nm)
+		for loc in server["children"]:
+			if _zoneName(_dir(loc, "limit_req ")) == nm:
+				usedSomewhere = true
+		_check(usedSomewhere, "zona %s é usada por alguma location (zona declarada e não usada é enfeite)" % nm)
 	suitesDone += 1
 
 func _suiteRouting() -> void:
@@ -389,6 +408,18 @@ func _suiteRouting() -> void:
 		["/landing/index.html", "landing"],
 		["/ads_bridge.js", "ads"],
 		["/sw.js", "sw"],
+		# A rota de prontidão é exata; o resto de /push/ tem de continuar sendo o
+		# SPA. É esta dupla que prova que abrir uma rota não abriu a fila.
+		["/push/vapid", "push"],
+		["/push/test", "catchall"],
+		["/push/queue", "catchall"],
+		# O catálogo é exato pelo mesmo motivo do vapid: `= /catalog` leva só a leitura
+		# de preço ao companion. Estas duas linhas são o que impede um `^~ /catalog`
+		# de fachada — com prefixo, qualquer caminho novo embaixo dele alcançaria o
+		# processo que segura o SQLite.
+		["/catalog", "catalog"],
+		["/catalog/", "catchall"],
+		["/catalogx", "catchall"],
 	]
 	for c in cases:
 		var uri : String = str(c[0])
@@ -401,6 +432,127 @@ func _suiteRouting() -> void:
 	_check(_dir(wh, "limit_req ") != "", "o caminho que o provedor POSTA está de fato sob o rate-limit")
 	var co : Dictionary = _matchLocation("/checkout/intents")
 	_check(_dir(co, "client_max_body_size") != "", "o caminho que o browser POSTA está sob o teto de corpo")
+	suitesDone += 1
+
+# F) a rota de prontidão do push — aberta em 2026-09-27 para `GET /push/vapid`
+# chegar a um browser (peças 2 e 3 de `WebPushDelivery.DeliverParts()`). Ela é a
+# primeira rota proxied que NÃO é o dinheiro, e por isso o risco aqui é o oposto
+# do de C: não a falta de cerca, e sim ela virar porta para a fila. As duas
+# checks que importam mais que as demais são `= /push/vapid` (exata) e a
+# ausência de qualquer prefixo `/push` no proxy.
+func _suitePushRoute() -> void:
+	print("-- F) prontidão do push: uma rota exata, GET-only, e nada além dela")
+	var push : Dictionary = _matchLocation("/push/vapid")
+	_check(_classify(push) == "push", "existe um bloco para /push/vapid (%s)" % str(push.get("header", "nenhum")))
+	if _classify(push) != "push":
+		suitesDone += 1
+		return
+	var tag : String = str(push["header"]).replace("location ", "")
+	_check(tag.begins_with("= "), "%s é EXATO (`=`): `^~ /push/` ou prefixo levaria POST /push/test para o companion por cima do token de admin" % tag)
+	_check(_dir(push, "proxy_pass").contains("$shambleta_companion"), "%s: proxy por variável + resolver (companion atrasado não derruba o boot)" % tag)
+	_check(_dir(push, "resolver").contains("127.0.0.11"), "%s: resolver da rede do compose" % tag)
+	_check(_dir(push, "limit_req ") != "", "%s: tem rate-limit — é a rota batida a cada boot de aba" % tag)
+	var zone : String = _zoneName(_dir(push, "limit_req "))
+	_check(zone.contains("push"), "%s: usa zona própria (%s), não a do webhook de 25 r/s" % [tag, zone])
+	_check(_dirs(froot, "limit_req_zone").any(func(z): return _zoneName(str(z)) == zone),
+		"%s: zona %s declarada no nível http (limit_req de zona inexistente é nginx que não sobe)" % [tag, zone])
+	_check(_dir(push, "limit_req ").contains("nodelay"), "%s: nodelay (burst não vira latência no boot)" % tag)
+	var le : Dictionary = {}
+	for child in push["children"]:
+		if str(child["header"]).begins_with("limit_except"):
+			le = child
+	_check(not le.is_empty(), "%s: `limit_except` presente — sem ele qualquer método alcançaria o companion" % tag)
+	if not le.is_empty():
+		_check(str(le["header"]).contains("GET"), "%s: a lista de métodos lícitos é GET (`limit_except GET` trava os outros)" % tag)
+		_check(_hasAny(le, "deny all"), "%s: `deny all` dentro de limit_except (lista sem trava é decorativa)" % tag)
+	_check(_dir(push, "client_max_body_size") != "", "%s: teto de corpo declarado mesmo em GET (o único plafond do caminho é o proxy)" % tag)
+	_check(_sizeToBytes(_dir(push, "client_max_body_size")) <= 4096, "%s: teto de corpo pequeno — a rota não tem escrita" % tag)
+	_check(_dir(push, "client_body_timeout") != "" and _dir(push, "client_header_timeout") != "", "%s: timeouts de corpo e cabeçalho (slow-loris não segura worker)" % tag)
+	_check(_dir(push, "add_header Content-Security-Policy").contains("default-src 'none'"), "%s: CSP fechada (a resposta é JSON de estado)" % tag)
+	_check(_dir(push, "add_header X-Content-Type-Options").contains("nosniff"), "%s: nosniff" % tag)
+	_check(_dir(push, "add_header Referrer-Policy") != "", "%s: Referrer-Policy" % tag)
+	_check(_dir(push, "add_header Cache-Control").contains("max-age"), "%s: Cache-Control com max-age (sem teto, cada aba bate no companion; sem cache, o toggle abre devagar)" % tag)
+	_check(_dir(push, "add_header Cache-Control").contains("always"), "%s: headers com `always` (somem no 4xx/5xx sem isso)" % tag)
+	_check(_dir(push, "sub_filter") == "", "%s: nenhum sub_filter (reescrever o corpo quebraria o JSON lido por `ObserveCompanionPushResponse`)" % tag)
+	# A cerca inversa: nenhum OUTRO caminho /push pode estar proxied.
+	var leaked : Array = []
+	for loc in server["children"]:
+		var h : String = str(loc["header"])
+		if not h.begins_with("location "):
+			continue
+		if _dir(loc, "proxy_pass") == "":
+			continue
+		var spec : String = h.substr(9).strip_edges()
+		if spec.contains("/push") and not spec.contains("/push/vapid"):
+			leaked.append(h)
+	_check(leaked.is_empty(), "nenhum prefixo /push* proxied além da rota exata (fila fora da fronteira pública): %s" % str(leaked))
+	for uri in ["/push/test", "/push/queue", "/push/send"]:
+		var other : Dictionary = _matchLocation(uri)
+		_check(_dir(other, "proxy_pass") == "", "%s cai em bloco servido, não no companion (%s)" % [uri, str(other.get("header", "nenhum"))])
+	suitesDone += 1
+
+# G) a rota de leitura de preço — `GET /catalog`, aberta em 2026-09-28. O risco é o
+# mesmo da F e por um motivo novo: é a primeira rota proxied cujo corpo é montado
+# contra o SQLite do companion. Se ela deixar de ser exata, ou deixar de ser
+# GET-only, o browser alcança caminhos que hoje só existem atrás do rate-limit do
+# dinheiro. A segunda metade da suíte é a identidade: o `/catalog` que a página lê
+# tem de ser o MESMO gate que o checkout usa, senão a vitrine volta a anunciar o
+# passe de uma temporada que o `POST /checkout/intents` recusa.
+func _suiteCatalogRoute() -> void:
+	print("-- G) leitura de preço: uma rota exata, GET-only, e o mesmo gate do checkout")
+	var cat : Dictionary = _matchLocation("/catalog")
+	_check(_classify(cat) == "catalog", "existe um bloco para /catalog (%s)" % str(cat.get("header", "nenhum")))
+	if _classify(cat) != "catalog":
+		suitesDone += 1
+		return
+	var tag : String = str(cat["header"]).replace("location ", "")
+	_check(tag.begins_with("= "), "%s é EXATO (`=`): prefixo levaria qualquer caminho novo abaixo de /catalog ao companion" % tag)
+	_check(_dir(cat, "proxy_pass").contains("$shambleta_companion"), "%s: proxy por variável + resolver" % tag)
+	_check(_dir(cat, "resolver").contains("127.0.0.11"), "%s: resolver da rede do compose" % tag)
+	var zone : String = _zoneName(_dir(cat, "limit_req "))
+	_check(zone.contains("catalog"), "%s: usa zona própria (%s), não a do webhook de 25 r/s" % [tag, zone])
+	_check(_dirs(froot, "limit_req_zone").any(func(z): return _zoneName(str(z)) == zone),
+		"%s: zona %s declarada no nível http" % [tag, zone])
+	_check(_dir(cat, "limit_req ").contains("nodelay"), "%s: nodelay" % tag)
+	var le : Dictionary = {}
+	for child in cat["children"]:
+		if str(child["header"]).begins_with("limit_except"):
+			le = child
+	_check(not le.is_empty(), "%s: `limit_except` presente — sem ele POST/PUT alcançariam o companion" % tag)
+	if not le.is_empty():
+		_check(str(le["header"]).contains("GET"), "%s: a lista de métodos lícitos é GET" % tag)
+		_check(_hasAny(le, "deny all"), "%s: `deny all` dentro de limit_except" % tag)
+	_check(_sizeToBytes(_dir(cat, "client_max_body_size")) <= 4096,
+		"%s: teto de corpo pequeno, a rota não tem escrita (%s)" % [tag, _dir(cat, "client_max_body_size")])
+	_check(_dir(cat, "client_body_timeout") != "" and _dir(cat, "client_header_timeout") != "",
+		"%s: timeouts de corpo e cabeçalho" % tag)
+	_check(_dir(cat, "add_header Content-Security-Policy").contains("default-src 'none'"),
+		"%s: CSP fechada (a resposta é JSON de preço)" % tag)
+	_check(_dir(cat, "add_header X-Content-Type-Options").contains("nosniff"), "%s: nosniff" % tag)
+	_check(_dir(cat, "add_header Cache-Control").contains("max-age"),
+		"%s: Cache-Control com max-age (sem teto, cada aba bate no SQLite; sem cache, preço velho nunca refresca)" % tag)
+	_check(_dir(cat, "sub_filter") == "", "%s: nenhum sub_filter (reescrever o corpo quebraria o JSON)" % tag)
+	var leaked : Array = []
+	for loc in server["children"]:
+		var h : String = str(loc["header"])
+		if not h.begins_with("location ") or _dir(loc, "proxy_pass") == "":
+			continue
+		var spec : String = h.substr(9).strip_edges()
+		if spec.contains("catalog") and not spec.begins_with("= /catalog"):
+			leaked.append(spec)
+	_check(leaked.is_empty(), "nenhum OUTRO caminho com `catalog` está proxied: %s" % str(leaked))
+	# Identidade das camadas: a marcação de temporada do `/catalog` é o MESMO gate do
+	# checkout. Se `public_catalog` parar de chamar `season_offer_status`, a vitrine
+	# volta a ser um texto que a frente do dinheiro desmente — e nada neste arquivo
+	# perceberia, porque o conf continua verde.
+	var py : String = _read("res://companion/server.py")
+	_check(not py.is_empty(), "companion/server.py foi lido para a régua de identidade")
+	if not py.is_empty():
+		_check(py.contains("def public_catalog("), "o companion tem a função que monta o corpo de /catalog")
+		_check(py.contains("season_offer_status(con, catalog, sku)"),
+			"e `public_catalog` marca o passe com o MESMO gate que o checkout usa, não com uma régua paralela")
+		_check(py.contains("\"store_unavailable\""),
+			"banco inacessível marca o passe como indisponível (display fail-closed, como o gate)")
 	suitesDone += 1
 
 func _nginxBinary() -> String:
@@ -464,7 +616,9 @@ func _run() -> void:
 	_suiteHttpLevel()
 	_suiteMoneyRoutes()
 	_suiteRouting()
+	_suitePushRoute()
+	_suiteCatalogRoute()
 	_suiteHonestScope()
-	_check(suitesDone == 5, "as 5 suítes rodaram até o fim (run cortado no meio não pode imprimir verde; o log é lido pelo ci_gate_log, esta linha lê o próprio verde)")
+	_check(suitesDone == 7, "as 7 suítes rodaram até o fim (run cortado no meio não pode imprimir verde; o log é lido pelo ci_gate_log, esta linha lê o próprio verde)")
 	print("== NGINX HARDENING: %d checks, %d failures ==" % [checks, failures])
 	quit(failures)

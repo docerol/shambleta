@@ -53,6 +53,24 @@ const RARITY_WEIGHT : Dictionary = {"Comum": 100, "Incomum": 60, "Raro": 30, "É
 
 const SUBMIT_FEE_BASE : int = 500
 
+# SOM-CRAFT (economia, 2026-09-28): a matéria-prima da faixa existia como OFERTA
+# (`FarmZoneData.BandMaterialNames` cai do drop com `MaterialDropSharePPM`) sem
+# DEMANDA nenhuma — `craft_authority_test.gd` tinha "zero material no inventário e
+# a forja aceita" como asserção verde, que é a forma mais honesta de dizer que o
+# segundo eixo não existia: um faucet sem sink é um contador, não uma atividade.
+# Aqui nasce a demanda. A unidade é TEMPO DE FAZENDA, derivado das três constantes
+# da oferta no mesmo arquivo que a declara: zona 1 faz `3600 / ParBaseSeconds` =
+# 150 kills/h, `DefaultDropRatePPM` = 0,7 drop por kill, `MaterialDropSharePPM` =
+# 6% disso → ~6,3 unidades/h. Um craft de tier 1 custa 12 unidades ≈ 1,9 h de farm
+# da própria faixa. Linear em tier, e não tier² como o ouro, porque a oferta já é
+# mais lenta no tier alto: `parKillsPerHour = 3600 / (ParBaseSeconds +
+# ParPerZoneSeconds × (zona − 1))` cai ~2× entre a zona 1 e a 22 (tier 8), então
+# 96 unidades no tier 8 são ~27 h de farm, não ~4×1,9 h. A régua
+# (`tests/craft_authority_test.gd`, suíte C2) recomputa a taxa a partir das três
+# constantes e exige que o tier 1 caiba entre 1 e 3 horas de farm: mexer na oferta
+# ou na demanda move os dois lados e quem decide é o harness, não esta prosa.
+const MATERIAL_UNITS_PER_TIER : int = 12
+
 const MAX_PER_DAY : int = 3
 
 const RESUB_MAX : int = 3
@@ -69,6 +87,8 @@ const CREATOR_FEE_PCT : int = 1
 # Validações (server-autorizado):
 # - slot válido (0–7), baseItemHash > 0, name não-vazio
 # - budget: soma ponderada de modifiers <= BudgetCap(tier, slot) (0 = bloqueado)
+# - matéria-prima: MaterialPerCraft(tier) unidades da matéria-prima da faixa, com
+#   débito espelhado no ledger (`craft_material:<hash>`)
 # - taxa: player tem gp >= SubmitFee(tier); burnt + ledger mirror
 # - nome: não vazio, tamanho 3–30, não na blocklist, não duplicata (edit-distance < 2)
 # - daily cap: MAX_PER_DAY submissões hoje
@@ -90,6 +110,12 @@ static func RarityForUsage(pct : float) -> String:
 # Taxa de submissão em gold: 500 × tier² (proposta; confirmar após o beta).
 static func SubmitFee(tier : int) -> int:
 	return SUBMIT_FEE_BASE * tier * tier
+
+# Preço em matéria-prima da faixa do tier (ver MATERIAL_UNITS_PER_TIER: a unidade
+# é hora de fazenda, não unidade solta). tier < 1 não tem faixa declarada e custa 0
+# por acidente de entrada — quem chama valida o tier antes (`invalid_tier`).
+static func MaterialPerCraft(tier : int) -> int:
+	return MATERIAL_UNITS_PER_TIER * maxi(tier, 0)
 
 # Normaliza nome p/ checagens (pré-filtro + duplicata).
 static func NormName(name : String) -> String:

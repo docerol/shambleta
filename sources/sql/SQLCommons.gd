@@ -50,6 +50,14 @@ const BackupLimits : Dictionary[BackupFrequency, int] = {
 
 const Verbosity : SQLite.VerbosityLevel	= SQLite.NORMAL
 
+# Árvore de patches que o boot enxerga. Vazio = `Path.MigrationRsc` (o caminho
+# embarcado no pacote), que é a resposta de sempre. Existe porque o carimbo de
+# versão agora é fail-closed e precisa ser testado com um patch quebrado DE
+# VERDADE: apontar para um diretório descartável é o único modo de provar isso
+# sem escrever no `live.db` nem no `data/conf/migrations/` da produção. É também
+# o ensaio de migration em staging antes do deploy.
+const MigrationsDirEnv : String			= "SHAMBLETA_MIGRATIONS_DIR"
+
 # Nome de slot de cosmético em `cosmetic_equip`. Entra como PARÂMETRO nas queries
 # quentes: um literal `'title'` no texto da statement tira a leitura do caminho
 # rápido de certificação (`SQLReadRules._FastCertify` não tem como separar código

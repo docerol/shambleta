@@ -46,8 +46,13 @@ func Build(accountID : int, charID : int) -> Dictionary:
 	# novo o que o jogador já coletou.
 	var anchor : int = int(Launcher.SQL.GetCharacter(charID).get("last_settled_at", 0))
 	# A vitrine segue a temporada: sem linha `active` na tabela, o companion recusa
-	# intent/preferência/sandbox do passe, então a Loja não oferece o botão.
-	var seasonActive : bool = not _eco.ActiveSeason().is_empty()
+	# intent/preferência/sandbox do passe, então a Loja não oferece o botão. As duas
+	# respostas saem da MESMA linha lida uma vez — `season_active` diz se há
+	# temporada, `activePassSku` diz qual passe ela vende (e pode ser "" com
+	# temporada no ar, quando a linha congelou regras ilegíveis).
+	var activeRow : Dictionary = _eco.ActiveSeason()
+	var seasonActive : bool = not activeRow.is_empty()
+	var activePassSku : String = SeasonConfig.PremiumSkuOfRow(activeRow)
 	return {
 		"gems" = _eco.GetGems(accountID),
 		"chests" = chestIDs,
@@ -60,7 +65,7 @@ func Build(accountID : int, charID : int) -> Dictionary:
 			"cap_hours" = OfflineSettle.CapHoursForCharacter(charID, accountID, anchor, now)},
 		"vip1_cost" = EconomyCatalog.VIP1CostGems,
 		"vip2_cost" = EconomyCatalog.VIP2CostGems,
-		"catalog" = Storefront.ShopCatalog(seasonActive),
+		"catalog" = Storefront.ShopCatalog(activePassSku),
 		"season_active" = seasonActive,
 		"starter_offer" = _eco.GetStarterOfferState(accountID),
 		"pending_grants" = _eco.GetPendingGrants(accountID),

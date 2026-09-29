@@ -1,0 +1,11 @@
+-- 060 — Índice da janela anti-dreno do vault (AUDITORIA 2026-09-27 §14)
+-- O servidor passou a recusar o N-ésimo saque dentro de `GuildVaultLimits.WindowSec`
+-- e conta essa janela no rastro durável (`WithdrawFromVault` →
+-- `_WithdrawsInWindowLocked`), porque um limitador em memória morre no restart e
+-- reconectar é a primeira coisa que um oficial modado tenta. A consulta filtra
+-- `guild_vault_log` por `account_id` + `kind` e corta por `created_at`; sem índice
+-- o SQLite varria o log inteiro, que é append-only e cresce para sempre — seria o
+-- gate mais caro da casa, pago dentro da transação que segura `settleMutex`.
+-- Ordem das colunas = igualdade, igualdade, alcance: `SEARCH ... USING INDEX` é
+-- asserido por tests/guild_vault_gate_test.gd. Formato dos índices de 041/047/051.
+CREATE INDEX IF NOT EXISTS idx_vault_log_window ON guild_vault_log(account_id, kind, created_at);

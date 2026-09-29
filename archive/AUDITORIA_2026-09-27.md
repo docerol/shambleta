@@ -71,7 +71,7 @@ inclusive no checkout `[CÓDIGO]` (`046_age_gate.sql`).
 
 **SHIPPED-MAS-INALCANÇÁVEL**: janela completa e testada do Auction House existe
 (`AuctionHouseWindow.gd`, 116 linhas) mas **nenhuma cena ou script a instancia** — o botão do HUD dá
-toast "use /ah list, /ah buy" `[CÓDIGO]` (`Gui.gd:642-644`); arena/torneio resolvem no servidor e os
+toast "use /ah list, /ah buy" `[CÓDIGO]` (`Gui.gd:87-88`, HISTÓRICO gravado no código; fechado em 2026-09-27); arena/torneio resolvem no servidor e os
 resultados caem em métodos de `Client` que não existem `[CÓDIGO]`; live events sem handler de cliente.
 
 **STUB DELIBERADO (fail-closed)**: anúncios recompensados (nonce CSPRNG server-minted pronto, portal
@@ -96,7 +96,7 @@ Fronteira de dinheiro: companion valida webhook e escreve `grant_queue`; o jogo 
 **Achados MEDIUM** `[CÓDIGO]`:
 - Disciplina transacional é convenção + detecção em runtime: dois caminhos live (reset de senha,
   `_GrantApplyAndMark`) re-travam `queryMutex` dentro de `Transaction()` — funciona hoje, e os três
-  comentários do repo discordam entre si se o mutex é recursivo (`SQL.gd:528` vs `CheckoutService.gd:175`
+  comentários do repo discordam entre si se o mutex é recursivo (`SQL.gd:658-698` vs `CheckoutService.gd:175`
   vs `IdleTests.gd:327`). A fronteira "raw-only dentro de lambda" não tem guarda estática.
 - Gate anti-god-node (`scripts/check_god_nodes.sh:23-38`) isenta exatamente os 6 maiores arquivos sem
   teto — e **todos os 6 cresceram** no ciclo em que o gate passou verde (SQL 1267→1502). O comentário
@@ -297,7 +297,7 @@ transparente, lockout de login exponencial. Os furos restantes não são de fron
   **troca de senha + revoke de tokens = takeover total**, com bônus de DoS por KDF por tentativa.
   Fix (≈1 dia): alfabetio alfanumérico ≥8, contador ≤5 tentativas com consumo do código, limite por
   conta (não por peer), resets persistidos em banco. Teste: asserting erradas invalidam entrada.
-- **P1 — autorização acoplada a build** `[CÓDIGO]` (`CommandManager.gd:35`: o gate de permissão só
+- **P1 — autorização acoplada a build** `[CÓDIGO]` (`CommandManager.gd:53`: o gate de permissão só
   roda em non-debug; produção shipa release e está protegida pelo Dockerfile, mas rodar o servidor
   do editor/fonte = qualquer jogador logado vira GM). Fix: flag de role real, não build type.
 - **P2 — enumeração de e-mail no cadastro** (`Server.gd:22-25`) — é o oráculo que alimenta o P0;
@@ -381,6 +381,17 @@ de quem fica `[COMUNIDADE]` — não há nada disso, e a confiança de vault é 
 golpe que derruba guilds em jogos-live (Throne & Liberty) `[COMUNIDADE]`.
 
 **Nota Social: 4/10.**
+
+**Fechado em 2026-09-27 (metade do vault drenável).** O `GuildWithdrawGate` existia só no cliente, e o
+cabeçalho dele dizia isso — um oficial com cliente modado nunca passava por lá. O teto por ação e a janela
+de 3 ações/5 min agora são conferidos no **servidor**, contra o rastro durável
+(`sources/economy/GuildService.gd:178`, `:194`, `:219`), com os três números numa fonte só
+(`sources/economy/GuildVaultLimits.gd:15`) e o índice que sostiene a consulta
+(`data/conf/migrations/060_vault_withdraw_gate.sql`, `idx_vault_log_window`). Prova executável:
+`tests/guild_vault_gate_test.gd` — 61 checks, 0 falhas — e o negativo que a torna régua: trocar
+`GuildVaultLimits.MaxWithdrawActionsInWindow` por `9999` em `sources/economy/GuildService.gd:194` levou
+5 checks a vermelho, incluindo o loop de dreno por chamada direta ao service. O que **não** foi fechado
+aqui é o resto da categoria: sem amigos, sem party/co-op, sem gifting, sem denúncias por botão.
 
 ---
 
@@ -541,8 +552,9 @@ Prova: `Hasher.gd:7,49`, `EmailService.gd:96-101`, throttle 1/s/peer. Correção
 Teste nova suíte I18n-par-AUTH: erradas invalidam entrada + cooldown persiste restart.
 
 ### P1-1 — Auction House sem UI / arena e eventos sem handlers de cliente
-Prova: `Gui.gd:642-644` toast; `AuctionHouseWindow.gd` só em testes; `Network.gd:551-575` cai em
-métodos inexistentes. Fix: instanciar a janela (1 dia), aba de arena, banner de live event.
+Prova: `Gui.gd:87-88` toast; `AuctionHouseWindow.gd` era janela sem chamador. **Fechado em 2026-09-27:**
+`Network.gd:616-666` é a superfície de leilão (`AuctionBuy`, `AuctionList`, `GetAuctionPage`, …) e
+`AuctionHousePanel.gd:573-595` a consome por RPC, não pelo chat. Fix restante: aba de arena, banner de live event.
 
 ### P1-2 — Zero confirmação em gasto irreversível + reason tokens cru (`F2/F3`)
 ### P1-3 — Newbie ×5 gold invertido (§4)
@@ -554,7 +566,7 @@ métodos inexistentes. Fix: instanciar a janela (1 dia), aba de arena, banner de
 ### P1-9 — `beaten` regredido no rush (§7.2, `maxi`)
 ### P1-10 — `PurchaseVIP` e reroll em duas transações (fechar numa só)
 ### P1-11 — Índice `auction_listing(seller_account)` + fatiar BackupPlayers por frame + presença O(1)
-### P1-12 — Debug-build GM bypass (`CommandManager.gd:35` desacoplar de build) + XFF atrás do proxy + enumeração no cadastro
+### P1-12 — Debug-build GM bypass (`CommandManager.gd:53` desacoplar de build) + XFF atrás do proxy + enumeração no cadastro
 
 ### P2 (curto): leaderboard/§docs drift, god-node ratchet com teto, rollback pull, staging volume
 do companion, stop_grace_period + canary documentado, offsite default-on, muted persistido,

@@ -268,6 +268,10 @@ func TestPureContract() -> void:
 # ---------------------------------------------------------------------------
 func TestDatabaseAuthorization() -> void:
 	print("-- 2) gatilho de cobertura, UPDATE negado e T2 sem T1 --")
+	# `presence_session` entra aqui como FATO DE SCHEMA (a migration 057 subiu na base
+	# que o boot migrou) e nada mais: a vida da tabela — heartbeat, TTL, poda, os três
+	# planos e os dois processos lendo o mesmo arquivo — é medida em
+	# tests/presence_fuzz.gd, não nesta lista.
 	for table in ["ledger_transaction", "ledger_daily_rollup", "ledger_compaction_cover", "ledger_compaction_run", "presence_session"]:
 		CheckEq(OneInt("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = ? AND type = 'table';", [table]), 1,
 			"tabela '%s' existe depois das migrations do boot" % table)

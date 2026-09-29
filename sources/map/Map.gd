@@ -55,14 +55,22 @@ func UnloadMapNode():
 		Entities.Clear()
 		MapUnloaded.emit()
 
+# O ramo de falha sai cedo de propósito. A reescrita mecânica que trocou
+# `assert(currentMapNode != null)` por validação em produção (`0c5cb56`) moveu o corpo
+# para DENTRO do `== null`, e o caminho feliz ficou sem adicionar o nó à árvore, sem
+# `RefreshTileMap()` (fringe nulo) e sem `MapLoaded` (fronteira da câmera nunca definida).
 func LoadMapNode(mapID : int):
 	currentMapNode = pool.LoadMapLayers(mapID)
-	currentMapID = mapID
 	if currentMapNode == null:
 		push_error("Map instance could not be created")
-		RefreshTileMap()
-		Launcher.add_child(currentMapNode)
-		MapLoaded.emit()
+		return
+	# `currentMapID` só acompanha o mapa que de pé está: `Minimap.gd:13` trata
+	# `DB.UnknownHash` como "sem mapa", e gravar um id para um mapa inexistente faria
+	# `EmplaceMapNode` sair cedo sobre o `not force` de :35 em toda tentativa seguinte.
+	currentMapID = mapID
+	RefreshTileMap()
+	Launcher.add_child(currentMapNode)
+	MapLoaded.emit()
 
 # Entity cache
 func PreloadEntity(agentRID : int, actorType : ActorCommons.Type, currentShape : int, nick : String, defaultState : ActorCommons.State):
@@ -153,7 +161,11 @@ func AddChild(child : Node2D):
 	if currentFringe == null:
 		push_error("Current fringe layer not found, could not add a new child")
 		return
-		currentFringe.add_child.call_deferred(child)
+	# SOM-IDLE (auditoria 2026-09-28): o mesmo `0c5cb56` deixou esta linha ABAIXO do
+	# `return`, e `Character.gd:113` — o único chamador — vinha pedindo uma inserção que
+	# nunca acontecia: a prévia de personagem montava a entidade sem nunca pendurá-la na
+	# franja, então o jogador via um boneco invisível na própria tela de personagem.
+	currentFringe.add_child.call_deferred(child)
 
 # Entities
 func FullUpdateEntity(agentRID : int, agentVelocity : Vector2, agentPosition : Vector2, agentOrientation : Vector2, agentState : ActorCommons.State, skillCastID : int, isRunning : bool, frameID : int):

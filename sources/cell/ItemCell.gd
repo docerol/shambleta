@@ -4,6 +4,11 @@ class_name ItemCell
 
 @export var slot : ActorCommons.Slot			= ActorCommons.Slot.NONE
 @export var tier : int							= 1
+# SOM-CRAFT: matéria-prima da forja. Estrutural, não convenção de nome — é o que
+# separa "insumo" de "equipamento" para o servidor (equipar, vender no leilão,
+# trocar e corromper olham este flag, nunca a string `name`). Matéria-prima nasce
+# `bound` (carimbo em SQL.AddItemToCharacter) e nunca atravessa caminho de trade.
+@export var material : bool						= false
 # D2-depth: classe exigida ("warden"|"rogue"|"scholar"; "" = universal).
 @export var classReq : String					= ""
 @export var textures : Array[Texture2D]			= []

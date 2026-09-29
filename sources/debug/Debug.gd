@@ -11,24 +11,29 @@ func OnPlayerEnterGame():
 	if desyncDebug:
 		if Launcher.Player == null:
 			push_error("Debug: Player is not accessible")
-			if Launcher.Player.sprite:
-				Launcher.Player.sprite.set_visible(false)
+			return
+		# SOM-IDLE (auditoria 2026-09-28): o bloco abaixo tinha ficado DENTRO do ramo de
+		# erro (`0c5cb56` inverteu o `if Launcher.Player:` do assert antigo sem
+		# desindentar), então religar `desyncDebug` crashava em `null.sprite` e não
+		# montava nenhum marcador.
+		if Launcher.Player.sprite:
+			Launcher.Player.sprite.set_visible(false)
 
-			if correctPos == null:
-				var col : ColorRect = ColorRect.new()
-				col.size = Vector2(4,4)
-				col.color = Color.GREEN
-				col.top_level = true
-				correctPos = col
-				Launcher.Player.add_child.call_deferred(col)
+		if correctPos == null:
+			var col : ColorRect = ColorRect.new()
+			col.size = Vector2(4,4)
+			col.color = Color.GREEN
+			col.top_level = true
+			correctPos = col
+			Launcher.Player.add_child.call_deferred(col)
 
-			if wrongPos == null:
-				var col : ColorRect = ColorRect.new()
-				col.size = Vector2(4,4)
-				col.color = Color.MAGENTA
-				col.top_level = true
-				wrongPos = col
-				Launcher.Player.add_child.call_deferred(col)
+		if wrongPos == null:
+			var col : ColorRect = ColorRect.new()
+			col.size = Vector2(4,4)
+			col.color = Color.MAGENTA
+			col.top_level = true
+			wrongPos = col
+			Launcher.Player.add_child.call_deferred(col)
 
 #
 func _post_launch():

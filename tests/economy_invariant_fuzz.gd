@@ -5,13 +5,21 @@ extends SceneTree
 # Uso:  godot --headless --path . -s tests/economy_invariant_fuzz.gd
 # Saída: "== FUZZ: <n> checks, <m> failures =="  (exit code = <m>)
 #
-# Duas fatias, mesmo princípio:
+# Três fatias, mesmo princípio:
 #   gemas pagas  — grant/chargeback/refund/delta sobre a carteira de wallet
 #                  (I1..I7, as invariantes que caçaram o buraco do chargeback §8);
 #   mercado      — I8..I13 sobre a mesa de leilão depois da migração 059: anúncio
 #                  (escrow de ITEM + taxa em GEMA), ordem de compra (escrow de
 #                  OURO), compra a ask, fill parcial de bid, cancelamento dos dois
 #                  lados. É onde o ouro muda de dono sem passar pela loja.
+#   faucet/sink  — FS1..FS12 sobre uma trajetória LONGA de 29 famílias de operação
+#                  (settle, loja, forja, leilão, IAP, guilda, copa, troca, anúncio,
+#                  quest, streak, GM): soma o que CRIA moeda contra o que DESTRÓI,
+#                  POR MOEDA, com transferências e linhas de amount 0 nomeadas à
+#                  parte, e confere o líquido contra o que EXISTE no banco (carteiras
+#                  + custódia). Nenhuma régua acima vê um faucet que minte sem linha
+#                  nem um sink que queima sem débito: por conta, os dois têm sinais
+#                  opostos e se cancelam na soma.
 #
 # Por que existe: os harnesses deste repo são todos de CASO — cada um encena uma
 # sequência que alguém pensou antes de escrever (grant → chargeback → refund). O
@@ -43,6 +51,46 @@ const AHChars : int = 4
 const AHOps : int = 700
 const AHGoldEach : int = 40000
 const AHItemsEach : int = 60
+
+# ------------------------------------------------------------------ fatia faucet/sink
+# Trajetória LONGA de propósito: a régua é uma SOMA, e soma só significa alguma
+# coisa quando passa por muitos caminhos diferentes do mesmo ledger. As 29 famílias
+# abaixo são as que mexem em ouro ou gema no produto (fatia 060 do ROADMAP_COMERCIAL).
+const FSAccounts : int = 6
+const FSOps : int = 2600
+const FSWideEvery : int = 40
+const FSGoldEach : int = 400000
+const FSGemsEach : int = 150000
+const FSMatUnits : int = 720
+const FSEquipUnits : int = 90
+const FSTradeUnits : int = 24
+# Peso de cada família na trajetória (a tabela cumulativa é montada em runtime).
+const FSOpNames : PackedStringArray = [
+	"settle", "vendor", "salvage", "corrupt", "craft", "chest_buy", "daily_reroll",
+	"daily_offer", "vip", "boss_key", "guild", "copa", "ah_list", "ah_order",
+	"ah_cancel_order", "ah_cancel_listing", "ah_ask", "iap_grant", "gold_grant",
+	"chargeback", "process", "refund", "gm_delta", "troca", "anuncio", "quest",
+	"streak", "abrir_bau", "creator_round"]
+const FSOpWeights : PackedInt32Array = [
+	4, 3, 2, 2, 2, 3, 2, 2, 1, 2, 1, 1, 4, 4, 2, 1, 3, 4, 2, 3, 4, 2, 3, 1, 1, 1,
+	1, 1, 2]
+# Raízes de reason que NÃO criam nem destroem moeda: movem ouro entre contas
+# (`ah_buy`/`ah_sell`/`ah_creator_fee`, que fecham o ciclo do anúncio em soma zero)
+# ou entre carteira e custódia (`ah_bid_escrow`/`ah_bid_release`). A lista é a do
+# leilão e SÓ ela: as taxas do mesmo leilão (`ah_list_fee`, `ah_slot`,
+# `ah_highlight_fee`) são queima de gema, não transferência, e ficam no sink.
+const FSTransferRoots : PackedStringArray = [
+	"ah_buy", "ah_sell", "ah_creator_fee", "ah_bid_escrow", "ah_bid_release"]
+# amount == 0 é linha legítima em dois lugares e NEUTRA em nenhum dos dois lados da
+# régua: `clawback` de um payment cujo débito já foi consumido, e `ah_creator_fee`
+# de um anúncio barato (fee = roundi(1% × preço) arredonda para 0 abaixo de 50).
+# São contadas e nomeadas; nunca somadas em created nem destroyed.
+const FSZeroRoots : PackedStringArray = ["clawback", "ah_creator_fee", "fs_nc_zero"]
+# Moeda é {gold, gems}. Todo o resto é subproduto do ledger. Se um kind NOVO
+# aparecer na população, FS7 falha e alguém tem que dizer em voz alta se ele é
+# moeda — régua que ignora kind desconhecido é régua que deixa vazar.
+const FSNonCurrencyKinds : PackedStringArray = [
+	"item", "xp", "essence", "boss_key", "cosmetic", "vip", "pass", "pass_pt"]
 
 var checks : int = 0
 var failures : int = 0

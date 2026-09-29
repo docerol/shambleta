@@ -14,9 +14,10 @@ extends SceneTree
 #     devolve FALSE em run headless `-s` (confirmei: 182 classes GDScript vivem em
 #     `ProjectSettings.get_global_class_list()`, não no ClassDB nativo). A suíte B
 #     daqui refaz os três fatos com a régua certa e passa a cobrá-los.
-#  C) PORTÃO SEM CHAMADOR. `scripts/test.sh:240-244` explica por escrito que um
-#     gate não chamado é régua sem efeito — e foi exatamente isso que aconteceu com
-#     `check_doc_drift.sh` e `check_compose.sh` (42 checks verdes, zero chamadores).
+#  C) PORTÃO SEM CHAMADOR. O motivo escrito de `check_secrets.sh`
+#     (`scripts/test.sh:516-527`) diz exatamente isto: um gate não chamado é régua
+#     sem efeito — e foi isso que aconteceu com `check_doc_drift.sh` e
+#     `check_compose.sh` (42 checks verdes, zero chamadores).
 #     Esta suíte torna a frase verificável nos dois sentidos: todo `scripts/*.sh` e
 #     todo `tests/*.gd` tem de ser alcançável por um de três caminhos DECLARADOS
 #     (glob de descoberta, chamada nominal no runner/CI, ferramenta de mão com
@@ -359,14 +360,40 @@ func _suiteReachability() -> void:
 			ghosts += 1
 			print("  [FAIL] EXPLICIT_HARNESSES cita tests/%s.gd, que não existe" % entry)
 	CheckEq(ghosts, 0, "nenhuma entrada de EXPLICIT_HARNESSES aponta para harness inexistente")
-	# Os quatro gates de estrutura, na função e não duplicados fora dela.
+	# Os gates de estrutura, na função e não duplicados fora dela. A régua é pelos
+	# NOMES nos dois sentidos: só contar deixava o vermelho mudo — quando
+	# check_ci.sh entrou no runner, o que se lia era "got 5, want 4" sem dizer o
+	# quinto, e quem conserta adivinha.
 	var sg : String = _fnBody(runner, "structure_gates")
-	var gates : Array = ["check_god_nodes.sh", "check_doc_drift.sh", "check_compose.sh", "check_secrets.sh"]
-	CheckEq(sg.count("gate_sh"), gates.size(), "structure_gates() chama exatamente %d gates" % gates.size())
+	var gates : Array = ["check_god_nodes.sh", "check_doc_drift.sh", "check_compose.sh", "check_secrets.sh", "check_ci.sh", "check_dead_code.sh", "check_untracked.sh", "check_gate_log.sh", "check_boot_sandbox.sh"]
+	var calledGates : Array = []
 	for g in gates:
-		Check(sg.contains(g), "structure_gates() chama %s" % g)
-	var sgLines : int = sg.split("\n", false).size()
-	Check(sgLines >= gates.size() and sgLines <= 12, "structure_gates() continua curta (%d linhas) — gate novo se liga aqui, não duplicando o laço" % sgLines)
+		if not sg.contains(g):
+			print("  [FAIL] structure_gates() não chama %s — gate existe em scripts/ e ninguém roda" % g)
+	var strays : Array = []
+	for token in sg.split("\n", false):
+		var t : String = str(token).strip_edges()
+		# Só a linha de registro é prova de que o gate roda. O corpo tem a prosa que
+		# explica por que cada gate entrou, e essa prosa cita nomes de script: varrer
+		# comentário como se fosse chamada inventa gate — foi assim que `ci_gate_log.sh`, o
+		# LEITOR do veredito, saiu desta régua listado como se fosse um gate.
+		if t.is_empty() or t.begins_with("#"):
+			continue
+		if not t.begins_with("gate_sh") and not t.ends_with("{"):
+			strays.append(t)
+		var script : String = _between(t + " ", "scripts/", ".sh")
+		if not script.is_empty() and not calledGates.has(script + ".sh"):
+			calledGates.append(script + ".sh")
+	for found in calledGates:
+		if not gates.has(found):
+			print("  [FAIL] structure_gates() chama %s, que não está na lista declarada deste harness" % found)
+	CheckEq(calledGates.size(), gates.size(), "structure_gates() chama exatamente os %d gates declarados (medido: %d — %s)" % [gates.size(), calledGates.size(), ", ".join(PackedStringArray(calledGates))])
+	# Toda linha de código do corpo é uma chamada gate_sh. O teto antigo media TEXTO
+	# e acusava quem escrevia o motivo dentro da função — exatamente o que a casa pede
+	# — enquanto deixava passar uma segunda forma de ligar gate. Aqui a FORMA é
+	# vigiada pelo nome, e o cabeçalho `nome() {` fica fora porque não é trabalho.
+	# Régua que pune prosa e perdoa duplicação é o inverso do que se quer.
+	CheckEq(strays.size(), 0, "structure_gates(): toda linha de código é uma chamada gate_sh (%d fora da forma: %s — gate novo se liga aqui, não duplicando o laço)" % [strays.size(), ", ".join(PackedStringArray(strays))])
 	suitesDone += 1
 
 func _fnBody(source : String, fnName : String) -> String:
@@ -393,16 +420,14 @@ func _fnBody(source : String, fnName : String) -> String:
 # lista existir: quem encosta escreve porquê, um TERCEIRO na cerca só passa depois
 # de entrada nova com motivo, e entrada que apodrece (arquivo saiu da banda) é
 # FAIL. Sem refatoração estética nesta rodada (decisão de escopo, não de gosto).
-const NEAR_FENCE : Array = [
-	{
-		"path": "sources/gui/Gui.gd",
-		"reason": "800/800 no fim da rodada do juiz (2026-09-27): o gate mede '> teto', então parar exatamente no teto passa sem dizer nada. Não refatorei por decisão de escopo — outro agente mexia no teto nesta mesma rodada. A correção é fatiar na próxima; levantar MAX_LINES não é.",
-	},
-	{
-		"path": "sources/gui/Gui.gd",
-		"reason": "800/800 no fim da rodada do juiz (2026-09-27): o gate mede '> teto', então parar exatamente no teto passa sem dizer nada. Não refatorei por decisão de escopo — outro agente mexia no teto nesta mesma rodada. A correção é fatiar na próxima; levantar MAX_LINES não é.",
-	},
-]
+#
+# 2026-09-27, rodada do fatiamento do `Gui`: a entrada de `sources/gui/Gui.gd`
+# (800/800) saiu daqui porque o arquivo saiu da banda — 608 linhas em seis módulos
+# irmãos (`GuiStateScreens`, `GuiCharacterHub`, `GuiNoticeRules`, `GuiHudTargets`,
+# `GuiSandboxFlows`, `GuiUiScale`). `MAX_LINES` não foi tocado: o teto continua
+# 800, e a lista vazia é o estado verde que esta suíte cobra de quem fatiou
+# (motivo velho é allowlist podre).
+const NEAR_FENCE : Array = []
 
 func _suiteCeiling() -> void:
 	print("-- D) folga contra o teto: medir é mais barato que brigar na cerca")

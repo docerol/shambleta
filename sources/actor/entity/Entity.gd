@@ -90,9 +90,16 @@ func Cast(skillID : int):
 		return null
 
 	var skill : SkillCell = DB.SkillsDB[skillID]
+	# SOM-IDLE (auditoria 2026-09-28): `0c5cb56` trocou `assert(skill != null)` +
+	# `if skill == null or not skill.usable:` por um guard só de nulidade e deixou o
+	# `return` antigo como código morto embaixo. O portão de `usable` caiu daqui, que é o
+	# clique manual, enquanto `IdlePolicy.gd:577` e `actor/Inventory.gd:152` continuaram
+	# checando: as duas metades do jogo passaram a divergir sobre a mesma célula.
 	if skill == null:
-		push_error("Skill ID is not found, can't cast it")
+		push_error("Skill ID %x has no cell, can't cast it" % skillID)
 		return null
+	if not skill.usable:
+		push_error("Skill ID %x is not usable, can't cast it" % skillID)
 		return null
 
 	var targetRID : int = 0

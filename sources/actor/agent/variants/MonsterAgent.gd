@@ -9,28 +9,35 @@ var idleBossIndex : int = -1
 #
 static func GetActorType() -> ActorCommons.Type: return ActorCommons.Type.MONSTER
 
-func IsDropCell(cell : ItemCell) -> bool:
-	if cell:
-		for dropCell in data._drops:
-			if dropCell and dropCell.id == cell.id and dropCell.customfield == cell.customfield:
-				return true
-	return false
-
 func Killed():
 	super.Killed()
 	Formula.ApplyXp(self)
-
-	# Iterate from last to first to keep idx linear even with dropped items
-	for idx in range(inventory.items.size() - 1, -1, -1):
-		var item : Item = inventory.items[idx]
-		if item:
-			var cell : ItemCell = DB.GetItem(item.cellID, item.cellCustomfield)
-			if IsDropCell(cell):
-				inventory.DropItem(cell, item.count, idx)
+	_RollDrops()
 
 	var inst : WorldInstance = WorldAgent.GetInstanceFromAgent(self)
 	if inst and inst.timers:
 		Callback.SelfDestructTimer(inst.timers, ActorCommons.DeathDelay, WorldAgent.RemoveAgent, [self])
+
+# `EntityData._drops` é mesa de PROBABILIDADE por unidade — Salt Slime → Apple
+# 0.7 (70% de uma maçã por kill), Sand Snake → pele 0.05, chave de boss 1.0
+# (sempre). O roll acontece NA MORTE, um `randf()` por célula por kill — como o
+# drop de chave ao vivo (`Formula.gd:226`). No desenho antigo a mesa era rolada no
+# `AIAgent.SetData` e o resultado ficava guardado no inventário do mob, varrido
+# para o chão aqui; medido hoje A/B contra `HEAD` no mesmo harness, os dois
+# caminhos dão a mesma taxa (8 drops em 12 kills lá, 7 aqui, esperado 8.4), então
+# isto NÃO conserta um mob que não derrubava nada — move o roll para o evento que
+# a mesa descreve. A diferença é o resto: no caminho do spawn a quantidade
+# derrubada era `item.count` (estado da pilha do mob) em vez da mesa, e o mob
+# vivo passava a sessão segurando loot que ninguém ganhou. A régua (3) de
+# `SuiteIdleLootPipeline` trava isso; DROP_DELAY/NO_DROP do mapa são carga do
+# `WorldDrop.PushDrop`.
+func _RollDrops():
+	for cell : ItemCell in data._drops:
+		if cell == null:
+			continue
+		var chance : float = float(data._drops[cell])
+		if chance > 0.0 and randf() < chance:
+			WorldDrop.PushDrop(Item.new(cell, 1), self)
 
 func _ready():
 	inventory = ActorInventory.new(self)

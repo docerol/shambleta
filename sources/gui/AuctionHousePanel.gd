@@ -682,7 +682,7 @@ func _selected_sell_item() -> int:
 		return 0
 	return int(_sellItems[idx])
 
-# Vende-se o que está no inventário (mesma fonte do Altar em Activities.gd:173).
+# Vende-se o que está no inventário (mesma fonte do Altar em Activities.gd:193).
 func _populate_sell_items() -> void:
 	if _sellOption == null:
 		return

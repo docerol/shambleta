@@ -96,5 +96,9 @@ func _on_button_pressed():
 func _ready():
 	if content == null or content.material == null or items == null:
 		push_error("Menu Indicator nodes are not set correctly")
+		# SOM-IDLE (auditoria 2026-09-28): o guard não tinha `return` — o `assert` antigo
+		# parava ali em debug, e a versão reescrita (`0c5cb56`) só logava e caía na
+		# dereferência seguinte, que é justamente o que ele jurava prevenir.
+		return
 	content.material.set_shader_parameter("progress", 0.0)
 	items.set_visible(false)

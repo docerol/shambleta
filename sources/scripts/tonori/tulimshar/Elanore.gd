@@ -95,10 +95,38 @@ func OnMainChoice():
 		Choice("About those ingredients...", OnPotionQuestReminder)
 	else:
 		Choice("Can I help you with anything?", OnHelpWithPotions)
+	Choice("Can you teach me a skill?", OnSkillTraining)
 	Choice("What is Kaore?", OnExplainKaore)
 	Choice("Who are you?", OnExplainSelf)
 	if GetQuest(ProgressCommons.Quest.TUTORIAL) >= ProgressCommons.TUTORIAL.ELANORE_DONE:
 		Choice("Thank you again but I have to leave", Farewell)
+
+# ONDA 3b-A (juiz cego 2026-09-27, "nada no jogo ensina skill a ninguém"): Elanore é
+# a Kahwe que dá o tutorial (`presets/quests/Tutorial.tres`, giver = "Elanore"), então
+# todo personagem novo passa por ela. Este ramo é o caminho sem comando de depurador
+# para as lições: a tabela vive em `SkillOrigins` (`sources/skill/SkillOrigins.gd`) e
+# a decisão de quem pode receber está em `SkillTrainer`. Nada aqui lista skill à mão —
+# tirar a origem da tabela tira a lição do diálogo, e o harness
+# `tests/skill_content_reach_test.gd` fica vermelho nas duas pontas.
+func OnSkillTraining():
+	var offerings : Array = SkillTrainer.Offerings(own)
+	if offerings.is_empty():
+		Mes("The forms of the Kaumatua are not opened by coin, and not yet by your strength.")
+		var hint : String = SkillTrainer.NextHint(own)
+		if not hint.is_empty():
+			Mes(hint)
+		OnMainChoice()
+		return
+	Mes("I can teach you the old forms. Each one opens at a level, not in a shop.")
+	for row in offerings:
+		var skillName : String = str((row as Dictionary).get("skill", ""))
+		Choice("Teach me %s." % skillName, TeachLesson.bind(skillName))
+	Choice("Not today.", OnMainChoice)
+
+func TeachLesson(skillName : String):
+	var result : Dictionary = SkillTrainer.Teach(self, skillName)
+	Mes(str(result.get("message", "I cannot teach that form to you.")))
+	OnMainChoice()
 
 # Help with potions
 func OnHelpWithPotions():

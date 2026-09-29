@@ -7,13 +7,14 @@ ser citado no código (§4.1.1, §4.1.2, §4.1.3) sem existir no repositório.
 
 ## §4.1.1 — Banda de pacing em tempo real
 
-Piso honesto **30 kills/h**, teto de sanidade **200 kills/h** (gate de teste
-automatizado, `tests/IdleTests.gd`). Medido saudável nesta máquina de
-referência: ~80 kills/h standalone na zona 1 (mundo limpo), 36–48 kills/h em
-suíte completa sob carga concorrente. Ver `som-idle-docs/D1_GATE_REPORT.md`
-para o histórico completo da recalibração (o piso antigo de 60/h nunca
-passou nem no commit que o definiu; causa raiz era um bug de dois relógios,
-não uma mudança de pacing real — corrigido, ver `TECH_SPEC_CORE.md §3`).
+Piso honesto **30 kills/h**, teto de sanidade **320 kills/h** (gate de teste
+automatizado, `tests/IdleTests.gd::SuiteIdlePolicyRealTime`). Medido nesta máquina
+de referência, zona 1 com personagem L1 novo, 300 s de clock de jogo a 1×:
+**252 e 240 kills/h** em duas corridas standalone (2026-09-27, depois do fix que
+devolve o farmer à vida quando um mob o derruba — antes do fix as leituras eram
+36–80 kills/h porque o personagem morria e virava estátua pelo resto da sessão;
+a regressão agora é caçada por `tests/IdleTests.gd::SuiteIdleDeathRevive`, que exige
+kill DEPOIS de morrer, não pelo piso da banda).
 
 Esta é a banda **medida no clock de jogo**, após a correção do bug de dois
 relógios. Qualquer relato de taxa fora dessa banda deve ser tratado como
@@ -22,17 +23,19 @@ causa primeiro.
 
 ## §4.1.2 — Curva por zona
 
-24 zonas de farm reais (`ZONE_COUNT = 24`), agrupadas em 8 tiers de 3 zonas
-cada (`ZonesPerTier = 3`, `MAX_TIER = 8`). Fórmulas, para zona `z` (1-indexed):
+27 zonas de farm reais (`ZONE_COUNT = 27`), agrupadas em 9 tiers de 3 zonas
+cada (`ZonesPerTier = 3`, `MAX_TIER = 9`). As 3 últimas (25-27) entraram em
+2026-09-27 com mapas reais e roster próprio — ver o cabeçalho de
+`sources/idle/FarmZoneData.gd`. Fórmulas, para zona `z` (1-indexed):
 
-| Grandeza | Fórmula | Zona 1 | Zona 24 |
-|---|---|---|---|
-| Tier | `ceil(z / 3)`, limitado a `[1, 8]` | 1 | 8 |
-| XP por kill | `round(1200 × 1.25^(z-1))` | 1200 | ≈ 209 232 |
-| Ouro por kill | `round(xpPerKill / 8)` | 150 | ≈ 26 154 |
-| Par (kills/h) | `round(3600 / (24 + 0,9×(z-1)))` | 150/h | ≈ 96/h |
-| Ouro/h (par) | `parKillsPorHora × ouroPorKill` | 22 500 | ≈ 2 511 000 |
-| Poder mínimo | `24 + 8×(z-1)` | 24 | 208 |
+| Grandeza | Fórmula | Zona 1 | Zona 24 | Zona 27 |
+|---|---|---|---|---|
+| Tier | `ceil(z / 3)`, limitado a `[1, 9]` | 1 | 8 | 9 |
+| XP por kill | `round(1200 × 1.25^(z-1))` | 1 200 | 203 288 | 397 047 |
+| Ouro por kill | `round(xpPerKill / 8)` | 150 | 25 411 | 49 631 |
+| Par (kills/h) | `round(3600 / (24 + 0,9×(z-1)))` | 150/h | 81/h | 76/h |
+| Ouro/h (par) | `parKillsPorHora × ouroPorKill` | 22 500 | 2 058 291 | 3 771 956 |
+| Poder mínimo | `24 + 8×(z-1)` | 24 | 208 | 232 |
 
 Notas de calibração:
 - A curva de XP é geométrica (crescimento de **25% por zona**), a de par é

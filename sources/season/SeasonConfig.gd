@@ -51,6 +51,13 @@ const SeasonsFileEnv : String		= "SHAMBLETA_SEASONS_FILE"
 const DaySeconds : int				= 86400
 const DefaultDurationDays : int		= 30
 const ConfigIDKey : String			= "config_id"
+# O passe de uma temporada que NÃO declara `premium_sku`. Toda linha anterior ao
+# OPS-2 (e toda temporada aberta por `/season create <dias>`) chega aqui sem o
+# campo, e o que ela vendia era o passe do catálogo — por isso o default é o SKU
+# cobrado por `data/conf/paid_catalog.json`, não um SKU inventado. É o literal que
+# `DEFAULT_PREMIUM_SKU` repete no companion (Python não lê este arquivo), e
+# `tests/pass_season_alignment_test.gd` amarra os dois textos.
+const DefaultPremiumSku : String	= "pass.s1"
 # O consumidor é o relógio de temporada (5 min) e o claim do passe — nunca o
 # frame de render. TTL curto o bastante para "editei o arquivo, o próximo tick já
 # viu", longo o bastante para não reler JSON a cada claim.
@@ -503,6 +510,50 @@ static func NextScheduledStart(entries : Array, ts : int) -> int:
 	return next
 
 # ------------------------------------------------------------------ passe por temporada
+
+# O SKU base do passe que ESTA temporada vende (`pass.s2` → premium; o deluxe é
+# derivado por convenção de nome, `pass.s2.deluxe`, e só existe se o catálogo o
+# declarar). Entrada sem o campo é linha legada → `DefaultPremiumSku`. O validador
+# de boot já recusa temporada com SKU que ninguém cobra (`_SkuAdvertised`), então
+# o que aqui é decisão é só o "não declarado", nunca o "inventado".
+static func PremiumSku(entry : Dictionary) -> String:
+	if not entry.has("premium_sku"):
+		return DefaultPremiumSku
+	return str(entry["premium_sku"])
+
+# O passe de uma LINHA de temporada, na ordem de autoridade: o que a própria linha
+# congelou em `rules_frozen` (prova auditável, e é ela que sobrevive a alguém
+# quebrar o calendário depois da abertura), senão a entrada que a linha resolve no
+# calendário, senão o default do catálogo. `""` = nada a vender: linha vazia ou
+# `rules_frozen` que não parseia — ninguém sabe de que temporada é o passe, e
+# vender um passe não atribuído é cobrar sem poder entregar.
+static func PremiumSkuOfRow(row : Dictionary) -> String:
+	if row.is_empty():
+		return ""
+	var raw : String = str(row.get("rules_frozen", "")).strip_edges()
+	if raw.is_empty():
+		return PremiumSku(EntryForSeasonRow(Entries(), row))
+	# `parse()` e não `parse_string()`: o texto pode ser lixo de propósito (linha
+	# escrita por migration antiga, operador no SQL), e a recusa é o veredito — um
+	# `ERROR:` impresso a cada intent de passe seria o preço de um caminho que já
+	# era para ser silencioso.
+	var json : JSON = JSON.new()
+	if json.parse(raw) != OK or not (json.data is Dictionary):
+		return ""
+	var frozen : Dictionary = json.data
+	if frozen.has("premium_sku"):
+		# Chave presente e ilegível (null, número, texto vazio) é recusa, não
+		# default nem chute: `str(null)` devolveria "<null>" e a vitrine anunciaria
+		# um SKU que ninguém declarou — `GetCheckoutIntent` cairia em `unknown_sku`
+		# depois de o companion ter cobrado. A mesma régua do JSON que não parseia:
+		# sem passe legível, `""` = nada à venda. O companion recusa os três casos
+		# com `season_rules_unreadable`, e `tests/pass_season_alignment_test.gd`
+		# amarra as duas camadas.
+		var declared : Variant = frozen["premium_sku"]
+		if not (declared is String) or String(declared).strip_edges().is_empty():
+			return ""
+		return String(declared).strip_edges()
+	return PremiumSku(EntryForSeasonRow(Entries(), row))
 
 # Só as TRILHAS são dado da temporada. A curva de PT (`PassThresholds`), o custo
 # do skip e o valor das missões continuam no catálogo: a régua é uma regra só

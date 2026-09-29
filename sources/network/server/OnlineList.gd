@@ -4,13 +4,21 @@ class_name OnlineList
 #
 const JSONFileName : String				= "online.json"
 
-# SOM-IDLE social (auditoria 2026-09-27 §SOCIAL "presença barata"): índice de
-# presença em memória keyed por nick, atualizado incrementalmente nos mesmos dois
-# eventos que já disparam o push global. Sem isto, "fulano da guild está online?"
-# exigia varrer Peers.peers e reconstruir o array inteiro por membro — O(membros ×
-# online). Com o dicionário, a consulta é O(1) e o painel de guild responde por
-# linha sem varredura. É estado de processo: nasce vazio no boot e se preenche na
-# primeira leva de conexões (OnPlayerConnected é chamado pelo fluxo de login).
+# SOM-IDLE social (auditoria 2026-09-27 §SOCIAL "presença barata") + a metade quente
+# da presença em dois níveis do §12: índice em memória keyed por nick, atualizado
+# incrementalmente nos mesmos dois eventos que já disparam o push global. Sem isto,
+# "fulano da guild está online?" exigia varrer Peers.peers e reconstruir o array
+# inteiro por membro — O(membros × online). Com o dicionário, a consulta é O(1) e o
+# painel de guild responde por linha sem varredura.
+#
+# Este índice é a metade quente, e continua incompleto por construção: nasce
+# vazio no boot e só conhece os personagens que conectaram NESTE processo. A outra
+# metade é `Presence` (sources/network/server/Presence.gd) sobre `presence_session`
+# (migration 057) — endereçada por personagem, vencida por TTL e legível por um
+# segundo servidor. Quem precisa de latência lê `byNick`; quem precisa da população
+# inteira lê `Presence.QueryOnline`/`Presence.IsOnlineDurable`. As duas metades
+# concordam no mesmo instante e a divergência honesta (memória online, durável
+# vencida) é medida em tests/presence_fuzz.gd.
 static var byNick : Dictionary[String, bool] = {}
 
 #

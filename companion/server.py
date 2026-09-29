@@ -54,9 +54,10 @@ corpo do arquivo). Tables da migration 052 (push_subscription / push_outbox):
     python3 companion/server.py --db live.db --push-drain          # drena
     python3 companion/server.py --db live.db --push-notify --account 7 \
         --title T --body B                                          # enfileira+drena
-POST /push/test (interno: exige SHAMBLETA_PUSH_ADMIN_TOKEN; o nginx NÃO
-proxya /push/) drena a fila com o sender plugável SHAMBLETA_PUSH_SENDER
-(default "vapid"). O sender VAPID existe de verdade — `companion/push_vapid.py`
+POST /push/test (interno: exige SHAMBLETA_PUSH_ADMIN_TOKEN; dos caminhos `/push`
+o nginx do serviço web proxya só `GET /push/vapid`, nunca a fila) drena com o
+sender de `SHAMBLETA_PUSH_SENDER` (default "vapid"). O sender VAPID existe de
+verdade — `companion/push_vapid.py`
 assina o assertion ES256 da RFC 8292 e cifra o corpo em aes128gcm (RFC 8291),
 tudo na stdlib. Ele só NÃO roda sem segredo: sem SHAMBLETA_VAPID_PRIVATE_KEY
 configurado levanta NotImplementedError e a fila grava 'vapid_sender_unimplemented'
@@ -78,6 +79,8 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+try: import ad_ssv  # SSV de ads: companion/ad_ssv.py (rota /webhooks/ads)
+except ImportError: ad_ssv = None  # sem o módulo, a rota 503: nunca crédito
 
 KINDS = ("gems", "gold", "vip_days", "pass_premium", "cosmetic")
 DAY = 86400
@@ -110,6 +113,14 @@ DAY = 86400
 # leitores" do preço: o jogo valida o bloco contra os consts de `NetworkCommons`
 # no boot (`EconomyCatalog.ValidatePaidCatalog`) e na suíte, então bumpar
 # `AgreementTosVersion` sem bumpar o arquivo é erro de boot, não porta aberta.
+#
+# Passe de uma temporada que não congela `premium_sku` na própria linha. Espelho
+# do `SeasonConfig.DefaultPremiumSku` do jogo: aqui não há segunda opinião nem
+# segunda aritmética — o companion não lê o calendário de temporadas (no container
+# ele não tem o arquivo), então o que ele sabe é o que a LINHA diz, mais este
+# fallback. `tests/pass_season_alignment_test.gd` amarra os dois literais.
+DEFAULT_PREMIUM_SKU = "pass.s1"
+
 DEFAULT_CATALOG = {
     "_agreements": {"tos": "2026-09-c", "privacy": "2026-09-b", "age": "2026-09-a"},
     "gems.550":   {"kind": "gems",     "amount": 550,   "currency": "BRL", "price": 19.90},
@@ -123,6 +134,10 @@ DEFAULT_CATALOG = {
     # no doc, dono confirma). O tier viaja no payload p/ o grant aplicar.
     "pass.s1.deluxe": {"kind": "pass_premium", "amount": 1, "currency": "BRL", "price": 44.90,
                        "tier": "deluxe"},
+    # OPS-2: premium da S2, a temporada agendada em data/conf/seasons.json. Mesmo
+    # kind e mesma tarifa do passe padrão — o gate da vitrine (Storefront.PassSkus
+    # no jogo) e a suíte de catálogo amarram os três espelhos deste dict.
+    "pass.s2":    {"kind": "pass_premium", "amount": 1, "currency": "BRL", "price": 24.90},
     # Fase F (doação, MONETIZATION §1 item 12): Pix direto com contrapartida
     # cosmética mínima (título Apoiador, sem poder).
     "donate.support": {"kind": "cosmetic", "amount": 1, "currency": "BRL", "price": 4.90,
@@ -242,7 +257,6 @@ def alert(message, level="warn"):
     threading.Thread(target=_send, daemon=True).start()
 
 
-
 def resolve_grant(catalog, sku, claimed_amount=None):
     """Devolve (kind, authoritative_amount). Nunca usa claimed_amount como fonte
     de verdade — só como cross-check (CDC: preço anunciado = preço cobrado).
@@ -315,7 +329,19 @@ def season_offer_status(con, catalog, sku, now=None):
     `ends_at > agora` é o que impede vender um passe de temporada vencida nos
     minutos antes do relógio de temporada fechá-la. Tabela ausente (banco sem a
     migração de temporada) conta como indisponível: se não há tabela, não há
-    temporada."""
+    temporada.
+
+    A segunda pergunta, que até aqui não era feita: de QUE temporada é este
+    passe? Com `pass.s1` e `pass.s2` nos catálogos, a resposta anterior era
+    "qualquer um, enquanto houver linha ativa" — ou seja, na abertura da S2 o
+    companion continuava cobrando o passe da temporada encerrada, e o grant
+    escrevia premium na temporada nova. O SKU legível mora na LINHA
+    (`rules_frozen.premium_sku`, congelado pelo jogo na abertura): é ela que o
+    companion lê, pela mesma ordem de autoridade do `SeasonConfig.PremiumSkuOfRow`
+    do servidor. Linha legada sem o campo vende o passe do catálogo
+    (`DEFAULT_PREMIUM_SKU`); `rules_frozen` que não parseia é recusa
+    (`season_rules_unreadable`), não chute — ninguém pode cobrar um passe cuja
+    temporada não sabe dizer qual é."""
     if now is None:
         now = int(time.time())
     entry = catalog.get(sku) or {}
@@ -323,13 +349,131 @@ def season_offer_status(con, catalog, sku, now=None):
         return {"eligible": True, "reason": "not_season_bound", "season_id": 0}
     try:
         row = con.execute(
-            "SELECT season_id FROM season WHERE status = 'active' AND ends_at > ? "
-            "ORDER BY season_id DESC LIMIT 1;", (now,)).fetchone()
+            "SELECT season_id, rules_frozen FROM season WHERE status = 'active' "
+            "AND ends_at > ? ORDER BY season_id DESC LIMIT 1;", (now,)).fetchone()
     except sqlite3.Error:
         row = None
     if row is None:
         return {"eligible": False, "reason": "no_active_season", "season_id": 0}
-    return {"eligible": True, "reason": "ok", "season_id": row[0]}
+    season_id = row[0]
+    declared = DEFAULT_PREMIUM_SKU
+    frozen = str(row[1] or "").strip()
+    if frozen:
+        try:
+            parsed = json.loads(frozen)
+        except (ValueError, TypeError):
+            parsed = None
+        if not isinstance(parsed, dict):
+            return {"eligible": False, "reason": "season_rules_unreadable",
+                    "season_id": season_id}
+        if "premium_sku" in parsed:
+            value = parsed["premium_sku"]
+            # Chave PRESENTE e ilegível (null, número, texto vazio) é recusa, não
+            # default: `str(None)` daria "None" e a linha venderia um SKU inventado.
+            # É a mesma régua do JSON que não parseia — e do `PremiumSkuOfRow` do
+            # servidor, que devolve "" (nada à venda) para os mesmos três casos.
+            if not isinstance(value, str) or not value.strip():
+                return {"eligible": False, "reason": "season_rules_unreadable",
+                        "season_id": season_id}
+            declared = value.strip()
+    if sku not in (declared, declared + ".deluxe"):
+        return {"eligible": False, "reason": "season_mismatch",
+                "season_id": season_id, "premium_sku": declared}
+    return {"eligible": True, "reason": "ok", "season_id": season_id,
+            "premium_sku": declared}
+
+
+def public_catalog(catalog, con):
+    """O corpo de `GET /catalog`: display de preço, com a temporada marcada.
+
+    A porta que RECUSA é o `season_offer_status` no checkout; esta função só conta
+    a mesma régua para a página. Sem isso a vitrine anuncia `pass.s1` enquanto a
+    temporada em vigor congelou `pass.s2`, e o clique do jogador termina num 409
+    `season_mismatch` — na frente do dinheiro, 409 não é erro de usuário, é a página
+    mentindo. Cada `pass_premium` sai com `season_eligible` (e `season_id` quando é
+    elegível, `season_reason` quando não é); quando o motivo é `season_mismatch` sai
+    também `season_premium_sku`, que é o único caso em que a página tem como corrigir
+    o botão sozinha — nas recusas por temporada ilegível ou inexistente não há SKU
+    certo para oferecer, e inventar um seria a mesma mentira com outra roupa. Os
+    outros SKUs continuam intactos.
+
+    A contagem NÃO muda: nenhum item some do display de preço. Esconder o passe da
+    temporada errada seria esconder informação de preço, e a régua D5 de
+    `companion/test_security.py` existe exatamente para proibir sumiço silencioso.
+
+    `con` pode ser `None` (banco indisponível): aí todo passe sai ineligible com
+    `store_unavailable`, o mesmo fail-closed do gate — sem temporada confirmada não
+    há botão de compra honesto para oferecer.
+    """
+    pub = {}
+    for sku, entry in catalog.items():
+        if sku.startswith("_"):
+            continue  # declaração/comentário do arquivo, não item de loja
+        pub[sku] = {k: entry[k] for k in
+                    ("kind", "contents", "currency", "price", "one_time",
+                     "max_account_age", "title", "tier", "cosmetic_id")
+                    if k in entry}
+        if entry.get("kind") != "pass_premium":
+            continue
+        status = ({"eligible": False, "reason": "store_unavailable"} if con is None
+                  else season_offer_status(con, catalog, sku))
+        pub[sku]["season_eligible"] = bool(status.get("eligible"))
+        if status.get("eligible"):
+            pub[sku]["season_id"] = status.get("season_id", 0)
+        else:
+            pub[sku]["season_reason"] = status.get("reason", "unknown")
+            if "premium_sku" in status:
+                pub[sku]["season_premium_sku"] = status["premium_sku"]
+    return pub
+
+
+def retention_d1(con, now=None):
+    """D1 do companion é o D1 do servidor: a mesma view, uma definição só.
+
+    A régua está fixada na migration 045 e significa uma coisa: a conta ter um login no
+    DIA CALENDÁRIO UTC exato +1 a partir do dia da criação (inteiro de
+    `created_timestamp / 86400`), usando o login mais antigo como dia-zero quando a
+    conta não tem `created_timestamp`. É o predicado que `TelemetryService.IsD1Return`
+    aplica no funil e a bandeira que a view `cohort_retention` materializa. Aqui não
+    há segunda implementação aritmética: a leitura é `SELECT ... FROM
+    cohort_retention`, então o número do painel e o do funil não podem divergir por
+    construção, só pela janela de cohort escolhida — que vai no payload.
+
+    Isto substitui a régua que existia aqui e media OUTRA pergunta:
+    `last_timestamp > created_timestamp + 72000` sobre uma janela móvel de criação de
+    24 h, ou seja "voltou 20 h depois de criar", sem olhar o dia. Quem criou às
+    23:58 e voltou às 00:01 é D1 verdadeiro e não é "20 h depois"; quem criou às 00:02
+    e voltou 20 h depois, no MESMO dia, é o contrário. As duas respostas são
+    diferentes para os mesmos dados, e era isso que o painel chamava de D1. A suíte
+    própria planta exatamente os casos em que as definições divergem, de forma que
+    reimplantar a janela móvel é gate vermelho e não uma escolha silenciosa.
+
+    A fatia é o cohort de criação cujo dia D1 já fechou: dia UTC `now / 86400 - 2`,
+    medido em `cohort_day + 1`. A fatia de ontem teria a janela ainda aberta, e o
+    número dependeria da hora em que o painel é lido — 0 no início da madrugada, cheio
+    no fim do dia — que é justamente o que uma série histórica não pode ter.
+    `window_closed` e os dois índices de dia saem juntos para que a faixa seja
+    reconstituível sem ler este código.
+
+    Denominador = contas do cohort que têm pelo menos um login: o `JOIN` da view
+    exclui quem nunca abriu o jogo, declarado na própria migration ("D1 de quem nunca
+    abriu o jogo não existe e não deve entrar no denominador"). View ausente (banco
+    pré-045) devolve `None`: indisponível não é zero.
+    """
+    if now is None:
+        now = int(time.time())
+    day_index = now // DAY
+    cohort_day = day_index - 2
+    try:
+        row = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(d1), 0) FROM cohort_retention "
+            "WHERE cohort_day = ?;", (cohort_day,)).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return {"cohort": row[0], "retained": row[1], "cohort_day": cohort_day,
+            "d1_day": cohort_day + 1, "window_closed": cohort_day + 1 < day_index}
 
 
 def _const_time(a, b):
@@ -1155,10 +1299,7 @@ class Store:
         accts = con.execute(
             "SELECT COUNT(*), COALESCE(SUM(last_timestamp > ?), 0) FROM account;",
             (now - DAY,)).fetchone()
-        d1 = con.execute(
-            "SELECT COUNT(*), COALESCE(SUM(last_timestamp > created_timestamp + 72000), 0) "
-            "FROM account WHERE created_timestamp BETWEEN ? AND ?;",
-            (now - 2 * DAY, now - DAY)).fetchone()
+        retention = retention_d1(con, now)
         settles = con.execute(
             "SELECT COUNT(*), COALESCE(AVG(CAST(json_extract(meta, '$.eff') AS REAL)), 0) "
             "FROM telemetry_event WHERE kind = 'settle' AND created_at > ?;",
@@ -1219,10 +1360,11 @@ class Store:
         except sqlite3.Error:
             pass
         # K1: coorte D1/D7/D30 lida da view `cohort_retention` (migration 045) — é
-        # a régua reescrita de ROADMAP_COMERCIAL §Semana 2 medida em contas. Não é
-        # o `retention_d1` ali embaixo, que compara janelas móveis de 24 h e
-        # responde outra pergunta. View ausente (DB pré-045) = bloco vazio:
-        # indisponível não é zero.
+        # a régua reescrita de ROADMAP_COMERCIAL §Semana 2 medida em contas, e é a
+        # MESMA view de onde `retention_d1` tira a fatia diária: uma definição só, o
+        # que muda é a janela (aqui a população inteira, ali o último cohort com o
+        # dia D1 já fechado). View ausente (DB pré-045) = bloco vazio e
+        # `retention_d1` nulo: indisponível não é zero.
         cohort = {}
         try:
             c_n, c_d1, c_d7, c_d30 = con.execute(
@@ -1237,7 +1379,7 @@ class Store:
             "trades_7d": {"count": trades7[0], "fees_burned": fees7[0]},
             "vip_active": vip[0],
             "accounts": {"total": accts[0], "active_24h": accts[1]},
-            "retention_d1": {"cohort": d1[0], "retained": d1[1]},
+            "retention_d1": retention,
             "retention_cohort": cohort,
             "settles_24h": {"count": settles[0], "avg_eff": round(settles[1], 3)},
             "logins_24h": logins[0],
@@ -1271,21 +1413,20 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/health":
             with self.server.store.connect() as con:
-                self._send(200, {"ok": True,
-                                 "pending": self.server.store.pending(con)})
+                self._send(200, {"ok": True, "pending": self.server.store.pending(con)})
             return
         if path == "/catalog":
             # Catálogo público p/ a loja exibir preços (grants continuam
-            # server-authoritative no webhook; preço aqui é display).
-            pub = {}
-            for sku, e in self.server.catalog.items():
-                if sku.startswith("_"):
-                    continue  # declaração/comentário do arquivo, não item de loja
-                pub[sku] = {k: e[k] for k in
-                            ("kind", "contents", "currency", "price",
-                             "one_time", "max_account_age", "title",
-                             "tier", "cosmetic_id")
-                            if k in e}
+            # server-authoritative no webhook; preço aqui é display). A temporada
+            # entra como MARCAÇÃO (`season_eligible`), não como filtro — ver o
+            # docstring de `public_catalog`. Banco inacessível não derruba a página
+            # de preço, derruba o botão: os passes saem `store_unavailable`, o mesmo
+            # fail-closed que o checkout aplica.
+            try:
+                with self.server.store.connect() as con:
+                    pub = public_catalog(self.server.catalog, con)
+            except sqlite3.Error:
+                pub = public_catalog(self.server.catalog, None)
             self._send(200, {"catalog": pub})
             return
         if path == "/metrics":
@@ -1301,8 +1442,8 @@ class Handler(BaseHTTPRequestHandler):
             # worker precisa conhecer para assinar, e o header `k` da RFC 8292
             # é público por definição. NÃO toca o banco e nunca ecoa a privada;
             # sem chave configurada responde apenas ready=false + o rótulo do
-            # motivo. O nginx do serviço `web` não proxya /push/*; esta rota é
-            # para o caminho direto do deploy (e para o harness).
+            # motivo. O nginx do serviço `web` proxya exatamente esta leitura
+            # (`location = /push/vapid`, GET-only); /push/test continua sem proxy.
             return self._push_vapid_status()
         return self._send(404, {"error": "not_found"})
 
@@ -1319,6 +1460,8 @@ class Handler(BaseHTTPRequestHandler):
             # conhece /checkout/ e /webhooks/; mesmo assim o endpoint exige
             # token próprio e some quando o token não está configurado.
             return self._push_test()
+        if parsed.path == "/webhooks/ads":
+            return ad_ssv.handle(self) if ad_ssv else self._send(503, {"error": "ad_ssv_disabled"})
         if parsed.path != "/webhooks/payments":
             return self._send(404, {"error": "not_found"})
         length = int(self.headers.get("Content-Length", 0))
@@ -1811,7 +1954,6 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"status": "ok", "items": statuses})
 
 
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--db", default="",
@@ -1871,8 +2013,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="com --refund-sweep: só lista pendentes, sem chamar a API")
     # ---- SOM-IDLE W5: web push (migration 052; sender default é o VAPID real
-    # de push_vapid.py, que continua honesto: NotImplementedError sem chave
-    # configurada — credencial ausente nunca vira envio) ----
+    # de push_vapid.py, que sem chave levanta ConfigError: o wrapper o traduz em
+    # NotImplementedError e credencial ausente nunca vira envio) ----
     ap.add_argument("--push-register", action="store_true",
                     help="grava/upsert a subscription de push de uma conta "
                          "(exige --account --endpoint --p256dh --auth) e sai")
@@ -1905,7 +2047,7 @@ def main():
     ap.add_argument("--push-admin-token",
                     default=os.environ.get(PUSH_ADMIN_TOKEN_ENV, ""),
                     help="token do endpoint interno POST /push/test "
-                         "(vazio = endpoint desligado; nunca publicar /push/ no nginx)")
+                         "(vazio = endpoint desligado; a fila nunca vai ao nginx)")
     ap.add_argument("--push-vapid-keygen", action="store_true",
                     help="gera um par VAPID P-256 descartável: a PRIVADA vai para "
                          "--push-vapid-key-out (modo 0600, nunca stdout/log) e só a "
@@ -2061,7 +2203,6 @@ def main():
     finally:
         server.server_close()
     return 0
-
 
 
 if __name__ == "__main__":

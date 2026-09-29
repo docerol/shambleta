@@ -28,18 +28,22 @@ extends SceneTree
 #     comparariam com nada. É checado, não assumido (`physics ticks == 30`).
 #   * O custo por passo é a soma dos DOIS monitores de tempo que o próprio engine
 #     acumula (`Performance.TIME_PHYSICS_PROCESS` + `Performance.TIME_PROCESS`, ambos
-#     em segundos, ambos média móvel de 1 s). Já foi medido por SANDUÍCHE de
-#     `process_priority` — dois Nodes marcando `Time.get_ticks_usec()` nos extremos
-#     de prioridade — e o sanduíche era MEDIÇÃO ZERO: em sonda isolada (2 Nodes
-#     queimando 3 ms cada, um deles dentro de uma `SubViewport`, entre Marks de
-#     prioridade ±10^6) a janela dava 0,001 ms enquanto os dois Nodes rodavam 10
-#     passos cada. Ordem de prioridade não separa o trabalho das `SubViewport`s (onde
-#     moram as `WorldInstance`) dos Marks, então a régua antiga media ruído — e a
-#     monotonia exigida abaixo é justamente o que denunciou: 0.00 ms nos quatro
-#     níveis. A semântica dos monitores também foi medida e não assumida: 4 ms
-#     queimados em `_physics_process` movem `TIME_PHYSICS_PROCESS` (0,38 -> 4,18 ms)
-#     e não movem `TIME_PROCESS`; 4 ms em `_process` fazem o contrário. Só falta o
-#     render, que em `--headless` não existe — ou seja, a soma é o custo de um passo
+#     em segundos, ambos média móvel de 1 s). A régua anterior era um SANDUÍCHE de
+#     `process_priority`: dois Nodes marcando `Time.get_ticks_usec()` nos extremos de
+#     prioridade, e a janela entre eles como "custo do passo". Ela foi desmontada por
+#     MEDICAO DIRETA, não por gosto: com a escada de carga ligada, os quatro níveis
+#     devolviam `0.00 ms` — observado nesta máquina na rodada de 2026-09-28, log que não
+#     é retido —, ou seja a janela não continha trabalho nenhum dos 200 agentes que
+#     estavam rodando. Por que não
+#     continha é INFERENCIA a partir desse zero — `process_priority` ordena callbacks
+#     dentro da mesma lista de nós, e as `WorldInstance` moram em `SubViewport`s, que
+#     têm o próprio passo — e não medição: a sonda isolada que separaria as duas
+#     hipóteses não foi rodada. O que importa para a régua é o zero medido, e ele
+#     bastou: troca-se o instrumento pelos monitores do engine, que têm semântica
+#     medida e não assumida: 4 ms queimados em `_physics_process` movem
+#     `TIME_PHYSICS_PROCESS` (0,38 -> 4,18 ms) e não movem `TIME_PROCESS`; 4 ms em
+#     `_process` fazem o contrário. Só falta o render, que em `--headless` não existe —
+#     ou seja, a soma é o custo de um passo
 #     de servidor, que é exatamente o que se quer limitar.
 #   * Além do trabalho por passo sai o PERÍODO REAL do passo (parede / passos): é o
 #     que estoura quando o trabalho passa do orçamento, porque o sleep deixa de
@@ -52,6 +56,14 @@ extends SceneTree
 #       (b) DETECTOR: a sobrecarga de 40 ms/passo tem de estourar o período.
 #       (c) CARGA: `1 -> 20 -> 100 -> 200` tem de ser não-decrescente e o custo
 #           marginal por player tem de sair > 0 da regressão entre os dois pontos.
+#           Os degraus vivem em zonas diferentes, então "o degrau anterior inchou" é
+#           uma hipótese real: a monotonia que não vale re-mede o degrau anterior uma
+#           vez, e a janela só é declarada em `[RUIDO]` se a re-medida for MAIS BARATA
+#           que a janela suspeita — ela substitui a linha inchada no laudo. Se a
+#           re-medida não descer, a acusação fica e é produto.
+#   * O gancho `== NOISE-DECLARED: N ==` é impresso sempre, inclusive em zero: a
+#     contagem é quantas janelas de tempo este run trocou por re-medida. Verde com
+#     lacuna anunciada é diferente de verde sem lacuna lida.
 #   * Junto com o ms/tick sai o resto do laudo: objetos vivos na instância (players,
 #     mobs, agentes globais, nós e recursos), round trips de SQL e esperas na
 #     `queryMutex` POR TICK — porque a conclusão de capacidade deste servidor é
@@ -91,6 +103,11 @@ var calib : Node = null
 var agents : Array = []
 var charIDs : Array = []
 var rows : Array = []
+# Janelas de tempo que este run declarou não medir por ruído externo. O gancho é o
+# mesmo de `tests/multi_instance_tick_test.gd` (`== NOISE-DECLARED: N ==`, impresso
+# sempre, inclusive em N=0): a régua de monotonia pode trocar uma linha por uma
+# re-medida, e um verde que trocou tem de dizer que trocou.
+var noiseWindows : int = 0
 
 # Calibre: queima `us` de tempo real por passo de física dentro da MESMA árvore de
 # processamento que as WorldInstance (um Node filho de `root`, sem prioridade
@@ -391,6 +408,10 @@ func _run() -> void:
 			"calibre ligado na mesma árvore das WorldInstances (us=%d desligado)" % int(calib.get("us")))
 
 	var previous : Dictionary = {}
+	var previousIdx : int = -1
+	var previousInst : Object = null
+	var previousLevel : int = 0
+	var previousZone : int = 0
 	for i in range(Levels.size()):
 		var level : int = int(Levels[i])
 		var zoneID : int = int(Zones[i])
@@ -403,6 +424,7 @@ func _run() -> void:
 			continue
 		Check(int(setup.get("sessions")) > 0, "nível %d: %d sessão(ões) idle de verdade anexada(s)" % [level, int(setup.get("sessions"))])
 		var row : Dictionary = await _measure(inst, "%d players / zona %d" % [level, zoneID])
+		var rowIdx : int = rows.size() - 1
 		Check(int(row["samples"]) >= SampleFrames - SkipFrames - 5, "nível %d: %d amostras de tick (janela não foi truncada)" % [level, int(row["samples"])])
 
 		# (a) CALIBRAÇÃO — só no nível 1, com a carga mínima, para que o delta seja
@@ -441,12 +463,40 @@ func _run() -> void:
 						float(overloaded["periodMs"]), OverloadBurnUs / 1000])
 			rows.pop_back()	# idem: sobrecarga artificial não é nível de capacidade
 
-		# (c) CARGA — monotonia entre níveis.
+		# (c) CARGA — monotonia entre níveis. A escada vive em ZONAS diferentes, e zona
+		# diferente tem conteúdo diferente (o nível de 100 fecha com 9 mobs; o de 200,
+		# com 192): se a mediana cai contra o degrau anterior, o mais provável é o degrau
+		# anterior TER subido por janela suja — ruído só pode aumentar o tempo de uma
+		# janela. Então a régua re-mede o pau que subiu, uma vez. Se ele descer e a
+		# monotonia valer contra a re-medida, a linha inchada sai do laudo e a janela é
+		# DECLARADA no gancho de ruído; se ele não descer, a acusação fica e é produto.
 		if previous.has("medianMs"):
-			Check(float(row["medianMs"]) >= float(previous["medianMs"]) - 0.5,
+			var monotone : bool = float(row["medianMs"]) >= float(previous["medianMs"]) - 0.5
+			if not monotone and previousIdx >= 0 and previousIdx < rows.size() and previousInst != null:
+				var again : Dictionary = await _measure(previousInst,
+						"%d players / zona %d (re-medida)" % [previousLevel, previousZone])
+				var lastIdx : int = rows.size() - 1
+				monotone = float(row["medianMs"]) >= float(again["medianMs"]) - 0.5
+				if monotone:
+					# a re-medida substitui a linha inchada NO MESMO lugar: é ela que
+					# entra na tabela de deploy/SCALING.md e na regressão de slope.
+					rows[previousIdx] = again
+					previous = again
+					noiseWindows += 1
+					Note("[RUIDO] nível %d: o degrau anterior (%d players) media %.2f ms na janela suspeita e %.2f ms na re-medida — monotonia conferida contra a re-medida, que é a janela mais barata das duas" % [
+							level, previousLevel, float(row["medianMs"]), float(again["medianMs"])])
+				else:
+					Note("nível %d: re-medida do degrau anterior deu %.2f ms (a janela suspeita tinha %.2f ms) — queda não explicada por ruído" % [
+							level, float(again["medianMs"]), float(previous["medianMs"])])
+				rows.resize(lastIdx)
+			Check(monotone,
 					"nível %d: mediana %.2f ms não caiu contra o nível anterior (%.2f ms)" % [
 						level, float(row["medianMs"]), float(previous["medianMs"])])
 		previous = row
+		previousIdx = rowIdx
+		previousInst = inst
+		previousLevel = level
+		previousZone = zoneID
 
 	# Réguas que este harness deixa como contrato de regressão.
 	var byLevel : Dictionary = {}
@@ -518,5 +568,6 @@ func _finish() -> void:
 	if dbScript != null and (dbScript.get("preloadPaths") as PackedStringArray).size() > 0:
 		print("WARN: preload do DB ainda em voo no fim — drenando antes de quit()")
 		dbScript.call("DrainPendingPreloads")
+	print("== NOISE-DECLARED: %d ==" % noiseWindows)
 	print("== RESULT: %d checks, %d failures ==" % [checks, failures])
 	quit(failures if failures > 0 else 0)

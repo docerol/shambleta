@@ -6,7 +6,7 @@ static func PrintLog(logGroup : String, logString : String):
 	print("[%d.%03d][%s] %s" % [Time.get_ticks_msec() / 1000.0, Time.get_ticks_msec() % 1000, logGroup, logString])
 
 static func PrintInfo(logGroup : String, logString : String):
-	if Launcher.Debug:
+	if LauncherCommons.DebugServiceLive():
 		print("[%d.%03d][%s] %s" % [Time.get_ticks_msec() / 1000.0, Time.get_ticks_msec() % 1000, logGroup, logString])
 
 # Object/Node management
@@ -33,8 +33,17 @@ static func RemoveNode(node : Node, parent : Node):
 		node.queue_free()
 
 # Screenshot
+# Mesma razão de `PrintInfo`: o identificador do autoload não pode entrar no fonte
+# desta classe. A janela é pega pela main loop, e sem janela (headless, `-s`) a
+# resposta é null — que é o que `FileSystem.SaveScreenshot()` já sabe tratar.
 static func GetScreenCapture() -> Image:
-	return Launcher.get_viewport().get_texture().get_image()
+	var tree : SceneTree = Engine.get_main_loop() as SceneTree
+	if tree == null or tree.root == null:
+		return null
+	var viewport : Viewport = tree.root.get_viewport()
+	if viewport == null:
+		return null
+	return viewport.get_texture().get_image()
 
 # Audio
 static func VolumeRatioToDb(volumeRatio : float) -> float:
@@ -42,16 +51,6 @@ static func VolumeRatioToDb(volumeRatio : float) -> float:
 	return (1.0 - interpolation) * -80.0
 
 # Math
-static func UnrollPathLength(path : PackedVector2Array) -> float:
-	var pathSize : int = path.size()
-	if pathSize < 2:
-		return INF
-	var unrolledPos : Vector2 = Vector2.ZERO
-	for i in (pathSize-1):
-		unrolledPos += (path[i] - path[i+1]).abs()
-	unrolledPos *= SkillCommons.PerspectiveIncrease
-	return unrolledPos.length_squared()
-
 static func IsReachableSquared(pos1 : Vector2, pos2 : Vector2, threshold : float) -> bool:
 	return pos1.distance_squared_to(pos2) < threshold
 

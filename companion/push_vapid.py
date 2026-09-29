@@ -10,14 +10,18 @@ implementação foi dividida.
 
 POR QUE ISTO EXISTE E POR QUE É STDLIB PURO
 -------------------------------------------
-O companion é stdlib-only por contrato: o `deploy/companion/Dockerfile` copia
-`server.py` e não roda `pip install`, e o job `companion-tests` da CI declara
-"stdlib puro (sem requirements)". Uma dependência declarada (`cryptography`)
-trocaria um bloqueio por outro: o sender funcionaria no laptop e continuaria
-inexistente na imagem que sobe — `WebPush.CanDeliver()` viraria true num build
-que não entrega. A rota escolhida é ECDSA P-256 + AES-128-GCM escritos com
-`hashlib`/`hmac`/`secrets`, que rodam exatamente onde `server.py` roda, sem
-tocar em build ou imagem.
+O companion é stdlib-only por contrato: o `deploy/companion/Dockerfile` não roda
+`pip install`, e o job `companion-tests` da CI declara "stdlib puro (sem
+requirements)". Isso nunca quis dizer "anda sozinho no deploy": a fachada são
+QUATRO arquivos e o `import push_vapid` de `server.py` resolve por nome na mesma
+pasta, então o Dockerfile copia `push_vapid.py` + `push_common.py` +
+`push_p256.py` + `push_aesgcm.py` juntos — fechar o fechamento é o que faz o
+sender existir NA IMAGEM que sobe, não só no laptop. Uma dependência declarada
+(`cryptography`) trocaria um bloqueio por outro: funcionaria aqui e continuaria
+inexistente lá, e `WebPushDelivery.CanDeliver()` viraria true num build que não
+entrega — a mesma mentira, só do outro lado da fronteira. A rota escolhida
+é ECDSA P-256 + AES-128-GCM escritos com `hashlib`/`hmac`/`secrets`, que rodam
+exatamente onde `server.py` roda, sem tocar em build ou imagem.
 
 O tradeoff de segurança, dito sem eufemismo: criptografia assimétrica escrita
 à mão é o que um revisor de segurança ataca primeiro. O que isto mitiga, e o
@@ -49,16 +53,31 @@ precisar ser descoberto em produção: nenhum navegador real subscreveu este
 caminho durante a escrita dele. A entrega é verificada contra um receiver local
 que confere o `Authorization: vapid`, o corpo `aes128gcm` e devolve 201/410/403
 como um push service — o que prova o protocolo deste lado, não um 201 da
-Mozilla. Falta ainda o `pushManager.subscribe()` do lado do shell (o worker
-`deploy/web/sw.js` é servido, mas nunca registrado) e a rota pública que receberia
-a subscription gerada pelo navegador.
+Mozilla. Do outro lado o `pushManager.subscribe()` já existe na ponte do shell
+(`ShambletaPush.subscribe` em `export_presets.cfg`, com a chave pública vindo do
+jogo, nunca gravada aqui), e o worker `deploy/web/sw.js` é servido; o que ainda
+segura a linha de entrega inteira é o trecho `Network.gd`/`Server.gd` que leva a
+subscription ao servidor autenticado — as duas chamadas documentadas em
+`sources/web/WebPushSubscription.gd`. Nada disso é escondido por este docstring:
+`WebPushDelivery.CanDeliver()` devolve a conjunção mensurável dessas peças.
 
 Segredo NUNCA mora aqui: o par de chaves vem do ambiente
 (`SHAMBLETA_VAPID_PRIVATE_KEY`, `SHAMBLETA_VAPID_PUBLIC_KEY`,
 `SHAMBLETA_VAPID_SUBJECT`) e nenhuma função deste pacote escreve chave em log,
-exceção, repr ou retorno. Sem chave configurada, `push_ready()` devolve False e
-o sender levanta `NotImplementedError` — fail-closed, o comportamento exato de
-antes de estes arquivos existirem.
+exceção, repr ou retorno. Sem chave configurada nada é assinado nem enviado:
+`push_ready()` devolve False e `send()`/`vapid_authorization()` levantam
+`ConfigError` — fail-closed, porque um sender sem chave não tem o que fingir.
+
+E não há stub escondido atrás desta fachada: ela assina e posta de verdade. Quem
+recusa a entrega no companion é o wrapper `vapid_webpush_send` de `server.py`, e
+só nos DOIS casos em que recusar é fato — (a) as quatro camadas não acompanharam
+`server.py` na imagem (deploy quebrado: `import push_vapid` não resolve) ou
+(b) nenhuma chave VAPID está configurada (`push_ready()` false). Fora desses dois
+casos não existe mais "sender não implementado": a mensagem fina diz qual dos
+dois faltou, e a fila grava o rótulo `vapid_sender_unimplemented`, que hoje é
+palavra de CONFIGURAÇÃO, não de código ausente — foi exatamente essa leitura
+trocada que deixou `WebPushDelivery.SenderImplemented()` preso em false depois
+que o assinador já existia.
 
 Formatos aceitos em `SHAMBLETA_VAPID_PRIVATE_KEY` (sempre via segredo de
 deploy, nunca commitado):

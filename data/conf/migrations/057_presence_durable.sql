@@ -15,6 +15,16 @@
 -- vence e `Presence.Prune` a remove. Escrita por personagem é uma UPSERT de uma
 -- statement, então o custo marginal de presença é contado e limitado pelo
 -- heartbeat (`Presence.HeartbeatSec`), medido em tests/presence_fuzz.gd.
+--
+-- Onde a promessa acima vira código: `sources/network/server/Presence.gd` é o único
+-- caminho que escreve e lê esta tabela — alimentado por `Server.ConnectCharacter`,
+-- `Server.DisconnectCharacter` e `Server.SetFarmZone` (as duas statements de sessão),
+-- por `Presence.ReclaimServer` no boot (`SQL._post_launch`, ao lado da limpeza de
+-- tokens) e por `Presence.Tick` no acumulador de 1 s de `World._process` (uma
+-- statement por heartbeat, não por jogador). A régua é `tests/presence_fuzz.gd`:
+-- executa os três planos abaixo, o TTL nas duas direções do relógio e dois
+-- `SQLService` sobre o mesmo arquivo — um índice prometido e não usado é exatamente
+-- o tipo de frase que este cabeçalho continha antes de existir implementação.
 CREATE TABLE IF NOT EXISTS presence_session (
 	char_id INTEGER PRIMARY KEY,
 	account_id INTEGER NOT NULL DEFAULT 0,

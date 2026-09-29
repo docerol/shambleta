@@ -1,17 +1,28 @@
 # Alertmanager — para onde o `deploy/prometheus.yml` manda o que as regras de
-# `deploy/alerts.rules.yml` avaliaram. Embarcado por `deploy/monitoring/alertmanager.Dockerfile`.
+# `deploy/alerts.rules.yml` avaliaram. Embarcado por
+# `deploy/monitoring/alertmanager.Dockerfile`, que roda o render antes do exec.
 #
-# Estado honesto: a ROTEAMENTO por severidade está ligado e é conferido por
-# `scripts/check_compose.sh` (toda severidade usada numa regra tem uma rota, e toda
-# rota aponta para um receiver declarado). O DESTINO HUMANO não está: `webhook_configs`
-# abaixo é lista vazia porque preencher é segredo/URL de terceiro (Slack, PagerDuty,
-# webhook do on-call), e o repositório não tem um para apontar — inventar um host
-# deixaria o `page` falando sozinho. Ligar é um passo de deploy, não de código:
-# coloque a URL no arquivo (ou monte um config próprio) e o `severity: page` passa a
-# sair do Prometheus. Enquanto estiver vazio, o que se lê é
-# `docker compose exec game curl -s http://alertmanager:9093/api/v2/alerts` — a alerta
-# dispara, fica visível aqui, e só não chega a um humano (comando em
-# deploy/OPS_RUNBOOK.md §2).
+# Estado honesto (mudou em 2026-09-28): o ROTEAMENTO por severidade sempre esteve
+# ligado e é conferido por `scripts/check_compose.sh` (toda severidade usada numa
+# regra tem uma rota, e toda rota aponta para um receiver declarado). O DESTINO
+# HUMANO agora é configurável no deploy, e continua ausente neste repositório de
+# propósito — a URL de webhook de Slack/PagerDuty/on-call É uma credencial (quem a
+# tem publica no canal de emergência), e o repositório é open source.
+#
+# Como ligar: declare o nome da env em `.env.example` (já está) e o valor no
+# painel do deploy. Cada receiver abaixo carrega um marcador
+# `# @@ALERTWEBHOOK:<NOME_DA_ENV>@@` na linha do `webhook_configs`; o entrypoint da
+# imagem (`deploy/monitoring/render-alertmanager-config.sh`) materializa o destino
+# no boot e escreve `/etc/alertmanager/alertmanager.yml` — o caminho que o
+# `--config.file` do compose já aponta, que é por que a env sem render nada faria.
+#
+# Sem a env, ESTE arquivo continua um config válido e o `severity: page` não acorda
+# ninguém. Isso é configuração INCOMPLETA, não configuração segura: o alerta
+# dispara, fica no /api/v2/alerts e morre lá. A escolha deliberada foi a régua
+# acusar, e não o `docker compose up` recusar subir — motivo, custo e alternativa
+# em deploy/OPS_RUNBOOK.md §2.1. Enquanto estiver sem destino, o que se lê é
+# `docker compose exec game curl -s http://alertmanager:9093/api/v2/alerts`
+# (comando em deploy/OPS_RUNBOOK.md §2.2).
 
 global:
   resolve_timeout: 5m
@@ -47,8 +58,18 @@ inhibit_rules:
     equal: ["instance"]
 
 receivers:
+  # Os dois marcadores abaixo são código, não comentário: o render da imagem lê o
+  # nome entre `@@ALERTWEBHOOK:` e `@@`, exige que ele bata com
+  # SHAMBLETA_ALERT_*_WEBHOOK_URL e que o nome esteja declarado em `.env.example`
+  # (as duas pontas conferidas por `scripts/check_compose.sh`). As regras do
+  # render, espelhadas na régua: o marcador só vale na própria linha
+  # `webhook_configs:` (em qualquer outra linha o render morre, em vez de subir
+  # sem destino), e linha de comentário puro é documentação — é por isso que o
+  # cabeçalho deste arquivo pode descrever o formato sem ser lido como um
+  # receiver. Página de destino sem marcador não é "sem destino configurado" — é
+  # receiver quebrado, e a régua trata os dois casos como falha.
   - name: shambleta-page
-    webhook_configs: []    # ver cabeçalho: sem destino configurado no repositório
+    webhook_configs: []   # @@ALERTWEBHOOK:SHAMBLETA_ALERT_PAGE_WEBHOOK_URL@@
 
   - name: shambleta-ticket
-    webhook_configs: []
+    webhook_configs: []   # @@ALERTWEBHOOK:SHAMBLETA_ALERT_TICKET_WEBHOOK_URL@@

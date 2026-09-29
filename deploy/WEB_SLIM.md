@@ -41,7 +41,8 @@ excluídos no preset Web antes disto. (Nota de 2026-09-25: esta frase só ficou 
 depois do guard `FileSystem.DirExists` em `DB.Preload()`/`DB.Populate()` — antes dele o
 console do navegador empilhava `File path "res://presets/music/" is not accessible` a cada
 boot, medido em `scripts/qa_web.mjs`; a ausência de erro é verificada a cada export pelo
-check `web: nenhum erro de console` do QA, verde em `/tmp/qa_web_3.log`.)
+check `web: nenhum erro de console` do QA — reproduzível com `bash scripts/export_web.sh`,
+que roda o QA no pacote recém-exportado e quebra o script se aparecer erro.)
 
 ## Para chegar a <25 MB (follow-through — exige QA visual)
 
@@ -87,7 +88,7 @@ com o culpado nomeado na própria linha: música embutida no `.pck`, os 26 MB
 cortados acima. O arquivo de origem (`.kilo/plans/1789659178562-audit-commercial-launch.md:39`)
 foi **removido do repositório pelo dono em 2026-09-25** (".kilo só tinha lixo");
 a citação fica registrada aqui porque foi daqui que o número veio, e quem
-precisar do contexto completo lê `git show HEAD:.kilo/plans/1789659178562-audit-commercial-launch.md`.
+precisar do contexto completo lê `git show 6277671^:.kilo/plans/1789659178562-audit-commercial-launch.md` (o pai do commit que o removeu; em `HEAD` ele já não está).
 O `::aviso::` do script virou `::nota::`: **não existe limite técnico de tamanho
 para abrir ou instalar** um web app (sem cota de instalação por peso em
 Chrome/Android nem iOS; o que o navegador exige para instalar é HTTPS + manifest
@@ -95,6 +96,31 @@ com ícone/`display` + service worker, e isso o preset já emite), e nenhuma
 consequência de estourar os 25 MB está escrita em `deploy/`. Continuar com 25 MB
 como número de portão seria escolher uma meta que só se alcança mexendo em arte —
 que é exatamente o handoff abaixo.
+
+## Ratchet de peso em vigor — 36 MiB, medido 2026-09-27
+
+O parágrafo acima decide que 25 MB não é portão. Ficou faltando a outra metade da
+decisão: **o que é portão**. Um `::warning::` no job de CI com o pacote estourado
+deixa o job verde, então o gate anterior media e não barrava nada; e o passo de CI
+media só uma lista lembrada de artefatos, que é o mesmo defeito de régua que a
+seção de re-medição acima descreve (o `index.png` do splash ficava de fora).
+
+Medido nesta máquina no pacote de `build/Web` (export 2026-09-26, gzip -9,
+**diretório inteiro**, 36.735.388 B = 35,03 MiB). Ratchet: **36 MiB**
+(`CEILING=$((36*1024*1024))`), com ~1 MiB de folga sobre o número de hoje. Ele
+vive em dois lugares e uma régua confere os dois:
+
+| Onde | O que faz |
+|---|---|
+| `.github/workflows/godot-ci.yml`, step `Measure gzip weight` do job `web-export` | soma o gzip de **todo** arquivo do diretório e `exit 1` acima do ratchet — não `::warning::` |
+| `scripts/export_web.sh` | mesmo teto, mesmo `exit 1`, no export caseiro |
+| `scripts/check_ci.sh` | exige `exit 1` no step (aviso não conta), extrai o `CEILING` dos dois arquivos e confere que os dois números e este documento dizem a mesma coisa |
+
+A regra é a mesma dos ratchets de arquivo de `scripts/check_god_nodes.sh`: quando
+o teto real está acima da meta, o portão que barra é o número de hoje, e a meta
+continua declarada em separado. Subir peso passa a quebrar o build; baixar só
+pode melhorar. O `::nota::` dos 25 MB e do piso de ~32 MiB sem mexer em arte
+continua impresso, agora como meta — não como portão.
 
 **O maior item único que sobrou é uma imagem de boot, três vezes.** Medido em
 gzip: `.godot/imported/splashscreen.png-….ctex` 2.507.947 B dentro do `.pck` +
@@ -173,3 +199,77 @@ inteiro: zero ocorrências fora dos próprios arquivos. Peso irrelevante (323 B 
 fonte; o `test_service_base.gdc` deles é o último registro da tabela do `.pck`), mas
 é código morto versionado e empacotado — apagar arquivo rastreado é decisão do
 dono, não do corte de pacote, então fica aqui em vez de executado.
+
+## Shell mobile: o que foi alegado, o que foi medido, e a decisão (2026-09-28)
+
+A alegação de auditoria: "o preset exporta com `custom_html_shell=""` (`export_presets.cfg:961`),
+logo o produto promete mobile e o shell não declara viewport — promessa falsa; ou se
+conserta o shell, ou se apaga a promessa do documento". Verificada antes de agir, e a
+premissa não sobrevive ao grep. As três partes abaixo são o que ficou.
+
+**1) O viewport já existe, e vem do shell padrão.** `html/custom_html_shell=""` não
+significa "sem shell": significa o shell do próprio motor. O índice servido em
+produção é o artefato daquele export (`deploy/web/Dockerfile:26` roda
+`--export-release "Web" /out/Web/index.html`; `deploy/web/nginx.conf:46` serve
+`index index.html;`). O `index.html` exportado abre com
+`<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">`.
+Nada foi escrito por nós ali, e nada precisava ser: a promessa de viewport está
+declarada. As duas páginas que *nós* escrevemos também declaram o delas
+(`deploy/web/landing/index.html:5`, `deploy/web/checkout_return.html:5`). Quando um
+meta extra for necessário, a porta já existe e não exige shell próprio:
+`html/head_include` (`export_presets.cfg:962`) injeta a bridge de push/Sentry dentro
+do shell padrão — é por ali que ele entraria.
+
+**2) Safe-area não é promessa falsa: não é promessa.** `git grep -n "safe-area"` e
+`git grep -n "env(safe"` devolvem **zero** ocorrências em arquivo rastreado. Não
+existe texto prometendo respeito a notch/home indicator, logo não existe texto a
+apagar nem shell a escrever por isso. Fica registrado aqui: se alguém prometer
+safe-area um dia, a implementação é `head_include` + `env(safe-area-inset-*)` no HUD,
+não substituição de shell.
+
+**3) A promessa que era falsa, e era a maior, é outra: "tem modo mobile" sem prova de
+que a UI cabe no aparelho.** Medida dentro do motor, não em cabeçalho:
+
+- Com base 1280×720, `window/stretch/mode="canvas_items"` e `aspect="expand"`
+  (`project.godot:48-51`) e `html/canvas_resize_policy=2` (`export_presets.cfg:1136`
+  — quem manda no tamanho é a janela CSS), um iPhone 12/13/14 (390×844 CSS px) não
+  recebe um design space de 390×844. Recebe **1280×2690** no container de janelas
+  flutuantes, lido por `tests/panel_fit_test.gd`. **1 px de design vale 0,30 CSS px.**
+  O alvo de toque que o produto promete (`GuiUiScale.TouchTarget` = 48 px,
+  `sources/gui/GuiUiScale.gd:27`) chega ao dedo como **14,6 CSS px** — abaixo do piso
+  externo de 44 px (Apple HIG / WCAG 2.5.5). "A janela cabe nos 1280 de design" nunca
+  foi evidência de que cabe no aparelho, e era exatamente isso que a régua antiga
+  afirmava.
+- Na moldura 1:1 de 390×844, **8 janelas** passam da meta hoje (mesmo harness):
+  AuctionHouseWindow 227×1634, Boss 400×2992, Chests 400×1430, Cosmetics 380×1432,
+  GuildPanel 420×560, SeasonPass 380×1006, StatPanel 480×320, ZoneMap 420×400.
+
+**Decisão sobre shell: continuar com `custom_html_shell=""`.** Shell próprio é um
+arquivo rastreado a manter contra os ganchos do loader/worker do motor
+(`index.service.worker.js`, COOP/COEP) e não moveria um pixel do item 3 — o buraco é
+de layout e de espaço de design dentro do canvas, não de `<meta>`. Não havia promessa
+a apagar: havia ausência de medição, e agora existe régua.
+
+**O que a régua passou a exigir, e com qual número.** `WindowPanel` ganhou chrome
+variável (`chromeEdge`/`chromeCorner` + `SetChromePixels`), `GuiUiScale` virou o dono
+do número de toque — **48 px aplicados, 44 px apenas como piso externo; vale o maior**
+— aplicado às alças de resize nas 8 direções, ao `HideButton` da barra de título e às
+janelas montadas depois do boot (`_enter_tree`). Os dois lados são medidos: a sonda a
+44 px pega a alça no toque e não pega nada com a chrome de mouse (6/10 px), e o
+fechar volta ao mínimo de cena quando o dispositivo não é de toque. O controle
+negativo existe para a régua não ser decoração: uma janela inflada em memória é pega
+por R3 (caixa 1210×1409 estoura 390×844) e por R4 (botão nascido a x=1205 sem
+rolagem). Prova de que o ratchet morde, feita hoje: baixar o teto nomeado de `ZoneMap`
+de 430 para 410 px devolve `RESULT: 282 checks, 2 failures` e exit code 2, enquanto o
+estado medido de hoje passa em 282 checks.
+
+**O que fica aberto, com dono e número.** (a) O fator 0,30 só se fecha no espaço de
+design — base/stretch em `project.godot`, não neste documento e não na chrome; com
+`MobileDefault` = 1,2 (`sources/gui/GuiUiScale.gd:17`) o alvo físico continua 14,6 CSS
+px, e a régua imprime isso como `[aberto]` em vez de fingir verde. (b) As 8 janelas
+acima têm corpo em `sources/gui/*.gd`/`presets/gui/*.tscn` fora do escopo desta
+mudança; o teto nomeado delas é o que barra, e a meta 390×844 continua declarada —
+mesma política da seção de ratchet de peso acima: quando o teto real está acima da
+meta, o portão que barra é o número de hoje, e a meta continua declarada em separado.
+(c) Safe-area, se um dia for prometida, entra por `head_include` (item 2).
+

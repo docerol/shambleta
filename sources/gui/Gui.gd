@@ -11,47 +11,10 @@ var characterHub : WindowPanel = null
 func EnsureCharacterHub() -> WindowPanel:
 	if characterHub and is_instance_valid(characterHub):
 		return characterHub
-	characterHub = WindowPanel.new()
-	characterHub.name = "Character"
-	if statWindow:
-		characterHub.size = statWindow.size
-		characterHub.position = statWindow.position
-	var tabs := TabContainer.new()
-	tabs.name = "CharacterTabs"
-	tabs.set_anchors_preset(Control.PRESET_FULL_RECT)
-	characterHub.add_child(tabs)
-	_AbsorbWindow(statWindow, tabs, "Status")
-	_AbsorbWindow(skillWindow, tabs, "Skills")
-	_AbsorbWindow(progressWindow, tabs, "Progresso")
-	_AbsorbWindow(formationWindow, tabs, "Formação")
-	windows.add_child(characterHub)
-	characterHub.set_visible(false)
-	_RepointMenuToHub()
+	# A construção do hub (TabContainer + absorção das quatro janelas + reponte do
+	# menu) é fatia do gate anti-god-node: `GuiCharacterHub.gd`.
+	characterHub = GuiCharacterHub.Build(self)
 	return characterHub
-
-func _AbsorbWindow(win : WindowPanel, tabs : TabContainer, title : String) -> void:
-	if win == null or not is_instance_valid(win):
-		return
-	var layout : Node = win.get_node_or_null("Layout")
-	if layout:
-		var titleBar : Node = layout.get_node_or_null("TitleBar")
-		if titleBar:
-			layout.remove_child(titleBar)
-			titleBar.queue_free()
-		win.remove_child(layout)
-		var page := Control.new()
-		page.name = title
-		layout.set_anchors_preset(Control.PRESET_FULL_RECT)
-		page.add_child(layout)
-		tabs.add_child(page)
-	win.set_visible(false)
-
-func _RepointMenuToHub() -> void:
-	if menu == null or menu.items == null:
-		return
-	for node in menu.items.get_children():
-		if node is WindowButton and node.targetWindow and (node.targetWindow == statWindow or node.targetWindow == skillWindow or node.targetWindow == progressWindow or node.targetWindow == formationWindow):
-			node.targetWindow = characterHub
 
 func OpenCharacterHub(tab : int = 0) -> void:
 	var hub : WindowPanel = EnsureCharacterHub()
@@ -121,6 +84,8 @@ func _FloatingWindow(win : WindowPanel, windowName : String) -> WindowPanel:
 	win.set_visible(false)
 	return win
 
+# HISTÓRICO (prova citada por auditoria): até 2026-09-24 isto era um toast dizendo
+# "UI gráfica em desenvolvimento" e mandando digitar /ah list|buy|cancel.
 func OpenAuctionHouse() -> void:
 	var w : AuctionHousePanel = EnsureAuctionHouse()
 	if not w.is_visible():
@@ -239,18 +204,10 @@ func ToggleControl(control : WindowPanel):
 	RefreshNotices()
 
 # Bolinha vermelha de novidade (sem protocolo novo: deriva do estado já em
-# cache no client). Abrir a janela limpa (via WindowPanel.EnableControl).
+# cache no client). Abrir a janela limpa (via WindowPanel.EnableControl). A
+# derivação das três novidades e a regra "só acende com a janela fechada" são
+# fatia do gate anti-god-node: `GuiNoticeRules.gd`.
 var notices : Dictionary = {}
-
-func _NoticeWindow(windowName : String) -> WindowPanel:
-	match windowName:
-		"Boss":
-			return bossWindow
-		"Chests":
-			return chestsWindow
-		"AFK":
-			return afkWindow
-	return null
 
 func SetNotice(windowName : String, on : bool) -> void:
 	notices[windowName] = on
@@ -266,24 +223,7 @@ func ClearNoticeByNode(win : Control) -> void:
 func RefreshNotices() -> void:
 	if menu == null:
 		return
-	var bossKeys : int = 0
-	if not NetClient.LastBossState.is_empty():
-		bossKeys = int(NetClient.LastBossState.get("keys", 0))
-	_SetNoticeIfHidden("Boss", bossKeys > 0)
-	var closed : int = 0
-	if not NetClient.LastEconomyState.is_empty():
-		var ch = NetClient.LastEconomyState.get("chests", [])
-		if ch is Array:
-			closed = (ch as Array).size()
-	_SetNoticeIfHidden("Chests", closed > 0)
-	_SetNoticeIfHidden("AFK", not NetClient.LastAFKReport.is_empty())
-
-func _SetNoticeIfHidden(windowName : String, cond : bool) -> void:
-	if not cond:
-		SetNotice(windowName, false)
-		return
-	var win : WindowPanel = _NoticeWindow(windowName)
-	SetNotice(windowName, win == null or not win.is_visible())
+	GuiNoticeRules.Refresh(self)
 
 func ToggleChatNewLine():
 	if chatWindow:
@@ -327,145 +267,56 @@ Shambleta is an idle auto battler: build your fighter, pick a farm zone and your
 		# A ponte observa o fim do tour e avisa o servidor pelo rpc próprio.
 		OnboardingDoneBridge.Attach(onboarding)
 
-#
+# As telas abaixo são delegações: o FSM, o `Client` e `Loading.gd` chamam estes
+# métodos NO `Gui` (e o e2e os lista por nome), mas a coreografia de visibilidade
+# de cada tela vive em `GuiStateScreens.gd` — fatia do gate anti-god-node.
 func EnterLoginMenu():
-	if progressTimer != null:
-		progressTimer.stop()
-		progressTimer = null
-
-	infoContext.set_visible(false)
-	choiceContext.Hide()
-	progressionTracker.set_visible(false)
-	bossTracker.set_visible(false)
-	menu.SetItemsVisible(false)
-	menu.Close()
-	stats.SetBarsVisible(false)
-	statWindow.set_visible(false)
-	dialogueContainer.set_visible(false)
-	pickupPanel.AnimateClose()
-	loadingControl.set_visible(false)
-	actionBoxes.set_visible(false)
-	HideManualSkillButtons()
-	quitWindow.set_visible(false)
-	respawnWindow.EnableControl(false)
-	shortcuts.set_visible(false)
-	characterPanel.set_visible(false)
-	buttonBoxes.set_visible(false)
-
-	background.set_visible(true)
-	loginPanel.set_visible(true)
-	loginPanel.RefreshOnce()
-	buttonBoxes.set_visible(true)
+	GuiStateScreens.EnterLoginMenu(self)
 
 func EnterLoginProgress():
-	loginPanel.set_visible(false)
-	buttonBoxes.set_visible(false)
-
-	progressTimer = Callback.SelfDestructTimer(self, NetworkCommons.LoginAttemptTimeout, TimeoutLoginProgress, [], "ProgressTimer")
-	loadingControl.set_visible(true)
+	GuiStateScreens.EnterLoginProgress(self)
 
 func TimeoutLoginProgress():
 	Network.AuthError(NetworkCommons.AuthError.ERR_TIMEOUT)
 	progressTimer = null
 
 func EnterCharMenu():
-	if progressTimer:
-		progressTimer.stop()
-		progressTimer = null
-
-	if not DB.isInitialized:
-		if not Launcher.dbInitialized.is_connected(_show_char_menu):
-			Launcher.dbInitialized.connect(_show_char_menu, CONNECT_ONE_SHOT)
-		return
-	_show_char_menu()
+	GuiStateScreens.EnterCharMenu(self)
 
 func _show_char_menu():
-	loadingControl.set_visible(false)
-	background.set_visible(false)
-	loginPanel.set_visible(false)
-	characterPanel.RefreshOnce()
-
-	characterPanel.set_visible(true)
-	buttonBoxes.set_visible(true)
+	GuiStateScreens.ShowCharMenu(self)
 
 func EnterCharProgress():
-	characterPanel.set_visible(false)
-	buttonBoxes.set_visible(false)
-
-	progressTimer = Callback.SelfDestructTimer(self, NetworkCommons.CharSelectionTimeout, TimeoutCharProgress, [], "ProgressTimer")
-	loadingControl.set_visible(true)
+	GuiStateScreens.EnterCharProgress(self)
 
 func TimeoutCharProgress():
 	Network.CharacterError(NetworkCommons.CharacterError.ERR_TIMEOUT)
 	progressTimer = null
 
 func EnterGame():
-	if progressTimer:
-		progressTimer.stop()
-		progressTimer = null
-	loadingControl.set_visible(false)
-	background.set_visible(false)
-	loginPanel.set_visible(false)
-	characterPanel.set_visible(false)
-	buttonBoxes.set_visible(false)
-
-	Launcher.Camera.ResetCinematic()
-	DisplayActions(["gp_interact", "gp_target", "gp_untarget", "gp_pickup", "gp_sit"])
-
-	stats.SetBarsVisible(true)
-	menu.set_visible(true)
-	actionBoxes.set_visible(true)
-	shortcuts.set_visible(true)
-	menu.SetItemsVisible(true)
-	# Hybrid gameplay: manual skills available on HUD
-	AddManualSkillButtons()
+	GuiStateScreens.EnterGame(self)
 
 func ExitGame():
-	notificationLabel.ClearNotification()
-	HideManualSkillButtons()
+	GuiStateScreens.ExitGame(self)
 
 # SOM-IDLE UI scale: ÚNICO mecanismo de escala de fonte/janelas (era
 # mobile/web-only; agora também manual no Desktop via Settings
 # "General-UIScale"). Fator 1.0 = tamanho de design (viewport 1280×720,
 # fonte base do tema). Chamadas são absolutas (não acumulam): a fonte base
-# é capturada uma vez e toda chamada reaplica base × fator.
-const UIScaleMobileDefault : float = 1.2
-const UIScaleMin : float = 1.0
-const UIScaleMax : float = 2.0
+# é capturada uma vez e toda chamada reaplica base × fator. A matemática, os
+# limites e o ajuste mobile/web são fatia do gate anti-god-node:
+# `GuiUiScale.gd` — o estado (`uiScaleFactor`, base) fica aqui, onde Settings e
+# os harnesses leem.
 var uiScaleFactor : float = 1.0
 var _baseUIFontSize : int = -1
 
 func ApplyUIScale(factor : float) -> void:
-	uiScaleFactor = clampf(factor, UIScaleMin, UIScaleMax)
-	# SOM-IDLE parser: get_viewport().gui_theme_default_font_size não existe
-	# neste build (erro em runtime) — ThemeDB.fallback_font_size é a API
-	# correta p/ escalar a fonte de TODA a UI globalmente.
-	if _baseUIFontSize < 0:
-		_baseUIFontSize = ThemeDB.fallback_font_size
-	ThemeDB.fallback_font_size = int(float(_baseUIFontSize) * uiScaleFactor)
-	# Janelas principais acompanham (toque no mobile, leitura no Desktop HiDPI) — §13: antes só 3.
-	for win in [statWindow, chatWindow, shopWindow, chestsWindow, leaderboardWindow, seasonPassWindow, afkWindow, zoneWindow, auctionHouseWindow, arenaWindow, guildWindow]:
-		if win and win is WindowPanel:
-			(win as WindowPanel).scale = Vector2(uiScaleFactor, uiScaleFactor)
+	uiScaleFactor = GuiUiScale.Apply(self, factor)
+	GuiUiScale.ScaleWindows(self, uiScaleFactor)
 
 # P-A4: ajuste responsivo mínimo para mobile/web (não redesign).
 func _adjust_for_mobile_web():
-	if LauncherCommons.isMobile or LauncherCommons.isWeb:
-		# P-A4 (polimento): responsivo completo — fontes maiores, botões maiores, margens reduzidas.
-		ApplyUIScale(UIScaleMobileDefault)
-		# Reduzir margens das janelas para caber em telas pequenas.
-		if windows and windows is Control:
-			for win in windows.get_children():
-				if win is WindowPanel:
-					win.add_theme_constant_override("margin_left", 4)
-					win.add_theme_constant_override("margin_right", 4)
-					win.add_theme_constant_override("margin_top", 4)
-					win.add_theme_constant_override("margin_bottom", 4)
-		# Aumentar botões manuais para toque (tamanho mínimo 48px)
-		if manualSkillBar and is_instance_valid(manualSkillBar):
-			for child in manualSkillBar.get_children():
-				if child is Button:
-					(child as Button).custom_minimum_size = Vector2(48, 48)
+	GuiUiScale.AdjustForMobileWeb(self)
 
 func ToggleIdleMode():
 	idleMode = not idleMode
@@ -578,8 +429,8 @@ func _input(event : InputEvent):
 	# projeto e os nativos do motor, e nada em `sources/` chama `InputMap.add_action`.
 	# `is_action_pressed` de ação inexistente devolve false para sempre, então este
 	# atalho — o ÚNICO chamador de ToggleIdleMode — nunca disparou em nenhuma build.
-	# Vira tecla crua (o painel de bindings lista categorias próprias, não
-	# `InputMap.get_actions()`, como `InputBindings.gd:133` já faz com ESC) e sai do
+	# Vira tecla crua: o painel de bindings lista categorias próprias, não a
+	# lista de ações do motor, como `InputBindings.gd:133` já faz com ESC. Sai do
 	# F10: essa tecla já é o `ui_settings`, que o painel anuncia como "Settings".
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F12:
 		ToggleIdleMode()
@@ -604,46 +455,20 @@ func OpenUI(target : UICommons.UITarget):
 					node._on_button_pressed()
 
 # SOM-IDLE P2: manual skills interface (hybrid gameplay — manual + fallback idle)
+# As três "fases" abaixo (comercial / performance / rede) são delegações: o corpo
+# está em `GuiSandboxFlows.gd` (gate anti-god-node), os métodos continuam aqui
+# porque o e2e e a ponte de comandos os chamam no `Gui`.
 # Fase comercial (checkout sandbox) — fluxo completo de pagamento simulado.
 func SimulateCheckout(sku : String = "starter.pack"):
-	if Launcher.Economy == null:
-		if notificationLabel:
-			notificationLabel.AddNotification("Checkout: EconomyService not available", 2.0)
-		return
-	var accountID : int = 0
-	var peer : Variant = Launcher.get("Peer") if Launcher else null
-	if peer and int(peer.get("accountID", 0)) > 0:
-		accountID = int(peer.get("accountID", 0))
-	if accountID <= 0:
-		if notificationLabel:
-			notificationLabel.AddNotification("Checkout: no account ID found", 2.0)
-		return
-	var intent : Dictionary = Launcher.Economy.GetCheckoutIntent(accountID, sku)
-	if not bool(intent.get("ok", false)):
-		if notificationLabel:
-			notificationLabel.AddNotification("Checkout rejected: %s" % str(intent.get("reason", "unknown")), 2.0)
-		return
-	# Simula aprovação do pagamento (sandbox) e concede o grant.
-	if notificationLabel:
-		notificationLabel.AddNotification("Checkout approved: %s (%.2f BRL)" % [str(intent.get("label", sku)), float(intent.get("price", 0.0))], 3.0)
+	GuiSandboxFlows.SimulateCheckout(self, sku)
 
 # Fase performance (P4 profiling + benchmarks) — execução simples do benchmark gate.
 func RunPerformanceBenchmark():
-	if notificationLabel:
-		notificationLabel.AddNotification("Performance benchmark started...", 1.0)
-	# O benchmark real roda via `godot --headless -s tests/benchmarks.gd`;
-	# esta função apenas notifica o início/fim para o usuário.
-	if notificationLabel:
-		notificationLabel.AddNotification("Benchmark gate: budget 500ms settle, 1000ms XP, 200ms catalog", 2.0)
+	GuiSandboxFlows.RunPerformanceBenchmark(self)
 
 # Fase rede/servidor (estabilidade) — verificação básica de conectividade.
 func CheckNetworkStability():
-	if Network.Client == null and not LauncherCommons.isWeb:
-		if notificationLabel:
-			notificationLabel.AddNotification("Network: Client disconnected", 2.0)
-	else:
-		if notificationLabel:
-			notificationLabel.AddNotification("Network: Stable", 1.0)
+	GuiSandboxFlows.CheckNetworkStability(self)
 
 var manualSkillButtons : Array[Button] = []
 var manualSkillBar : HBoxContainer = null
@@ -727,26 +552,11 @@ func _on_manual_skill_pressed(skillID : int):
 					btn.add_theme_color_override("font_color", Color(1, 1, 0, 1))
 	# Fallback idle (IdlePolicy) remains intact — no interruption needed.
 
+# A tabela alvo → controle vivo é fatia do gate anti-god-node (`GuiHudTargets.gd`);
+# o método continua aqui porque é por ele que o `Client` e o tour de onboarding
+# (e o `tests/IdleTests.gd`) percorrem os painéis.
 func GetUITarget(target : UICommons.UITarget) -> Control:
-	match target:
-		UICommons.UITarget.NONE:			return null
-		UICommons.UITarget.MENUINDICATOR:	return menu
-		UICommons.UITarget.STATINDICATOR:	return stats
-		UICommons.UITarget.HEALTHBAR:		return stats.hpStat
-		UICommons.UITarget.MANABAR:			return stats.manaStat
-		UICommons.UITarget.STAMINABAR:		return stats.staminaStat
-		UICommons.UITarget.STAT:			return statWindow
-		UICommons.UITarget.INVENTORY:		return inventoryWindow
-		UICommons.UITarget.CHAT:			return chatWindow
-		UICommons.UITarget.SKILL:			return skillWindow
-		UICommons.UITarget.MINIMAP:			return minimapWindow
-		UICommons.UITarget.PROGRESS:		return progressWindow
-		UICommons.UITarget.SOCIAL:			return socialWindow
-		UICommons.UITarget.EMOTE:			return emoteWindow
-		UICommons.UITarget.SETTINGS:		return settingsWindow
-		UICommons.UITarget.ACTION_BAR:		return actionBoxes
-		_: push_error("Unhandled UITarget")
-	return null
+	return GuiHudTargets.Resolve(self, target)
 
 #
 func _ready():
@@ -798,3 +608,29 @@ func _on_ui_margin_resized():
 
 	if Launcher.Camera:
 		Launcher.Camera.SendViewportSize()
+
+# SOM-CRAFT (juiz "Core Loop" 2026-09-28): a forja tinha serviço, RPCs e até o
+# comando de GM (`/cs_craft`), mas nenhuma tela — `grep -i craft sources/gui/`
+# devolvia ZERO. O painel abaixo é a porta do mesmo caminho autorizado: o clique
+# termina em `Network.SubmitCraft`, nunca em `Launcher.Economy` (o cliente não tem
+# autoridade para mintar item, e o veredito de insumo/taxa/budget é do servidor).
+var craftWindow : CraftPanel = null
+
+# Pela CENA, como `EnsureGuildPanel`: o TitleBar da cena é o único botão de fechar
+# no mouse/touch. Não nasce de `.new()` — fora de cena o `_ready` não roda e a
+# janela abriria sem porta de saída (§13 da auditoria).
+const CraftPanelScene : PackedScene = preload("res://presets/gui/CraftPanel.tscn")
+
+func EnsureCraftPanel() -> CraftPanel:
+	if craftWindow == null or not is_instance_valid(craftWindow):
+		craftWindow = _FloatingWindow(CraftPanelScene.instantiate() as CraftPanel, "Craft") as CraftPanel
+	return craftWindow
+
+func OpenCraft() -> void:
+	var w : CraftPanel = EnsureCraftPanel()
+	if not w.is_visible():
+		ToggleControl(w)
+	w.OpenCraft()
+
+func _on_craft_pressed() -> void:
+	OpenCraft()

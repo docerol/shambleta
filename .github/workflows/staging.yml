@@ -1,18 +1,47 @@
 name: Deploy to Staging
 
+# Até 2026-09-27 isto era disparado por `push: branches: [develop]` e chamava o
+# endpoint de deploy do Coolify sem esperar nada: a suíte do MESMO commit rodava
+# em paralelo no workflow `godot-ci export`, então um push com teste vermelho ia
+# ao staging do mesmo jeito — o gate existia na vontade de quem leu o arquivo,
+# não no arquivo. `needs:` não atravessa workflows; o mecanismo que o GitHub
+# oferece para isso é `workflow_run`, que dispara na conclusão do workflow
+# nomeado, e a conclusão é conferida no `if:` antes de qualquer passo.
+#
+# Detalhe que derruba quem inventa: `branches:` no gatilho de `workflow_run`
+# filtra a branch PADRÃO do repositório (aqui `master`), não a branch do run que
+# terminou — filtrar por `develop` ali desligava o deploy inteiro. Por isso o
+# filtro de branch vive no `if:`, lido de `workflow_run.head_branch`, que é o
+# commit que de fato originou o run conferido.
 on:
-  push:
-    branches:
-      - develop
+  workflow_run:
+    workflows: ["godot-ci export"]
+    types:
+      - completed
+
+permissions:
+  contents: read
 
 jobs:
   deploy-staging:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'develop'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      # Os dois valores entram por `env:`, não interpolados dentro do comando:
+      # é o que mantém o token fora da linha de comando ecoada e a URL fora de
+      # um shell construído a partir de dado de configuração do repositório.
       - name: Deploy to Coolify Staging
+        env:
+          COOLIFY_URL: ${{ vars.COOLIFY_STAGING_URL }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_STAGING_TOKEN }}
         run: |
-          curl -X POST "${{ vars.COOLIFY_STAGING_URL }}/api/v1/deploy" \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_STAGING_TOKEN }}" \
+          # `-f` importa: sem ele um 4xx/5xx do Coolify sai com código 0 e o
+          # passo "verde" não implantou nada — o mesmo modo de falha que já
+          # custou o healthcheck do serviço `web` (ver deploy/STAGING.md).
+          [ -n "$COOLIFY_URL" ] || { echo "::error::COOLIFY_STAGING_URL não configurada (Settings > Variables)"; exit 1; }
+          [ -n "$COOLIFY_TOKEN" ] || { echo "::error::COOLIFY_STAGING_TOKEN não configurada (Settings > Secrets)"; exit 1; }
+          curl -fsS -X POST "$COOLIFY_URL/api/v1/deploy" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
             -H "Content-Type: application/json"

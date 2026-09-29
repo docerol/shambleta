@@ -54,13 +54,18 @@ RATCHET_SLACK=200
 # (banda de 200), para que crescimento e encolhimento tenham room antes de o gate
 # reclamar; a banda inteira é verificada a cada run, e o número impresso é o do
 # run — não este daqui.
+# Exceção registrada: `companion/server.py` subiu de 2068 para 2222 em 2026-09-28
+# porque a agenda de temporada passou a ter uma sucessora real (s2), e o SKU
+# `pass.s2` precisa existir também no espelho `DEFAULT_CATALOG` deste monolito — o
+# boot recusa temporada cujo `premium_sku` não é cobrável nos quatro catálogos (pass
+# M3). Quatro linhas de catálogo, teto +150 pela mesma banda "medido + folga".
 declare -A RATCHET=(
   ["sources/network/server/Server.gd"]=1965
   ["sources/world/WorldCommands.gd"]=1925
   ["sources/sql/SQL.gd"]=1814
   ["sources/network/client/Client.gd"]=1139
   ["sources/network/Network.gd"]=1277
-  ["companion/server.py"]=2068
+  ["companion/server.py"]=2222
 )
 fail=0
 measured=0

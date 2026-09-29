@@ -51,7 +51,8 @@ func QuestRewards():
 		Mes("I don't deserve this. It should belong to someone who is a better friend than I managed to be.")
 		Mes("Here. You take it. You've done more for us in one afternoon than we managed in years.")
 		RemoveItem(heavyEnvelopeID)
-		AddGP(1000)
+		# Os 1000 GP saíram daqui (`AddGP(1000)` sem ledger) para `rewardGP` em
+		# `presets/quests/TulimsharOldFriendship.tres`; o `SetQuest` abaixo paga.
 		SetQuest(QUEST_ID, ProgressCommons.TULIMSHAR_OLD_FRIENDSHIP.REWARDS_WITHDREW)
 	else:
 		Mes("Did you find Ben? He's in the western wall corridor.")
