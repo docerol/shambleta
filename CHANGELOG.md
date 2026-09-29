@@ -22,6 +22,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The harness that proves #86 had never finished a run, and it took three separate defects to
+  get one — each isolated by changing exactly one of them. `_spawnAgent` warmed the farm zone on
+  every call, and `CreateInstance` (`sources/world/WorldMap.gd:38`) only writes
+  `instances[instanceID]` (`sources/world/WorldMap.gd:40`), so the second warm-up replaced the
+  live instance and left
+  the first peer's agent standing in an orphan: the guard "two real PlayerAgents spawned" read a
+  freed reference, which in GDScript is `== null`, printed no `[spawn bail]` line and no script
+  error at all, and aborted the run at 49 checks — 23 of the 72 never executed. Reproduced 2/2
+  against the committed state before the fix, green after: the instance is created only when the
+  map does not already hold it, and the check names each side (`A=true B=true`) because a joint
+  `and` cannot say which half died. Sessions then entered through `Peers.AddPeer`, which is not
+  the product's door: `Network.Bulk` routes every peer not marked WebRTC/WebSocket to the ENet
+  interface (`sources/network/Network.gd:1075`) and `NetInterface.Bulk` reads `bulks[peerID]`
+  (`sources/network/Interface.gd:22`) — a row only `ConnectPeer` writes
+  (`sources/network/server/Server.gd:1807`, and the offline boot self-connects at
+  `sources/network/server/Server.gd:1890`, so in production the row is always there). That cost
+  145 `Out of bounds get index` script errors in a run whose 72 checks were all green: the gate
+  does not accept a script error when nothing fails. Third, delivery was never wired —
+  `NotifyInstance` reaches only players whose own `peerID` is set, which the product writes on
+  world entry (`peerID` at `sources/network/server/Server.gd:527`) — so the ruler for "the cut is
+  in the effect, not only in the counter" read 0 deliveries for an assembly reason while the
+  contrafactual in the same suite (`Network.ChatPlayer` called directly, peerID as an argument)
+  delivered all 200. The suite opens sessions with `ConnectPeer` and releases them with
+  `DisconnectPeer`, the pair the product uses, which also runs the product's own
+  `RateLimit.Forget` and world removal at exit instead of leaving two agents hung. Measured on
+  the fixed suite: 72 checks, 0 failures, zero script errors; R2 accepted 12 of a 200-line flood
+  (the bucket quota), cut 188 and delivered exactly 12 to the client probe, while the control
+  still delivered 200. Teardown had never been recorded for this harness because it had never
+  completed a run — the ceiling of 64 is the lean boot, and a booted world with live agents
+  leaks in the family of the other agent-spawning suites (`social_graph_test` measured 1888):
+  recorded from the run with `TEARDOWN_RECORD=1`, measured 1874 into a ceiling of 2406, and the
+  verifying run measured 1873.
 - Every `arquivo:NN` pointer living in the conf prose was lying — three at HEAD, three
   false — and no gate could see it. `data/conf/seasons.json` pinned the
   `not IsScheduled(s1)` leg at

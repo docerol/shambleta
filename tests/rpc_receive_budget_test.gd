@@ -313,11 +313,19 @@ func _behaviour() -> void:
 		return
 	var agentA : Node = await _spawnAgent(charA, "RLimitA")
 	var agentB : Node = await _spawnAgent(charB, "RLimitB")
-	if not Check(agentA != null and agentB != null, "dois PlayerAgent reais spawnados (TriggerChat só fala com agente vivo)"):
+	if not Check(agentA != null and agentB != null, "dois PlayerAgent reais spawnados, A=%s B=%s (TriggerChat só fala com agente vivo)" % [str(agentA != null), str(agentB != null)]):
 		_finish(7)
 		return
 	(peersScript.GetPeer(pidA) as Object).set("agentRID", int(agentA.call("get_rid").get_id()))
 	(peersScript.GetPeer(pidB) as Object).set("agentRID", int(agentB.call("get_rid").get_id()))
+	# O outro lado do par: `NotifyInstance` só entrega a quem tem `peerID` no AGENTE
+	# (sources/network/server/Server.gd:527 é onde o produto escreve isso na entrada do
+	# mundo). Sem este par o `TriggerChat` global difunde para ninguém e a régua de
+	# "corte no efeito" mede 0 entregas por motivo de montagem, não de cota — medido em
+	# 2026-09-29, com o R2 contrafactual (Network.ChatPlayer direto, que passa o peerID
+	# como argumento) entregando os 200 enquanto o handler entregava zero.
+	agentA.set("peerID", pidA)
+	agentB.set("peerID", pidB)
 
 	originalClient = network.get("Client")
 	probe = _makeProbe()
@@ -435,7 +443,16 @@ func _openSession(accountID : int, charID : int) -> int:
 	var candidate : int = PEER_BASE + accountID
 	while bool(peersScript.HasPeer(candidate)):
 		candidate += 1
-	peersScript.AddPeer(candidate, 0)
+	# A sessão entra pelo funil real de conexão, não por `Peers.AddPeer` direto:
+	# `Network.Bulk` rota para `ENetServer` todo peer que não está marcado WebRTC/WebSocket
+	# (sources/network/Network.gd:1075), e `NetInterface.Bulk` faz get em `bulks[peerID]`
+	# (sources/network/Interface.gd:22). A linha dessa tabela só `ConnectPeer` escreve
+	# (sources/network/server/Server.gd:1807), e o boot offline auto-conecta a sua
+	# (sources/network/server/Server.gd:1890) — na produção ela portanto sempre existe, e
+	# só um registro fora do funil a pula. Medido em 2026-09-29: com `AddPeer` puro o run
+	# teve 145 "Out of bounds get index" e ficou vermelho por SCRIPT ERROR com 72 checks
+	# verdes: o portão não aceita SCRIPT ERROR mesmo quando nenhum check falha.
+	serverNode.call("ConnectPeer", candidate)
 	var peer : Object = peersScript.GetPeer(candidate)
 	if peer == null:
 		return 0
@@ -481,11 +498,15 @@ func _spawnAgent(charID : int, nickname : String) -> Node:
 	var policy : GDScript = load("res://sources/idle/IdlePolicyService.gd")
 	var instID : int = int(policy.GetFarmInstanceID(1))
 	var instances : Dictionary = map.get("instances")
-	var stale : Object = instances.get(instID, null)
-	if stale != null:
-		stale.call("Destroy")
-		instances.erase(instID)
-	map.call("CreateInstance", instID)
+	# O segundo agente entra na MESMA instância. Esquentar a zona de novo chama
+	# `CreateInstance` outra vez, e ela apenas troca a entrada da tabela por um
+	# `WorldInstance` novo (sources/world/WorldMap.gd:40): a instância onde o primeiro
+	# agente está fica órfã, e o `agentA` que o check seguinte consulta passa a ser um
+	# objeto liberado — que em GDScript é `== null`, sem nenhuma linha de diagnóstico.
+	# Reproduzido 2/2 em 2026-09-29 no estado pré-correção: 49 checks, perna falsa, e
+	# NENHUM SCRIPT ERROR no run — este defeito é independente do do `bulks` acima.
+	if not instances.has(instID):
+		map.call("CreateInstance", instID)
 	var warm : bool = false
 	for i in 200:
 		var candidate : Object = policy.GetFarmInstance(1)
@@ -534,6 +555,18 @@ func _finish(code : int) -> void:
 			probe.get_parent().remove_child(probe)
 		probe.free()
 	probe = null
+	if serverNode != null and peersScript != null:
+		# Simetria com a porta de entrada: as sessões entraram por `ConnectPeer`, que escreve a
+		# linha de `bulks` (sources/network/server/Server.gd:1807). Soltá-las por
+		# `DisconnectPeer` é o que a apaga (`bulks.erase` em
+		# sources/network/server/Server.gd:1819), e o `FullyDisconnect` que ele chama solta o
+		# balde (`RateLimit.Forget` em sources/network/server/Server.gd:1826) e tira o agente do
+		# mundo (`WorldAgent.RemoveAgent` em sources/network/server/Server.gd:570) — antes de
+		# qualquer `queue_free`, para que quem remova o agente seja o caminho real, não o
+		# escombro.
+		for pid in (peersScript.peers as Dictionary).keys():
+			if int(pid) >= PEER_BASE:
+				serverNode.call("DisconnectPeer", int(pid))
 	for agent in spawnedAgents:
 		# O `as Node` numa referência já liberada é o "SCRIPT ERROR: Trying to cast a
 		# freed object" que fecha o gate §24-8 antes de qualquer check — medido no gate
@@ -544,10 +577,6 @@ func _finish(code : int) -> void:
 		var node : Node = agent as Node
 		if node != null:
 			node.queue_free()
-	if peersScript != null:
-		for pid in (peersScript.peers as Dictionary).keys():
-			if int(pid) >= PEER_BASE:
-				peersScript.RemovePeer(int(pid))
 	if sql != null:
 		_janitor()
 	if dbScript != null and (dbScript.get("preloadPaths") as PackedStringArray).size() > 0:
