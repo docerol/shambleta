@@ -177,10 +177,10 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 | Core Loop | 8,7 | — | 8,5 | 6,5 | **6,5** | R3B (conferido pelo orquestrador): nove escritores crus de `stat.gp` + snapshot absoluto (`SQL.gd:1156`) revertem o débito do vendor em ≤600 s para personagem conectado, e o detector do kernel só enxerga a perna de baixo (`EconomyKernel.gd:187`). R3A: nenhuma régua emenda o ciclo (logar→farmar→liquidar→gastar→subir zona→renascer na mesma sessão) |
 | Meta Game | 8,5 | — | 7,6 | 7,5 | 7,5 | R3A+R3B: `pass_tiers` é `{}` na S1 — a única temporada no ar corre por default de código (`SeasonConfig.gd:244` valida a faixa, `PassService.gd:84` leria o arquivo se existisse) — e as `races` power/spend não têm produtor rastreado; o ranking de temporada pontua estado acumulado, não o delta da janela (`SeasonService.gd:174-207`) |
 | Game Design | 8,6 | — | 8,0 | 7,0 | 7,0 | R3A+R3B: nenhum sumiouro de gold escala com a torneira (z27 paga ~3,77 M gold/h contra guild L10 a 10 M e teto de vendor ~29 k/dia), a trilha gratuita soma 100 gemas por temporada contra 120 por baú (`EconomyCatalog.gd:447,529`) — o F2P nunca alcança um baú — e `Experience.gd:9-10` afirma "3 semanas"/"satura na zona 24" contra a curva de 27 zonas |
-| Retenção | 7,8 | — |  |  | 7,8 |  |
-| Economia | 9,4 | — |  |  | 9,4 |  |
-| Monetização | 9,4 | — |  |  | 9,4 |  |
-| Marketplace | 8,5 | — |  |  | 8,5 |  |
+| Retenção | 7,8 | — |  | 8,3 | 7,8 | R3B: `StreakService.LossOnBreak` devolve **0 exatamente no dia 7** (`:76-80`, e o comentário diz "no topo do ciclo o número é 0 de propósito") — o único número de aversão à perda desaparece no dia que mais paga, e nenhuma segunda razão de retorno é asserida do dia 8 em diante; a escada `[100,200,300,400,500,750,1000]` (`:21`) é reentrante-safe (`same_day` em `:158`) e sai do relógio do servidor (`:144`). *Medido por ele só em Python:* `test_retention.py` → `== RETENTION: 21 checks, 0 failures ==`. Nenhum harness GD rodou (lock tomado) |
+| Economia | 9,4 | — |  | 8,4 | **8,4** | R3B: paridade online/offline é **de taxa, não de distribuição** — `OfflineSettle.gd:335` sorteia UM item por liquidação (`GetDropForRoll(zoneID, charID + zoneID)`) e grava `report.drops[itemHash] = dropCount` (`:336`): a média bate, a variância do AFK é zero e o pool da faixa nunca diversifica. E o `ReconcileWalletDaily`/`DivergingWallets` (`EconomyKernel.gd:170,207`) usa o ÚLTIMO `balance_after` como atestado — pega reversão de snapshot mas só denuncia. *A favor:* escritor único de ouro com `next < 0 → false` (`:100-110`) e `ApplyGoldMoves` por DELTA (`:116-124`); o fuzzer assere I1..I6 e trata verde por inércia como falha (`economy_invariant_fuzz.gd:309-324,369-373`); knobs cobertos por FAIXA, não igualdade. Nenhum harness GD rodou por contenção |
+| Monetização | 9,4 | — |  | 8,5 | **8,5** | R3B: a perna `kind == "gold"` de `_ApplyGrantRaw` escreve `stat.gp` crua (`CheckoutService.gd:392-396`: `select_rows` → `gp + amount` → `UpdateRowsRaw`) sem `_MoveGoldLocked`/`ApplyGoldMoves`, e para personagem COM agente carregado o snapshot de 600 s reverte o crédito — o detector em `EconomyKernel.gd:187` (`s.gp < balance_after`) só flaga. NENHUM SKU pago é `gold` hoje (kinds em `data/conf/paid_catalog.json` = bundle, cosmetic, gems, pass_premium, vip_days), então o alcance é grant de GM/sandbox, não venda. *A favor, medido por ele:* fila reivindicada no MESMO commit (`CheckoutService.gd:268-275`) com idempotência conferida por conta (`:174`), clawback limitado à parte paga (`:368`) com rombo denunciado (`:219`) e art.49 exigindo prova de origem (`:552`); SSV pendente até HMAC em produção (`AdsCosmeticsService.gd:91-96,114`). Rodou `test_refund_cli` (`12 checks`) e `test_season_offer` (`125 checks`); `spend_confirm_test`/`fraud_test`/fuzz ficaram por rodar (`GATE SERIALIZADO`) |
+| Marketplace | 8,5 | — |  | 7,6 | **7,6** | R3B (conferido pelo orquestrador): **wash-trade invisível por construção.** `ListItemForSale` só valida `priceGold <= 0 → 0` (`AuctionHouseService.gd:269`) — nenhuma faixa de preço contra `ah_price_history` ou vendor; e o `flip_trade`/`trade_burst` de `FraudeReview.gd:328,340,345` casa **somente** `trade_out:%`/`trade_in:%`, enquanto o AH grava `ah_list:%d:uids…` (`:96,:323`) e `ah_in:%d:lot%d` (`:400`) — o comentário de `:391-399` explica que o namespace foi movido justamente para comprar no leilão não armar cooldown nem flag de lavagem, e o efeito colateral é que A-anuncia → B-compra → B-anuncia → A-compra entre duas alts transfere ouro arbitrário em preço auto-fixado sem sinal nenhum. O leilão também não herdou nenhuma das três fricções da troca direta (e-mail verificado, cooldown, cap diário — `TradeChestService.gd:38-49`), só 5 gems de taxa e 5 slots; e **anúncio não expira nunca** — `auction_listing` tem `status`/`created_at` mas nenhum `expires_at` (DDL em `migrations/018`, conferido por mim) e nenhuma referência a expiry/reaper em `sources/`, então o ask espera o alt o tempo que for preciso com o item travado fora do inventário do dono. `CancelListing` (`:460`) re-minta lote novo por `_GrantStackRaw` embora `escrow_uids` esteja gravado (`:94,:318`) e lido só em `:375` para o `parentUID` do COMPRADOR — e ainda por `[0]`, o primeiro uid de um anúncio com `count > 1`: a linhagem do lote quebra no cancelamento e nunca é restaurada. *A favor:* autordealização barrada nas duas chaves (`:354`), escrow de demanda conferido antes de pagar (`:627`), `UNIQUE(listing_id)` (migration 059) e a suíte asserindo riqueza invariante (`marketplace_depth_test.gd:412`, `_riches` em `:168-172`). Nenhum harness GD rodou para ele (`GATE SERIALIZADO`, ~975 s) |
 | Analytics | 8,0 | — | 8,5 | 7,5 | 8,0 | R3A+R3B: o D1 é honesto sobre a própria janela nas duas pontas (`TelemetryService.gd:83,281`, `companion/server.py:466-476` com `window_closed`, migration 045) e os 14 `FUNNEL_KINDS` têm emissor real — mas `telemetry_event` não tem poda temporal alguma (retenção de 90 dias é só do ledger, `SQLRetention.gd:30`; o único delete é LGPD em `SQL.gd:326`), e `FunnelDaily`/`/metrics` fazem `GROUP BY` numa tabela que cresce para sempre com feature flag como única proteção |
 | Live Ops | 9,2 | — | 6,0 | 6,8 | **6,0** | R3A+R3B: `deploy/alertmanager.yml:60-64` materializa os dois receivers como `webhook_configs: []` — por default do repo o `severity: page` não acorda ninguém; nenhum dashboard versionado; rotação de temporada/campanha é PULL com TTL de 60 s (`LiveOpsCalendar.gd:108`) e não há cron versionado (`deploy/STAGING.md:136`), então a transição depende de trocar arquivo no host. *A favor, medido por R3B:* as dez séries de `alerts.rules.yml` resolvem em `MetricsServer.gd:190-244` e o orçamento do drain tem controle negativo que morde (`check_compose.sh`) |
 | Arquitetura | 8,5 | — | 7,0 | 8,9 | **7,0** | R3A+R3B: `EconomyKernel.GrantItem` (`:44-55`) insere em `ledger_transaction` por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex`, **fora** de `SQL.Transaction()` — ao contrário de `LedgerAppend` (`:33-41`), que declara o contrário no comentário — enquanto `:20-28` lê a mesma tabela pelo funil; e `deploy/SCALING.md:285-286` afirma que "a `queryMutex` de `SQL.gd:7` continua sendo o único funil de escrita" contra 30 escritores `.db.` crus em `sources/` (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`, `CheckoutService.gd:490`), sem nenhum gate de censo. R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
@@ -194,11 +194,13 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 | DevOps | 8,9 | 8,8 | 6,3 | 7,0 | **6,3** | R3A+R3B: `snap`/`release` com `needs: builds` publicam com teste vermelho; `deploy/ROLLBACK.md:26-33` declara que não há registry e `pull_policy: never` (`docker-compose.yml:50,102,211,319,374`), então o `SHAMBLETA_TAG` do job `container-images` morre no runner efêmero; smoke de compose roda 0 containers e nenhum `up` existe no caminho |
 | Documentação | 8,6 | 7,5 | 8,5 | 6,5 | **6,5** | R3A: taxa de erro falsa medida por ele = 0/5 (`DOC DRIFT: 1391 checks, 0 failures`), mas nenhuma afirmação de COMPORTAMENTO é coberta — números de `SCALING.md`/`OPS_RUNBOOK.md`/`WEB_SLIM.md` e o "4.7.2" de `deploy/web/landing/index.html:118`, construído em 4.7.1; e `tests/panel_fit_test.gd:6-7` aponta `WindowPanel.gd:235-237` para código que está em :238-239 sem acusação. R3B: duas afirmações falsas conferidas por mim passam — `docs/development/testing.md:87` diz "as 61 patches reais do boot viram a versão 61" contra 62 `.sql` em `data/conf/migrations/` (001..062), e a régua de numeral (`check_doc_drift.sh:178`) só morde quando o substantivo é "migrations", nunca "patches"; `README.md:65` aponta `Action.gd:176-199` para a cadeia `ui_*` que vai até 200, com `ui_fullscreen` FORA do intervalo citado, sem acusação |
 
-Cadeiras entregues: **8 de 10** — produto A+B, engenharia A+B, entrega A+B,
-experiência A+B. Faltam as duas de dinheiro (`juiz-A-dinheiro2`, `juiz-B-dinheiro2`),
-relançadas depois que os assentos originais estouraram o teto de turnos. Enquanto elas
-voam, a árvore fica congelada: são exatamente os arquivos de dinheiro que elas leem, e
-mudar `scripts/test.sh` sob um run em andamento fabrica um verde que ninguém mediu.
+Cadeiras entregues: **9 de 10** — produto A+B, engenharia A+B, entrega A+B,
+experiência A+B, dinheiro B. Falta só `juiz-A-dinheiro2`, relançada depois que o assento
+original estourou o teto de turnos. Enquanto ela voa, a árvore fica congelada: são
+exatamente os arquivos de dinheiro que ela lê, e mudar `scripts/test.sh` sob um run em
+andamento fabrica um verde que ninguém mediu. O `juiz-A-engenharia` original também bateu no
+teto (150 turnos) depois que o substituto entregou — a cadeira conta uma vez, pelo veredito
+que chegou.
 
 R1 foi um juiz por categoria (a regra 6 só passou a valer na rodada 2), então a
 coluna R1 é nota única. `Social` teve R2 re-medida à parte, com a governança de
@@ -472,4 +474,79 @@ métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gat
   geram verde falso), mas queimam um boot de vários minutos justamente do juiz que depura;
   e a veracidade do marcador dos outros 56 harnesses ficou como deriva em shell, não como
   run.
+
+### Veredito bruto — juiz B, grupo dinheiro (Retenção, Monetização, Marketplace, Economia)
+
+Chegou 2026-09-29 (33 chamadas, assento relançado com teto). **Não conseguiu rodar nenhum
+harness GD**: `bash scripts/test.sh one economy_invariant_fuzz` devolveu
+`GATE SERIALIZADO: godot pid 330713 pertence a outra instância deste script` em 3 tentativas
+ao longo de ~975 s, e ele registra isso como contenção, não como falha do projeto. Rodou os
+portões Python, que ficaram verdes: `test_retention.py` (`== RETENTION: 21 checks, 0 failures ==`),
+`test_refund_cli.py` (`12 checks`), `test_season_offer.py` (`125 checks`). Conferi por mim,
+antes de gravar, as quatro afirmações que baixam a nota: o `LossOnBreak` de topo de ciclo, o
+`stat.gp` cru do grant, o par de padrões do detector de lavagem contra os motivos do AH, e o
+`escrow_uids` gravado e nunca lido no cancelamento.
+
+- **Retenção 8,3.** O ciclo existe e é honesto: escada `[100,200,300,400,500,750,1000]`
+  (`StreakService.gd:21`), reentrada no mesmo `ShopDay` sem nada (`:158`), ouro saindo pelo
+  ledger (`:188`), relógio do servidor (`:144`) — nunca data de cliente. Progresso offline
+  cap-8 h F2P / 24 h VIP / horas por anúncio (`OfflineSettle.gd:131-132`) e a XP que sobra no
+  cap vira essência (`:409-411`). O `balance_test` assere o carimbo do funil de login
+  (`:187`) e a proporção do faucet, não uma constante (`:358`: ciclo semanal ≤ 10% de uma
+  liquidação F2P no cap). **Contra:** `LossOnBreak` (`:76-80`) devolve 0 exatamente no dia 7 —
+  o comentário confessa "no topo do ciclo o número é 0 de propósito" — então o único número
+  de aversão à perda some no dia que mais paga, e nenhuma segunda razão de retorno é asserida
+  do dia 8 em diante. *Hipótese dele:* não há notificação de "cap offline cheio" como gatilho
+  de retorno, e o D1 é régua de medição, não mecanismo de retenção.
+- **Monetização 8,5.** A perna de dinheiro está fechada onde ele pôde medir: fila reivindicada
+  dentro do MESMO commit (`CheckoutService.gd:268-275`, `AND status='pending'` + releitura de
+  verificação antes de creditar), idempotência conferida por CONTA (`:174` — colisão de chave
+  de outra conta recusa em vez de devolver `true`), clawback limitado à parte paga (`:368`
+  `mini(owed, clampi(GetGemsPaidRaw, 0, clawBal))`), rombo denunciado na coluna `error` e na
+  fila de revisão (`:219`), art.49 exigindo prova de origem (`:552`) e barrando pagamento
+  duplo pós-clawback (`:541`). Em produção o slot de anúncio nasce PENDENTE (`expires_at = 0`)
+  e só o HMAC do portal ativa (`AdsCosmeticsService.gd:91-96`), com nonce de
+  `Crypto.generate_random_bytes(16)` e não `randi()` (`:114`). Preço único em
+  `data/conf/paid_catalog.json` com consentimento antes de qualquer preço (`:93`) e SKU do
+  passe lido da linha ativa do banco (`:133`). **Contra:** o grant `kind == "gold"` escreve
+  `stat.gp` cru (`:392` leitura, `:396` `{"gp" = gp + amount}`) fora do caminho único que
+  `AuctionHouseService.gd:10-14` e `EconomyKernel.gd:86-96` documentam — para personagem com
+  agente carregado o snapshot de 600 s reverte o crédito, e o detector de `:187` só flaga.
+  Nenhum SKU pago é `gold` hoje, então o alcance é GM/sandbox.
+- **Marketplace 7,6 — a nota mais baixa e o achado mais dele.** A mecânica é sólida:
+  autordealização barrada nas duas chaves (`:354`, mesmo caminho de liquidação para ask e bid),
+  escrow de demanda conferido antes de pagar (`:627` `held < need * unitCap → false`),
+  depósito por `_MoveGoldLocked` (`:558`), sobra devolvida (`:649,:656`), cap por conta
+  (`:549`), preço realizado na MESMA transação (`:389`) com `UNIQUE(listing_id)` (059), e a
+  suíte asserindo invariante — `marketplace_depth_test.gd:412` confere que a RIQUEZA
+  (carteira + escrow aberto, `:168-172`) não mudou. **Contra:** não há faixa de preço
+  (`:269` só `priceGold <= 0`) e o detector ficou cego por decisão documentada: `:391-399`
+  explica que a perna de compra foi movida de `trade_in:` para `ah_in:` porque `LastTradeTimestampRaw`
+  armava o cooldown de 60 s de troca direta em quem comprava no leilão e `_FlagFlipTrades`
+  abria flag de lavagem em quem recomprou o próprio item — mas `_FlagFlipTrades`/`trade_burst`
+  (`FraudeReview.gd:328,340,345`) só enxergam `trade_out:%`/`trade_in:%`, então o round-trip
+  entre duas alts do mesmo humano transfere ouro arbitrário em preço auto-fixado sem sinal
+  nenhum. O AH não herdou nenhuma fricção da troca direta (`TradeChestService.gd:38-49`:
+  e-mail verificado, cooldown, cap diário) — tem 5 gems de taxa e 5 slots. E
+  `CancelListing` (`:460`) re-minta lote novo apesar de `escrow_uids` estar gravado (`:94,:318`)
+  e lido só em `:375`, pelo primeiro uid, para o `parentUID` do comprador. *Conferido por mim
+  além dele:* `auction_listing` não tem `expires_at` (DDL em `data/conf/migrations/018`, com
+  `status`/`created_at` e índices por `status`) e nenhuma referência a expiry/reaper em
+  `sources/` — o ask espera a alt o tempo que for, com o item travado fora do inventário.
+- **Economia 8,4.** Escritor único de ouro com carteira nunca negativa (`EconomyKernel.gd:100-110`),
+  `ApplyGoldMoves` aplicando DELTA e não valor absoluto para não apagar receita ganha durante a
+  transação (`:116-124`); fuzzer assere I1..I6 (`economy_invariant_fuzz.gd:309-324,336,342`) e
+  trata verde por inércia como falha (`:369-373`); uma única régua `equivKills` gera os dois
+  faucet (`OfflineSettle.gd:319-331`) com o drop recalibrado de ppm-de-segundos para
+  ppm-de-kills contra a taxa online medida ("0,54 drop/h contra ~105/h do farm ao vivo",
+  `:324-326`); paridade online/offline asserida como invariante em `balance_test.gd:230-237`;
+  knobs por FAIXA (`economy_knob_range_test.gd`). **Contra:** offline sorteia UM item por
+  liquidação (`GetDropForRoll(zoneID, charID + zoneID)`, `:335`, gravado como
+  `drops[itemHash] = dropCount`) — a taxa bate, a distribuição não: o AFK tem variância zero e
+  nunca diversifica o pool da faixa. E `ReconcileWalletDaily`/`DivergingWallets` (`:170,:207`)
+  usa o último `balance_after` como atestado, o que pega reversão de snapshot mas só denuncia.
+- **Declaração de limitação, dele:** "medi sob contenção, nada aqui é veredito vermelho do
+  projeto"; o `spend_confirm_test`, o `fraud_test` e o fuzz de invariantes — a prova executável
+  de dupla entrega e estorno pós-gasto — nunca rodaram para ele, então a robustez do fuzzer é
+  lida de código.
 
