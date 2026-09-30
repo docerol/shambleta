@@ -777,8 +777,10 @@ func _suitePriceBand() -> void:
 	# A régua lê a MESMA função que o funil de anúncio usa para julgar o preço
 	# (`AuctionHouseService.gd:729` chama `AHPriceBand(itemID, unit)`), no instante em
 	# que o anúncio foi julgado. `ListItemForSaleChecked` ecoa `band` só nas recusas
-	# Early (`:712/:730` devolvem `result`, que tem a chave); o caminho de sucesso
-	# devolve `out` (`:738`, `:844`), que nunca teve `band` — buscar a chave no
+	# Early (`sources/economy/AuctionHouseService.gd:712,730` devolvem `result`, que tem a
+	# chave); o caminho de sucesso devolve `out`, declarado e devolvido dentro de
+	# `ListItemForSaleChecked` (`sources/economy/AuctionHouseService.gd:@ListItemForSaleChecked`),
+	# que nunca teve `band` — buscar a chave no
 	# veredito aceito era `null as Dictionary` e derrubava a suíte inteira com
 	# SCRIPT ERROR. Não é afrouxamento: `no_anchor` continua exigido por nome, e se o
 	# produto passar a ancorar item sem histórico esta linha fecha vermelha.

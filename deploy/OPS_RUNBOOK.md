@@ -186,7 +186,7 @@ O gate lê os quatro `depends_on` + as portas dos probes contra o código:
 |---|---|---|
 | `deploy/web/Dockerfile:50` | remover o `HEALTHCHECK ... wget -qO- http://127.0.0.1/` | o compose agora define o probe honesto; a linha na imagem é um check que não consegue falhar (`try_files ... /index.html`, `deploy/web/nginx.conf:306`) e só sobrevive para confundir quem lê a imagem. |
 | `main()` — `companion/server.py:@main` | instalar handler de `SIGTERM` antes do `serve_forever()`, com join das threads | hoje `docker stop` mata no meio de um webhook (medido: exit 143). O provedor re-tenta, mas a janela entre verificar a assinatura e gravar o grant é exatamente onde o dinheiro vive. |
-| `sources/sql/SQLBackups.gd:92` | `lastDailyBackupTimestamp = 0` (como `:102` faz para o job meta) | redeploy diário zera o relógio do backup diário; ver `deploy/BACKUP_RUNBOOK.md` §2. |
+| `sources/sql/SQLBackups.gd:92` | `lastDailyBackupTimestamp = 0` (como `lastMetaJobTimestamp = 0` já faz em `sources/sql/SQLBackups.gd:102`, na mesma `Run()`) | redeploy diário zera o relógio do backup diário; ver `deploy/BACKUP_RUNBOOK.md` §2. |
 
 
 **Não é mais pendência (2026-09-28, conferido no arquivo, não na memória):** a

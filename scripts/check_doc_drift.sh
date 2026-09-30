@@ -949,6 +949,23 @@ IDENT_MIN=120
 # devolve "0 acusações" julgando 180 nomes, e 180 passa no IDENT_MIN acima: o zero não
 # prova nada, o 87 é que prova que a classe foi lida.
 RESOL_MIN=87
+# Piso da régua de CONTINUAÇÃO (#124, fatia órfão). O braço nasceu nesta passada e foi
+# rodado contra a árvore ANTES do conserto (be573ce): 33 `:NN` lidos — 22 ÓRFÃOS (numero
+# sem arquivo na linha) e 11 herdando — e 24 acusações, porque além dos 22 órfãos dois
+# herdando mentiam: em COOLIFY a faixa 111-120 de SQLBackups caia numa linha em branco,
+# e em OPS_RUNBOOK o número 102 nomeava `lastDailyBackupTimestamp`, que mora em 92, 164
+# e 166. O piso NÃO é 33, e a razão é a mesma que faz o braço existir: cobrar 33
+# continuações seria cobrar que os 22 órfãos continuassem na árvore, porque a única
+# forma de manter esse piso verde é não consertar os órfãos — piso que só fica verde com
+# a doença presente é prêmio à doença. O censo de agora é 9 lidos, 9 julgados pelo
+# arquivo herdado, 0 órfãos, 0 acusações, e é esse o piso: afrouxamento de população
+# medida, não de métrica, com o mesmo predicado nos mesmos dois cortes. O que impede a
+# volta do órfão não é este piso, é a acusação: `herdado is None` entra em
+# `cont_accused`, que é somado às falhas do portão — órfão novo é vermelho na hora, e foi
+# assim que os 22 saíram, não por edição a olho. Este piso guarda só o walk mudo: 0
+# lidos com 9 na árvore é braço parado, e o que prova que o braço lê é o self-test
+# mordendo os 10 controles (dois deles exatamente o órfão e o off-by-one de grupo).
+CONT_MIN=9
 # Piso da régua de literal: o censo medido no run de 2026-09-28 é 54 ponteiros
 # pinados. É pouco porque a régua só julga o literal que mora UMA vez no arquivo-alvo
 # — duas ocorrências não pinham nada e o caso devolve "não julgado" — e a maioria das
@@ -982,6 +999,20 @@ REG_MIN=2
 #    de lá da vírgula de `0,70`, e âncora sem nome na oração é decorativa. A vírgula
 #    decimal é lida aqui como fronteira de oração, o que corta cláusula no meio de toda
 #    prosa de número em português — achado registrado, não consertado de passagem.
+#    Os 148 de agora são os 137 daquela costura mais 11, e os 11 não saíram de marreta:
+#    saíram de matar a classe que nenhuma régua lia. O braço 29, rodado contra a árvore
+#    do HEAD, acusou 22 números sem arquivo na linha, e onde havia símbolo declarável a
+#    resposta foi âncora: cinco em `deploy/BACKUP_RUNBOOK.md`, um em `deploy/COOLIFY.md`
+#    (a porta que estava escrita como `:NN` e portanto lida como linha), um em
+#    `tests/d1_return_metric_test.gd`, um em `tests/economy_invariant_fuzz.gd` e dois em
+#    `tests/marketplace_depth_test.gd` que cabem numa âncora só porque a frase passou a
+#    nomear a função que declara o `out`. Isso fecha dez; o décimo primeiro veio de um
+#    ponteiro que JÁ tinha arquivo em COOLIFY e valia menos que o nome da função que o
+#    dispara. Dos doze órfãos que sobram, nenhum tem símbolo para ancorar: seis eram esta
+#    régua citando a própria régua, dois eram exemplo de sintaxe no harness, e quatro são
+#    o `pull_policy` do compose, onde âncora não cabe porque `DECLS` só conhece gd, py e
+#    sh — a forma barata ali é nomear o arquivo UMA vez e deixar o `ANYCITE` ler as cinco
+#    linhas, que é o que a enumeração de `deploy/ROLLBACK.md` faz.
 #  - LINE_MAX é TETO de `arquivo:linha`: só pode descer. Subir é a marreta sendo
 #    paga de novo, e foi exatamente assim que o custo apareceu: +132 linhas numa
 #    rodada quebraram 21 ponteiros. A queda de 608 para 496 é a fatia 3 cobrando a
@@ -1000,12 +1031,13 @@ REG_MIN=2
 #    bloco — 165 sentenças a reescrever, julgamento, não marreta.
 # O censo desta passada foi escrito com uma disciplina a mais, e ela é medida, não
 # prometida: `sources/idle/FarmZoneData.gd` foi re-fluxido para ficar com o MESMO
-# número de linhas do HEAD (13 entradas, 13 saídas), porque seis ponteiros de nome nu
-# (`:180`, `:243-254`, `:260-272`, `:377-385`, `:401`, `:513`, em três arquivos)
-# apontam para dentro dele e cada linha que eu acrescento lá é uma mentira que entra
-# pela porta dos fundos — nenhuma régua a acusaria, porque o arquivo é citado sem
-# caminho e a linha citada continua cheia. É o custo da marreta em cifra exata: uma
-# frase sobre âncora custa dois minutos de re-fluxo enquanto o ponteiro for de linha.
+# número de linhas do HEAD (13 entradas, 13 saídas), porque cinco citações dele pelo
+# nome, sem caminho, em quatro arquivos, apontavam para dentro; cada linha que eu
+# acrescentasse lá era
+# uma mentira entrando pela porta dos fundos — nenhuma régua a acusaria, porque o
+# arquivo é citado sem caminho e a linha citada continua cheia. É o custo da marreta em
+# cifra exata: uma frase sobre âncora custa dois minutos de re-fluxo enquanto o ponteiro
+# for de linha.
 # O censo de 2026-09-30 é a passada da resolução, e ela baixou o teto sem marreta:
 # oito ponteiros viraram âncora (README dois, `architecture.md`, `debugging.md`,
 # `testing.md`, `FarmZoneData.gd`, `drop_band_content_test.gd`, `fraud_test.gd`), e a
@@ -1024,8 +1056,14 @@ REG_MIN=2
 # oração, e dois juízes da MESMA promessa liam duas promessas. Agora os dois chamam
 # `lit_clause` e os dois perdoam o nome do próprio arquivo; cada isenção entrou no
 # self-test com o espelho que prova que não é manto, e os controles mordem 50/50.
-ANCHOR_MIN=137
-LINE_MAX=491
+# A passada do órfão baixou o teto em UM, e o número pequeno é a descoberta, não o
+# barulho: o censo de linha nunca foi onde o custo morava. Dos 22 números sem arquivo,
+# nenhum foi devolvido à linha certa — dez viraram âncora, quatro viraram um só
+# ponteiro de enumeração, seis eram esta régua citando a si mesma e dois eram exemplo de
+# sintaxe no harness. O que cai de vinte e dois para zero não é marreta paga, é classe
+# que enfim tem juiz; régua nova se prova em acusação, não em ratchet de linha.
+ANCHOR_MIN=148
+LINE_MAX=490
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))
@@ -1099,6 +1137,68 @@ ANYCITE = re.compile(r"(?<![\w./-])" + _TGT + r":(\d+)((?:[-,]\d+)*)")
 # escolha; (2) o que a prosa pin-a aparece dentro do bloco. O literal viaja junto,
 # senão a âncora vira "o nome existe", e isso não prova nada.
 ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*)")
+
+# A CONTINUACAO de ponteiro: `:NN` ou `:NN-MM` sem arquivo, herdando o alvo do
+# ponteiro anterior. Nem `PTR` nem `ANYCITE` nem `ANCHOR` a veem, porque as tres
+# exigem o `arquivo.ext` antes do dois-pontos — entao a classe inteira era ilegivel
+# para o portao barato. Censo medido por este braço na arvore do HEAD (be573ce): 33
+# continuacoes fora dos registros datados, 22 delas sem antecedente nenhum na linha e
+# 11 herdando o alvo, e 24 acusacoes — os 22 orfaos mais dois herdando que mentiam.
+# O nome e CONTPTR
+# porque `CONT` ja e o regex de token-de-continuacao da régua de faixa, e os dois
+# significam coisas opostas.
+CONTPTR = re.compile(r"`:(\d+)(?:-(\d+))?`")
+
+
+class Herdado:
+    """Um `:NN` julgado como ponteiro: a interface de `PTR`, com o arquivo emprestado.
+
+    `PTR` e `CONT` tem grupos em posicoes diferentes (o arquivo desloca os numeros em
+    uma casa), entao o adaptador e o que deixa o `verdict` julgar os dois sem saber
+    qual dele veio de onde.
+    """
+
+    def __init__(self, m, arquivo):
+        self._m = m
+        self._arquivo = arquivo
+
+    def group(self, i):
+        if i == 1:
+            return self._arquivo
+        if i == 2:
+            return self._m.group(1)
+        if i == 3:
+            return self._m.group(2)
+        return self._m.group(0)
+
+    def start(self):
+        return self._m.start()
+
+    def end(self):
+        return self._m.end()
+
+
+def herancas(line):
+    """[(match do `:NN`, arquivo herdado ou None)] para cada continuacao da linha.
+
+    Heranca e do ultimo `arquivo:NN` ou `arquivo:@simbolo` ANTERIOR NA MESMA LINHA, e
+    so ai. Nada de linha anterior: a promessa de um `:NN` e lida por quem esta com o
+    olho na frase, e uma regla que herda de cima passaria a depender de onde a frase
+    quebrou no arquivo — o mesmo defeito de juiz que le a linha errada que o #116
+    registrou. Sem antecedente, `None`: o opto e acusar, nao adivinhar.
+    """
+    saida = []
+    ultimo = None
+    eventos = []
+    for rx, tipo in ((PTR, "p"), (ANCHOR, "a"), (CONTPTR, "c")):
+        for m in rx.finditer(line):
+            eventos.append((m.start(), tipo, m))
+    for _pos, tipo, m in sorted(eventos, key=lambda t: t[0]):
+        if tipo == "c":
+            saida.append((m, ultimo))
+        else:
+            ultimo = m.group(1)
+    return saida
 
 
 # ---------------------------------------------------------------------------
@@ -1778,6 +1878,75 @@ def selftest():
     return biting, total
 
 
+# Os dois controles da classe `:NN`. O primeiro é a FORMA da herança (de qual arquivo
+# cada continução fala), o segundo é o ADAPTADOR: `PTR` e `CONTPTR` têm os grupos em
+# casas diferentes — no ponteiro nomeado o arquivo é o grupo 1 e a linha o grupo 2, no
+# nu a linha é o grupo 1 — então um off-by-one aqui julgaria o arquivo como se fosse a
+# linha, ou a linha 4 como se fosse a 3, e o verde sairia de uma régua que não leu nada.
+HERD_HERDAS = [
+    ("herança: o `:NN` puxa o arquivo do ponteiro anterior na mesma linha",
+     "abre `Beta` em `x.gd:3` e fecha em `:4`", ["x.gd"]),
+    ("herança: âncora também é antecedente, porque o arquivo é o mesmo",
+     "declara `Beta` (`x.gd:@Beta`), e o corpo está em `:4`", ["x.gd"]),
+    ("órfão: `:NN` antes de qualquer ponteiro da linha não herda de nada",
+     "`:4` abre a frase, e `x.gd:3` vem depois", [None]),
+    ("troca: cada continuação herda do SEU antecedente, na ordem da linha",
+     "`a.gd:1` nomeia `Beta` e `:3` também; depois `x.gd:3` e `:4`", ["a.gd", "x.gd"]),
+    ("faixa: `:4-6` é uma continuação, não duas",
+     "mora em `x.gd:3` e a cadeia está em `:4-6`", ["x.gd"]),
+    ("sem continuação na linha, nenhuma herança é inventada",
+     "só `x.gd:3` e `x.gd:4`", []),
+]
+
+HERD_ADAPTADOR = [
+    ("adaptador: o número herdado é o cobrado, e ele mora no alvo",
+     "(`x.gd:4`), o `GATE_RUN` mora na `:2`", True),
+    ("adaptador: o mesmo número apontando para outra linha é acusado",
+     "(`x.gd:4`), o `GATE_RUN` mora na `:5`", False),
+]
+
+
+def herdselftest():
+    biting = 0
+    total = 0
+    for label, line, esperadas in HERD_HERDAS:
+        total += 1
+        vistas = [arq for _m, arq in herancas(line)]
+        if vistas == esperadas:
+            biting += 1
+        else:
+            print("[FAIL] continuação: self-test cego no controle %s (herda %s, esperado %s)"
+                  % (label, vistas, esperadas))
+    for wide in (False, True):
+        nome = "wide" if wide else "narrow"
+        for label, line, esperado in HERD_ADAPTADOR:
+            total += 1
+            hs = herancas(line)
+            err = None
+            if not hs:
+                err = "nenhuma continuação reconhecida na linha do controle"
+            else:
+                mc, arq = hs[0]
+                if arq is None:
+                    err = "órfão onde o controle promete um antecedente"
+                else:
+                    # O MESMO caminho de `scan()`: o `:NN` vira `Herdado` e o veredito
+                    # decide pela oração cortada na posição dele, não na do ponteiro.
+                    ok, cands, _where, _motivo = verdict(
+                        lit_clause(None, line[:mc.start()], False, False),
+                        Herdado(mc, arq), ALVO5, wide, "x")
+                    if ok != esperado:
+                        err = "deveria %s e %s (candidatos %s)" % (
+                            "aprovar" if esperado else "acusar",
+                            "aprovou" if ok else "acusou", cands[:3])
+            if err is None:
+                biting += 1
+            else:
+                print("[FAIL] continuação: self-test %s cego no controle %s (%s)"
+                      % (nome, label, err))
+    return biting, total
+
+
 def build_index(root):
     # indice basename -> ate tres caminhos, para resolver ponteiro citado por NOME NU.
     # A medicao desta passada: 95 ponteiros fora dos registros datados tem alvo que nao
@@ -1810,6 +1979,10 @@ def scan(root, wide, reg, index):
     reg_accused = 0
     anchor_total = 0
     anchor_accused = 0
+    cont_total = 0
+    cont_judged = 0
+    cont_accused = 0
+    cont_orfas = 0
     line_total = 0
     resolvidos = [0]
 
@@ -1904,10 +2077,29 @@ def scan(root, wide, reg, index):
                     continue
                 prev_end = 0
                 ptr_k = 0
-                for m in PTR.finditer(line):
+                # A CONTINUACAO entra no mesmo laco do ponteiro nomeado, nao num laco
+                # separado de proposito: o que faz a clausula de um `:NN` e a posicao
+                # dele na linha. Jogando os dois num fluxo ordenado, o ponteiro que vem
+                # depois do `:NN` corta no `:NN` — e `ptr_k == 1` passa a significar "o
+                # primeiro ponteiro da linha", que e o que a funcao da oracao quer saber.
+                pontos = [(m.start(), m, False) for m in PTR.finditer(line)]
+                for mc, herdado in herancas(line):
+                    cont_total += 1
+                    if herdado is None:
+                        cont_accused += 1
+                        cont_orfas += 1
+                        print("[FAIL] continuação: %s:%d cita %s sem nenhum `arquivo:NN` ou `arquivo:@sim` antes, na mesma linha — sem antecedente não há de que arquivo falar, e a régua que adivinha pela linha de cima passa a depender de onde a frase quebrou"
+                              % (rel, n, mc.group(0)))
+                        continue
+                    pontos.append((mc.start(), Herdado(mc, herdado), True))
+                for _pos, m, eh_cont in sorted(pontos, key=lambda t: t[0]):
                     target = m.group(1)
                     if target.startswith("res://"):
                         target = target[6:]
+                    ponto = m.group(0) if not eh_cont else "`%s:%s%s`" % (
+                        target, m.group(2),
+                        ("-%s" % m.group(3)) if m.group(3) else "")
+                    herd = " (linha herdada do ponteiro anterior na mesma linha)" if eh_cont else ""
                     clip = line[prev_end:m.start()]
                     prev_end = m.end()
                     ptr_k += 1
@@ -1916,7 +2108,10 @@ def scan(root, wide, reg, index):
                     tl = lines_of(target)
                     if tl is None:
                         continue
-                    judged += 1
+                    if eh_cont:
+                        cont_judged += 1
+                    else:
+                        judged += 1
                     # A MESMA oração que a régua de literal julga (#116). Antes desta
                     # linha o braço de identidade comia o prefixo bruto da linha desde o
                     # ponteiro anterior, e os dois juízes da mesma frase liam duas
@@ -1931,20 +2126,23 @@ def scan(root, wide, reg, index):
                         os.path.splitext(os.path.basename(target))[0])
                     if ok:
                         continue
-                    accused += 1
-                    if motivo == "branco":
-                        print("[FAIL] branco: %s:%d aponta %s e a linha %s está em branco — quem abre no número citado não vê nada"
-                              % (rel, n, m.group(0), where[0]))
-                    elif motivo == "faixa":
-                        print("[FAIL] faixa: %s:%d cita %s e o construto continua na linha %s (%s) — a faixa termina no meio da cadeia que a frase nomeia"
-                              % (rel, n, m.group(0), where[0],
-                                 (tl[where[0] - 1].strip()[:70] if where[0] <= len(tl) else "")))
-                    elif motivo == "arquivo":
-                        print("[FAIL] arquivo: %s:%d nomeia %s e aponta %s:%s; o nome mora em %s — a linha citada é texto cheio de outra coisa"
-                              % (rel, n, cands[:3], target, m.group(2), where or "lugar nenhum"))
+                    if eh_cont:
+                        cont_accused += 1
                     else:
-                        print("[FAIL] identidade: %s:%d nomeia %s e aponta %s:%s; o nome mora em %s"
-                              % (rel, n, cands[:3], target, m.group(2), where or "lugar nenhum"))
+                        accused += 1
+                    if motivo == "branco":
+                        print("[FAIL] branco: %s:%d aponta %s e a linha %s está em branco — quem abre no número citado não vê nada%s"
+                              % (rel, n, ponto, where[0], herd))
+                    elif motivo == "faixa":
+                        print("[FAIL] faixa: %s:%d cita %s e o construto continua na linha %s (%s) — a faixa termina no meio da cadeia que a frase nomeia%s"
+                              % (rel, n, ponto, where[0],
+                                 (tl[where[0] - 1].strip()[:70] if where[0] <= len(tl) else ""), herd))
+                    elif motivo == "arquivo":
+                        print("[FAIL] arquivo: %s:%d nomeia %s e aponta %s:%s; o nome mora em %s — a linha citada é texto cheio de outra coisa%s"
+                              % (rel, n, cands[:3], target, m.group(2), where or "lugar nenhum", herd))
+                    else:
+                        print("[FAIL] identidade: %s:%d nomeia %s e aponta %s:%s; o nome mora em %s%s"
+                              % (rel, n, cands[:3], target, m.group(2), where or "lugar nenhum", herd))
                 # Régua de literal: os mesmos ponteiros da linha, com ou sem backtick,
                 # julgados pelo que a frase PROMETE em código. É ortogonal ao censo de
                 # nome acima, e é o que vê a âncora que deslizou para outra linha.
@@ -1990,7 +2188,7 @@ def scan(root, wide, reg, index):
                           % (rel, n, m3.group(1),
                              "nenhuma chamada de gate_sh lida (scripts/test.sh nao encontrado)"
                              if reg is None else "%d chamada(s) de gate_sh em structure_gates()" % len(reg)))
-    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0]
+    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas
 
 
 def main():
@@ -1999,13 +2197,18 @@ def main():
     lbiting, lcases = litselftest()
     rbiting, rcases = regselftest()
     abiting, acases = anchorselftest()
+    hbiting, hcases = herdselftest()
     reg = registry(root)
     index = build_index(root)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
-     anchors, anchor_bad, lines, resolvidos) = scan(root, False, reg, index)
+     anchors, anchor_bad, lines, resolvidos, cont_n, cont_jn, cont_an, cont_on) = \
+        scan(root, False, reg, index)
     (wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w,
-     anchors_w, anchor_bad_w, lines_w, resolvidos_w) = scan(root, True, reg, index)
+     anchors_w, anchor_bad_w, lines_w, resolvidos_w, cont_w, cont_jw, cont_aw,
+     cont_ow) = scan(root, True, reg, index)
     accused = narrow_bad + wide_bad
+    cont_jugados = cont_jn + cont_jw
+    cont_acusados = cont_an + cont_aw
     # A régua de literal não depende do corte: ela compara texto, não forma de
     # identificador. Os dois passes têm de ver o mesmo; divergir é o walk tendo
     # mudado de forma entre os cortes, e aí nenhum dos dois números vale.
@@ -2016,10 +2219,15 @@ def main():
     # abrir os mesmos alvos. Divergir e o indice tendo mudado entre os dois `scan`, e ai
     # nenhum dos censos acima vale.
     resol_cut_drift = resolvidos != resolvidos_w
+    # Quantos `:NN` existem na arvore nao depende do corte: o corte muda a FORMA do
+    # candidato, nao a regex do ponteiro. Divergir e o walk tendo perdido linha.
+    cont_cut_drift = cont_n != cont_w
     print("identidade de ponteiro: %d nomeados no corte narrow (%d acusacoes), %d no corte wide (%d acusacoes), %d alvos abertos por resolucao de nome, self-test %d/%d controles mordendo"
           % (narrow_judged, narrow_bad, wide_judged, wide_bad, resolvidos, biting, cases))
     print("literal pinado: %d ponteiros com literal único no alvo (%d acusacoes), self-test %d/%d controles mordendo"
           % (lit_judged, lit_bad, lbiting, lcases))
+    print("continuação de ponteiro: %d `:NN` no corte narrow (%d acusações), %d no corte wide (%d acusações), %d sem antecedente na linha, self-test %d/%d controles mordendo"
+          % (cont_n, cont_an, cont_w, cont_aw, cont_on, hbiting, hcases))
     print("registro de gates de estrutura: %d prosas afirmando a contagem (%d acusações), %s, self-test %d/%d controles mordendo"
           % (reg_judged, reg_bad, "registro NÃO lido" if reg is None else "registro com %d gates" % len(reg), rbiting, rcases))
     print("âncora de ponteiro: %d `arquivo:@simbolo` no lugar de %d `arquivo:linha` (%d acusações), self-test %d/%d controles mordendo"
@@ -2034,6 +2242,9 @@ def main():
         print("[FAIL] resolução: narrow abriu %d alvos por nome e wide abriu %d — a árvore é a "
               "mesma entre os dois passes, e divergir aqui é o índice tendo mudado no meio"
               % (resolvidos, resolvidos_w))
+    if cont_cut_drift:
+        print("[FAIL] continuação: narrow viu %d `:NN` e wide viu %d — a regex do ponteiro não depende do corte"
+              % (cont_n, cont_w))
     if cut_drift:
         print("[FAIL] literal: narrow viu %r e wide viu %r — a régua não depende do corte, a igualdade é invariant"
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
@@ -2042,9 +2253,11 @@ def main():
     print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting))
+    print("CONT %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on))
     if (biting != cases or accused or narrow_judged < MIN_CHECKS or wide_judged < narrow_judged
             or cut_drift or reg_cut_drift or anchor_cut_drift or resol_cut_drift or lbiting != lcases
             or rbiting != rcases or abiting != acases or anchor_bad
+            or hbiting != hcases or cont_acusados or cont_cut_drift
             or reg_bad or reg is None):
         return 1
     return 0
@@ -2054,10 +2267,11 @@ sys.exit(main())
 PYEOF
 )"
 	ident_code=$?
-	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA) '
+	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT) '
 	ident_stats="$(printf '%s\n' "$ident_out" | grep '^IDENTIDADE ' | tail -n 1)"
 	lit_stats="$(printf '%s\n' "$ident_out" | grep '^LITERAL ' | tail -n 1)"
 	anc_stats="$(printf '%s\n' "$ident_out" | grep '^ANCORA ' | tail -n 1)"
+	cont_stats="$(printf '%s\n' "$ident_out" | grep '^CONT ' | tail -n 1)"
 	checks=$((checks + 1))
 	if [ -z "$ident_stats" ]; then
 		fail "a régua de identidade não devolveu a linha \`IDENTIDADE\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
@@ -2691,6 +2905,54 @@ else
 		fi
 		if [ "$anc_accused" -eq 0 ] && [ "$anc_biting" -eq "$anc_cases" ] && [ "$anc_n" -ge "$ANCHOR_MIN" ] && [ "$anc_lines" -le "$LINE_MAX" ]; then
 			echo "[ok] $anc_n âncoras \`arquivo:@simbolo\` julgadas pelo bloco da declaração, sobre $anc_lines ponteiros de linha (teto $LINE_MAX), com os $anc_cases controles do self-test mordendo"
+		fi
+	fi
+	# ---------------------------------------------------------------------------
+	# 29) CONTINUAÇÃO de ponteiro: o `:NN` que herda o arquivo do ponteiro anterior.
+	#
+	# A classe nasceu da passada que ensinou o bash a resolver nome nu: consertando os
+	# ponteiros, três deles tinham sido escritos como `` `nome.ext:NN` … e `:NN` `` —
+	# segunda citação do mesmo arquivo, sem arquivo. `PTR`, `ANYCITE` e
+	# `ANCHOR` exigem o `nome.ext` antes dos dois-pontos, então o número era lido por
+	# ninguém: nem a régua de linha, nem a de literal, nem a de caminho. O censo é
+	# medido pelo próprio braço abaixo e impresso no human line; o que se decidiu aqui,
+	# com número, é que só a forma ENTRE backticks é lida: `:NN` solto no texto tem
+	# 3291 ocorrências na árvore e quase todas são razão (`3:1`), porta 9400 ou
+	# hora (`22:27`) — cobrar a forma sem backtick seria acusar prosa inocente, que é
+	# a doença que o #116 denuncia.
+	#
+	# A herança é do último `arquivo:NN` ou `arquivo:@simbolo` ANTERIOR NA MESMA LINHA.
+	# Não herda da linha de cima: uma régua que atravessa a quebra de linha passa a
+	# acusar prosa honesta conforme o formatador resolveu quebrar a frase, e é o
+	# #116 de novo. Sem antecedente, o `:NN` é órfão e é ACUSADO — a alternativa é
+	# adivinhar o arquivo, e adivinhação em gate é manto.
+	#
+	# Piso de volume (o censo acima) e self-test próprio, porque a régua nova tem dois
+	# modos de mentir verde: não reconhecer a continuação nenhuma (walk mudo) e
+	# reconhecer trocando os grupos do regex — `CONTPTR` numera a linha no grupo 1 e
+	# `PTR` no grupo 2, e um off-by-one julgaria o arquivo como se fosse o número.
+	# ---------------------------------------------------------------------------
+	checks=$((checks + 1))
+	if [ -z "$cont_stats" ]; then
+		fail "a régua de continuação não devolveu a linha \`CONT\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
+	else
+		cont_j=0
+		cont_a=0
+		cont_cases=0
+		cont_biting=0
+		cont_seen=0
+		cont_orfas=0
+		read -r _lab cont_j cont_a cont_cases cont_biting cont_seen cont_orfas <<< "$cont_stats"
+		checks=$((checks + cont_j))
+		failures=$((failures + cont_a))
+		if [ "$cont_biting" -ne "$cont_cases" ]; then
+			fail "self-test da continuação mordeu $cont_biting de $cont_cases controles — com a herança quebrada, o \`:NN\` vira número sem arquivo e o zero de acusações não vale nada"
+		fi
+		if [ "$cont_seen" -lt "$CONT_MIN" ]; then
+			fail "continuação leu $cont_seen \`:NN\` no corte narrow contra o piso $CONT_MIN — um walk que para de herdar devolve zero acusações julgando o resto"
+		fi
+		if [ "$cont_a" -eq 0 ] && [ "$cont_biting" -eq "$cont_cases" ] && [ "$cont_seen" -ge "$CONT_MIN" ]; then
+			echo "[ok] $cont_seen ponteiros de continuação \`:NN\` lidos, $cont_j julgados pelo arquivo herdado nos dois cortes (órfão é acusação), com os $cont_cases controles do self-test mordendo"
 		fi
 	fi
 fi

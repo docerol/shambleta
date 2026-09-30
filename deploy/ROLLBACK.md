@@ -21,8 +21,9 @@ knob único:
 | `prometheus` | `shambleta/prometheus:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:319` |
 | `alertmanager` | `shambleta/alertmanager:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:374` |
 
-Os cinco trazem também `pull_policy: never` (`deploy/docker-compose.yml:51`,
-`:103`, `:212`, `:320`, `:375`) na linha seguinte. Não é decoração: **não existe
+Os cinco trazem também `pull_policy: never`
+(`deploy/docker-compose.yml:51,103,212,320,375`), cada um na linha seguinte ao seu
+`image:`. Não é decoração: **não existe
 registry** para onde este stack olhe. O artefato nasce e mora no host que o buildou.
 Quem faz `docker compose pull game` num serviço buildado não está baixando versão
 nenhuma — está ou procurando `shambleta/game` no Docker Hub (404) ou achando que

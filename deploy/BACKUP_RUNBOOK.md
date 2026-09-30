@@ -37,16 +37,19 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
   `sources/sql/SQLBackups.gd:14`) — arquivo único e consistente **sem** o `-wal`.
 - Retensão local: 7 diários / 4 semanais / 12 mensais (`sources/sql/SQLCommons.gd:34-38`),
   podada por `PruneBackups()` (`sources/sql/SQLBackups.gd:@PruneBackups`).
-- O push offsite acontece **depois** do diário (`sources/sql/SQLBackups.gd:54-64`),
-  cria o diretório se faltar (`:39-42`) e só é anunciado como sucesso depois de
-  `VerifyBackupRestorable()` abrir a cópia e ler `SELECT version FROM migration`
-  (`:47-49`, `:54-64`).
+- O push acontece **depois** do diário: `CreateDailyBackup()`
+  (`sources/sql/SQLBackups.gd:@CreateDailyBackup`)
+  é chamado por `Run()` antes de `PushOffsite()` (`sources/sql/SQLBackups.gd:@PushOffsite`),
+  que cria o diretório se faltar e só é anunciado como sucesso depois de
+  `VerifyBackupRestorable()` (`sources/sql/SQLBackups.gd:@VerifyBackupRestorable`) abrir
+  a cópia e ler `SELECT version FROM migration`.
 - **O offsite nunca é podado**: `PruneBackups()` só caminha por `GetBackupPath()`
-  (`:69`). A rotação de longa duração é do operator (§5).
+  (`sources/sql/SQLBackups.gd:@PruneBackups`). A rotação de longa duração é do operator (§5).
 - **[PENDÊNCIA, arquivo de outro dono]** o `lastDailyBackupTimestamp` é inicializado por
   `Run()` em `sources/sql/SQLBackups.gd:@Run` com `SQLCommons.Timestamp()`, então o primeiro diário só
   existe 24 h depois do boot — um redeploy zera o relógio. É o defeito que o
-  `#28` corrigiu para o job meta (`:97-102`, `lastMetaJobTimestamp = 0`) e que
+  `#28` corrigiu para o job meta, que o mesmo `Run()` inicializa
+  (`sources/sql/SQLBackups.gd:@Run`) com `lastMetaJobTimestamp = 0`, e que
   ficou para trás no backup. Mudança pedida: nascer em `0` (ou persistir o último
   carimbo no banco). Sintoma: `ls /data/.local/share/Shambleta/sql-backups/DAILY`
   vazio num beta que re-deploya todo dia.

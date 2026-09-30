@@ -1039,10 +1039,10 @@ func SuiteEvidencePointers() -> void:
 				# (7) SÉRIE NOMEADA × ARQUIVO QUE A EMITE. Um ponteiro pode jurar que a
 				# linha `X.gd:A-B` é onde `shambleta_foo` é emitida sem nomear símbolo de
 				# código nenhum — e a régua de identidade, que julga identificadores
-				# declarados, passa adiante: `MetricsBody()` mora em `:114` e cobre o
-				# intervalo inteiro, então "está no corpo" era verdade mesmo quando o
-				# intervalo citando `:197-216` já não continha a série que a frase
-				# enumerava. Aqui o nome é LIDO da linha que cita e conferido no intervalo
+				# declarados, passa adiante: `MetricsBody()` é o corpo de uma função
+				# inteira, cobre qualquer intervalo que caia nela, então "está no corpo" era
+				# verdade mesmo quando o intervalo citado já não continha a série que a
+				# frase enumerava. Aqui o nome é LIDO da linha que cita e conferido no intervalo
 				# citado, com uma condição para não acusar prosa inocente: só julga quando
 				# o arquivo alvo EMITE a série em alguma linha. Sem essa trava, "a série
 				# aparece na frase" viraria acusação contra qualquer `.gd` que a frase só

@@ -10,9 +10,9 @@ extends SceneTree
 # funil para baixo: a conta criada ontem que loga HOJE pela primeira vez e D1 pela
 # regua da view `cohort_retention` (migration 045), mas a heuristica via 0
 # dias-distintos no banco (o login de estreia ainda estava no buffer) e SUPRIMIA
-# exatamente esse caso. A unica autoridade agora e `IsD1Return`
-# (`sources/economy/TelemetryService.gd:80-92`), atingida via `RecordFunnel`
-# (o gate em `:83`) — dos dois lados, sem como divergir.
+# exatamente esse caso. A unica autoridade agora e `IsD1Return` (`sources/economy/TelemetryService.gd:@IsD1Return`)
+# e o gate que a aplica e `RecordFunnel` (`sources/economy/TelemetryService.gd:@RecordFunnel`) — dos dois
+# lados, sem como divergir.
 #
 # Este harness fecha a lacuna que `tests/ops_fix_test.gd` (suite B) nao fechava:
 # aquela suite mede o PREDICADO e o GATE chamando `RecordFunnel` por fora, mas

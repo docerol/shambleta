@@ -672,7 +672,8 @@ func _ahSweep(at : String) -> void:
 		# `paid` junto com `gems`, nunca deixá-lo ACIMA da carteira. `paid > gems` não
 		# é estado legal do leilão: é writer fora do funil, e é exatamente isso que
 		# o clawback (`CheckoutService.gd:379`, teto `clampi(paid, 0, saldo)`) e o
-		# `not_paid` do art.49 (`:722`) leem como se fosse verdade de origem. Régua que
+		# `not_paid` de `RequestPurchaseRefund` no art.49 (`sources/economy/CheckoutService.gd:@RequestPurchaseRefund`)
+		# leem como se fosse verdade de origem. Régua que
 		# o próprio detector declara inalcançável é buraco de auditoria, não escolha:
 		# a sensibilidade do predicado é conferida por sonda em `_ig2Probe()`.
 		var paid : int = _paid(accountID)

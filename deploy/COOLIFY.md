@@ -28,7 +28,8 @@ Mercado Pago / Stripe / Pix sandbox ──webhook──▶ companion:8901 ──
 ### Modo recomendado: Proxy TLS (Coolify)
 
 O Coolify/Traefik termina o TLS na borda. O game server binda WebSocket
-plain em `:6108` — **não precisa de `server.crt`/`server.key`** no container.
+plain na porta 6108 (`static var WebSocketPort` em `sources/network/NetworkCommons.gd:@WebSocketPort`)
+— **não precisa de `server.crt`/`server.key`** no container.
 
 No ambiente do compose, defina:
 - `SHAMBLETA_PROXY_TLS=1`
@@ -234,7 +235,7 @@ reset de senha não envia e-mail.
 | Tarefa | Como |
 |---|---|
 | Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLCommons.gd:43` + `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
-| Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:@MetaJobIntervalSec`), disparado em `sources/sql/SQLBackups.gd:121-125` (o porquê do desacoplamento está no comentário `:111-120`) — saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
+| Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:@MetaJobIntervalSec`), disparado pela própria `Run()` (`sources/sql/SQLBackups.gd:@Run`) — o porquê do desacoplamento está no comentário `#28` logo acima do disparo; saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
 | Wipe de progresso (pré-beta) | migration `014_reset_progress_idle` ou reset do volume `game-data` antes dos convites. |
 | Logs do server | Logs do container `game` (Util.PrintLog vai ao stdout). |
 | Atualizar jogo | Push no branch → rebuild (client web é imutável por build; o server ignora clientes com protocol version diferente — força refresh). |
