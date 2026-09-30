@@ -360,7 +360,9 @@ encontrado credencial viva em arquivo rastreado.
   `Check(src.contains("Peers.Footprint(peerID, \"claim_settle\", ...)` — lê PROSA do fonte;
   contou 419 linhas de `Check(...contains(...)` em 4.290 linhas de `Check*` em `tests/*.gd`
   (~10% da suíte é casamento de texto). `scripts/check_ci.sh:190` aceita qualquer `needs`
-  como portão, e `.github/workflows/godot-ci.yml:415` dá `needs: builds` ao job que publica;
+  como portão, e `.github/workflows/godot-ci.yml:521-524` amarra o job que publica a `builds`
+  (registro da passada: `test-gate` entrou nessa mesma lista depois, fechando #83; o ponteiro
+  antigo apontava para 415, linha que o `+68` do passo de `nginx -t` deslocou);
   `structure` verde com `== CI GATE: 97 checks, 0 failures ==` passa por cima do próprio
   buraco. *Hipótese:* ~93 suítes do kernel ficaram não conferidas nesta passada.
 - **Segurança 7,2.** `sources/network/server/Admission.gd:103` declara `windows` e escreve em

@@ -115,7 +115,7 @@ func _run():
 	_suiteRosters(worldNode)
 	_suiteDropBands()
 	_suiteBossLadder(worldNode)
-	_finish()
+	_suiteSpawnSource()
 
 # ------------------------------------------------------- (0) censo do EntitiesDB
 
@@ -397,3 +397,218 @@ func _suiteBossLadder(worldNode : Node):
 	# Legado intacto: sem índice, a janela é a das constantes originais.
 	_checkEq(float(_bossService.InterruptBonus(0.3)), float(_bossService.InterruptGoodMult), "interrupt legacy: timing 0.3 sem índice ainda é good")
 	_checkEq(float(_bossService.InterruptBonus(0.9)), 1.0, "interrupt legacy: timing 0.9 sem índice ainda é miss")
+
+# ------------------------------------------------- (4) ponto cego de import
+
+# Por que esta suíte existe. `presets/maps/server/**` é ARTEFATO: o addon
+# `tiled_importer` o regride de `data/maps/**.tmx` — `tiled_import_plugin.gd:162`
+# grava o `MapServerData` com os `SpawnObject` do mapa e `:169` o amarra no
+# `MapData` que virá `MapsDB` (`sources/db/DB.gd:8`), lidos pelo `ParseFileDB`.
+# Com o `.godot` morno a engine NÃO reimporta um `.tmx` cujo md5 não mudou, então
+# a máquina local lê o `.tres` committado; o CI regenera o `.godot` do zero e roda
+# `godot --headless --editor --import --quit` (`.github/workflows/godot-ci.yml`,
+# passo "Import assets"), que SOBrescreve o artefato pela fonte. Foi exatamente
+# assim que este harness deu `0 failures` na máquina e `33 failures` no CI (run
+# 36634640820, commit 1f540a1): o elenco de mobs e a escada de boss foram escritos
+# à mão nos artefatos de 10 mapas e o `.tmx` ficou para trás. Reimportando, o CI
+# acusou 13 spawns da zona 17 (Drazil) com dois ids que não resolvem para entidade
+# (3851394706, 4085786187), um censo de 16 grupos fantasmas, as zonas 25/26/27 sem
+# nenhum grupo (`0 >= 19` no tier fundo), o farm em 24 espécies contra a régua de
+# 27 (faltavam Lynx, Goblin, Bandit) e seis chefes 4..9 sem o mob na própria
+# arena. São 30 linhas `[FAIL]` no log para 33 falhas. O que voltou para a fonte:
+# 18 grupos de spawn, 12 nas zonas 25/26/27 e 6 nas arenas dos chefes.
+#
+# A régua: para cada mapa do `MapsDB`, o MULTICONJUNTO de spawns de MONSTRO do
+# `.tmx` tem de ser o do artefato carregado, campo a campo — id, contagem,
+# respawn_delay, posição e offset, estes dois recalculados como o import os
+# calcula (`pos + extents` / `extents`, `set_default_obj_params` dando 0 a
+# width/height ausentes: `tiled_map_reader.gd:627-628` e `:928`). Divergência == o
+# CI vai reescrever este mapa. Conserta-se o `.tmx` (fonte), nunca o artefato —
+# e nunca se afrouxa a régua. Mordida medida: revertido só o `.tmx` de ship-hold
+# para o de HEAD, 2 falhas nomeando 'Ship Hold' e os 3 grupos que o CI apagaria;
+# com a fonte atual, verde (269 grupos, 0 divergentes). Ponto fixo medido direto,
+# não inferido: um clone frio com os 3714 arquivos do índice e sem `.godot`,
+# rodando o mesmo `--import` da CI (Godot 4.7.2 aqui, 4.7.1 no runner), devolveu
+# `presets/maps/server/**` e `presets/maps/data/**` byte a byte iguais ao
+# committado. O que o import regride e esta régua não julga é
+# `presets/maps/layers/**`: 40/40 arquivos mudam a cada import sozinhos, por
+# `unique_id`, nome de instância (`@GPUParticles2D@20401`) e dados de partícula —
+# artefato gerado committado, portanto sem gate possível, e o elenco do jogo não
+# vem deles.
+func _suiteSpawnSource():
+	print("[suite] ponto cego de import: o .tmx fonte e o artefato committado têm o mesmo elenco de mob")
+	var pathScript : GDScript = load("res://sources/system/Path.gd")
+	var fsScript : GDScript = load("res://sources/system/FileSystem.gd")
+	var consts : Dictionary = pathScript.get_script_constant_map()
+	var mapRsc : String = str(consts.get("MapRsc", ""))
+	var mapExt : String = str(consts.get("MapExt", ""))
+	if not _check(not mapRsc.is_empty() and mapRsc.ends_with("/") and not mapExt.is_empty(),
+		"Path.MapRsc/MapExt são legíveis pelo harness ('%s' + '%s') — sem eles a varredura da fonte andaria sobre um caminho vazio e daria verde" % [mapRsc, mapExt]):
+		_finish()
+		return
+	var tmxFiles : PackedStringArray = fsScript.call("ParseExtension", mapRsc, mapExt)
+	_check(not tmxFiles.is_empty(), "o diretório de mapas fonte lista arquivos (%d '%s' em '%s')" % [tmxFiles.size(), mapExt, mapRsc])
+
+	var byName : Dictionary = {}
+	var sourceKeys : Dictionary = {}
+	var sourceGroups : int = 0
+	for tmxPath in tmxFiles:
+		var path : String = str(tmxPath)
+		var text : String = str(FileAccess.get_file_as_string(path))
+		if not text.begins_with("<?xml"):
+			_check(false, "mapa fonte '%s' não abriu como texto XML (a varredura não pode comparar o que não lê)" % path)
+			continue
+		var keys : Array = _tmxMonsterKeys(text)
+		sourceGroups += keys.size()
+		var mapName : String = _tmxMapName(text, path.get_file().get_basename())
+		_check(not byName.has(mapName), "nome de mapa '%s' não se repete entre os .tmx — senão o pareamento com o artefato é ambíguo" % mapName)
+		byName[mapName] = path
+		sourceKeys[path] = keys
+
+	var paired : Dictionary = {}
+	var divergent : int = 0
+	var maps : Dictionary = _dbScript.MapsDB
+	for mapID in maps:
+		var mapData = maps[mapID]
+		if mapData == null or mapData.serverData == null:
+			continue
+		var artPath : String = str(mapData.serverData.resource_path)
+		var mapName : String = artPath.get_file().get_basename()
+		if mapName.is_empty():
+			mapName = str(mapData._name)
+		if not byName.has(mapName):
+			divergent += 1
+			_check(false, "mapa %s ('%s'): o artefato '%s' não tem .tmx fonte em '%s' — o CI não tem o que reimportar e este artefato é conteúdo órfão" % [mapID, str(mapData._name), artPath, mapRsc])
+			continue
+		var tmxPath : String = str(byName[mapName])
+		paired[tmxPath] = true
+		var src : Array = sourceKeys[tmxPath]
+		var art : Array = []
+		for spawn in mapData.serverData.spawns:
+			if spawn == null or int(spawn.type) != _monsterType:
+				continue
+			art.append(_monsterKey(int(spawn.id), _asInt(spawn.count), float(spawn.respawn_delay), spawn.spawn_position, spawn.spawn_offset))
+		var added : Array = _multisetDiff(src, art)
+		var removed : Array = _multisetDiff(art, src)
+		if added.is_empty() and removed.is_empty():
+			continue
+		divergent += 1
+		_check(false, "mapa %s ('%s'): .tmx e artefato divergem e o --import do CI regride este mapa — %d grupo(s) que SÓ o .tmx conhece (%s) | %d grupo(s) que SÓ o artefato conhece, o CI os APAGA (%s)" % [mapID, str(mapData._name), added.size(), str(added), removed.size(), str(removed)])
+	for tmxPath in tmxFiles:
+		var path : String = str(tmxPath)
+		var count : int = (sourceKeys.get(path, []) as Array).size()
+		if count > 0 and not paired.has(path):
+			divergent += 1
+			_check(false, "mapa fonte '%s' tem %d grupo(s) de mob e nenhum artefato no MapsDB — o CI o importa e esse elenco entra no jogo sem que nenhuma régua tenha olhado" % [path, count])
+	print("  [info] ponto cego: %d/%d mapas do MapsDB pareados com .tmx, %d grupos de mob na fonte, %d divergentes" % [paired.size(), maps.size(), sourceGroups, divergent])
+	# O piso é folga, não régua: 40 mapas pareados e 269 grupos na fonte medidos
+	# verdes em 2026-09-29. Quem acusa de verdade é a divergência abaixo.
+	_check(paired.size() >= 40, "a varredura pareou conteúdo real, não um diretório vazio (%d mapas)" % paired.size())
+	_check(sourceGroups >= 250, "a fonte tem elenco de mob real para comparar (%d grupos nos .tmx)" % sourceGroups)
+	_checkEq(divergent, 0, "nenhum mapa com o .tmx e o artefato divergindo (classe dos 33 vermelhos do CI)")
+	# Controles nos dois sentidos: sem eles a suíte pode ser a frase de uma
+	# varredura que não comparou nada.
+	# Dois lados do mesmo defeito, cada um com o seu par de arrays: `srcWide` é o que
+	# o .tmx manda spawnar, `artNarrow` o que o artefato committado tem.
+	var srcWide : Array = [_monsterKey(11, 2, 30.0, Vector2i(10, 20), Vector2i(5, 10)), _monsterKey(22, 1, 15000.0, Vector2i(0, 0), Vector2i(0, 0))]
+	var artNarrow : Array = [_monsterKey(11, 2, 30.0, Vector2i(10, 20), Vector2i(5, 10))]
+	var artWide : Array = [_monsterKey(11, 2, 30.0, Vector2i(10, 20), Vector2i(5, 10)), _monsterKey(33, 4, 30.0, Vector2i(8, 8), Vector2i(4, 4))]
+	var srcNarrow : Array = [_monsterKey(11, 2, 30.0, Vector2i(10, 20), Vector2i(5, 10))]
+	_checkEq(_multisetDiff(srcWide, artNarrow).size(), 1, "controle: grupo que só o .tmx conhece É acusado (o CI o acrescentaria ao mapa)")
+	_checkEq(_multisetDiff(artWide, srcNarrow).size(), 1, "controle: grupo que só o artefato conhece É acusado (o CI o apagaria do mapa)")
+	_checkEq(_multisetDiff(srcNarrow, artNarrow).size(), 0, "controle: multiconjuntos iguais não acusam")
+	_checkEq(_multisetDiff(artNarrow, srcWide).size(), 0, "controle: o sentido da queixa não se inverte — o que falta no artefato não aparece como excesso dele")
+	_checkEq(_multisetDiff([_monsterKey(11, 3, 30.0, Vector2i(0, 0), Vector2i(0, 0))], [_monsterKey(11, 2, 30.0, Vector2i(0, 0), Vector2i(0, 0))]).size(), 1, "controle: a contagem do grupo é comparada, não só a presença do id")
+	_checkEq(_multisetDiff([_monsterKey(11, 2, 30.0, Vector2i(0, 0), Vector2i(0, 0))], [_monsterKey(11, 2, 30.0, Vector2i(0, 0), Vector2i(0, 0)), _monsterKey(11, 2, 30.0, Vector2i(0, 0), Vector2i(0, 0))]).size(), 0, "controle: repetição maior do outro lado não gera queixa falsa")
+	_finish()
+
+func _monsterKey(id : int, count : int, delay : float, position : Vector2i, offset : Vector2i) -> String:
+	return "id %d x%d atraso %s em %d,%d + %d,%d" % [id, count, str(delay), position.x, position.y, offset.x, offset.y]
+
+# Diferença de multiconjuntos por contagem: tirar por índice de um Array literal é
+# o no-op que tests/aggro_cap_test.gd caça, então aqui se conta chave por chave.
+func _multisetDiff(from : Array, against : Array) -> Array:
+	var seen : Dictionary = {}
+	for key in against:
+		seen[str(key)] = int(seen.get(str(key), 0)) + 1
+	var out : Array = []
+	for key in from:
+		var k : String = str(key)
+		if int(seen.get(k, 0)) > 0:
+			seen[k] = int(seen[k]) - 1
+		else:
+			out.append(k)
+	return out
+
+# O nome com que o import batiza o artefato é `map_name`: nasce vazio
+# (`tiled_map_reader.gd:80`) e aqui só é atribuído pela property name do
+# mapa (`tiled_map_reader.gd:1430-1431`). O import não conhece o nome do
+# arquivo — o `fallback` abaixo é guarda deste harness, e um mapa sem a
+# property chega com o nome vazio, que não casa com nenhum .tmx e é contado
+# como divergência.
+func _tmxMapName(text : String, fallback : String) -> String:
+	var cut : int = -1
+	for marker : String in ["<layer", "<objectgroup", "<tilelayer"]:
+		var at : int = text.find(marker)
+		if at >= 0 and (cut < 0 or at < cut):
+			cut = at
+	var head : String = text if cut < 0 else text.substr(0, cut)
+	var re := RegEx.new()
+	if re.compile('\\bname="name"[^>]*\\bvalue="([^"]*)"') != OK:
+		return fallback
+	var m : RegExMatch = re.search(head)
+	return m.get_string(1) if m != null and not m.get_string(1).is_empty() else fallback
+
+func _tmxMonsterKeys(text : String) -> Array:
+	var out : Array = []
+	var attrRe := RegEx.new()
+	if attrRe.compile('\\b(\\w+)="([^"]*)"') != OK:
+		return out
+	for chunk : String in text.split("<object"):
+		# "<objectgroup" e o resto do documento também caem no split: um tag de
+		# objeto sempre começa com espaço (o nome do atributo).
+		if not chunk.begins_with(" "):
+			continue
+		var closeTag : int = chunk.find(">")
+		if closeTag < 0:
+			continue
+		var tag : String = chunk.substr(0, closeTag)
+		var attrs : Dictionary = _tmxAttrs(tag, attrRe)
+		if str(attrs.get("type", "")) != "Spawn":
+			continue
+		var body : String = ""
+		if not tag.rstrip(" ").ends_with("/"):
+			var endObj : int = chunk.find("</object>")
+			if endObj > closeTag:
+				body = chunk.substr(closeTag + 1, endObj - closeTag - 1)
+		var props : Dictionary = _tmxProps(body, attrRe)
+		# O tipo do spawn vem do PROPERTY, não do atributo type="Spawn" do objeto.
+		if str(props.get("type", "")).to_upper() != "MONSTER":
+			continue
+		var pos := Vector2(float(str(attrs.get("x", "0"))), float(str(attrs.get("y", "0"))))
+		var extents := Vector2(float(str(attrs.get("width", "0"))) / 2.0, float(str(attrs.get("height", "0"))) / 2.0)
+		var position : Vector2i = Vector2i(pos + extents)
+		var offset : Vector2i = Vector2i(extents)
+		out.append(_monsterKey(str(attrs.get("name", "")).hash(), int(str(props.get("count", "1"))), float(str(props.get("respawn_delay", "30.0"))), position, offset))
+	return out
+
+func _tmxProps(body : String, attrRe : RegEx) -> Dictionary:
+	var out : Dictionary = {}
+	for chunk : String in body.split("<property"):
+		if not chunk.begins_with(" "):
+			continue # o contentor <properties>
+		var closeTag : int = chunk.find(">")
+		if closeTag < 0:
+			continue
+		var attrs : Dictionary = _tmxAttrs(chunk.substr(0, closeTag), attrRe)
+		var nm : String = str(attrs.get("name", ""))
+		if nm.is_empty():
+			continue
+		out[nm] = str(attrs.get("value", ""))
+	return out
+
+func _tmxAttrs(tag : String, attrRe : RegEx) -> Dictionary:
+	var out : Dictionary = {}
+	for m in attrRe.search_all(tag):
+		out[str(m.get_string(1))] = str(m.get_string(2))
+	return out

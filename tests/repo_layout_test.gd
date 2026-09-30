@@ -37,6 +37,16 @@ extends SceneTree
 # daquele número é o `check_god_nodes.sh` — o que passa aqui é NOTADO em voz alta,
 # não silenciado. `check_secrets.sh` cobre o estado inverso (apagado sem `git rm`).
 #
+# Pré-condição minha, e ela tem rótulo: as contagens acima só valem se o git
+# respondeu. O job em `container:` da CI já devolveu "0 arquivos" porque o
+# workspace pertence ao uid do runner e o processo fala como outro uid — o git
+# fecha o índice nesse caso, e a régua que conta sem perguntar acusa o repositório
+# pelo ambiente. Por isso `_git()` retém rc e stderr, `_gitWhy()` nomeia a causa e
+# `_gitBlame()` pendura o motivo em todo rótulo que conta arquivos lidos do índice,
+# inclusive nos que passariam por vacuidade (`moved`, `over`, `undeclared`). A
+# acusação continua de pé: índice ilegível é FAIL, nunca verde silencioso — o que
+# mudou é que agora o log diz qual das três causas o produziu.
+#
 # Uso:
 #   XDG_DATA_HOME=/tmp/impl-sec/.data XDG_CACHE_HOME=/tmp/impl-sec/.cache \
 #     timeout 300 godot --headless --path . -s tests/repo_layout_test.gd
@@ -46,6 +56,13 @@ var checks : int = 0
 var failures : int = 0
 var suitesDone : int = 0
 var _gitSeq : int = 0
+# O índice do git é a matéria-prima de A e D. Quando ele não vem, três causas
+# diferentes (git ausente, git recusando o dono do diretório, repo sem índice)
+# despejam o mesmo "0 arquivos" no log — aqui mora a causa que o rótulo passa a
+# carregar, lida do rc e do stderr do git, não da minha hipótese.
+var _gitRc : int = -1
+var _gitErr : String = ""
+var _indexDiag : String = ""
 
 func Check(condition : bool, label : String) -> bool:
 	checks += 1
@@ -92,19 +109,60 @@ func _repoRoot() -> String:
 
 # Saída de git para um arquivo temporário e lê o arquivo: neste build o stdout de
 # `OS.execute` não volta no array de saída, então o veredicto viaja por arquivo.
+# O stderr viaja por ARQUIVO PRÓPRIO e o código de saída é retido: até aqui o
+# `2>/dev/null || true` apagava a recusa do git e deixava no log um "0 arquivos"
+# que parecia acusação ao repositório sendo acusação ao ambiente.
 func _git(args : String) -> PackedStringArray:
 	_gitSeq += 1
 	var tmp : String = OS.get_temp_dir().path_join("shambleta-layout-%d-%d.txt" % [Time.get_ticks_msec(), _gitSeq])
-	OS.execute("sh", ["-c", "cd '%s' && git %s > '%s' 2>/dev/null || true" % [_repoRoot(), args, tmp]])
+	var errPath : String = tmp + ".err"
+	_gitRc = OS.execute("sh", ["-c", "cd '%s' && git %s > '%s' 2> '%s'" % [_repoRoot(), args, tmp, errPath]])
+	_gitErr = _oneLine(_read(errPath), 200)
+	DirAccess.remove_absolute(errPath)
 	var out : PackedStringArray = PackedStringArray()
 	var body : String = _read(tmp)
 	DirAccess.remove_absolute(tmp)
-	if body.strip_edges() == "":
-		return out
-	for l in body.split("\n", false):
-		if l != "":
-			out.append(l)
+	if body.strip_edges() != "":
+		for l in body.split("\n", false):
+			if l != "":
+				out.append(l)
+	if args.begins_with("ls-files"):
+		# Sticky só enquanto a leitura do índice estiver ruim; a primeira leitura boa
+		# limpa a acusação, senão um glitch antigo continuaria pendurado em rótulo.
+		_indexDiag = "" if (_gitRc == 0 and out.size() > 0) else _gitWhy()
 	return out
+
+# stderr em uma linha só: rótulo de veredito é lido em coluna, e o que quebra
+# linha em meio a um `[FAIL]` some do resumo que o runner faz das falhas.
+func _oneLine(text : String, maxLen : int) -> String:
+	var flat : String = text.replace("\r", " ").replace("\n", " | ").replace("\t", " ")
+	while flat.contains("  "):
+		flat = flat.replace("  ", " ")
+	flat = flat.strip_edges()
+	if flat.length() > maxLen:
+		return flat.substr(0, maxLen) + "…"
+	return flat
+
+# Qual das causas o git realmente confessou. Nomes dos sintomas vêm do texto dele.
+func _gitWhy() -> String:
+	if _gitRc == 127:
+		return "git não é um programa deste ambiente (rc=127 = não encontrado); stderr: %s" % (_gitErr if _gitErr != "" else "(vazio)")
+	if _gitRc == -1:
+		return "git nem foi chamado direito (rc=-1)"
+	if _gitErr.contains("dubious ownership"):
+		return "git RECUSOU ler este diretório: rc=%d, %s (é o uid do runner contra o uid do processo no container; cura: `git config --global --add safe.directory <workspace>)" % [_gitRc, _gitErr]
+	if _gitErr.contains("not a git repository"):
+		return "%s não é um repositório git (rc=%d): %s" % [_repoRoot(), _gitRc, _gitErr]
+	if _gitRc != 0:
+		return "git respondeu rc=%d com saída vazia: %s" % [_gitRc, (_gitErr if _gitErr != "" else "(sem stderr)")]
+	return "git respondeu rc=0 e índice VAZIO mesmo assim — repo sem nada rastreado (rc=0, stderr: %s)" % (_gitErr if _gitErr != "" else "(vazio)")
+
+# Sufixo de rótulo: vazio quando o índice foi lido, nomeado quando não foi. Toda
+# régua que conta arquivos do índice passa a dizer com que autoridade conta.
+func _gitBlame() -> String:
+	if _indexDiag == "":
+		return ""
+	return " || ÍNDICE NÃO LIDO — " + _indexDiag
 
 # Lista de um diretório da árvore: arquivos, ou subdiretórios (`wantDirs`).
 func _list(dir : String, wantDirs : bool) -> Array:
@@ -212,7 +270,7 @@ func _suiteRoot() -> void:
 		var rel : String = str(p)
 		if not rel.contains("/") and rel.get_extension() == "gd":
 			rootGdInIndex.append(rel)
-	Check(indexSize > 200, "git ls-files respondeu (%d arquivos no índice; zero aqui = git indisponível e A/D viram escuridão, não verde)" % indexSize)
+	Check(indexSize > 200, "git ls-files respondeu (%d arquivos no índice; zero aqui = git indisponível e A/D viram escuridão, não verde)%s" % [indexSize, _gitBlame()])
 	var stillTracked : Array = []
 	var stale : Array = []
 	for p in rootGdInIndex:
@@ -220,7 +278,7 @@ func _suiteRoot() -> void:
 			stillTracked.append(p)
 		else:
 			stale.append(p)
-	CheckEq(stillTracked.size(), 0, "nenhum .gd rastreado E presente na raiz (achado: %s)" % ", ".join(PackedStringArray(stillTracked)))
+	CheckEq(stillTracked.size(), 0, "nenhum .gd rastreado E presente na raiz (achado: %s)%s" % [", ".join(PackedStringArray(stillTracked)), _gitBlame()])
 	if stale.size() > 0:
 		Note("fora da árvore, ainda no índice até o commit: %s (fica com quem commita: `git rm --cached %s`)" % [", ".join(PackedStringArray(stale)), str(stale[0])])
 	var pj : String = _read("res://project.godot")
@@ -268,7 +326,7 @@ func _suiteProbeFacts() -> void:
 		var rel : String = str(p)
 		if PROBES.has(rel.get_file()) and FileAccess.file_exists(_join(_repoRoot(), rel)):
 			moved.append(rel)
-	CheckEq(moved.size(), 0, "nenhuma das três sondas foi apenas MOVIDA de pasta (ainda existe em: %s)" % ", ".join(PackedStringArray(moved)))
+	CheckEq(moved.size(), 0, "nenhuma das três sondas foi apenas MOVIDA de pasta (ainda existe em: %s)%s" % [", ".join(PackedStringArray(moved)), _gitBlame()])
 	suitesDone += 1
 
 # --- C) portão sem chamador -------------------------------------------------
@@ -282,7 +340,7 @@ func _suiteReachability() -> void:
 		+ _read("res://deploy/web/Dockerfile") + _read("res://deploy/api/Dockerfile")
 	var manual : String = _corpus(["docs/"], PackedStringArray(["md"])) + _corpus(["deploy/"], PackedStringArray(["md"])) \
 		+ _read("res://README.md") + _read("res://ROADMAP_COMERCIAL.md")
-	Check(ci.contains("scripts/test.sh structure"), "a CI chama `scripts/test.sh structure` — a mesma porta do `all` local, sem divergir")
+	Check(ci.contains("scripts/test.sh structure"), "a CI chama `scripts/test.sh structure` — a mesma porta do `all` local, sem divergir (corpus lido do índice: %d chars)%s" % [ci.length(), _gitBlame()])
 
 	var orphans : int = 0
 	var called : int = 0
@@ -298,7 +356,7 @@ func _suiteReachability() -> void:
 		else:
 			orphans += 1
 			print("  [FAIL] gate sem chamador: scripts/%s" % name)
-	CheckEq(orphans, 0, "todo scripts/*.sh é chamado por máquina ou por receita documentada")
+	CheckEq(orphans, 0, "todo scripts/*.sh é chamado por máquina ou por receita documentada (o corpus onde procurei o chamador saiu do índice)%s" % _gitBlame())
 	Note("scripts citados só em doc (ferramenta de mão, não gate): %s" % ", ".join(PackedStringArray(byHand)))
 	Check(called >= 4, "%d scripts invocados por test.sh/CI/harness (check_secrets.sh conta entre eles)" % called)
 	Check(runner.contains("check_secrets.sh") and runner.contains("SECRETS GATE"), "o gate de segredo está ligado em structure_gates(), não só escrito")
@@ -332,7 +390,7 @@ func _suiteReachability() -> void:
 		stranded += 1
 		print("  [FAIL] tests/%s não é descoberto, não é chamado e não tem receita escrita" % name)
 	CheckEq(noMarker.size(), 0, "todo harness descoberto por glob imprime marcador de resultado: %s" % ", ".join(PackedStringArray(noMarker)))
-	CheckEq(stranded, 0, "nenhum tests/*.gd morto (sem glob, sem chamada, sem receita)")
+	CheckEq(stranded, 0, "nenhum tests/*.gd morto (sem glob, sem chamada, sem receita)%s" % _gitBlame())
 	Check(discovered >= 25, "%d harnesses cobertos pelo glob de descoberta de `all`" % discovered)
 	Note("ferramentas de mão declaradas (não rodam no gate): %s" % ", ".join(PackedStringArray(manualTools)))
 	# Todo harness SceneTree tem de terminar sozinho: sem `quit()` o `-s` fica com
@@ -463,7 +521,7 @@ func _suiteCeiling() -> void:
 	var tracked : Dictionary = {}
 	for q in _git("ls-files --cached"):
 		tracked[str(q)] = true
-	Check(tracked.size() > 200, "índice do git lido (%d arquivos) — régua D mede o repo, não a bagunça da vez" % tracked.size())
+	Check(tracked.size() > 200, "índice do git lido (%d arquivos) — régua D mede o repo, não a bagunça da vez%s" % [tracked.size(), _gitBlame()])
 
 	var measured : Array = []
 	_walk("res://sources", PackedStringArray(["gd"]), measured)
@@ -493,7 +551,7 @@ func _suiteCeiling() -> void:
 		# estourou é passivo do ratchet do gate, não desta régua.
 		if not capped and ceiling > 0 and n <= ceiling and n * 100 >= ceiling * 98:
 			atFence.append([local, n])
-	CheckEq(over, 0, "nenhum arquivo rastreado sem teto nomeado acima de MAX_LINES")
+	CheckEq(over, 0, "nenhum arquivo rastreado sem teto nomeado acima de MAX_LINES%s" % _gitBlame())
 	CheckEq(ratchetBad.size(), 0, "o ratchet do gate bate com o run por fora (estouro ou teto velho sem baixa): %s" % ", ".join(PackedStringArray(ratchetBad)))
 	if overUntracked.size() > 0:
 		Note("acima do teto e AINDA não rastreado (obra de outro agente; dono do número é o check_god_nodes.sh): %s" % ", ".join(PackedStringArray(overUntracked)))
@@ -505,7 +563,7 @@ func _suiteCeiling() -> void:
 	for row in atFence:
 		if not declared.has(str(row[0])):
 			undeclared.append("%s=%d" % [row[0], int(row[1])])
-	CheckEq(undeclared.size(), 0, "encostar no teto exige motivo registrado junto da entrada (novos na banda >=98%%: %s)" % ", ".join(PackedStringArray(undeclared)))
+	CheckEq(undeclared.size(), 0, "encostar no teto exige motivo registrado junto da entrada (novos na banda >=98%%: %s)%s" % [", ".join(PackedStringArray(undeclared)), _gitBlame()])
 	var staleWhy : Array = []
 	for p in declared.keys():
 		Check(FileAccess.file_exists("res://" + str(p)), "%s da lista de motivo existe no repo" % str(p))
@@ -515,7 +573,7 @@ func _suiteCeiling() -> void:
 				still = true
 		if not still:
 			staleWhy.append(str(p))
-	CheckEq(staleWhy.size(), 0, "nenhum motivo para arquivo que já saiu da banda — apague a entrada (motivo velho é allowlist podre): %s" % ", ".join(PackedStringArray(staleWhy)))
+	CheckEq(staleWhy.size(), 0, "nenhum motivo para arquivo que já saiu da banda — apague a entrada (motivo velho é allowlist podre): %s%s" % [", ".join(PackedStringArray(staleWhy)), _gitBlame()])
 	for e in NEAR_FENCE:
 		Check(str(e["reason"]).length() > 80, "%s tem motivo de verdade escrito (%d chars, não placeholder)" % [str(e["path"]), str(e["reason"]).length()])
 
@@ -544,7 +602,7 @@ func _suiteCeiling() -> void:
 	CheckEq(overTests, 0, "nenhum harness acima do teto de tests/ (%d)" % testsCeiling)
 	if testRows.size() > 0:
 		Note("maior harness: tests/%s = %d linhas (folga %d contra o teto de tests/)" % [testRows[0][0], testRows[0][1], testsCeiling - int(testRows[0][1])])
-	Check(rows.size() > 150, "%d arquivos próprios medidos contra o teto de %d" % [rows.size(), ceiling])
+	Check(rows.size() > 150, "%d arquivos próprios medidos contra o teto de %d%s" % [rows.size(), ceiling, _gitBlame()])
 	suitesDone += 1
 
 func _run() -> void:

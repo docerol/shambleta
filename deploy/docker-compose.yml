@@ -42,7 +42,7 @@
 services:
   web:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/web/Dockerfile
       args:
         SHAMBLETA_SERVER_ADDRESS: ${SHAMBLETA_SERVER_ADDRESS:-}
@@ -97,7 +97,7 @@ services:
 
   game:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/server/Dockerfile
     image: shambleta/game:${SHAMBLETA_TAG:-local-unpinned}
     pull_policy: never
@@ -206,7 +206,7 @@ services:
 
   companion:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/companion/Dockerfile
     image: shambleta/companion:${SHAMBLETA_TAG:-local-unpinned}
     pull_policy: never
@@ -314,7 +314,7 @@ services:
   # agora exige que a referência exista E que todo serviço nomeado por ela exista.
   prometheus:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/monitoring/prometheus.Dockerfile
     image: shambleta/prometheus:${SHAMBLETA_TAG:-local-unpinned}
     pull_policy: never
@@ -369,7 +369,7 @@ services:
 
   alertmanager:
     build:
-      context: .
+      context: ..
       dockerfile: deploy/monitoring/alertmanager.Dockerfile
     image: shambleta/alertmanager:${SHAMBLETA_TAG:-local-unpinned}
     pull_policy: never
@@ -437,3 +437,21 @@ volumes:
   # Requer token do Cloudflare Zero Trust (CLOUDFLARED_TOKEN).
   # NOTA: não declarar como volume nomeado aqui; o serviço cloudflared acima
   # cuida da inicialização do tunnel.
+
+# --------------------------------------------------------------------- contexto
+# `build.context: ..` não é typo nem preferência: é o diretório do PRIMEIRO `-f`,
+# e nada mais. O compose resolve `build.context` contra o diretório do projeto, e
+# o diretório do projeto, sem `--project-directory`, é o diretório do arquivo de
+# compose (aqui `deploy/`), não o CWD de quem digitou o comando. Com `context: .`
+# o contexto era `deploy/` e o `dockerfile:` (relativo ao contexto) virava
+# `deploy/deploy/...`: medido no runner, `docker compose -f deploy/docker-compose.yml
+# build` devolveu `resolve : lstat /home/runner/work/shambleta/shambleta/deploy/deploy:
+# no such file or directory` no job container-images (log de 2026-09-29, commits
+# 126b086 e 1f540a1). Os cinco serviços buildam com o mesmo contexto porque os cinco
+# Dockerfiles copiam caminhos da RAIZ (`COPY . .`, `COPY data/conf/paid_catalog.json .`,
+# `COPY deploy/web/nginx.conf ...`) — contexto certo é o repositório, e é a única
+# leitura que faz `docker compose -f deploy/docker-compose.yml build` (CI, ROLLBACK.md,
+# STAGING.md), `cd deploy && docker compose up -d` (README.md) e o import do Coolify
+# resolverem o mesmo lugar sem flag nenhuma. Consequência que a régua de
+# scripts/check_compose.sh cobra: NENHUM comando pode passar `--project-directory`,
+# porque ele move o `..` para fora do repositório.

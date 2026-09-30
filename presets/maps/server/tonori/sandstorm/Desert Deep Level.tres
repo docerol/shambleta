@@ -8,6 +8,17 @@
 
 [sub_resource type="Resource" id="Resource_ri3ja"]
 script = ExtResource("2_j5dy5")
+count = 4
+id = 2399925469
+type = 1
+spawn_position = Vector2i(1349, 1285)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 60000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_kckft"]
+script = ExtResource("2_j5dy5")
 id = 2025440114
 type = 2
 player_script = ExtResource("3_wa2ov")
@@ -16,7 +27,51 @@ spawn_offset = Vector2i(5, 5)
 is_persistant = true
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_kckft"]
+[sub_resource type="Resource" id="Resource_b01cu"]
+script = ExtResource("2_j5dy5")
+count = 5
+id = 3842739378
+type = 1
+spawn_position = Vector2i(1600, 1600)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 45000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_n3km6"]
+script = ExtResource("2_j5dy5")
+count = 2
+id = 825312237
+type = 1
+spawn_position = Vector2i(1500, 2000)
+spawn_offset = Vector2i(48, 48)
+respawn_delay = 90000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_2sy84"]
+script = ExtResource("2_j5dy5")
+count = 3
+id = 236646007
+type = 1
+spawn_position = Vector2i(1727, 2431)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 60000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_jb17l"]
+script = ExtResource("2_j5dy5")
+count = 4
+id = 2399925469
+type = 1
+spawn_position = Vector2i(1765, 2917)
+spawn_offset = Vector2i(96, 64)
+respawn_delay = 60000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_xow01"]
 script = ExtResource("2_j5dy5")
 id = 2025440114
 type = 2
@@ -28,7 +83,7 @@ is_persistant = true
 trigger_radius = 100.0
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_b01cu"]
+[sub_resource type="Resource" id="Resource_ye7gl"]
 script = ExtResource("2_j5dy5")
 id = 2089709631
 nick = "To Abandoned Level"
@@ -41,63 +96,8 @@ trigger_polygon = PackedVector2Array(2, 81, 33, 49, 64, 81)
 destination_map = 259752832
 destination_pos = Vector2(2864, 2384)
 
-[sub_resource type="Resource" id="Resource_endDeser00"]
-script = ExtResource("2_j5dy5")
-count = 4
-id = 2399925469
-type = 1
-spawn_position = Vector2i(1349, 1285)
-spawn_offset = Vector2i(64, 64)
-respawn_delay = 60000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endDeser01"]
-script = ExtResource("2_j5dy5")
-count = 4
-id = 2399925469
-type = 1
-spawn_position = Vector2i(1765, 2917)
-spawn_offset = Vector2i(96, 64)
-respawn_delay = 60000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endDeser02"]
-script = ExtResource("2_j5dy5")
-count = 3
-id = 236646007
-type = 1
-spawn_position = Vector2i(1727, 2431)
-spawn_offset = Vector2i(64, 64)
-respawn_delay = 60000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endDeser03"]
-script = ExtResource("2_j5dy5")
-count = 2
-id = 825312237
-type = 1
-spawn_position = Vector2i(1500, 2000)
-spawn_offset = Vector2i(48, 48)
-respawn_delay = 90000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endDeser04"]
-script = ExtResource("2_j5dy5")
-count = 5
-id = 3842739378
-type = 1
-spawn_position = Vector2i(1600, 1600)
-spawn_offset = Vector2i(64, 64)
-respawn_delay = 45000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
 [resource]
 script = ExtResource("1_ojae3")
 name = "Desert Deep Level"
-spawns = Array[ExtResource("2_j5dy5")]([SubResource("Resource_ri3ja"), SubResource("Resource_kckft"), SubResource("Resource_b01cu"), SubResource("Resource_endDeser00"), SubResource("Resource_endDeser01"), SubResource("Resource_endDeser02"), SubResource("Resource_endDeser03"), SubResource("Resource_endDeser04")])
+spawns = Array[ExtResource("2_j5dy5")]([SubResource("Resource_ri3ja"), SubResource("Resource_kckft"), SubResource("Resource_b01cu"), SubResource("Resource_n3km6"), SubResource("Resource_2sy84"), SubResource("Resource_jb17l"), SubResource("Resource_xow01"), SubResource("Resource_ye7gl")])
 flags = 4

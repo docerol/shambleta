@@ -6,7 +6,7 @@
 #
 # Só o `.dockerignore` da RAIZ DO CONTEXTO vale. Como `deploy/server/.dockerignore`
 # e `deploy/web/.dockerignore` nunca foram lidos (o contexto é a raiz do repositório
-# — deploy/docker-compose.yml, `build.context: .`), eles foram MOVADOS para cá,
+# — deploy/docker-compose.yml, `build.context: ..`), eles foram MOVADOS para cá,
 # corrigidos: aquele par excluía `presets/**/*.png|ttf|ogg|wav`, que é exatamente o
 # que `sources/db/Instantiate.gd:4-5` precisa (`preload("res://presets/entities/Entity.tscn")`
 # → as cenas referenciam as texturas), e `docs/**`, que tem `.import` de imagem.

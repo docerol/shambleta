@@ -18,6 +18,15 @@ trigger_polygon = PackedVector2Array()
 
 [sub_resource type="Resource" id="Resource_7vaqr"]
 script = ExtResource("2_2tel7")
+id = 2088963654
+type = 1
+spawn_position = Vector2i(800, 800)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_uiwva"]
+script = ExtResource("2_2tel7")
 id = 2089386186
 type = 2
 player_script = ExtResource("4_5r46x")
@@ -27,7 +36,7 @@ direction = 2
 state = 2
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_uiwva"]
+[sub_resource type="Resource" id="Resource_pl2ev"]
 script = ExtResource("2_2tel7")
 id = 2089709631
 nick = "To First Deck"
@@ -40,17 +49,7 @@ trigger_polygon = PackedVector2Array(0, 32, 0, 0, 32, 0, 32, 32)
 destination_map = 4229445336
 destination_pos = Vector2(1040, 912)
 
-[sub_resource type="Resource" id="Resource_endShipN00"]
-script = ExtResource("2_2tel7")
-count = 1
-id = 2088963654
-type = 1
-spawn_position = Vector2i(800, 800)
-spawn_offset = Vector2i(16, 16)
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
 [resource]
 script = ExtResource("1_23tc3")
 name = "Ship Nard's Room"
-spawns = Array[ExtResource("2_2tel7")]([SubResource("Resource_q5d7r"), SubResource("Resource_7vaqr"), SubResource("Resource_uiwva"), SubResource("Resource_endShipN00")])
+spawns = Array[ExtResource("2_2tel7")]([SubResource("Resource_q5d7r"), SubResource("Resource_7vaqr"), SubResource("Resource_uiwva"), SubResource("Resource_pl2ev")])

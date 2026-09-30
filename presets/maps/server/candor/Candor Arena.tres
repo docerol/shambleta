@@ -8,6 +8,15 @@
 
 [sub_resource type="Resource" id="Resource_1xxp1"]
 script = ExtResource("2_q7ol7")
+id = 3045949408
+type = 1
+spawn_position = Vector2i(1900, 1200)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_044lx"]
+script = ExtResource("2_q7ol7")
 id = 2089134121
 type = 2
 player_script = ExtResource("4_yx854")
@@ -16,7 +25,7 @@ spawn_position = Vector2i(1744, 1851)
 is_persistant = true
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_044lx"]
+[sub_resource type="Resource" id="Resource_ws54c"]
 script = ExtResource("2_q7ol7")
 id = 2089709631
 nick = "Warp Candor Cave"
@@ -29,18 +38,8 @@ trigger_polygon = PackedVector2Array(-16, 96, -16, 64, 0, 32, 32, 0, 64, 32, 80,
 destination_map = 515101915
 destination_pos = Vector2(1616, 2224)
 
-[sub_resource type="Resource" id="Resource_endCando00"]
-script = ExtResource("2_q7ol7")
-count = 1
-id = 3045949408
-type = 1
-spawn_position = Vector2i(1900, 1200)
-spawn_offset = Vector2i(16, 16)
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
 [resource]
 script = ExtResource("1_snkdb")
 name = "Candor Arena"
-spawns = Array[ExtResource("2_q7ol7")]([SubResource("Resource_1xxp1"), SubResource("Resource_044lx"), SubResource("Resource_endCando00")])
+spawns = Array[ExtResource("2_q7ol7")]([SubResource("Resource_1xxp1"), SubResource("Resource_044lx"), SubResource("Resource_ws54c")])
 flags = 5

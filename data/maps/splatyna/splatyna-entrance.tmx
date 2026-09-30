@@ -506,5 +506,10 @@
    </properties>
    <polygon points="0,0 32,32 64,0 96,-64 -32,-64"/>
   </object>
- </objectgroup>
+   <object id="53" name="Xakelbael" type="Spawn" x="1584" y="1284" width="32" height="32">
+   <properties>
+    <property name="type" value="Monster"/>
+   </properties>
+  </object>
+</objectgroup>
 </map>

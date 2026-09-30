@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="97" height="128" tilewidth="32" tileheight="32" infinite="0" nextlayerid="9" nextobjectid="38">
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="97" height="128" tilewidth="32" tileheight="32" infinite="0" nextlayerid="9" nextobjectid="43">
  <properties>
   <property name="ambient" value="Lighting"/>
   <property name="ambientintensity" type="float" value="0.2"/>
@@ -835,5 +835,40 @@
    </properties>
    <polygon points="33,49 64,81 2,81"/>
   </object>
- </objectgroup>
+   <object id="38" name="Sand Snake" type="Spawn" x="1285" y="1221" width="128" height="128">
+   <properties>
+    <property name="count" type="int" value="4"/>
+    <property name="respawn_delay" type="float" value="60000"/>
+    <property name="type" value="Monster"/>
+   </properties>
+  </object>
+  <object id="39" name="Sand Snake" type="Spawn" x="1669" y="2853" width="192" height="128">
+   <properties>
+    <property name="count" type="int" value="4"/>
+    <property name="respawn_delay" type="float" value="60000"/>
+    <property name="type" value="Monster"/>
+   </properties>
+  </object>
+  <object id="40" name="Snake" type="Spawn" x="1663" y="2367" width="128" height="128">
+   <properties>
+    <property name="count" type="int" value="3"/>
+    <property name="respawn_delay" type="float" value="60000"/>
+    <property name="type" value="Monster"/>
+   </properties>
+  </object>
+  <object id="41" name="Red Scorpion" type="Spawn" x="1452" y="1952" width="96" height="96">
+   <properties>
+    <property name="count" type="int" value="2"/>
+    <property name="respawn_delay" type="float" value="90000"/>
+    <property name="type" value="Monster"/>
+   </properties>
+  </object>
+  <object id="42" name="Scorpion" type="Spawn" x="1536" y="1536" width="128" height="128">
+   <properties>
+    <property name="count" type="int" value="5"/>
+    <property name="respawn_delay" type="float" value="45000"/>
+    <property name="type" value="Monster"/>
+   </properties>
+  </object>
+</objectgroup>
 </map>

@@ -123,7 +123,7 @@ fi
 COMPOSE_BIN="$COMPOSE_BIN" RESOLVED_PROD="$RESOLVED_PROD" RESOLVED_MERGED="$RESOLVED_MERGED" \
 SMOKE="$SMOKE" \
 PY="$PY" "$PY" - "$PROD" "$STG" <<'PYEOF'
-import os, re, subprocess, sys, yaml
+import glob, os, re, subprocess, sys, yaml
 
 prod_path, stg_path = sys.argv[1], sys.argv[2]
 resolved_prod = os.environ.get("RESOLVED_PROD") or ""
@@ -757,7 +757,7 @@ DIRT = [
     ".test-home/IdleTests/.booting", ".test-home2/data/Shambleta/logs/godot.log",
     ".test-k8/IdleTests/.booting", "logs/godot.log", "tmp/x", ".tmp/x", "testing.db-wal",
     "run.log", "server.pem", "server.crt", "server.key", ".env",
-    "tests/zone_policy_test.gd", "test_scratch.gd", "scripts/census.gd", "e.autotest-entity",
+    "tests/perf_fix_test.gd", "test_scratch.gd", "scripts/census.gd", "e.autotest-entity",
     "graphify-out/2026-09-24/cost.json", "snap/snapcraft.yaml", "archive/SEASONS_GAP.md",
     "designs/x", "publishing/x", "landing_new/x",
     "__pycache__/x.pyc", "companion/__pycache__/server.cpython-314.pyc",
@@ -771,7 +771,7 @@ shipped = ("addons", "data", "presets", "sources", "project.godot", "export_pres
            "deploy/alerts.rules.yml", "docs")
 ignored_top = [p for p in shipped if is_ignored(p)]
 check(os.path.isfile(".dockerignore"), ".dockerignore existe na raiz do contexto",
-      "o único lugar que o daemon lê (build.context: .)", "ausente")
+      "o único lugar que o daemon lê (o contexto é a raiz — `build.context: ..` visto de deploy/)", "ausente")
 check(not git_err and tracked_files > 0,
       "o índice do git foi lido (%d caminhos, %d bytes)" % (tracked_files, tracked_bytes),
       "`git ls-files -z` devolvendo caminhos — é o contexto de um clone limpo",
@@ -1301,6 +1301,162 @@ check(entry_home == docker_home and canary_file == os.path.basename(grab1(r'cons
       "USER_DIR=%s e arquivo %r (sources/system/Path.gd:56 + project.godot + ENV HOME em %s)" % (
           expected_user_dir, "canary", SRV_DF),
       "HOME no script=%r vs Dockerfile=%r; arquivo=%r" % (entry_home, docker_home, canary_file))
+
+# ---- (7b) Resolução do contexto — o que o compose FAZ com `build.context` ----
+# Medido no runner, 2026-09-29: com `context: .` o job container-images morreu em
+# `resolve : lstat /home/runner/work/shambleta/shambleta/deploy/deploy: no such file
+# or directory` (commits 126b086 e 1f540a1) e NENHUM check deste gate viu o defeito:
+# `docker compose config -q` não resolve contexto nem testa existência de caminho, e
+# a régua de imagens de scripts/check_ci.sh lia o `dockerfile:` contra o CWD. A
+# semântica, ela: diretório do projeto = diretório do PRIMEIRO `-f` (aqui `deploy/`)
+# enquanto ninguém passar `--project-directory`; `build.context` é relativo a esse
+# diretório; `build.dockerfile` é relativo ao CONTEXTO resolvido. Então `context: .`
+# + `dockerfile: deploy/web/Dockerfile` = `deploy/deploy/web/Dockerfile` — o caminho
+# dobrado do log. Os cinco Dockerfiles copiam da RAIZ (`COPY . .`,
+# `COPY data/conf/paid_catalog.json .`, `COPY deploy/web/nginx.conf ...`), logo o
+# contexto tem de ser o repositório, e os COPY são a prova cruzada: só com a raiz
+# aqueles caminhos existem dentro do contexto. `..` é o único valor que faz a CI
+# (`-f deploy/docker-compose.yml` da raiz), o README (`cd deploy && docker compose
+# up -d`) e o import do Coolify resolverem o mesmo lugar sem flag.
+PROJ_DIR = os.path.dirname(os.path.abspath(prod_path))
+REPO_ROOT = os.getcwd()
+
+def resolve_ctx(ctx, df):
+    """Igual ao compose: contexto contra o diretório do projeto, dockerfile contra o
+    contexto. Contexto absoluto ou URI (`git://`, `http://`) fica como veio."""
+    if os.path.isabs(ctx) or re.match(r"^[A-Za-z0-9+.-]+://", ctx):
+        c = os.path.normpath(ctx)
+    else:
+        c = os.path.abspath(os.path.join(PROJ_DIR, ctx))
+    return c, (df if os.path.isabs(df) else os.path.normpath(os.path.join(c, df)))
+
+COPY_RX = re.compile(r'^\s*(?:COPY|ADD)\s+(.*\S)\s*$')
+
+def copy_sources(df_text):
+    """Fontes de COPY/ADD que vêm do CONTEXTO. `--from=` é outro estágio, flag tem
+    `=`, fonte absoluta não é lícita no contexto e `$VAR` não é caminho."""
+    out = []
+    for ln in df_text.splitlines():
+        if ln.lstrip().startswith("#"):
+            continue
+        m = COPY_RX.match(ln)
+        if not m or "--from=" in m.group(1):
+            continue
+        toks = [t for t in m.group(1).split() if "=" not in t]
+        if len(toks) < 2:
+            continue
+        out += [t for t in toks[:-1] if not t.startswith("/") and not t.startswith("$")]
+    return out
+
+builds_ctx = []
+for label, svcs in (("produção", prod_services), ("mesclado", merged_services)):
+    for svc, spec in sorted(svcs.items()):
+        b = (spec or {}).get("build")
+        if not isinstance(b, dict) or not b.get("dockerfile"):
+            continue
+        raw = str(b.get("context", "."))
+        c, d = resolve_ctx(raw, str(b["dockerfile"]))
+        builds_ctx.append((label, svc, raw, c, d))
+check(len(builds_ctx) >= 10,
+      "os dois arquivos declaram os blocos `build:` de %d serviços (%s)" % (
+          len(builds_ctx), ", ".join(sorted(set("%s/%s" % (l, s) for l, s, _, _, _ in builds_ctx)))),
+      ">= 10 (cinco serviços com build nos dois caminhos de leitura)",
+      "%d blocos" % len(builds_ctx))
+wrong_root = ["%s/%s: `context: %r` resolve para %s, e o build precisa da raiz (%s)"
+              % (l, s, raw, c, REPO_ROOT) for l, s, raw, c, _ in builds_ctx if c != REPO_ROOT]
+check(not wrong_root,
+      "todo contexto de build resolvido COMO O COMPOSE resolve é a raiz do repositório (%d blocos)" % len(builds_ctx),
+      "abspath(diretório-do-primeiro--f + build.context) == %s" % REPO_ROOT,
+      "; ".join(wrong_root) if wrong_root else "os %d resolvem para %s" % (len(builds_ctx), REPO_ROOT))
+missing_df = ["%s/%s: %s (contexto %s)" % (l, s, d, c)
+              for l, s, _, c, d in builds_ctx if not os.path.isfile(d)]
+check(not missing_df,
+      "todo `dockerfile:` existe no caminho que o compose abre, relativo ao CONTEXTO",
+      "arquivo presente", "; ".join(missing_df) if missing_df else "os %d dockerfiles conferidos" % len(builds_ctx))
+bad_copy = []
+copy_checked = 0
+for l, s, _, c, d in builds_ctx:
+    for src in copy_sources(read(d)):
+        copy_checked += 1
+        if "*" in src or "?" in src:
+            if not glob.glob(os.path.join(c, src)):
+                bad_copy.append("%s/%s: %s: %r não casa nada no contexto %s" % (l, s, d, src, c))
+        elif not os.path.exists(os.path.join(c, src)):
+            bad_copy.append("%s/%s: %s: %r não existe no contexto %s" % (l, s, d, src, c))
+check(copy_checked > 0 and not bad_copy,
+      "cada fonte de COPY dos Dockerfiles resolve dentro do contexto resolvido (%d fontes, %d blocos)" % (
+          copy_checked, len(builds_ctx)),
+      "todo caminho relativo do COPY existe sob o contexto — é isto que prova que o contexto é a raiz",
+      "; ".join(bad_copy) if bad_copy else "%d fontes conferidas" % copy_checked)
+
+# `--project-directory` é a única flag que muda o que `..` significa: com ela apontando
+# para a raiz, o contexto viria o PAI do repositório. Varrida em quem chama o compose de
+# verdade (CI, runbooks, docs, scripts), com comentário fora — linha de comentário explica
+# o knob, não o usa. E só conta linha que CHAMA o binário: a própria régua nomeia o knob
+# para proibi-lo, e nomear não é usar.
+pd_hits = []
+pd_scanned = 0
+
+def pd_use(ln):
+    return (not ln.lstrip().startswith("#") and bool(re.search(r'docker[\s-]+compose', ln))
+            and "--project-directory" in ln)
+
+for p in sorted(set(glob.glob(".github/workflows/*.yml") + glob.glob("deploy/*.md")
+                    + glob.glob("docs/**/*.md", recursive=True) + glob.glob("scripts/*.sh")
+                    + ["README.md"])):
+    pd_scanned += 1
+    for n, ln in enumerate(read(p).splitlines(), 1):
+        if pd_use(ln):
+            pd_hits.append("%s:%d" % (p, n))
+check(not pd_hits,
+      "nenhum comando compose dos %d arquivos varridos passa `--project-directory` (moveria o `..` para fora do repo)" % pd_scanned,
+      "zero ocorrências em linha de comando", "; ".join(pd_hits) if pd_hits else "zero")
+# O fixture do controle é montado por partes: este arquivo está na varredura, e uma
+# linha literal com o binário e a flag seria o próprio falso positivo. Concatenar o
+# nome da flag não afrouxa nada — `pd_use` recebe a mesma string de comando.
+PD = "--project-" "directory"
+check(pd_use("run: docker compose -f deploy/docker-compose.yml " + PD + " . build")
+      and not pd_use("\t# docker compose " + PD + " explica o knob")
+      and not pd_use("docker compose -f deploy/docker-compose.yml build")
+      and not pd_use("a régua proíbe " + PD + " sem chamar o binário"),
+      "controle negativo (--project-directory): só linha que chama o binário com a flag é acusada — comentário, comando sem flag e prosa que nomeia o knob são poupados",
+      "1 acusada, 3 poupadas", "uso=%s" % [pd_use(x) for x in (
+          "docker compose -f deploy/docker-compose.yml " + PD + " . build",
+          "# docker compose " + PD,
+          "docker compose -f deploy/docker-compose.yml build",
+          "proíbe " + PD)])
+
+# Controle negativo: a forma EXATA do log da CI. Rebobinar um bloco para `context: .`
+# tem de acusar os três sintomas de uma vez — o contexto fora da raiz, o dockerfile no
+# caminho dobrado e o COPY da raiz invisível. Régua que só confere o valor escrito não
+# pega nada disso, e foi por isso que o defeito chegou ao runner.
+lie_ctx, lie_df = resolve_ctx(".", "deploy/web/Dockerfile")
+lie_copy = os.path.join("data", "conf", "paid_catalog.json")
+check(lie_ctx != REPO_ROOT and not os.path.exists(lie_df)
+      and os.path.exists(os.path.join(REPO_ROOT, lie_copy))
+      and not os.path.exists(os.path.join(lie_ctx, lie_copy)),
+      "controle negativo (contexto): `context: .` é acusado — fora da raiz, dockerfile %s inexistente e o COPY da raiz some" % lie_df,
+      "os três sintomas juntos, como no log do runner",
+      "ctx=%s df existe=%s copy existe no ctx=%s" % (
+          lie_ctx, os.path.exists(lie_df), os.path.exists(os.path.join(lie_ctx, lie_copy))))
+ok_ctx, ok_df = resolve_ctx("..", "deploy/web/Dockerfile")
+check(ok_ctx == REPO_ROOT and os.path.isfile(ok_df),
+      "o estado de hoje (`context: ..`) resolve para a raiz e o dockerfile abre",
+      "%s + deploy/web/Dockerfile" % REPO_ROOT, "ctx=%s df=%s" % (ok_ctx, ok_df))
+
+# O oráculo, quando existe: `docker compose config` reimprime o contexto que o loader
+# resolveu — a segunda leitura do MESMO valor. Ele NÃO pegou o defeito de 2026-09-29
+# (não toca o disco), então nunca é a única régua; em modo emulado o TSV acima já
+# registrou o pulo com o motivo, e é ele que responde por esta régua não estar aqui.
+if resolved_prod and os.path.isfile(resolved_prod):
+    oracle_ctx = sorted(set(str(((s or {}).get("build") or {}).get("context"))
+                            for s in ((load(resolved_prod) or {}).get("services") or {}).values()
+                            if isinstance(((s or {}).get("build")), dict)))
+    bad_oracle = [v for v in oracle_ctx if resolve_ctx(v, "Dockerfile")[0] != REPO_ROOT]
+    check(bool(oracle_ctx) and not bad_oracle,
+          "oráculo: todo `context:` impresso pelo `docker compose config` resolve para a raiz (%d valores)",
+          "os valores resolvidos == %s" % REPO_ROOT,
+          "; ".join(bad_oracle) if bad_oracle else ", ".join(oracle_ctx))
 
 # (5) Auto-evidência: toda citação `arquivo:linha` escrita pelos arquivos desta
 # posse tem de resolver para uma linha útil. sources/ e companion/ mudam de linha

@@ -8,6 +8,15 @@
 
 [sub_resource type="Resource" id="Resource_bdwgx"]
 script = ExtResource("2_63l8l")
+id = 2715760142
+type = 1
+spawn_position = Vector2i(1600, 1300)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_ab1qw"]
+script = ExtResource("2_63l8l")
 id = 2843189460
 type = 2
 player_script = ExtResource("3_lmi4k")
@@ -16,7 +25,7 @@ spawn_offset = Vector2i(73, 64)
 is_persistant = true
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_ab1qw"]
+[sub_resource type="Resource" id="Resource_gwjrg"]
 script = ExtResource("2_63l8l")
 id = 2089709631
 nick = "Splatyna Cave"
@@ -29,7 +38,7 @@ trigger_polygon = PackedVector2Array(-16, 64, 0, 32, 32, 0, 64, 32, 80, 64)
 destination_map = 3863109455
 destination_pos = Vector2(2256, 1360)
 
-[sub_resource type="Resource" id="Resource_gwjrg"]
+[sub_resource type="Resource" id="Resource_imru3"]
 script = ExtResource("2_63l8l")
 id = 2089709631
 nick = "Overworld"
@@ -44,17 +53,7 @@ destination_map = 1009372873
 destination_pos = Vector2(1336, 3640)
 auto_warp = false
 
-[sub_resource type="Resource" id="Resource_endSplat00"]
-script = ExtResource("2_63l8l")
-count = 1
-id = 2715760142
-type = 1
-spawn_position = Vector2i(1600, 1300)
-spawn_offset = Vector2i(16, 16)
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
 [resource]
 script = ExtResource("1_fftci")
 name = "Splatyna Cave Entrance"
-spawns = Array[ExtResource("2_63l8l")]([SubResource("Resource_bdwgx"), SubResource("Resource_ab1qw"), SubResource("Resource_gwjrg"), SubResource("Resource_endSplat00")])
+spawns = Array[ExtResource("2_63l8l")]([SubResource("Resource_bdwgx"), SubResource("Resource_ab1qw"), SubResource("Resource_gwjrg"), SubResource("Resource_imru3")])

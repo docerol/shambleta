@@ -10,6 +10,17 @@
 
 [sub_resource type="Resource" id="Resource_028c4"]
 script = ExtResource("2_vspim")
+count = 4
+id = 2834092087
+type = 1
+spawn_position = Vector2i(1792, 1003)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 90000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_0mnon"]
+script = ExtResource("2_vspim")
 id = 3662818686
 type = 2
 player_script = ExtResource("4_0icva")
@@ -19,7 +30,18 @@ is_persistant = true
 trigger_radius = 512.0
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_0mnon"]
+[sub_resource type="Resource" id="Resource_hkvko"]
+script = ExtResource("2_vspim")
+count = 4
+id = 890728458
+type = 1
+spawn_position = Vector2i(1710, 1738)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 120000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_kd4mv"]
 script = ExtResource("2_vspim")
 id = 3639315857
 nick = "Guard"
@@ -32,7 +54,29 @@ state = 0
 trigger_radius = 160.0
 trigger_polygon = PackedVector2Array()
 
-[sub_resource type="Resource" id="Resource_hkvko"]
+[sub_resource type="Resource" id="Resource_otw3s"]
+script = ExtResource("2_vspim")
+count = 6
+id = 3842739378
+type = 1
+spawn_position = Vector2i(2536, 2060)
+spawn_offset = Vector2i(64, 64)
+respawn_delay = 45000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_pu03v"]
+script = ExtResource("2_vspim")
+count = 3
+id = 3045949408
+type = 1
+spawn_position = Vector2i(1000, 2060)
+spawn_offset = Vector2i(48, 48)
+respawn_delay = 90000.0
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_xe45y"]
 script = ExtResource("2_vspim")
 id = 2089709631
 nick = "To Castle Corridors"
@@ -45,7 +89,7 @@ trigger_polygon = PackedVector2Array(24, 36, 24, 4, 56, -28, 56, 68)
 destination_map = 398960913
 destination_pos = Vector2(1936, 3056)
 
-[sub_resource type="Resource" id="Resource_kd4mv"]
+[sub_resource type="Resource" id="Resource_w4ceu"]
 script = ExtResource("2_vspim")
 id = 2089709631
 nick = "To Castle Corridors"
@@ -58,7 +102,7 @@ trigger_polygon = PackedVector2Array(-7, 68, -7, -28, 24, 4, 24, 36)
 destination_map = 398960913
 destination_pos = Vector2(3504, 3056)
 
-[sub_resource type="Resource" id="Resource_otw3s"]
+[sub_resource type="Resource" id="Resource_hnwh2"]
 script = ExtResource("2_vspim")
 id = 2089709631
 nick = "To Tulimshar"
@@ -71,51 +115,7 @@ trigger_polygon = PackedVector2Array(41, 43, 9, 11, 28, 3, 55, 3, 73, 11)
 destination_map = 2608626462
 destination_pos = Vector2(1360, 1520)
 
-[sub_resource type="Resource" id="Resource_endTulim00"]
-script = ExtResource("2_vspim")
-count = 4
-id = 2834092087
-type = 1
-spawn_position = Vector2i(1792, 1003)
-spawn_offset = Vector2i(64, 64)
-respawn_delay = 90000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endTulim01"]
-script = ExtResource("2_vspim")
-count = 4
-id = 890728458
-type = 1
-spawn_position = Vector2i(1710, 1738)
-spawn_offset = Vector2i(64, 64)
-respawn_delay = 120000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endTulim02"]
-script = ExtResource("2_vspim")
-count = 3
-id = 3045949408
-type = 1
-spawn_position = Vector2i(1000, 2060)
-spawn_offset = Vector2i(48, 48)
-respawn_delay = 90000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
-[sub_resource type="Resource" id="Resource_endTulim03"]
-script = ExtResource("2_vspim")
-count = 6
-id = 3842739378
-type = 1
-spawn_position = Vector2i(2536, 2060)
-spawn_offset = Vector2i(64, 64)
-respawn_delay = 45000.0
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
 [resource]
 script = ExtResource("1_xxyto")
 name = "Tulimshar Castle"
-spawns = Array[ExtResource("2_vspim")]([SubResource("Resource_028c4"), SubResource("Resource_0mnon"), SubResource("Resource_hkvko"), SubResource("Resource_kd4mv"), SubResource("Resource_otw3s"), SubResource("Resource_endTulim00"), SubResource("Resource_endTulim01"), SubResource("Resource_endTulim02"), SubResource("Resource_endTulim03")])
+spawns = Array[ExtResource("2_vspim")]([SubResource("Resource_028c4"), SubResource("Resource_0mnon"), SubResource("Resource_hkvko"), SubResource("Resource_kd4mv"), SubResource("Resource_otw3s"), SubResource("Resource_pu03v"), SubResource("Resource_xe45y"), SubResource("Resource_w4ceu"), SubResource("Resource_hnwh2")])

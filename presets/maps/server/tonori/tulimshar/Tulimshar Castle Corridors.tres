@@ -6,6 +6,15 @@
 
 [sub_resource type="Resource" id="Resource_hmw3a"]
 script = ExtResource("2_5tu4x")
+id = 2089340336
+type = 1
+spawn_position = Vector2i(2700, 3020)
+spawn_offset = Vector2i(16, 16)
+is_persistant = true
+trigger_polygon = PackedVector2Array()
+
+[sub_resource type="Resource" id="Resource_d4q0g"]
+script = ExtResource("2_5tu4x")
 id = 2089709631
 nick = "To Castle"
 type = 2
@@ -17,7 +26,7 @@ trigger_polygon = PackedVector2Array(24, 36, 24, 4, 56, -28, 56, 68)
 destination_map = 3953695706
 destination_pos = Vector2(2480, 2096)
 
-[sub_resource type="Resource" id="Resource_d4q0g"]
+[sub_resource type="Resource" id="Resource_loomj"]
 script = ExtResource("2_5tu4x")
 id = 2089709631
 nick = "To Castle"
@@ -30,17 +39,7 @@ trigger_polygon = PackedVector2Array(-7, 68, -7, -28, 24, 4, 24, 36)
 destination_map = 3953695706
 destination_pos = Vector2(1104, 2096)
 
-[sub_resource type="Resource" id="Resource_endTulim00"]
-script = ExtResource("2_5tu4x")
-count = 1
-id = 2089340336
-type = 1
-spawn_position = Vector2i(2700, 3020)
-spawn_offset = Vector2i(16, 16)
-is_persistant = true
-trigger_polygon = PackedVector2Array()
-
 [resource]
 script = ExtResource("1_hebri")
 name = "Tulimshar Castle Corridors"
-spawns = Array[ExtResource("2_5tu4x")]([SubResource("Resource_hmw3a"), SubResource("Resource_d4q0g"), SubResource("Resource_endTulim00")])
+spawns = Array[ExtResource("2_5tu4x")]([SubResource("Resource_hmw3a"), SubResource("Resource_d4q0g"), SubResource("Resource_loomj")])

@@ -168,9 +168,73 @@ jobs:
     container:
       image: barichello/godot-ci:4.7.1
     name: SOM-IDLE Idle Tests
+    # Segundo canal da autorização de índice, e ele é o que o harness HERDA: o
+    # `git config --global` do passo abaixo só é lido por quem tiver o mesmo HOME,
+    # enquanto GIT_CONFIG_* entra no ambiente de TODO step do job — inclusive no
+    # processo Godot que chama `sh -c "git ls-files"`. O escopo de linha de comando
+    # é justamente um dos que o `safe.directory` aceita (o config local do repo não
+    # é), então a leitura do índice deixa de depender de adivinhar qual HOME o
+    # harness vai ter.
+    env:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: ${{ github.workspace }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      # Job em `container:` roda dentro da imagem, como outro usuário: o checkout
+      # fica pertencendo ao uid do runner e o harness fala de outro uid, então o
+      # git recusa ler o índice (a guarda de "dubious ownership") e devolve nada.
+      # `repo_layout_test` mede o repo LENDO o índice — com o índice fechado ele
+      # vê 0 arquivos, e 0 arquivos é indistinguível de um repo esvaziado. A
+      # autorização mora aqui, dentro do mesmo container onde o harness vai rodar
+      # as suas chamadas `git`, e o preflight abaixo falha o JOB quando o índice
+      # continua ilegível: a acusação de "0 arquivos" deixa de ser possível.
+      - name: Tornar o índice do git legível dentro do container
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(pwd -P)"
+          # `--system` quando o passo pode escrever em /etc: esse arquivo é lido
+          # seja qual for o HOME do processo, então o config global acima é redundância
+          # e não única fonte da autorização.
+          if [ -w /etc/gitconfig ] || [ "$(id -u)" -eq 0 ]; then
+            git config --system --add safe.directory "$GITHUB_WORKSPACE" 2>/dev/null \
+              || echo "aviso: --system indisponível; ficando só no global e no GIT_CONFIG_* do job"
+          fi
+          echo "safe.directory: $(git config --global --get-all safe.directory | tr '\n' ' ')"
+          echo "uid efetivo: $(id -u) | dono do workspace: $(stat -c %u .)"
+          count=$(git ls-files --cached | wc -l)
+          echo "git ls-files --cached: $count arquivos no índice"
+          if [ "$count" -le 200 ]; then
+            # O stderr do git vai para o log do job junto com a contagem: "0 arquivos"
+            # sozinho é a mesma acusação muda que o harness sofria.
+            echo "--- stderr do git na leitura do índice ---"
+            git ls-files --cached >/dev/null
+            echo "::error::indice do git ilegivel ou vazio DENTRO deste job ($count arquivos) - nao e o repo que encolheu, e o git que nao deixou ler; os gates de layout medem o que o git responde"
+            exit 1
+          fi
+
+      # `web_delivery_test` tem uma perna em python (estatica + sender + fila +
+      # CLI) e a imagem do job nao traz interpretador: `OS.execute("python3")`
+      # devolve rc=127 (programa nao encontrado), que no log e igual a uma
+      # regressao real do produto. A imagem e Debian (os jobs de export ja fazem
+      # install por apt), entao a CI prover a ferramenta no job que a exige. O
+      # preflight abaixo e o que impede o step de virar decoracao: se o python
+      # nao ficar de pe com a stdlib da perna, o job para aqui, nomeado.
+      - name: Prover o interpretador da perna python
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -uo pipefail
+          apt-get update
+          apt-get install -y python3
+          python3 --version
+          python3 -c 'import glob, json, os, re, sqlite3, subprocess, sys, tempfile, threading, time, http.server; print("stdlib da perna e2e disponivel")'
 
       - name: Import assets
         run: |
@@ -401,14 +465,18 @@ jobs:
       - name: Resolve compose (staging overlay sobre o prod)
         run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml config -q
 
+      # `--progress` é flag GLOBAL do compose: depois do `build` o CLI avisa
+      # ("--progress is a global compose flag", medido no log de 2026-09-29) e descarta
+      # o valor — o build saía no formato TTY, que o runner quebra em linhas impossíveis
+      # de ler. Antes do subcomando é a forma que vale.
       - name: Build every image the prod compose declares
-        run: docker compose -f deploy/docker-compose.yml build --progress=plain
+        run: docker compose --progress=plain -f deploy/docker-compose.yml build
 
       # O overlay de staging troca os `build.args` do serviço `web` (o endereço do
       # game server entra compilado no pacote). Buildar só com o prod deixaria o
       # caminho que o staging usa sem prova nenhuma.
       - name: Build the web image with the staging args
-        run: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml build --progress=plain web
+        run: docker compose --progress=plain -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml build web
 
       # Finding #89: `deploy/web/Dockerfile` só COPIAVA o nginx.conf — um conf que o
       # nginx recusa (diretiva fora de contexto, `location` duplicada, `{` sem fechar)

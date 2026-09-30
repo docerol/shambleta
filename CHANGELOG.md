@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-09-29
+## [Unreleased] - 2026-09-30
 
 ### Removed
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`
@@ -71,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The content catalogue is not loaded there: `DB.Preload()` only issues
   `ResourceLoader.load_threaded_request` for every preset path, and `PreloadUpdate()` —
   re-armed on `Launcher.get_tree().process_frame` — is what closes the preload, calls
-  `Load()` and lights `isInitialized` (`sources/db/DB.gd:228`). The dictionaries therefore
+  `Load()` and lights `isInitialized` (`sources/db/DB.gd:233-235`). The dictionaries therefore
   exist only after enough FRAMES. Here the frames land before the harness quits (~1747
   objects measured); on the CI runner, whose `.godot/` the workflow regenerates, they do
   not (30–31 measured against the 2247 ceiling recorded from a full local boot), and
@@ -97,6 +97,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `marketplace_depth_test.gd:300` in `tests/auction_house_wiring_test.gd` was already stale
   by 43 lines (it points at `panel.contains("\"GetAuctionPage\"")`, which lives in `:343`);
   all three now land on the code the prose claims.
+- The pointer ruler then ate what the round that fed it had left behind: every citation the
+  entries above moved out of date was accused by the suite that checks citations, and all of
+  them were mine. `sources/db/DB.gd:228` — cited by ten harnesses as the boot wait — named
+  `PreloadUpdate()`, which is not the line the sentence describes; the sentence says the call
+  closes the preload, calls `Load()` and lights `isInitialized`, and that is `:233-235`, so
+  all ten moved in place, one line each, without shifting a file another citation reads. The
+  eleventh named a harness that this round deleted: the `ZonePolicy` entry above removed
+  `tests/zone_policy_test.gd`, and the prose in `scripts/check_compose.sh` still cited it as
+  the file that measures the thing — the harness-citation arm caught it as `1 vs 0`
+  (`scripts/check_compose.sh → tests/zone_policy_test.gd`). Two more moved to the lines that
+  actually hold the code (`tiled_map_reader.gd:627-628` for `spawn_position`/`spawn_offset`)
+  and one header comment was rewritten so the bare word `name` stops being offered to the
+  ruler as a symbol. Verdict read from the marker, not from the file count: `== RESULT: 3236
+  checks, 0 failures ==` with the sweep's own census in the log — `538 referências
+  arquivo:linha (159 em prosa fora de `.md`), 138 com símbolo nomeado na cláusula` — and
+  `== GATES VERMELHOS: none ==`, `== FLAKES: none ==`. One stale pointer of the same class
+  was still live in `BLIND_JUDGE_PROTOCOL.md`: it cited `.github/workflows/godot-ci.yml:415`
+  for a job's `needs`, and the `+68` that the `nginx -t` step added to that workflow moved
+  the number without the prose noticing. `scripts/check_doc_drift.sh` does not accuse it (the
+  target is a `.yml` line and line 415 is not blank), which is the honest limit of that
+  ruler, recorded rather than patched around: the citation now reads `:521-524`, names the
+  shift that broke it, and says plainly that the finding it records was closed by #83.
+- Two gates were red on the runner because the runner refuses them their tools, and both
+  printed the shape of a product regression while saying something about the environment.
+  `repo_layout_test` counted `== RESULT: 52 checks, 6 failures ==` (`##[error]6 checks falhos
+  em 52`) with `índice do git lido (0 arquivos)` — the job runs in
+  `container: barichello/godot-ci:4.7.1`, where the checkout belongs to the runner's uid and
+  the harness process speaks as another, so git's ownership guard answered nothing; a harness
+  that cannot read the repository was reporting zero files, which is indistinguishable from an
+  emptied one, and all six failures were measurements taken through that index (including the
+  three `tests/*.gd` accused of being dead and a stale `NEAR_FENCE` reason that is green here).
+  `web_delivery_test` counted `== WEB DELIVERY: 125 checks, 6 failures ==` including
+  `e2e python (estatica + sender + fila + CLI) exit 0 (rc=127)`: `OS.execute("python3", …)`
+  found no interpreter because the image ships none, and "program not found" arrived dressed
+  as a regression. Both halves closed on both sides. The workflow now authorizes the index
+  through the scope the harness actually inherits — job-level `GIT_CONFIG_COUNT`/`KEY_0`/
+  `VALUE_0=safe.directory=${{ github.workspace }}`, since a step's `git config --global` only
+  reaches processes sharing that HOME — plus `--global` for `$GITHUB_WORKSPACE` and `$(pwd -P)`,
+  `--system` where writable, and a preflight that fails the JOB when `git ls-files --cached`
+  answers ≤ 200 files, with git's stderr in the log; and `apt-get install -y python3` followed
+  by a preflight importing the stdlib the leg leans on (`glob, json, os, re, sqlite3,
+  subprocess, sys, tempfile, threading, time, http.server`). The harnesses stopped trusting
+  their tools: `_git()` keeps rc and stderr, `_gitWhy()` names the cause and `_gitBlame()`
+  hangs it on every label that counts index files, so the same failure reads `… || ÍNDICE NÃO
+  LIDO — git RECUSOU ler este diretório: rc=128, fatal: detected dubious ownership …` instead
+  of a bare `0 arquivos`; `web_delivery_test` names the interpreter that ran (`perna executada
+  por Python 3.14.7 | ambiente: Linux | máquina local, sem container`), counts legs that did
+  not run as visible `[SKIP]` lines plus `== WEB DELIVERY SKIPS: %d (%s) ==`, and pins the CI
+  provisioning with a ruler that reads the `idle-tests` job block for an executable
+  `apt-get install … python3` line. Each new ruler ate the lie in situ: `git` stubbed to exit
+  128 with the runner's own message reproduces the CI exactly — `52 checks, 6 failures`, six
+  labels each carrying the reason — and deleting the provisioning line prints `linha
+  executável do job idle-tests: AUSENTE` with `== WEB DELIVERY: 126 checks, 1 failures ==` and
+  the gate red. Restored, both are green: `52 checks, 0 failures` (teardown 30/64) and `126
+  checks, 0 failures`, `== WEB DELIVERY SKIPS: 0 (nenhum) ==` (teardown 30/101). One
+  reservation kept in the open: in that same minute the FIRST attempt of both gates died of
+  signal 11 sharing six backtrace frames (`godot+0x48252fc`, `+0x4825af8`, `+0x6c4a345`,
+  `+0x6c4a58c`, `+0x6564175`, `+0x6ee90b9`), the runner retried and the retry was green
+  (`== FLAKES: repo_layout_test ==`, `== FLAKES: web_delivery_test ==`); a second session
+  crashed neither (`godot exit=0`, `== FLAKES: none ==`). Engine crash, not a check failure,
+  not reproduced — tracked as a defect, not smoothed into the verdict.
+- `content_hygiene_test` printed `0 failures` on this machine and `== RESULT: 7167 checks, 33
+  failures ==` on the runner (run 36634640820, commit `1f540a1`), and the gap was not the
+  harness: it was two copies of the same content, one of which nothing read.
+  `presets/maps/server/**` is an ARTIFACT — `addons/tiled_import_plugin.gd:162` regenerates the
+  `MapServerData` and its `SpawnObject`s from `data/maps/**.tmx` and `:169` links the `MapData`
+  that becomes `MapsDB` (`sources/db/DB.gd:8`). With a warm `.godot` the engine skips a `.tmx`
+  whose md5 did not change, so here the game read the committed `.tres`; CI regenerates `.godot`
+  and runs `godot --headless --editor --import --quit` (`.github/workflows/godot-ci.yml`, step
+  "Import assets"), which overwrites the artifact with the source. The mob roster and the boss
+  ladder had been hand-written into the artifacts of ten maps and the `.tmx` had been left
+  behind, so the CI import handed back 13 spawns in zone 17 (Drazil) resolving to nothing
+  (`3851394706`, `4085786187`), a census of 16 phantom spawn groups, zones 25/26/27 with no mob
+  group at all (`0 >= 19` on the deepest tier), the farm at 24 species against a fence of 27
+  (Lynx, Goblin, Bandit gone) and bosses 4..9 missing from their own arenas — 30 `[FAIL]` lines
+  in the log for 33 failures. The product fix went to the source, not the artifact: 18 spawn
+  groups written back into the nine `.tmx` files that were short (12 for zones 25/26/27, 6 for
+  the boss arenas) and Drazil's object list renumbered onto the artifact the game ships. Nine
+  `presets/maps/server/*.tres` came along as the deterministic importer writes them. The ten
+  `presets/maps/layers/*.tscn` the same edit produced were REVERTED: after normalizing
+  `unique_id`, instance names and particle data the diff against `HEAD` is empty — that
+  directory is a committed generated file whose ids change on every import, so the edit was
+  noise and noise does not get a commit. The ruler is a fourth suite in
+  `tests/content_hygiene_test.gd`: for every map in `MapsDB` it compares the MULTISET of
+  monster spawns parsed out of the `.tmx` against the loaded artifact, field by field — id,
+  count, `respawn_delay`, position and offset, the last two recomputed the way the import
+  computes them (`tiled_map_reader.gd:627-628`, `:928`) — so divergence means the CI import is
+  about to rewrite this map. Floors measure the sweep itself (40 maps paired, 269 mob groups in
+  the source, both counted visible) and the verdict is `divergent == 0`; six `_multisetDiff`
+  controls cover both directions (group only in source, only in artifact, count off, delay off,
+  position off, offset off). Bite measured on the real file: reverting only
+  `data/maps/ship/ship-hold.tmx` to its `HEAD` bytes printed 2 failures naming `'Ship Hold'`
+  and listing the three groups CI would delete (`== RESULT: 7259 checks, 2 failures ==`, gate
+  red); with the source current, `== RESULT: 7258 checks, 0 failures ==` and `Gate §24-8 OK`.
+  The fixed point was then measured rather than inferred: a cold copy of the 3714 files named by
+  `git ls-files -z`, with no `.godot`, run through the same `--import` (Godot 4.7.2 here, 4.7.1
+  on the runner) returned `presets/maps/server/**` and `presets/maps/data/**` byte-identical to
+  the checkout — while all 40 `presets/maps/layers/**` files moved on their own, which is what
+  the ruler refuses to judge and why it reads the spawn-carrying artifacts.
+- The compose build died on the runner and every gate that could have seen it was green,
+  because they were all reading a value instead of resolving it. Five services declared
+  `build.context: .` in `deploy/docker-compose.yml`; compose takes the project directory from
+  the directory of the FIRST `-f` file — `deploy/` — resolves a relative `context` against
+  that, and then resolves a relative `dockerfile` against the resolved context. So the build
+  daemon was asked for `deploy/deploy/web/Dockerfile`. Same bytes in two runner logs, on two
+  different commits (`126b086095d0`, `1f540a1c21a9`): `resolve : lstat
+  /home/runner/work/shambleta/shambleta/deploy/deploy: no such file or directory`. Neither CI
+  `config` step nor the 156-check compose gate could see it: `docker compose config -q`
+  resolves neither the context nor the existence of any path, and the image ruler in
+  `scripts/check_ci.sh` was checking the written `dockerfile:` against the current directory.
+  The product fix is the value, not a flag: `context: ..` on all five services
+  (`deploy/docker-compose.yml:45`, `:100`, `:209`, `:317`, `:372`), the only spelling that
+  makes CI (checkout root plus `-f deploy/docker-compose.yml`), the README's `cd deploy &&
+  docker compose up -d` and Coolify's "import this file" land on the same directory — and it
+  has to be the repository root, because the Dockerfiles copy out of it (`COPY . .` at
+  `deploy/server/Dockerfile:17` and `deploy/web/Dockerfile:17`). The reasoning, the runner
+  error verbatim and the three invocation styles are now in the file itself, in the block that
+  starts at `deploy/docker-compose.yml:442`, because this is the second round in a row where a
+  runbook and a workflow disagreed about a path and only the log knew.
+- Two rulers were added so the class cannot come back silently, and each was proven to bite
+  before its green was believed. Section (7b) of `scripts/check_compose.sh` reimplements the
+  resolution — project dir = directory of the first `-f`, dockerfile relative to the resolved
+  context — and turns it into four checks: the sweep found at least ten `build:` blocks (10
+  measured, across the production file and the staging merge), every resolved context equals
+  the repository root, every `dockerfile:` exists at the path compose actually opens, and every
+  relative `COPY` source of those Dockerfiles resolves inside the resolved context (40 sources,
+  `%d` printed from the run, not from the prose). A fifth scan walks 36 files — `.github/workflows/*.yml`,
+  `deploy/*.md`, `docs/**/*.md`, `scripts/*.sh`, `README.md` — and refuses `--project-directory`
+  on any command line, because that flag is the one knob that would move `..` outside the
+  repository; it spares comments, flag-less commands and prose that only names the knob, and
+  both halves are pinned by negative control. The fixture strings are assembled as
+  `"--project-" "directory"` so the ruler cannot accuse its own test, which is the second time
+  this round a self-accusing ruler had to be separated from its fixture without weakening
+  either. `scripts/check_ci.sh` got the same resolver on its image leg. Bite, measured by
+  breaking it in place: reverting a SINGLE service's `context` to `.` printed the doubled
+  `deploy/deploy/<…>Dockerfile` name and `2 failures` in each of the two gates; restored, the
+  bytes are identical to what was measured and both are green — `== COMPOSE GATE: 164 checks,
+  0 failures ==` and `== CI GATE: 140 checks, 0 failures ==`.
+- `--progress=plain` moved in front of `-f` in both build steps of
+  `.github/workflows/godot-ci.yml:473` and `:479`. The runner said so in as many words —
+  `--progress is a global compose flag, better use \`docker compose --progress xx build …\`` —
+  and discarded the value where it had been written, so the flag after `build` was decoration:
+  the plain progress the step asked for, and the log evidence a failed build needs, were never
+  there. It is now a global flag on the command, and the comment names the measured warning
+  rather than a preference.
+- Two prose sites were corrected to say what the file now does. `.dockerignore:9` and
+  `scripts/check_compose.sh:774` both described the build context as "the root of the
+  repository" while `deploy/docker-compose.yml` was declaring `context: .`, which is `deploy/`;
+  the sentence was true of the intent and false of the file, which is the shape every ruler in
+  this repository exists to catch.
 - The lockout-duration check in `tests/login_hardening_test.gd` was an unsatisfiable wall-clock
   assertion. `RecordFailedLogin` (`sources/sql/SQL.gd:381`) stamps `lockedUntil` from
   `SQLCommons.Timestamp()` at the moment of the write (`sources/sql/SQL.gd:386`) — a

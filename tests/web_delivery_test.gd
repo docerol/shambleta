@@ -839,22 +839,47 @@ func _run() -> void:
 	DirAccess.remove_absolute(result_path)
 	var rootPath : String = ProjectSettings.globalize_path("res://")
 	var e2e_path : String = ProjectSettings.globalize_path("user://web_delivery_py_e2e.py")
-	var code : int = OS.execute("python3", [e2e_path, rootPath, snapshot, str(accountID),
-		FakeEndpoint, FakeP256dh + "B", FakeAuth, str(GhostAccount), result_path],
-		PackedStringArray(), true)
-	var py_text : String = _read(result_path)
-	print("  . python: " + py_text.replace("\n", " ").strip_edges())
-	_check(code == 0, "e2e python (estatica + sender + fila + CLI) exit 0 (rc=%d)" % code)
-	_check(py_text.contains("PYSTATIC: OK"),
-		"nenhum dos quatro modulos confessa NotImplementedError e send() existe")
-	_check(py_text.contains("PYSENDER: OK"),
-		"send() EXECUTADO: POST com Authorization: vapid + corpo aes128gcm aberto pelo receiver; 410 -> SubscriptionGone")
-	_check(bool(parts.get("sender_implemented", false)) and py_text.contains("PYSENDER: OK"),
-		"peca 1 declarada E provada por execucao (a regex antiga exigia o contrario)")
-	_check(py_text.contains("PYQUEUE: OK"),
-		"linha gravada por Launcher.SQL passou por sweep -> drain (sender fake, estado terminal) e 410 -> push_subscription_gone_410 + subscription apagada")
-	_check(py_text.contains("PYCLI: OK"),
-		"caminho CLI inteiro (register/sweep/dedup/drain keyless/notify stdout) continua verde")
+	# A ferramenta primeiro, o veredito depois: sem `python3` no ambiente o
+	# `OS.execute` devolve rc=127 (programa não encontrado) e as SEIS checks desta
+	# perna saíam vermelhas — cinco delas downstream, cada uma gritando "o sender
+	# quebrou" por causa de um binário que não está ali. Em run117 da CI foi
+	# exatamente isso. Skip nomeado, contabilizado e com o ambiente declarado é o
+	# desenho de `nginx_hardening_test` e do `scripts/check_compose.sh` (achei
+	# `[SKIP]` + `MOTIVO:`): medido não foi, então não pode dizer nem "ok" nem
+	# "produto quebrado". E não é isenção: a última check desta perna cobra da
+	# própria CI a linha executável que prover o interpretador, então arrancar a
+	# provisão acende vermelho aqui dentro, não apaga a régua.
+	var pySonda : Dictionary = _pythonSonda()
+	var pyWhy : String = str(pySonda.get("why", ""))
+	if pyWhy != "":
+		var why : String = "%s | ambiente deste run: %s%s" % [pyWhy, _envLabel(), _pythonElsewhere()]
+		for nm in PY_LEG_NAMES:
+			_skip(nm, why)
+	else:
+		var code : int = OS.execute("python3", [e2e_path, rootPath, snapshot, str(accountID),
+			FakeEndpoint, FakeP256dh + "B", FakeAuth, str(GhostAccount), result_path],
+			PackedStringArray(), true)
+		var py_text : String = _read(result_path)
+		print("  . python: " + py_text.replace("\n", " ").strip_edges())
+		_check(code == 0, "e2e python (estatica + sender + fila + CLI) exit 0 (rc=%d) — perna executada por %s | ambiente: %s" % [code, str(pySonda.get("version", "?")), _envLabel()])
+		_check(py_text.contains("PYSTATIC: OK"),
+			"nenhum dos quatro modulos confessa NotImplementedError e send() existe (%s)" % _envLabel())
+		_check(py_text.contains("PYSENDER: OK"),
+			"send() EXECUTADO: POST com Authorization: vapid + corpo aes128gcm aberto pelo receiver; 410 -> SubscriptionGone (%s)" % _envLabel())
+		_check(bool(parts.get("sender_implemented", false)) and py_text.contains("PYSENDER: OK"),
+			"peca 1 declarada E provada por execucao (a regex antiga exigia o contrario) (%s)" % _envLabel())
+		_check(py_text.contains("PYQUEUE: OK"),
+			"linha gravada por Launcher.SQL passou por sweep -> drain (sender fake, estado terminal) e 410 -> push_subscription_gone_410 + subscription apagada (%s)" % _envLabel())
+		_check(py_text.contains("PYCLI: OK"),
+			"caminho CLI inteiro (register/sweep/dedup/drain keyless/notify stdout) continua verde (%s)" % _envLabel())
+	# Verde em uma máquina e escuridão na outra é a doença que este harness pegou
+	# da CI: por isso a provisão é conferida em TODO run, com ou sem interpretador
+	# aqui. A prova é linha executável do workflow, não frase de README.
+	var provisioned : String = _ciPythonProvision()
+	_check(provisioned != "",
+		"a CI prover o interpretador da perna python no job containerizado que roda este harness (linha executável do job idle-tests: %s) — sem ela a perna só existe na máquina de quem escreve"
+		% (provisioned if provisioned != "" else "AUSENTE"))
+	print("== WEB DELIVERY SKIPS: %d (%s) ==" % [skips, ", ".join(skipNames) if skips > 0 else "nenhum"])
 
 	# --- (G) a perna do navegador, EXECUTADA ---
 	_suiteBrowserLeg(wpd, wps, wpsub, accountID)
@@ -925,6 +950,108 @@ func _suiteBrowserLeg(wpd : Object, wps : Object, wpsub : Object, accountID : in
 	_check(bool(wpd.call("BrowserCanSubscribe")) == false and str(wpd.call("LastReason")) == "not_web",
 		"isWeb e a publica restaurados: a sonda volta a not_web (a suite nao deixou estado para as proximas checks) — %s"
 		% str(wpd.call("LastReason")))
+
+# --------------------------------------------------------------------------
+# (E) contabilidade da perna python
+# --------------------------------------------------------------------------
+#
+# A perna (E) executa `python3` para medir sender AES-128-GCM, fila e CLI do
+# companion em cima da linha que o JOGO gravou. Duas verdades precisam coexistir
+# aí: sem o interpretador nada foi medido (logo: nem verde, nem "o sender
+# quebrou"), e a perna continua obrigatória em algum ambiente. O desenho é o da
+# casa — `tests/nginx_hardening_test.gd` (`[SKIP]` + contabilidade própria) e
+# `scripts/check_compose.sh` (`[SKIP]` + `MOTIVO:`). Os nomes abaixo são as seis
+# checks da perna, um por um, para o log dizer exatamente o que ficou de fora.
+const PY_LEG_NAMES : Array = [
+	"e2e python (estatica + sender + fila + CLI) exit 0",
+	"PYSTATIC — nenhum dos quatro modulos confessa NotImplementedError e send() existe",
+	"PYSENDER — send() EXECUTADO: POST com Authorization: vapid + corpo aes128gcm aberto pelo receiver; 410 -> SubscriptionGone",
+	"peca 1 declarada E provada por execucao (a regex antiga exigia o contrario)",
+	"PYQUEUE — linha gravada por Launcher.SQL passou por sweep -> drain (sender fake, estado terminal) e 410 -> push_subscription_gone_410 + subscription apagada",
+	"PYCLI — caminho CLI inteiro (register/sweep/dedup/drain keyless/notify stdout) continua verde",
+]
+
+var skips : int = 0
+var skipNames : Array = []
+
+func _skip(name : String, reason : String) -> void:
+	skips += 1
+	skipNames.append(name)
+	print("[SKIP] " + name + " | " + reason)
+
+func _flat(text : String, maxLen : int) -> String:
+	var out : String = text.replace("\r", " ").replace("\n", " ").strip_edges()
+	while out.contains("  "):
+		out = out.replace("  ", " ")
+	return out.substr(0, maxLen) + "…" if out.length() > maxLen else out
+
+# Sonda da ferramenta, em rc + texto: 127 = o programa não existe aqui; outro rc
+# com saída = o interpretador está presente e se recusou por outro motivo, que o
+# rótulo passa a carregar. O stdout NÃO volta no array de saída deste build (é a
+# mesma limitação que obriga `repo_layout_test` a ler o git por arquivo), então a
+# resposta viaja por arquivo e só o código de saída é lido direto do processo.
+func _pythonSonda() -> Dictionary:
+	var tmp : String = OS.get_temp_dir().path_join("shambleta-webdelivery-pyver.txt")
+	var rc : int = OS.execute("sh", ["-c", "python3 --version > '%s' 2>&1" % tmp])
+	var said : String = _flat(_read(tmp), 140)
+	DirAccess.remove_absolute(tmp)
+	if rc == 0:
+		return {"why": "", "version": said if said != "" else "python3 sem --version"}
+	if rc == 127:
+		return {"why": "o ambiente não tem o binário que a perna exige: `python3 --version` devolveu rc=127 = programa não encontrado%s" % (" — " + said if said != "" else ""), "version": "python3 ausente"}
+	return {"why": "python3 respondeu rc=%d à sonda de versão: %s" % [rc, said if said != "" else "(sem saída)"], "version": "python3 rc=%d" % rc}
+
+# Qual ambiente correu (ou tentou correr) a perna. A CI containerizada e esta
+# máquina têm ferramentas diferentes; um rótulo que não diz onde mediu mente
+# sobre o que mede.
+func _envLabel() -> String:
+	var where : String = "máquina local, sem container"
+	if OS.get_environment("CI") == "true":
+		where = "runner da CI, job idle-tests (container barichello/godot-ci)"
+	return "%s | %s" % [OS.get_name(), where]
+
+# A linha executável (nunca comentário) do job containerizado que prover o
+# interpretador. Comentário no workflow não instala nada — é a mesma lição do
+# canário C1 do scripts/check_ci.sh.
+func _ciPythonProvision() -> String:
+	var wf : String = _read("res://.github/workflows/godot-ci.yml")
+	if wf == "":
+		return ""
+	var head : String = "\n  idle-tests:\n"
+	var a : int = wf.find(head)
+	if a < 0:
+		return ""
+	var block : String = wf.substr(a + head.length())
+	var stop : RegEx = RegEx.create_from_string("\n  [a-zA-Z0-9_.-]+:\n")
+	if stop != null:
+		var m : RegExMatch = stop.search(block)
+		if m != null:
+			block = block.substr(0, m.get_start())
+	for l in block.split("\n", false):
+		var s : String = str(l).strip_edges()
+		if s == "" or s.begins_with("#"):
+			continue
+		if s.contains("apt-get install") and s.contains("python3"):
+			return s
+	return ""
+
+# Onde a perna roda quando não roda aqui — a prova estrutural de que pular não é
+# isenção: os quatro módulos do companion são exercidos por pytest no job
+# `companion-tests`, e a fila em cima do snapshot do processo é exercida pelo
+# job containerizado, desde que ele prove o interpretador (régua acima).
+func _pythonElsewhere() -> String:
+	var where : Array = []
+	var provisioned : String = _ciPythonProvision()
+	if provisioned != "":
+		where.append("CI idle-tests prover o interpretador (`%s`)" % provisioned)
+	var covered : int = 0
+	for f in ["companion/test_push_common.py", "companion/test_push_p256.py",
+			"companion/test_push_aesgcm.py", "companion/test_push_vapid.py"]:
+		if FileAccess.file_exists("res://" + f):
+			covered += 1
+	if covered > 0:
+		where.append("companion-tests roda pytest sobre os mesmos quatro módulos (%d arquivos em companion/)" % covered)
+	return " | a perna continua medida em: " + "; ".join(where) if where.size() > 0 else " | NENHUM OUTRO AMBIENTE PROVE ESTA PERNA"
 
 # Copia consistente do banco que este processo esta usando. `VACUUM INTO` com
 # bind (nada de caminho concatenado dentro do SQL); se a engine recusar o bind,

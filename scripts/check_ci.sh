@@ -478,8 +478,24 @@ compose_build_files = set()
 for m in re.finditer(r'docker\s+compose([^\n;|]*)\bbuild\b', all_wf_raw):
     compose_build_files.update(re.findall(r'-f\s+(\S+)', m.group(1)))
 for svc, ctx, df in builds:
-    check(os.path.exists(df), "%s: o dockerfile %s que o compose aponta existe" % (svc, df),
-          "arquivo presente na árvore", "ausente")
+    # Resolução como o compose faz, não como o CWD deste script: o diretório do
+    # projeto é o do PRIMEIRO `-f` (deploy/), `context` é relativo a ele e o
+    # `dockerfile` é relativo ao contexto resolvido. Ler o dockerfile contra o CWD
+    # foi o verde falso de 2026-09-29: `deploy/web/Dockerfile` existe à raiz, e o
+    # compose abria `deploy/deploy/web/Dockerfile` (log do runner, commits 126b086 e
+    # 1f540a1). A régua de verdade está em scripts/check_compose.sh (7b); esta é a
+    # mesma conta, feita com o par (contexto, dockerfile) que o compose declara.
+    proj = os.path.dirname(os.path.abspath("deploy/docker-compose.yml"))
+    ctx_abs = (ctx if (os.path.isabs(ctx) or re.match(r"^[A-Za-z0-9+.-]+://", ctx))
+               else os.path.abspath(os.path.join(proj, ctx)))
+    df_abs = df if os.path.isabs(df) else os.path.normpath(os.path.join(ctx_abs, df))
+    check(ctx_abs == os.getcwd(),
+          "%s: o `context: %s` do compose resolve para a raiz do repositório, que é o "
+          "único lugar de onde os `COPY` dos Dockerfiles fazem sentido" % (svc, ctx),
+          "abspath(diretório-do--f + context) == %s" % os.getcwd(),
+          "resolve para %s" % ctx_abs)
+    check(os.path.exists(df_abs), "%s: o dockerfile %s que o compose abre (contexto %s) existe" % (svc, df_abs, ctx_abs),
+          "arquivo presente no caminho RESOLVIDO", "ausente")
     explicit = re.search(r"docker\s+build[^\n]*-f\s+%s" % re.escape(df), all_wf_raw)
     via_compose = "deploy/docker-compose.yml" in compose_build_files
     check(bool(explicit) or via_compose,
