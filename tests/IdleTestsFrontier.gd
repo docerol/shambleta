@@ -77,6 +77,18 @@ func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
 # índice a régua olharia um terço da evidência que diz estar olhando.
 static var _ptrIndex : Dictionary = {}
 
+# O alvo de um ponteiro, UMA lista para os quatro regexes deste arquivo. Ela é o texto de
+# `_TGT` da régua bash (`scripts/check_doc_drift.sh`) e a razão de existir dela é a mesma do
+# adaptador `Herdado` lá: os dois juízes da mesma árvore têm de ler a mesma classe. Escrita à
+# mão em quatro casas, esta lista aqui era mais estreita que a de lá e não via `nginx.conf`,
+# `Dockerfile`, `.mjs`, `.html`, `.yaml` — 27 ponteiros de linha invisíveis para cá e julgados
+# de lá (o censo desta varredura saltou de 447 para 474 ao içar a lista, com as âncoras paradas
+# em 121), e a primeira consequência medida foi o braço de continuação acusar de órfã uma frase
+# honesta do runbook de operação: o antecedente existia na linha, só não era um alvo
+# reconhecível aqui.
+# Dockerfile entra sem ponto porque é assim que a doc de deploy o cita.
+const PTR_TGT : String = "((?:[A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|yaml|json|sql|cfg|conf|md|csv|mjs|toml|godot|tscn|example|html))|(?:[A-Za-z0-9_./-]*Dockerfile))"
+
 static func _PtrIndexWalk(dirPath : String) -> void:
 	var dir : DirAccess = DirAccess.open(dirPath)
 	if dir == null:
@@ -214,6 +226,44 @@ static func _AnchorStruct(sym : String, ext : String, symSpans : Dictionary) -> 
 		return "`%s`: nenhuma declaração no alvo — a âncora aponta para um nome que o arquivo não declara" % sym
 	if list.size() > 1:
 		return "`%s`: %d declarações no alvo — âncora ambígua é acusação, não escolha" % [sym, list.size()]
+	return ""
+
+# Continuação de ponteiro (#124, fatia 5): o número sem arquivo entre backticks herda o arquivo
+# do ÚLTIMO `arquivo:NN` ou `arquivo:@simbolo` ANTERIOR NA MESMA LINHA, e só ali. Herdar da linha
+# de cima deixaria o veredito depender de onde a frase quebrou no arquivo — o mesmo defeito de
+# juiz que le a linha errada que o #116 registrou. Sem antecedente devolve "", e a decisão é
+# acusar, não adivinhar. A ordenação é por POSIÇÃO e não por regex porque é a posição que decide
+# a cláusula: um ponteiro que vem depois do número herdado não pode ser o antecedente dele.
+static func _ContHerdancas(line : String, ptrRx : RegEx, ancRx : RegEx, contRx : RegEx) -> Array:
+	var eventos : Array = []
+	for pm in ptrRx.search_all(line):
+		eventos.append([pm.get_start(), "p", String(pm.get_string(1)), pm])
+	for am in ancRx.search_all(line):
+		eventos.append([am.get_start(), "a", String(am.get_string(1)), am])
+	for cm in contRx.search_all(line):
+		eventos.append([cm.get_start(), "c", "", cm])
+	eventos.sort_custom(func(a, b) -> bool: return int(a[0]) < int(b[0]))
+	var saida : Array = []
+	var ultimo : String = ""
+	for ev in eventos:
+		if String(ev[1]) == "c":
+			saida.append([ev[3], ultimo])
+		else:
+			ultimo = String(ev[2])
+	return saida
+
+# Metade estrutural do alvo herdado: a linha tem que caber no arquivo e nenhuma das duas bordas
+# pode cair em branco — os mesmos dois predicados que a régua aplica ao ponteiro nomeado. Modelo
+# de cláusula (identidade, literal, mensagem) fica com a régua que já o tem: reimplementar aqui
+# seria criar o segundo modelo que discorda do primeiro, e é por isso que o braço de âncora
+# acima declara o que não julga em vez de adivinhar. Devolve "" quando não há o que acusar.
+static func _ContStruct(src : PackedStringArray, from : int, to : int) -> String:
+	if from > src.size() or to > src.size():
+		return "cai em %d-%d, que não cabe num arquivo de %d linhas" % [from, to, src.size()]
+	if _LineBlank(src, from):
+		return "a linha %d está em branco" % from
+	if _LineBlank(src, to):
+		return "a linha %d está em branco" % to
 	return ""
 
 # Nome do símbolo declarado nesta linha de coluna zero, ou "" se a linha não declara.
@@ -493,14 +543,14 @@ static func _IdentityJudgeCorpus(docLines : PackedStringArray, src : PackedStrin
 		symSpans : Dictionary, tag : String, tally : Dictionary) -> Array[String]:
 	var out : Array[String] = []
 	var ptrRx : RegEx = RegEx.new()
-	ptrRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):(\\d+)(?:-(\\d+))?`")
+	ptrRx.compile("`" + PTR_TGT + ":(\\d+)(?:-(\\d+))?`")
 	var symRx : RegEx = RegEx.new()
 	symRx.compile("`([^`]+)`")
 	# O índice do corpus é o MESMO da varredura: ponteiro de linha e âncora, lado a lado.
 	# Sem a âncora aqui, o controle que morde a costura passaria numa casa que a régua
 	# real não tem — fixture que reproduz o bug velho não prova o conserto dele.
 	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):@([A-Za-z_][A-Za-z0-9_]*)`")
+	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*)`")
 	var recs : Array = []
 	for p in docLines.size():
 		var pTxt : String = String(docLines[p])
@@ -857,11 +907,14 @@ static func _LabelOf(line : String) -> String:
 # sendo que as duas linhas citadas eram o corpo de `gate()`, e um `enum BackupFrequency` dito ao
 # lado de um número que caía num comentário de poda de ledger também. Números reais desses casos
 # moram nos documentos que a varredura julga, não aqui: esta casa é comentário de ferramenta, e um
-# ponteiro escrito nela viraria evidência falsa no run seguinte.
+# ponteiro escrito nela viraria evidência falsa no run seguinte. E (9) CONTINUAÇÃO (#124, fatia 5):
+# um número sem arquivo, cujo arquivo é o do último ponteiro ANTERIOR NA MESMA LINHA. A régua bash
+# passou a ler essa classe na passada do órfão; um gémeo que lê só a metade nomeada da árvore faz os
+# dois censos serem incomparáveis, e juiz que vê número diferente é a doença que o #116 registrou.
 func SuiteEvidencePointers() -> void:
 	print("[suite] ponteiros de evidência")
 	var ptrRx : RegEx = RegEx.new()
-	ptrRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):(\\d+)(?:-(\\d+))?`")
+	ptrRx.compile("`" + PTR_TGT + ":(\\d+)(?:-(\\d+))?`")
 	var msgRx : RegEx = RegEx.new()
 	msgRx.compile("\"([^\"]{12,90})\"")
 	# `CheckBox.new(` não é check de teste: a âncora exige chamada `Check…(`.
@@ -936,7 +989,14 @@ func SuiteEvidencePointers() -> void:
 	# a migração da fatia 3 abriu — 103 números viraram âncora e dois ponteiros
 	# honestos passaram a levar culpa alheia.
 	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):@([A-Za-z_][A-Za-z0-9_]*)`")
+	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*)`")
+	# O número SEM ARQUIVO (#124, fatia 5): o `:` colado no backtick de abertura é o que separa
+	# esta classe da de ponteiro nomeado, e exigir o backtick é o que impede um endereço com porta
+	# de ser lido como continuação da frase anterior. Os grupos numeram DESLOCADOS em relação ao
+	# `ptrRx` — aqui o primeiro número é o grupo 1, ali é o grupo 2 — e é por isso que a herança
+	# devolve o `RegExMatch` cru e quem decide o alvo é o braço, não um índice compartilhado.
+	var contRx : RegEx = RegEx.new()
+	contRx.compile("`:(\\d+)(?:-(\\d+))?`")
 	for docPath in sweep:
 		var wholeProse : bool = ["md", "json"].has(String(docPath).get_extension().to_lower())
 		var docRaw : String = _RepoFile(docPath)
@@ -1184,6 +1244,100 @@ func SuiteEvidencePointers() -> void:
 			"âncora morde no duplo: dois `func Beta` na mesa são âncora ambígua, não escolha (%s)" % _AnchorStruct("Beta", "gd", ancSpans))
 	Check(_AnchorStruct("README", "md", ancSpans).contains("sem modelo de declaração"),
 			"âncora morde no arquivo: `.md` não declara, e âncora ali é linha disfarçada (%s)" % _AnchorStruct("README", "md", ancSpans))
+	# (9) CONTINUAÇÃO (#124, fatia 5): o número SEM ARQUIVO. A régua de bash passou a ler esta
+	# classe na passada do órfão e este gémeo não a lia: dois juízes da mesma árvore vendo
+	# números diferentes é a doença que o #116 registrou, não um detalhe de paridade de código.
+	# O braço julga a metade que os dois podem julgar sem inventar um segundo modelo de cláusula
+	# — o vínculo é a POSIÇÃO na linha (é o que a frase promete), o alvo passa pelo mesmo
+	# `_PtrResolve` do ponteiro nomeado e a estrutura é a mesma dupla borda: cabe no arquivo, não
+	# cai em branco. Identidade, literal e mensagem continuam com a régua que já os tem.
+	var contos : Array[String] = []
+	var contLidas : int = 0
+	var contJulgadas : int = 0
+	var contOrfas : int = 0
+	# Os quatro registros datados ficam fora, com a mesma lista e pela mesma razão da régua bash:
+	# num registro um número sem arquivo cita o que a frase dizia NAQUELA rodada, e reescrevê-lo
+	# é editar história — herdá-lo da linha de cima para torná-lo legível seria introduzir aqui o
+	# defeito que este braço existe para não ter. É folga de ESCOPO, não de métrica: o censo
+	# impresso abaixo é o medido com esses arquivos fora, e diz quantos ficaram dentro.
+	var contSkip : Array[String] = ["CHANGELOG.md", "progress.md", "ROADMAP_COMERCIAL.md", "BLIND_JUDGE_PROTOCOL.md"]
+	for contPath in sweep:
+		if contSkip.has(String(contPath).get_file()):
+			continue
+		var contProse : bool = ["md", "json"].has(String(contPath).get_extension().to_lower())
+		var contLines : PackedStringArray = _RepoFile(contPath).split("\n")
+		for c in contLines.size():
+			var contLine : String = String(contLines[c])
+			if not contProse and not contLine.strip_edges().begins_with("#"):
+				continue
+			for herd in _ContHerdancas(contLine, ptrRx, ancRx, contRx):
+				contLidas += 1
+				var cmatch : RegExMatch = herd[0]
+				var cfile : String = String(herd[1])
+				var csite : String = "%s:%d" % [String(contPath).trim_prefix("res://"), c + 1]
+				if cfile == "":
+					contOrfas += 1
+					contos.append("%s: continuação %s sem nenhum `arquivo:NN` ou `arquivo:@simbolo` antes, na mesma linha — sem antecedente não há de que arquivo falar, e a régua que adivinha pela linha de cima passa a depender de onde a frase quebrou" % [csite, cmatch.get_string(0)])
+					continue
+				var ctarget : String = _PtrResolve(cfile)
+				if ctarget == "":
+					contos.append("%s: continuação %s herda de `%s`, que não resolve a arquivo na árvore" % [csite, cmatch.get_string(0), cfile])
+					continue
+				if not lineCache.has(ctarget):
+					lineCache[ctarget] = _RepoFile(ctarget).split("\n")
+				var cfrom : int = int(cmatch.get_string(1))
+				var cto : int = int(cmatch.get_string(2))
+				if cto < cfrom:
+					cto = cfrom
+				contJulgadas += 1
+				var cverdict : String = _ContStruct(lineCache[ctarget], cfrom, cto)
+				if cverdict != "":
+					contos.append("%s: continuação %s herda `%s:%d-%d`, que %s" % [csite, cmatch.get_string(0), cfile, cfrom, cto, cverdict])
+	CheckEq(contos.size(), 0, "continuação: %d números sem arquivo lidos, %d julgados pelo antecedente da MESMA linha, %d órfãos (%s)" % [contLidas, contJulgadas, contOrfas, " | ".join(contos)])
+	print("  [info] continuação: %d números sem arquivo vistos fora dos registros datados, %d julgados pelo arquivo herdado, %d órfãos — o censo sai também no verde porque piso sem número impresso não discrimina walk parado de árvore honesta" % [contLidas, contJulgadas, contOrfas])
+	# O piso é o medido, e o medido é pequeno porque a classe é pequena: oito números na árvore de
+	# hoje. A comparação é o ponto desta fatia — se um dos dois censos se mover e o outro não, a
+	# primeira pergunta é qual dos dois parou de ler —, e é por isso que aqui não há a folga de
+	# onze que o piso da âncora tem: com população oito, folga três deixaria três arquivos
+	# inteiros saírem da varredura em silêncio. Oito, e não os nove que a régua bash leu na
+	# passada do órfão, porque um daqueles nove era uma PORTA escrita em forma de continuação: no
+	# runbook de escala o Alertmanager tinha o número de porta colado a dois-pontos dentro de
+	# backticks, sem arquivo, logo depois de um ponteiro de linha. Este braço herdou a porta para
+	# o arquivo do vizinho e a acusou de cair além da última linha. A bash não podia acusá-la: o
+	# `verdict` de lá não tem predicado de fim de arquivo — a fatia de faixa é cortada pelo
+	# comprimento do arquivo e o check de branco é condicionado a a borda estar dentro dele, então
+	# número depois da última linha fatia vazio e devolve "nada a acusar". A porta voltou a ser
+	# porta na prosa, o censo desceu um, e o piso desce com ele aqui e em `CONT_MIN` na bash, com
+	# os dois números medidos e ditos.
+	Check(contLidas >= 8,
+			"continuação: %d números sem arquivo na varredura — abaixo de 8 o braço está verde por não olhar (%s)" % [contLidas, "8 é o medido fora dos quatro registros datados"])
+	# A herança mordendo em mesa, nos modos que a árvore limpa não mostra: sem o control negativo
+	# o braço pode estar verde por não acusar nada, e sem o positivo vira máquina de acusar
+	# citação honesta. A linha é inventada de propósito — o que se prova aqui é a aritmética do
+	# vínculo (posição na linha, e QUAL grupo do regex é o número), não um fato da árvore. O
+	# deslocamento é o defeito que o adaptador `Herdado` da régua bash existe para evitar: no
+	# ponteiro nomeado o arquivo é o grupo 1 e os números vêm depois; no número solo o primeiro
+	# número É o grupo 1. Trocar um pelo outro devolve um alvo legível e errado.
+	var herdMesa : Array = _ContHerdancas("abre com `sources/x.gd:10`, continua em `:20-22`, ancora em `sources/y.gd:@Foo` e continua de novo em `:30`", ptrRx, ancRx, contRx)
+	Check(herdMesa.size() == 2, "continuação morde no censo: a linha da mesa tem dois números sem arquivo (%d achados)" % herdMesa.size())
+	if herdMesa.size() == 2:
+		var hMesa0 : RegExMatch = herdMesa[0][0]
+		Check(String(herdMesa[0][1]) == "sources/x.gd",
+				"continuação herda do ponteiro anterior da mesma linha (herdou \"%s\")" % String(herdMesa[0][1]))
+		Check(int(hMesa0.get_string(1)) == 20 and int(hMesa0.get_string(2)) == 22,
+				"continuação numera no grupo certo: o `:20-22` da mesa é 20 e 22, não os números deslocados do ponteiro nomeado (grupo 1 = \"%s\", grupo 2 = \"%s\")" % [hMesa0.get_string(1), hMesa0.get_string(2)])
+		Check(String(herdMesa[1][1]) == "sources/y.gd",
+				"âncora é antecedente legítimo: o número depois de uma âncora fala daquele arquivo, e foi assim que a tabela de portas do runbook passou a ser julgada (herdou \"%s\")" % String(herdMesa[1][1]))
+	var hOrfa : Array = _ContHerdancas("vem `:20` primeiro, e só depois `sources/x.gd:10`", ptrRx, ancRx, contRx)
+	Check(hOrfa.size() == 1 and String(hOrfa[0][1]) == "",
+			"continuação sem antecedente na linha é órfã, nunca herdada da linha de cima (%d achada(s))" % hOrfa.size())
+	var contMesaSrc : PackedStringArray = PackedStringArray(["cheia", "", "outra cheia"])
+	Check(_ContStruct(contMesaSrc, 1, 3) == "",
+			"continuação não morde no alvo são: 1-3 cabe no arquivo de três linhas e nenhuma borda é branco (%s)" % _ContStruct(contMesaSrc, 1, 3))
+	Check(_ContStruct(contMesaSrc, 2, 2).contains("em branco"),
+			"continuação morde na borda em branco: herdada para a linha vazia é acusada (%s)" % _ContStruct(contMesaSrc, 2, 2))
+	Check(_ContStruct(contMesaSrc, 3, 9).contains("arquivo de 3"),
+			"continuação morde no fim do arquivo: herdada além da última linha é acusada (%s)" % _ContStruct(contMesaSrc, 3, 9))
 	CheckEq(quebrados.size(), 0, "ponteiros: %d referências arquivo:linha conferidas, nenhuma fora do arquivo (%s)" % [conferidos, " | ".join(quebrados)])
 	CheckEq(vazios.size(), 0, "ponteiros: nenhuma das %d referências cai em linha em branco — ponteiro em branco não mostra nada para quem abre no número citado (%s)" % [conferidos, " | ".join(vazios)])
 	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])

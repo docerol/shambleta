@@ -957,15 +957,29 @@ RESOL_MIN=87
 # e 166. O piso NÃO é 33, e a razão é a mesma que faz o braço existir: cobrar 33
 # continuações seria cobrar que os 22 órfãos continuassem na árvore, porque a única
 # forma de manter esse piso verde é não consertar os órfãos — piso que só fica verde com
-# a doença presente é prêmio à doença. O censo de agora é 9 lidos, 9 julgados pelo
+# a doença presente é prêmio à doença. O censo de agora é 8 lidos, 8 julgados pelo
 # arquivo herdado, 0 órfãos, 0 acusações, e é esse o piso: afrouxamento de população
 # medida, não de métrica, com o mesmo predicado nos mesmos dois cortes. O que impede a
 # volta do órfão não é este piso, é a acusação: `herdado is None` entra em
 # `cont_accused`, que é somado às falhas do portão — órfão novo é vermelho na hora, e foi
 # assim que os 22 saíram, não por edição a olho. Este piso guarda só o walk mudo: 0
-# lidos com 9 na árvore é braço parado, e o que prova que o braço lê é o self-test
+# lidos com 8 na árvore é braço parado, e o que prova que o braço lê é o self-test
 # mordendo os 10 controles (dois deles exatamente o órfão e o off-by-one de grupo).
-CONT_MIN=9
+#
+# O 9 virou 8 na passada do gémeo (`tests/IdleTestsFrontier.gd`, braço (9)), e o que
+# desceu é doença, não régua: um daqueles nove não era ponteiro nenhum, era a PORTA do
+# Alertmanager escrita em forma de continuação — dois-pontos colado no número, dentro de
+# backticks, logo depois de um ponteiro de linha do compose. O braço novo do harness
+# herdou a porta para o arquivo do vizinho e a acusou de cair além da última linha; ESTA
+# régua leu o mesmo token e não podia acusá-lo, porque o `verdict` daqui não tem predicado
+# de fim de arquivo: a fatia de faixa é cortada pelo comprimento do arquivo
+# (`min(len(target_lines), ...)`) e o check de branco é condicionado a a borda estar
+# dentro dele (`1 <= edge <= len(...)`), então número além da última linha fatia vazio e
+# devolve "nada a acusar". A porta voltou a ser porta na prosa e o censo desceu um. O
+# buraco do fim de arquivo fica REGISTRADO e não consertado de passagem: fechá-lo é
+# auditar quantos `arquivo:NN` nomeados da árvore já caem além do fim, que é a próxima
+# passada, não esta.
+CONT_MIN=8
 # Piso da régua de literal: o censo medido no run de 2026-09-28 é 54 ponteiros
 # pinados. É pouco porque a régua só julga o literal que mora UMA vez no arquivo-alvo
 # — duas ocorrências não pinham nada e o caso devolve "não julgado" — e a maioria das

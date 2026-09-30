@@ -212,7 +212,7 @@ resultado do harness e regravá-la neste arquivo é o número que mente no commi
   (`sources/system/MetricsServer.gd:25-26`), então o scraper precisa compartilhar
   o namespace do jogo — `network_mode: service:game` em
   `deploy/docker-compose.yml:330`, porta do Prometheus `--web.listen-address=:9090`
-  (`deploy/docker-compose.yml:352`), Alertmanager `:9093`
+  (`deploy/docker-compose.yml:352`) e Alertmanager na porta 9093
   (`deploy/docker-compose.yml:402`). As regras viajam dentro da imagem
   (`deploy/monitoring/prometheus.Dockerfile:19-20`,
   `deploy/monitoring/alertmanager.Dockerfile:32`).
