@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prose anchor inside this file, and a literal pinned outside the block each came back with its
   own accusation, and both ratchet directions fired. Eleven pointers migrated in this commit,
   including the ones in `BLIND_JUDGE_PROTOCOL.md` that the growth had just broken.
+- The settle's drain of the write-ahead log is now attributed rather than argued, and the
+  counterfactual is printed (#125 scope). Each settle above the ceiling is printed with its
+  distance to the nearest drain, and `DrainAftermathSettles` in `tests/benchmarks.gd` is the
+  window the measured series showed (5 settles), not a window chosen to buy green. The
+  diagnostic answers the question the next round would otherwise guess at: if everything inside
+  that window were absolved, would the red survive? Across the three runs on this disk, 46, 51
+  and 65 samples sat above the ceiling and 2, 4 and 10 of them fell outside the window, against
+  8, 7 and 7 that the p99 of the survivors would tolerate. Two of the three would go green, the
+  third would not. The verdict itself still absolves only the hitches the ruler attributes, and
+  the p99 gate remains red at 4.98× the baseline against a 4× headroom.
 
 ### Removed
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`
@@ -48,6 +58,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The offline settle paid four statements per dropped item identity, in a loop. `_Apply` called
+  `AddItemToCharacter` once per hash and each call was a SELECT of the stack, an UPDATE or INSERT
+  of it, an INSERT of the `item_instance` lot, and a `SELECT last_insert_rowid()` to fetch the uid
+  the settle then threw away. `AddItemsBatchToCharacter` writes the same rows as two multi-row
+  statements per slice of up to `GrantBatchSlice` identities — 512, because nine bindings per lot
+  against SQLite's 32766 host-parameter ceiling — so a collection of many days passes through here
+  more than once instead of blowing up the connection. It keeps the two rules the per-item path
+  existed to enforce: one lot per identity, never merged, because the ledger and the escrow (#94)
+  need the lineage, and `bound` read from the cell, never from the name (#88). It also closes a
+  window the old path carried: the stack used to be read, summed in GDScript and written back
+  absolutely, while the batch writes `count = item.count + excluded.count` and lets the engine do
+  the addition in the statement. The probe's census now reads 12.00 counted round trips per
+  settle inside the 8–16 budget this ruler has always demanded.
 - The web image could not be built, and the reason was a directive in the wrong context.
   The CI's `Build Deploy Images` job refused the tree at `RUN nginx -t` with
   `"client_header_timeout" directive is not allowed here in

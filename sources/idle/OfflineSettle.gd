@@ -461,10 +461,12 @@ static func _Apply(sql : SQLService, report : SettleReport) -> bool:
 		if not sqlNode.UpdateStatDirect(report.charID, newLevel, progressXP, newGold):
 			return false
 
-		# 3) drop items straight into character inventory
-		for itemHash in report.drops:
-			if not sqlNode.AddItemToCharacter(report.charID, itemHash, report.drops[itemHash]):
-				return false
+		# 3) drop items em lote: um statement para as pilhas e um para os lotes, por
+		# fatia. O laço por identidade custava 4 statements por identidade — SELECT da
+		# pilha, UPDATE/INSERT dela, INSERT do `item_instance` e o
+		# `SELECT last_insert_rowid()` que devolvia o uid do pai (#109).
+		if not sqlNode.AddItemsBatchToCharacter(report.charID, report.drops):
+			return false
 
 		# 4) ledger rows (gold + xp; item rows appended per drop)
 		var accountID : int = int(fresh.get("account_id", 0))

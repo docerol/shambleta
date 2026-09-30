@@ -1840,3 +1840,73 @@ func FlushGoldDelta(charID : int, stats : ActorStats) -> bool:
 		return false
 	stats.gpFlushed = stats.gp
 	return true
+
+# ------------------------------------------------------------------ WorkOrder #109
+# Mora no fim do arquivo pela mesma razão da seção #88: ponteiros de evidência
+# (`deploy/`, `README.md`, `IdleTests.SuiteEvidencePointers`) amarram prosa a
+# linhas nomeadas deste arquivo, e inserir no meio deslocaria todas.
+#
+# O settle offline concedia drop por drop em `AddItemToCharacter`, que são QUATRO
+# statements por identidade lida: o `select_rows` da pilha, o `update_rows`/
+# `insert_row` dela, o `insert_row` do lote em `item_instance` e o
+# `SELECT last_insert_rowid()` que devolve o uid. Com a distribuição real de
+# drops (#95) um settle de uma hora rola ~40 identidades, ou seja ~160 statements
+# por transação — medido em 2026-09-30 com o mesmo probe de 800 settles, na mesma
+# máquina, contra o worktree de `2fad68b`: p50 479 → 3811 µs (8×) e max 940 µs →
+# 540081 µs, com 10 hitches acima de 50 ms onde o baseline tinha zero. A régua de
+# latência viu; o que ela não via é que o custo era o FORMATO da escrita, não a
+# quantidade de item — os mesmos 32246 lotes saem por dois statements aqui.
+#
+# As duas afirmações abaixo são exatamente o laço antigo, em lote:
+#   - a pilha sobe por `count = count + excluído`, que é o que o read-modify-write
+#     fazia, só sem a janela entre ler e somar;
+#   - cada identidade ganha UM lote em `item_instance` com o mesmo carimbo `bound`
+#     lido da célula (regra #88), o mesmo `reason`, `storage` 0 e sem pai.
+# Lotes não são fundidos: um lote por identidade é o que o ledger e o escrow (#94)
+# exigem. O que some é a ida e volta por identidade.
+#
+# A fatia de 512 identidades por statement é o teto de parâmetros: 9 bindings por
+# linha, e o limite do SQLite para host parameters é 32766. Uma recolha de muitos
+# dias passa por aqui mais de uma vez, em vez de estourar a ligação.
+const GrantBatchSlice : int = 512
+
+func AddItemsBatchToCharacter(charID : int, rolls : Dictionary, reason : String = "settle") -> bool:
+	if rolls.is_empty():
+		return true
+	var stampedAt : int = SQLCommons.Timestamp()
+	var ids : Array = rolls.keys()
+	var from : int = 0
+	while from < ids.size():
+		var to : int = mini(from + GrantBatchSlice, ids.size())
+		var stackValues : String = ""
+		var stackParams : Array = []
+		var lotValues : String = ""
+		var lotParams : Array = []
+		for i in range(from, to):
+			var itemID : int = int(ids[i])
+			var count : int = int(rolls[ids[i]])
+			if itemID <= 0 or count <= 0:
+				return false
+			var sep : String = "," if i > from else ""
+			stackValues += "%s(?, ?, ?, 0, '')" % sep
+			stackParams.append(itemID)
+			stackParams.append(charID)
+			stackParams.append(count)
+			var bound : int = 1 if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)) else 0
+			lotValues += "%s(?, ?, ?, 0, ?, '', ?, 0, 0, ?)" % sep
+			lotParams.append(charID)
+			lotParams.append(itemID)
+			lotParams.append(count)
+			lotParams.append(bound)
+			lotParams.append(reason)
+			lotParams.append(stampedAt)
+		if not ExecuteBindings("INSERT INTO item (item_id, char_id, count, storage, customfield) "
+			+ "VALUES " + stackValues
+			+ " ON CONFLICT(char_id, item_id, storage, customfield) DO UPDATE SET count = item.count + excluded.count;",
+			stackParams):
+			return false
+		if not ExecuteBindings("INSERT INTO item_instance (char_id, item_id, count, storage, bound, customfield, reason, parent_uid, creator_account_id, created_at) "
+			+ "VALUES " + lotValues + ";", lotParams):
+			return false
+		from = to
+	return true

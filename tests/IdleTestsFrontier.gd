@@ -2115,8 +2115,8 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 		return
 	# Medido, não afirmado: quantos slots o load do MESMO char traz ocupados antes de
 	# a precondição abrir espaço. É o número que a #95 moveu (o settle offline paga
-	# agora uma identidade por rolagem, e `AddItemToCharacter` empilha uma linha por
-	# identidade sem olhar o teto de `InventorySize`, enquanto `ImportInventory` chama
+	# agora uma identidade por rolagem, e `AddItemsBatchToCharacter` empilha uma
+	# linha por identidade sem olhar o teto de `InventorySize`, enquanto `ImportInventory` chama
 	# `PushItem` e descarta o que não cabe) — com a mochila no teto, `PushItem` recusa
 	# e as réguas de chão→inventário caem juntas por estado de fixture.
 	print("LOOTPIPE: mochila do char %d chegou com %d/%d slots" % [charID, agent.inventory.itemCount, ActorCommons.InventorySize])
