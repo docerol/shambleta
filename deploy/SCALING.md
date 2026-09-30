@@ -10,7 +10,7 @@ failures ==`), não um script solto. Número que ninguém remede é boato.
 ## 1. Orçamento de tick
 
 O servidor roda a 30 Hz: `const ServerMaxFPS : int = 30` em
-`sources/launcher/LauncherCommons.gd:19`, aplicado em `sources/launcher/Launcher.gd:205-206`
+`sources/launcher/LauncherCommons.gd:@ServerMaxFPS`, aplicado em `sources/launcher/Launcher.gd:205-206`
 (`Engine.set_max_fps` + `Engine.set_physics_ticks_per_second`) **somente sob
 `--server`**. Orçamento por passo = 1000/30 = **33,33 ms**. É a régua de tudo
 abaixo. O harness confere a paridade antes de medir (assert "tick do harness =
@@ -184,24 +184,24 @@ resultado do harness e regravá-la neste arquivo é o número que mente no commi
 
 - **Um único thread de tick**: tudo acima é 30 Hz num processo (`sources/launcher/Launcher.gd:205-206`).
 - **SQL serializada numa única mutex**: `var queryMutex : Mutex = Mutex.new()` em
-  `sources/sql/SQL.gd:7`. `grep -rn "Thread.new()" sources/` devolve **exatamente
+  `sources/sql/SQL.gd:@queryMutex`. `grep -rn "Thread.new()" sources/` devolve **exatamente
   uma** linha — `sources/sql/SQLBackups.gd:5` (worker de backup). Não existe pool
   de threads de jogo: escrita, transação e o round trip do read pool competem pela
   mesma `queryMutex`. Espera dela é medida, não suposta: o ponto único de lock é
-  `_LockQueryMutex()` (`sources/sql/SQL.gd:1561`), que cronometra cada seção com
+  `_LockQueryMutex()` (`sources/sql/SQL.gd:@_LockQueryMutex`), que cronometra cada seção com
   `Time.get_ticks_usec()`. Os contadores e a cauda >1/>10/>100 ms são declarados
   por `mutexWaits` (`sources/sql/SQL.gd:1545-1553`) e acumulados dentro da
   seção crítica por `mutexWaitMicroseconds`
   (`sources/sql/SQL.gd:1565-1574`); a leitura é `SQL.QueryMutexWaitSeconds()`
-  (`sources/sql/SQL.gd:1581`, forma counter Prometheus) e
-  `SQL.QueryMutexWaitStats()` (`sources/sql/SQL.gd:1584`).
+  (`sources/sql/SQL.gd:@QueryMutexWaitSeconds`, forma counter Prometheus) e
+  `SQL.QueryMutexWaitStats()` (`sources/sql/SQL.gd:@QueryMutexWaitStats`).
   Na tabela do §2 a espera é 0,00 µs/passo porque o harness simula o mundo e não
   um fluxo de escrita por player; o caminho de escrita é o que
   `tests/scale_test.gd` mede em round trips por ação.
 - **Cap de instância**: `MAX_PLAYERS_PER_INSTANCE = 20` em
-  `sources/world/WorldInstance.gd:5`, resolvido por busca limitada em
-  `WorldAgent.ResolvePlayerInstance()` (`sources/world/WorldAgent.gd:158`,
-  janela `MAX_SHARDS_PER_FAMILY = 32` em `sources/world/WorldAgent.gd:16`,
+  `sources/world/WorldInstance.gd:@MAX_PLAYERS_PER_INSTANCE`, resolvido por busca limitada em
+  `WorldAgent.ResolvePlayerInstance()` (`sources/world/WorldAgent.gd:@ResolvePlayerInstance`,
+  janela `MAX_SHARDS_PER_FAMILY = 32` em `sources/world/WorldAgent.gd:@MAX_SHARDS_PER_FAMILY`,
   chamada no spawn em `sources/world/WorldAgent.gd:218` e no warp em
   `sources/world/World.gd:111-112`). Instâncias de zona dedicada (`>=
   IdlePolicyService.ZoneInstanceBase`) e de boss **não** são fragmentadas
@@ -279,8 +279,8 @@ bash scripts/test.sh one shard_capacity_test
   já expõe a espera da mutex, e com cauda — `shambleta_sql_query_mutex_waits`,
   `shambleta_sql_query_mutex_wait_seconds`, `..._wait_max_seconds` e os degrades
   `..._over_1ms` / `..._over_10ms` / `..._over_100ms` saem do corpo de `MetricsBody()`
-  em `sources/system/MetricsServer.gd:220-239`, lidos de `QueryMutexWaitStats()`
-  (`sources/sql/SQL.gd:1584`). A regra de alerta que esperava esse sinal também já
+  em `sources/system/MetricsServer.gd:@MetricsBody`, lidos de `QueryMutexWaitStats()`
+  (`sources/sql/SQL.gd:@QueryMutexWaitStats`). A regra de alerta que esperava esse sinal também já
   existe: `deploy/alerts.rules.yml:102` alarma em
   `increase(shambleta_sql_query_mutex_wait_over_100ms[10m]) > 0`. O snippet que estava
   aqui chamava `QueryMutexWaitSeconds()`, função que ninguém definiu — era pedido
@@ -325,7 +325,7 @@ bash scripts/test.sh one presence_fuzz
 O que **NÃO** mudou, declarado porque é exatamente o que este número não prova:
 
 - **Um escritor só — com duas origens de valor.** A `queryMutex` de
-  `sources/sql/SQL.gd:7` continua sendo o único funil de *statement*: nada no repo
+  `sources/sql/SQL.gd:@queryMutex` continua sendo o único funil de *statement*: nada no repo
   escreve sem passar por ela (`Query`, `QueryBindings`, `ExecuteBindings` e
   `Transaction` são os quatro caminhos que a pegam; as escritas cruas de `db.*`
   vivem atrás de `Transaction()`, e `scripts/check_write_funnel.sh` é a régua que

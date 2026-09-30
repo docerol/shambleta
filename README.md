@@ -67,7 +67,7 @@ live: `_input()` in `Action.gd:176-200` dispatches the project's `ui_*` actions 
 `F3` inventory, `F6` minimap, `F7` chat, `F8` emote, `F9` social, `F10` settings
 and `F11` fullscreen — the four game-state-only ones are gated on the same line
 they are read. `F12` is the exception: it is a raw key, not an action, because the
-`ui_f10` action it used to call never existed (`_input()` in `sources/gui/Gui.gd:428-434` explains
+`ui_f10` action it used to call never existed (`_input()` in `sources/gui/Gui.gd:@_input` explains
 why it moved off `F10`). None of these keys exist on web or mobile, so every window
 is also reachable by tap: the on-screen `Menu` indicator (`_on_button_pressed()` in `MenuIndicator.gd:63`)
 opens the 17 `WindowButton` icons declared in `presets/gui/Game.tscn` (Stat,

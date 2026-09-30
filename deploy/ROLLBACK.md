@@ -300,15 +300,15 @@ Isso dá ao operador três coisas que a frase "o número está certo" nunca deu:
    `game` com o mesmo `SHAMBLETA_TAG` é o retry correto — não um `up -d` com outro
    tag, e nunca com `--no-build` apontando para um binário mais velho (§fronteira).
 3. **O `/healthz` recusa junto — e mesmo assim a métrica é o sinal.** A decisão está em
-   `ServingFor()` (`sources/system/MetricsServer.gd:92`): com o flag parado ela devolve
+   `ServingFor()` (`sources/system/MetricsServer.gd:@ServingFor`): com o flag parado ela devolve
    falso, o `/healthz` responde 503 e o healthcheck do
    `game` (`deploy/docker-compose.yml:98`) marca o container como não saudável. Antes
    desta alavanca o probe media só o processo de pé, e um boot parado num patch ficava
    verde: o cliente autenticava e morria na primeira RPC que tocasse a tabela ausente.
    Hoje a mesma flag fecha a porta de entrada antes do teto de conexões — o motivo é
    `schema_blocked` (`sources/network/server/Admission.gd:55`), entregue à porta por
-   `_ValidateAuth()` (`sources/network/server/Server.gd:1957`), que lê
-   `MigrationBlocked()` (`sources/sql/SQL.gd:80`). Os dois lados do flag, a precedência
+   `_ValidateAuth()` (`sources/network/server/Server.gd:@_ValidateAuth`), que lê
+   `MigrationBlocked()` (`sources/sql/SQL.gd:@MigrationBlocked`). Os dois lados do flag, a precedência
    sobre o teto e essa fiação viva são medidos em S5 (`tests/admission_gate_test.gd:691-796`),
    sobre WebSocket de verdade. O que o probe continua sem dizer é QUAL patch falhou e
    contra qual carimbo o binário está: isso só o log e a métrica acima dizem, e é por

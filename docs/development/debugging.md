@@ -128,7 +128,7 @@ P4 de fragmentar `Network.gd` em seis módulos (revertida). Na ordem:
    verdadeiro (`Util` é `class_name`, não autoload), então o log de transição de
    estado — a primeira linha que você procura quando o cliente não chega em
    `IN_GAME` — não saía em build nenhum; `sources/network/Network.gd:1190-1194` é o
-   `_init()` sem guard (e o estado que faltava logar é `States.IN_GAME`, `sources/launcher/FSM.gd:16`); e `sources/web/WebPush.gd:11-20` descreve o mesmo defeito
+   `_init()` sem guard (e o estado que faltava logar é `States.IN_GAME`, `sources/launcher/FSM.gd:@States`); e `sources/web/WebPush.gd:11-20` descreve o mesmo defeito
    nos guards de `Conf`/`LauncherCommons`, que também saíram. Chamada estática
    direta resolve também sob `godot -s` (é como os testes sobem), que era o
    pretexto do guard. **Consequência para debugging:** se um `class_name` novo

@@ -164,7 +164,7 @@ func MetricsBody() -> String:
 		if not ff.is_empty():
 			flagsOpen = int(ff[0].get("n", 0))
 		# ESCALABILIDADE: `queryMutex` é o serializador de todo round trip do processo
-		# (sources/sql/SQL.gd:7) e até aqui não tinha sinal — `deploy/SCALING.md` mede o
+		# (sources/sql/SQL.gd:@queryMutex) e até aqui não tinha sinal — `deploy/SCALING.md` mede o
 		# teto do tick, mas o que encosta no teto primeiro é a espera, e espera sem
 		# número é a hipótese que ninguém consegue refute num incidente. A média sozinha
 		# não serve: um passe de backup de 400 ms numa média de 3 µs é apagado pela média

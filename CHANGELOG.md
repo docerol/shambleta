@@ -50,6 +50,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/check_doc_drift.sh` returned the same four across both cuts. Census with the plant in:
   21 anchors seen by each judge; with it out: 17, and 19 once this entry cites the arm by name
   instead of by line — the number the floor now holds.
+- The anchor paid for itself and then billed its own pass (#124 slice 3). 103 `arquivo:NN` pointers
+  became `arquivo:@símbolo` across 50 files, and the migration was computed with the ruler's own
+  `anchorverdict` (`scripts/check_doc_drift.sh`): a pointer moved only when the anchor already
+  returns true for the clause exactly as written — the cited interval sits inside ONE declared
+  symbol of the target, that symbol's name is already in the clause, and every literal the clause
+  pins already lives inside the block. None of those three is a `sed` decision, and the proof that
+  no sentence moved is the diff: for those 103 only the token changed. Then the marreta sent the
+  invoice for this very commit — `SuiteEvidencePointers` grew by 62 lines to host the anchor
+  controls, and that displaced nine pointers the tree makes to `tests/IdleTestsFrontier.gd`. Six
+  became anchors, and those six did NOT keep the sentence intact: this ruler's clause is the
+  ORAÇÃO, cut at the last `,`, `;` or `. ` outside backticks before the pointer, so
+  `SuiteIdleLootPipeline` sat on the far side of the decimal comma of `0,70` and the anchor was
+  refused as `prosa` until the sentence was re-worded. The comma-as-boundary slices every numeric
+  Portuguese sentence in the repo and is registered, not fixed in passing. Three pointers went to
+  prose instead, because the claim they carried ("== instância da zona 1") is not what an anchor
+  says — and one of the three was already lying at HEAD: the line it spelled is the
+  `InventorySize` comment, not the instance, with a full line and no name in the clause, which no
+  ruler accuses. Two more refused the automatic pass over a surviving bare digit (`SCALING.md §7`,
+  `= 5 s`); the guard was right to be nervous, and both were section numbers and durations, so
+  they went in by hand. What is left does not fit a script: re-measured after the pass, ZERO
+  pointers migrate automatically and 165 need a sentence rewritten (163 `prosa`, 2 `bloco`).
+- Growing a file that is cited by name is how this round nearly shipped a new lie. Six bare
+  `FarmZoneData.gd:NN` pointers (three live files) point into `sources/idle/FarmZoneData.gd`, and
+  bash does not resolve a bare filename while the GDScript arm resolves it by unique suffix — so
+  every line I add there silently falsifies a citation that one judge cannot see and the other
+  would blame on the wrong thing. The file was re-flowed to stay line-neutral against HEAD (13 in,
+  13 out) instead of touching three other files: `git diff --numstat` is the receipt. Census of
+  the pass: `ANCHOR_MIN` 19 → 128 (19 + 103 automatic + 6 paid by the tax), `LINE_MAX` 608 → 496,
+  `== DOC DRIFT: 2107 checks, 0 failures ==` and `== RESULT: 3246 checks, 0 failures ==` on the
+  idle gate, the eight anchor controls biting, and the harness anchor floor raised 8 → 90 on 101
+  measured. The seam the migration exposed is in the GDScript
+  arm, not in the docs: its name→pointer index did not know anchors, so a name glued to an anchor
+  got attributed to a neighbouring `arquivo:NN` and two clauses were accused for saying the truth.
+  Anchors are now indexed in the production sweep and in the fixture corpus alike, and the fix is
+  proven by a two-sided control — the same claim anchored is silent, the same claim unanchored
+  accuses — rather than by quieting the arm.
 - What one commit pays in pointer tax, counted in this tree rather than argued: growing two
   files cost fifteen re-citations — two in `docs/development/testing.md`, ten in code comments,
   three in this file. Nine of the ten in code named a file and a number, and the number was

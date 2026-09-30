@@ -151,7 +151,7 @@ func _initialize() -> void:
 		return
 	# O catálogo de conteúdo NÃO sobe junto com o boot dos autoloads: `DB.Preload()`
 	# empilha os `load_threaded_request` (`sources/db/DB.gd:224`) e o `PreloadUpdate()`
-	# (`sources/db/DB.gd:233-235`) fecha o preload, chama `Load()` e acende `isInitialized`,
+	# (`sources/db/DB.gd:@PreloadUpdate`) fecha o preload, chama `Load()` e acende `isInitialized`,
 	# re-armado a cada `process_frame` — portanto precisa de FRAMES. Este harness não esperava por nada:
 	# rodava as suites e caía no `quit()` com o catálogo pelo caminho, então o MESMO
 	# run valia ~30 objetos aqui e ~1700 num runner mais lento (mesma classe da régua

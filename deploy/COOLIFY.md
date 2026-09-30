@@ -116,8 +116,8 @@ public bind`. Veja `deploy/TLS.md` para o guia completo.
    - `SHAMBLETA_OFFSITE_BACKUPS` = **deixe como o compose já define: `/data-backups`**
      (`deploy/docker-compose.yml`, `SHAMBLETA_OFFSITE_BACKUPS: ${...:-/data-backups}`).
      **Não** se põe vazio: vazio desliga o push inteiro — `PushOffsite()` sai na
-     primeira linha (`sources/sql/SQLBackups.gd:36-38`) porque
-     `GetOffsiteBackupPath()` devolve `""` (`sources/sql/SQLCommons.gd:107-108`) — e o gate
+     primeira linha (`sources/sql/SQLBackups.gd:@PushOffsite`) porque
+     `GetOffsiteBackupPath()` devolve `""` (`sources/sql/SQLCommons.gd:@GetOffsiteBackupPath`) — e o gate
      `scripts/check_compose.sh` recusa compose com este valor diferente de
      `/data-backups`, porque o `/data-backups` do default é justamente o mount do
      volume `game-backups`. Só troque quando houver montagem offsite real (NFS /
@@ -234,7 +234,7 @@ reset de senha não envia e-mail.
 | Tarefa | Como |
 |---|---|
 | Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLCommons.gd:43` + `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
-| Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:21`), disparado em `sources/sql/SQLBackups.gd:121-125` (o porquê do desacoplamento está no comentário `:111-120`) — saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
+| Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:@MetaJobIntervalSec`), disparado em `sources/sql/SQLBackups.gd:121-125` (o porquê do desacoplamento está no comentário `:111-120`) — saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
 | Wipe de progresso (pré-beta) | migration `014_reset_progress_idle` ou reset do volume `game-data` antes dos convites. |
 | Logs do server | Logs do container `game` (Util.PrintLog vai ao stdout). |
 | Atualizar jogo | Push no branch → rebuild (client web é imutável por build; o server ignora clientes com protocol version diferente — força refresh). |

@@ -3,7 +3,7 @@ extends SceneTree
 # ONDA 3b-A (juiz cego 2026-09-27, "Core Gameplay 8.3 / Game Design 8.6": o catálogo
 # de skills existe em `presets/cells/skills/`, `ClassBonus` declara o que cada classe
 # PODE usar, e nada no jogo ENTREGAVA nada além do kit padrão e da skill inicial —
-# `TeachSkill` (`sources/actor/agent/NpcCommons.gd:334-342`) tinha ZERO chamadores de
+# `TeachSkill` (`sources/actor/agent/NpcCommons.gd:@TeachSkill`) tinha ZERO chamadores de
 # conteúdo e `/skill` (depurador) era o único caminho que punha skill em personagem).
 #
 # Este harness fecha o eixo em duas camadas, e as duas têm de poder ficar vermelhas:
@@ -377,7 +377,7 @@ func _setupFixtures() -> bool:
 	return ok
 
 # Traços do ponto de vista de quem cria: é o que `Traits.GetValues()`
-# (sources/gui/character/Traits.gd:40) monta a partir dos primeiros valores de cada
+# (sources/gui/character/Traits.gd:@GetValues) monta a partir dos primeiros valores de cada
 # rolagem. O servidor confere isso com `ActorCommons.CheckTraits`, que exige
 # hairstyle/haircolor/race/skintone/gender reais — `ActorCommons.DefaultTraits` só tem
 # shape/spirit, e entregar DefaultTraits aqui era ERR_MISSING_PARAMS na porta.

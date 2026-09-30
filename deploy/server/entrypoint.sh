@@ -9,7 +9,7 @@
 # só aparece em `sources/gui/Gui.gd:409`, que é client). Consequência medida antes
 # desta mudança: `docker compose stop` mandava SIGTERM, o binário saía com 143 sem
 # teardown, e até `BackupPlayersSec` = 600 s de ouro que só existia em memória iam
-# junto (`sources/sql/SQLCommons.gd:11`), com `-wal` órfão.
+# junto (`sources/sql/SQLCommons.gd:@BackupPlayersSec`), com `-wal` órfão.
 #
 # O que fazer ao receber TERM/INT não é reinventar shutdown: é tocar o MESMO canary
 # que o runbook manda tocar à mão (deploy/OPS_RUNBOOK.md §3), para que `docker
@@ -18,7 +18,7 @@
 # `Launcher.Quit()` (sources/launcher/Launcher.gd:166-172) e fecha o SQLite.
 #
 # Prova de que o watcher está armado, e não só de que o diretório existe:
-# `ShutdownCanary.Start()` APAGA o canary no boot (sources/world/ShutdownCanary.gd:21).
+# `ShutdownCanary.Start()` APAGA o canary no boot (sources/world/ShutdownCanary.gd:@Start).
 # Então, se depois de escrever o arquivo ele some sozinho, o `CheckCanary` está
 # rodando e a drenagem começou. Se ele continua lá, o processo ainda está em boot
 # (migrations + mundo) ou travado — e o canary nunca seria lido. Nesse caso este
@@ -36,7 +36,7 @@
 #
 # Orçamento (conferido por `scripts/check_compose.sh` contra o compose, e os três
 # números são lidos DAS LINHAS ABAIXO, não de memória):
-#   10 s de detecção (2 batidas de `checkInternalSec`, sources/world/ShutdownCanary.gd:5)
+#   10 s de detecção (2 batidas de `checkInternalSec`, sources/world/ShutdownCanary.gd:@checkInternalSec)
 #   + 30 + 15 s dos avisos (ShutdownCanary.gd:10-13) + 2 s de join do worker de backup
 #   (sources/sql/SQLCommons.gd:10) = 57 s de drain, que têm de caber nos 62 s de
 #   DRAIN_TIMEOUT_SEC — o teto é contado DO SINAL, não do fim da detecção.
@@ -54,7 +54,7 @@ set -u
 # config/custom_user_dir_name="Shambleta" (project.godot) ->
 # $HOME/.local/share/Shambleta. Os dois são conferidos contra o fonte por
 # `scripts/check_compose.sh`, que também confere o nome do arquivo contra
-# Path.CanaryFile (sources/system/Path.gd:56).
+# Path.CanaryFile (sources/system/Path.gd:@CanaryFile).
 USER_DIR="${HOME:-/data}/.local/share/Shambleta"
 CANARY_FILE="$USER_DIR/canary"
 

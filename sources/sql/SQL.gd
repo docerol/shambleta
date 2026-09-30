@@ -1530,7 +1530,7 @@ var txCounter : int = 0
 
 # ---------------------------------------------------------------- espera na mutex
 # P1 — escalabilidade: o gargalo do caminho de SQL neste processo é UMA mutex
-# (`queryMutex`, sources/sql/SQL.gd:7 — `grep -rn "Thread.new()" sources/` devolve
+# (`queryMutex`, sources/sql/SQL.gd:@queryMutex — `grep -rn "Thread.new()" sources/` devolve
 # um hit só, o worker de backup), e até aqui ela era invisível: tínhamos quantas
 # round trips se faziam (queryCounter) e nunca QUANTO TEMPO alguém ficou na fila
 # para fazê-las. Sem esse número, "o banco está lento" e "todo mundo está esperando

@@ -27,15 +27,16 @@ extends SceneTree
 #  (3) O PREÇO DE ENCHER FAIXA É ZERO, e isto é régua, não promessa: a contagem
 #      de drop por kill não lê a pool — ela sai de `dropRatePPM`
 #      (`OfflineSettle.gd:326`) no offline e da soma das tabelas `_drops` do mob
-#      no farm vivo (`tests/IdleTestsFrontier.gd:2271-2274`, costurada ao ppm em
-#      `IdleTestsFrontier.gd:2290-2293`). Três medidas aqui, nenhuma regravada em texto:
+#      no farm vivo, que é o que a suíte `SuiteIdleLootPipeline`
+#      (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`) mede e costura ao mesmo ppm
+#      dentro de si. Três medidas aqui, nenhuma regravada em texto:
 #      nenhuma zona carrega taxa própria escondida (a pia é uma régua do
 #      catálogo), o roll devolve exatamente UM item por roll (identidade, nunca
 #      quantidade), e as matérias-primas que a faixa ganhou NÃO estão em mesa
 #      `_drops` de mob nenhum — é por isso que preencher faixa não tem como tocar
 #      no 0,7/kill. A grandeza em si é conferida contra a mesa viva da zona que a
-#      própria fronteira mede (`IdleTestsFrontier.gd:2205` == instância da zona 1),
-#      com a mesma folga de 25% daquela régua.
+#      própria `SuiteIdleLootPipeline` instancia — a instância da zona 1 é asserida por
+#      ela — com a mesma folga de 25% daquela régua.
 #
 # Uso: godot --headless --path . -s tests/drop_band_content_test.gd
 # Régua do gate = última linha `== RESULT: N checks, M failures ==` e o exit code.
@@ -279,8 +280,9 @@ func _suiteAppleScope():
 
 # O que encher faixa NÃO muda: a expectativa de drop por kill. A contagem tem duas
 # origens e nenhuma delas lê a pool — offline `zone.dropRatePPM` × kills equivalentes
-# (`OfflineSettle.gd:326`), online a soma das probabilidades da mesa `_drops` do mob
-# (`IdleTestsFrontier.gd:2271-2274`). Daí três medidas:
+# (`OfflineSettle.gd:326`), online a soma das probabilidades da mesa `_drops` do mob,
+# medida por `SuiteIdleLootPipeline` (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`).
+# Daí três medidas:
 #   (a) nenhuma zona carrega taxa própria escondida: `FarmZoneData.gd:180` dá a
 #       todas o `DefaultDropRatePPM`, e nada em `_make` (`FarmZoneData.gd:260-272`)
 #       o sobrescreve, então conteúdo
@@ -290,8 +292,8 @@ func _suiteAppleScope():
 #       declarada entrasse num `_drops`, cada kill passaria a rolar mais um item e
 #       o 0,7 medido subia silenciosamente. É a única forma de o trabalho desta
 #       faixa mover a contagem, e é travada aqui.
-# A grandeza do catálogo é conferida contra a mesa viva da zona que a fronteira
-# mede (`IdleTestsFrontier.gd:2205`), com a mesma folga de 25% da régua do ppm em
+# A grandeza do catálogo é conferida contra a mesa viva da zona 1, a instância que a
+# própria suíte assera, com a mesma folga de 25% da régua do ppm em
 # `SuiteIdleLootPipeline` (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`).
 func _suiteKillCount():
 	print("[suite] contagem: conteúdo de faixa não move o drop por kill")
@@ -336,8 +338,9 @@ func _suiteKillCount():
 		"a contagem por kill da zona 1 é a taxa do catálogo (%.3f vs %.3f por kill)" % [perKillCatalog, perKill])
 
 # Censo das células que os mobs já derrubam por mesa própria (`_drops`), na chave
-# do ItemsDB. É o contrapeso da asserção (c) acima: a contagem do farm vivo nasce
-# deste censo (`IdleTestsFrontier.gd:2271-2274`), então o que não está aqui não entrou no
+# do ItemsDB. É o contrapeso da asserção (c) acima: a contagem do farm vivo nasce do
+# censo que `SuiteIdleLootPipeline` faz (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`)
+# sobre estas mesmas mesas, então o que não está aqui não entrou no
 # roll por kill — e o conteúdo que as faixas ganharam não está.
 func _mobDropTableCensus() -> Dictionary:
 	var out : Dictionary = {}

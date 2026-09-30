@@ -236,7 +236,7 @@ que a UI cabe no aparelho.** Medida dentro do motor, não em cabeçalho:
   recebe um design space de 390×844. Recebe **1280×2690** no container de janelas
   flutuantes, lido por `tests/panel_fit_test.gd`. **1 px de design vale 0,30 CSS px.**
   O alvo de toque que o produto promete (`GuiUiScale.TouchTarget` = 48 px,
-  `sources/gui/GuiUiScale.gd:27`) chega ao dedo como **14,6 CSS px** — abaixo do piso
+  `sources/gui/GuiUiScale.gd:@TouchTarget`) chega ao dedo como **14,6 CSS px** — abaixo do piso
   externo de 44 px (Apple HIG / WCAG 2.5.5). "A janela cabe nos 1280 de design" nunca
   foi evidência de que cabe no aparelho, e era exatamente isso que a régua antiga
   afirmava.

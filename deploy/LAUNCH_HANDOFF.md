@@ -95,7 +95,7 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   jogador aceita (`data/db/agreement.json`: 8 categorias de texto, mais de cinco mil
   caracteres) <!-- DRIFT agreement_categories 8 --> está todo em
   **inglês**, e não existe segunda versão para escolher: `Scrollable.AddContent`
-  (`sources/gui/Scrollable.gd:44-49`) concatena `entry["content"]` cru — o arquivo inteiro
+  (`sources/gui/Scrollable.gd:@AddContent`) concatena `entry["content"]` cru — o arquivo inteiro
   não tem uma chamada `tr(` —, então o painel do aceite renderiza o JSON como ele é enquanto
   o resto da interface é i18n com PT-BR como língua fonte. Um aceite afirmativo cobrado por
   lei, prestado numa língua que o público-alvo não tem obrigatoriamente, é decisão de

@@ -6,7 +6,7 @@ class_name SkillOrigins
 # cada classe PODE usar — e nada no jogo ENTREGAVA nada além das duas skills padrão e
 # da skill inicial da classe). A diferença entre "permitida" e "obtenível" era
 # invisível: `SkillAllowed()` é um portão, não uma torneira. `TeachSkill`
-# (`sources/actor/agent/NpcCommons.gd:334-342`) não tinha UM chamador de conteúdo, e
+# (`sources/actor/agent/NpcCommons.gd:@TeachSkill`) não tinha UM chamador de conteúdo, e
 # `/skill` (depurador) era o único caminho que punha skill em personagem.
 #
 # Este arquivo é a TORNEIRA declarada: para cada skill do catálogo, pelo menos uma

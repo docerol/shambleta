@@ -445,9 +445,9 @@ func _openSession(accountID : int, charID : int) -> int:
 		candidate += 1
 	# A sessão entra pelo funil real de conexão, não por `Peers.AddPeer` direto:
 	# `Network.Bulk` rota para `ENetServer` todo peer que não está marcado WebRTC/WebSocket
-	# (sources/network/Network.gd:1075), e `NetInterface.Bulk` faz get em `bulks[peerID]`
-	# (sources/network/Interface.gd:22). A linha dessa tabela só `ConnectPeer` escreve
-	# (sources/network/server/Server.gd:1807), e o boot offline auto-conecta a sua
+	# (sources/network/Network.gd:@Bulk), e `NetInterface.Bulk` faz get em `bulks[peerID]`
+	# (sources/network/Interface.gd:@Bulk). A linha dessa tabela só `ConnectPeer` escreve
+	# (sources/network/server/Server.gd:@ConnectPeer), e o boot offline auto-conecta a sua
 	# (sources/network/server/Server.gd:1890) — na produção ela portanto sempre existe, e
 	# só um registro fora do funil a pula. Medido em 2026-09-29: com `AddPeer` puro o run
 	# teve 145 "Out of bounds get index" e ficou vermelho por SCRIPT ERROR com 72 checks
@@ -559,7 +559,7 @@ func _finish(code : int) -> void:
 		# Simetria com a porta de entrada: as sessões entraram por `ConnectPeer`, que escreve a
 		# linha de `bulks` (sources/network/server/Server.gd:1807). Soltá-las por
 		# `DisconnectPeer` é o que a apaga (`bulks.erase` em
-		# sources/network/server/Server.gd:1819), e o `FullyDisconnect` que ele chama solta o
+		# sources/network/server/Server.gd:@DisconnectPeer), e o `FullyDisconnect` que ele chama solta o
 		# balde (`RateLimit.Forget` em sources/network/server/Server.gd:1826) e tira o agente do
 		# mundo (`WorldAgent.RemoveAgent` em sources/network/server/Server.gd:570) — antes de
 		# qualquer `queue_free`, para que quem remova o agente seja o caminho real, não o

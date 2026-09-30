@@ -38,7 +38,7 @@ func Check(condition : bool, label : String) -> bool:
 	return condition
 
 # Assinaturas separadas de propósito: `CheckEq(int, int, String)` recebe String e o
-# harness morre em Parse Error no preflight (`preflight_parse()`, `scripts/test.sh:648`).
+# harness morre em Parse Error no preflight (`preflight_parse()`, `scripts/test.sh:@preflight_parse`).
 func CheckI(value : int, expected : int, label : String) -> bool:
 	return Check(value == expected, "%s (got %d, want %d)" % [label, value, expected])
 

@@ -169,7 +169,7 @@ Staging is used for:
   processo do jogo — ver `deploy/COOLIFY.md`. **`127.0.0.1` literal, nunca
   `localhost`**: o `MetricsServer` binda somente IPv4 — a constante `BindAddress`
   está em `sources/system/MetricsServer.gd:26` e a porta `DefaultPort` em
-  `sources/system/MetricsServer.gd:25`, então
+  `sources/system/MetricsServer.gd:@DefaultPort`, então
   num container com `::1` no `/etc/hosts` o `localhost` tenta IPv6 primeiro e leva
   connection refused — o probe falha num servidor saudável. É por isto que o
   `healthcheck` declarado no compose (`deploy/docker-compose.yml`, bloco `test:` do

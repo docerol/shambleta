@@ -9,7 +9,7 @@ class_name Experience
 # 5523999861 XP total. At/above MAX_LEVEL the table returns MAX_LEVEL_REACHED (0)
 # and the level simply stops. This file computes no income, no zone saturation and
 # no real-time pacing; the cap's XP->essence conversion is done by
-# Stats.AddExperience (sources/actor/Stats.gd:244), not here. Cumulative to the cap
+# Stats.AddExperience (sources/actor/Stats.gd:@AddExperience), not here. Cumulative to the cap
 # of 60 is ~5.5e9, ~9 orders of magnitude below int64 max, so the cache is always
 # int64-safe at the levels the cap allows.
 

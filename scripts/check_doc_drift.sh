@@ -957,25 +957,52 @@ REG_MIN=2
 # Ratchet da ÂNCORA (#124). Dois números, um só sentido de afrouxamento:
 #  - ANCHOR_MIN é PISO de `arquivo:@simbolo`: só pode subir. Cair âncora significa
 #    ou que a âncora voltou a ser linha (o custo que se quer matar), ou que o walk
-#    parou de ler o arquivo — nos dois casos "zero acusações" é a régua muda.
+#    parou de ler o arquivo — nos dois casos "zero acusações" é a régua muda. Os 19
+#    da fatia 2 eram os 17 medidos mais dois que o registro daquela rodada ganhou ao
+#    citar o braço pelo nome em vez de por linha; os 128 de agora são os 19 mais os
+#    103 do automático e mais 6 que a marreta cobrou na própria rodada — escrever a
+#    costura da âncora em `tests/IdleTestsFrontier.gd` (+62 linhas) empurrou de si nove
+#    ponteiros que a doc fazia àquele arquivo. Seis viraram âncora; três foram para
+#    prosa, porque a afirmação que eles carregavam ("== instância da zona 1") não é o
+#    que uma âncora diz, e um deles já mentia no HEAD: a linha 2205 de
+#    `IdleTestsFrontier.gd` é o comentário de `InventorySize`, não a instância.
+#    Nenhum régua disse nada: o arquivo era citado pelo nome nu, a linha era cheia e a
+#    cláusula não nomeava símbolo — é a classe que a fatia 4 tem de resolver, não esta.
+#    Pagar em âncora exigiu reescrever a oração, porque a cláusula desta régua é a
+#    ORAÇÃO (corta no último `,`/`;`/ponto-fora-de-backtick antes do ponteiro) e não a
+#    janela de ±2 linhas da régua de identidade: `SuiteIdleLootPipeline` estava do lado
+#    de lá da vírgula de `0,70`, e âncora sem nome na oração é decorativa. A vírgula
+#    decimal é lida aqui como fronteira de oração, o que corta cláusula no meio de toda
+#    prosa de número em português — achado registrado, não consertado de passagem.
 #  - LINE_MAX é TETO de `arquivo:linha`: só pode descer. Subir é a marreta sendo
 #    paga de novo, e foi exatamente assim que o custo apareceu: +132 linhas numa
-#    rodada quebraram 21 ponteiros. Os 608 de agora são os 610 menos dois: escrever
-#    a fatia 2 da âncora em `tests/IdleTestsFrontier.gd` empurrou de si os dois
-#    ponteiros que a doc de teste fazia àquele arquivo — a régua cobrou a marreta no
-#    commit que existe para matá-la, e é por isso que o teto desce. A mesma passada
-#    achou uma citação invisível: `tests/drop_band_content_test.gd` citava a faixa
-#    como `` `:2205-2208` ``, sem arquivo, e o `ptrRx` exige o caminho — um ponteiro
-#    que nenhuma régua via. Qualificado, ele entrou no censo (609) e virou âncora
-#    (14), que é o único formato que não apodrece na próxima linha escrita. Os 19 de
-#    agora são os 17 mais dois: o registro desta rodada cita o braço pelo nome em vez
-#    de citá-lo por linha, que é precisamente o que a forma compra — uma frase sobre a
-#    régua que sobrevive ao harness ganhar linhas.
+#    rodada quebraram 21 ponteiros. A queda de 608 para 496 é a fatia 3 cobrando a
+#    própria aposta: 103 ponteiros migrados para âncora numa passada só, cada um
+#    escolhido porque o `anchorverdict` já devolvia verdadeiro para ele — a faixa
+#    citada mora dentro de UM símbolo declarado, a cláusula nomeia esse símbolo, e
+#    todo literal pinado já mora no bloco. Nenhum dos três é decisão de `sed`, e a
+#    prova de que a frase não foi reescrita está no diff: nos 103 automáticos só o
+#    token muda; os seis que a marreta cobrou nesta rodada pediram a oração
+#    reescrita, porque o nome do símbolo caiu do outro lado da vírgula. Dois ponteiros
+#    ficaram de fora do automático porque sobrava um dígito na prosa
+#    (`SCALING.md §7`, `= 5 s`), e trocar o ponteiro deixando a frase soletar o
+#    número velho é comprar a mentira nova; os dois eram falso positivo do guarda e
+#    foram à mão. O que sobra não cabe em script: 163 faixas que moram dentro de um
+#    símbolo que a cláusula não nomeia (`prosa`) e duas pinando literal fora do
+#    bloco — 165 sentenças a reescrever, julgamento, não marreta.
+# O censo desta passada foi escrito com uma disciplina a mais, e ela é medida, não
+# prometida: `sources/idle/FarmZoneData.gd` foi re-fluxido para ficar com o MESMO
+# número de linhas do HEAD (13 entradas, 13 saídas), porque seis ponteiros de nome nu
+# (`:180`, `:243-254`, `:260-272`, `:377-385`, `:401`, `:513`, em três arquivos)
+# apontam para dentro dele e cada linha que eu acrescento lá é uma mentira que entra
+# pela porta dos fundos — nenhuma régua a acusaria, porque o arquivo é citado sem
+# caminho e a linha citada continua cheia. É o custo da marreta em cifra exata: uma
+# frase sobre âncora custa dois minutos de re-fluxo enquanto o ponteiro for de linha.
 # Os dois valores são o censo medido nesta passada (2026-09-30), depois de migrar
 # os onze ponteiros que o crescimento de `tests/benchmarks.gd` (400→690 linhas)
 # tinha sujado — cada um deles era uma caçada de linha, e virou uma escrita.
-ANCHOR_MIN=19
-LINE_MAX=608
+ANCHOR_MIN=128
+LINE_MAX=496
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))

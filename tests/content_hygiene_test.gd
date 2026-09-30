@@ -403,7 +403,7 @@ func _suiteBossLadder(worldNode : Node):
 # Por que esta suíte existe. `presets/maps/server/**` é ARTEFATO: o addon
 # `tiled_importer` o regride de `data/maps/**.tmx` — `tiled_import_plugin.gd:162`
 # grava o `MapServerData` com os `SpawnObject` do mapa e `:169` o amarra no
-# `MapData` que virá `MapsDB` (`sources/db/DB.gd:8`), lidos pelo `ParseFileDB`.
+# `MapData` que virá `MapsDB` (`sources/db/DB.gd:@MapsDB`), lidos pelo `ParseFileDB`.
 # Com o `.godot` morno a engine NÃO reimporta um `.tmx` cujo md5 não mudou, então
 # a máquina local lê o `.tres` committado; o CI regenera o `.godot` do zero e roda
 # `godot --headless --editor --import --quit` (`.github/workflows/godot-ci.yml`,

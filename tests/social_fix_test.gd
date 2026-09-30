@@ -67,7 +67,7 @@ func _runTests():
 			break
 	print("== boot wait done (%d ms) ==" % waited)
 
-	# O boot do Launcher dispara `DB.Preload()` (sources/db/DB.gd:218), que pede
+	# O boot do Launcher dispara `DB.Preload()` (sources/db/DB.gd:@Preload), que pede
 	# ~330 presets ao `ResourceLoader.load_threaded_request()` e só se encerra quando
 	# `PreloadUpdate` juntar cada um — o marcador é `DB.isInitialized`. SQL+World
 	# inicializados NÃO implicam isso: sem esperar aqui, os `load()` de script deste

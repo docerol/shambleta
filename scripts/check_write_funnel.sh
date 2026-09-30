@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WorkOrder #91 — census gate do funil de escrita.
 #
-# `deploy/SCALING.md` §7 afirma que a `queryMutex` de `sources/sql/SQL.gd:7` é o
+# `deploy/SCALING.md` §7 afirma que a `queryMutex` de `sources/sql/SQL.gd:@queryMutex` é o
 # funil de escrita do processo. Isso só é verdade para quem passa pelas portas de
 # `SQLService` (`Query`, `QueryBindings`, `ExecuteBindings`, `Transaction`). Um
 # `db.update_rows(...)` / `db.insert_row(...)` / `db.delete_rows(...)` cru, pegado

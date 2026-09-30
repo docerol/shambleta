@@ -8,12 +8,12 @@ não foi conferido no código está marcado como **[NÃO MEDIDO]**.
 
 | dado | caminho lógico | caminho no container | origem |
 |---|---|---|---|
-| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `Local` = `user://` (`sources/system/Path.gd:55`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
+| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `Local` = `user://` (`sources/system/Path.gd:@Local`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
 | histórico de backup | `user://sql-backups/{DAILY,WEEKLY,MONTHLY}/AAAA-MM-DD_HH-MM-SS.db` | dentro do **mesmo** `/data` | `sources/sql/SQLCommons.gd:8` (`BackupPath`), `sources/sql/SQLBackups.gd:10-19` (`CreateDailyBackup()`) |
 | cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `sources/sql/SQLCommons.gd:107-108`, `sources/sql/SQLBackups.gd:35-51` (`PushOffsite()`), `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
 
 Os diretórios são **MAIÚSCULOS** e isto não é cosmetismo: o nome vem das chaves do
-enum `BackupFrequency` (`sources/sql/SQLCommons.gd:43`, `{DAILY, WEEKLY, MONTHLY}`,
+enum `BackupFrequency` (`sources/sql/SQLCommons.gd:@BackupFrequency`, `{DAILY, WEEKLY, MONTHLY}`,
 usado em `sources/sql/SQLBackups.gd:12` e `:22`), e o
 container é case-sensitive. Um `ls` na variante minúscula desse caminho devolve vazio
 num banco que tem backups — a aparência de "o backup nunca rodou" vem do `ls`, não
@@ -36,7 +36,7 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
 - A cópia é feita pela API de backup online do SQLite (`Launcher.SQL.db.backup_to`,
   `sources/sql/SQLBackups.gd:14`) — arquivo único e consistente **sem** o `-wal`.
 - Retensão local: 7 diários / 4 semanais / 12 mensais (`sources/sql/SQLCommons.gd:34-38`),
-  podada por `PruneBackups()` (`sources/sql/SQLBackups.gd:66-88`).
+  podada por `PruneBackups()` (`sources/sql/SQLBackups.gd:@PruneBackups`).
 - O push offsite acontece **depois** do diário (`sources/sql/SQLBackups.gd:54-64`),
   cria o diretório se faltar (`:39-42`) e só é anunciado como sucesso depois de
   `VerifyBackupRestorable()` abrir a cópia e ler `SELECT version FROM migration`
@@ -44,7 +44,7 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
 - **O offsite nunca é podado**: `PruneBackups()` só caminha por `GetBackupPath()`
   (`:69`). A rotação de longa duração é do operator (§5).
 - **[PENDÊNCIA, arquivo de outro dono]** o `lastDailyBackupTimestamp` é inicializado por
-  `Run()` em `sources/sql/SQLBackups.gd:91-92` com `SQLCommons.Timestamp()`, então o primeiro diário só
+  `Run()` em `sources/sql/SQLBackups.gd:@Run` com `SQLCommons.Timestamp()`, então o primeiro diário só
   existe 24 h depois do boot — um redeploy zera o relógio. É o defeito que o
   `#28` corrigiu para o job meta (`:97-102`, `lastMetaJobTimestamp = 0`) e que
   ficou para trás no backup. Mudança pedida: nascer em `0` (ou persistir o último
@@ -132,7 +132,7 @@ código só copia para o caminho que a env disser, sem inventar nada
 ## 6. O que nada aqui cobre
 
 - O snapshot de jogadores (`BackupPlayers`, cadência `BackupPlayersSec` = 600 s,
-  `sources/sql/SQLCommons.gd:11` + `sources/sql/SQLBackups.gd:167-170`) não é
+  `sources/sql/SQLCommons.gd:@BackupPlayersSec` + `sources/sql/SQLBackups.gd:167-170`) não é
   backup: é o que se perde quando o processo morre sem drain. A causa raiz
   (memória por cima do banco) está em `archive/AUDITORIA_2026-09-27.md` §7.1, não é
   resolvida por backup e não é deste runbook.

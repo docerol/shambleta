@@ -281,7 +281,7 @@ func _measureOne(entry : Dictionary, area : Vector2, phone : bool) -> Dictionary
 	await process_frame
 	var minimum : Vector2 = control.get_combined_minimum_size()
 	# A caixa que o jogador vê é a maior das duas: `WindowPanel.UpdateWindow`
-	# (sources/gui/WindowPanel.gd:235-237) nunca deixa a janela ficar menor que o
+	# (sources/gui/WindowPanel.gd:@UpdateWindow) nunca deixa a janela ficar menor que o
 	# próprio mínimo, então um painel cujo conteúdo pede mais cresce até lá. Medir
 	# o transbordamento contra a caixa DESenhada (menor) acusaria de bug todo painel
 	# cujo conteúdo só esticou a janela — e é R1, acima, que pega o caso grave:

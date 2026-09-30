@@ -143,7 +143,7 @@ static func _DeferredPush(agent : BaseAgent, inst : WorldInstance):
 # `IdlePolicyService.ZoneInstanceBase` o id é CONTRATO de outro subsistema: a zona
 # de farm é procurada por `ZoneInstanceBase + zoneID`
 # (sources/idle/IdlePolicyService.gd:9-24) e a arena de boss é privada por char
-# (`BossInstanceBase + charID`, sources/idle/IdlePolicyService.gd:9) — mover o
+# (`BossInstanceBase + charID`, sources/idle/IdlePolicyService.gd:@BossInstanceBase) — mover o
 # jogador para outro id sem mover a policy dele é o que quebraria a sessão idle,
 # não a lotação. O cap que vale nesses ids é o do tick, medido em
 # `deploy/SCALING.md` / `tests/tick_capacity_test.gd`.
@@ -153,7 +153,7 @@ static func IsShardableInstance(instanceID : int) -> bool:
 # Devolve a instância da família de `baseID` que ainda comporta MAIS UM player, ou
 # null quando a família está cheia. Percorre `base`, `base+1`, ... `base +
 # MAX_SHARDS_PER_FAMILY - 1`; onde não existe instância, cria ali (reaproveitando
-# buraco deixado por `DestroyEmptyInstanceIfUnchanged`, sources/world/WorldMap.gd:55)
+# buraco deixado por `DestroyEmptyInstanceIfUnchanged`, sources/world/WorldMap.gd:@DestroyEmptyInstanceIfUnchanged)
 # e para. Nunca cria uma segunda quando a primeira tem vaga, nem entrega uma cheia.
 static func ResolvePlayerInstance(map : WorldMap, baseID : int) -> WorldInstance:
 	if map == null:

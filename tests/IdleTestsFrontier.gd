@@ -496,10 +496,18 @@ static func _IdentityJudgeCorpus(docLines : PackedStringArray, src : PackedStrin
 	ptrRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):(\\d+)(?:-(\\d+))?`")
 	var symRx : RegEx = RegEx.new()
 	symRx.compile("`([^`]+)`")
+	# O índice do corpus é o MESMO da varredura: ponteiro de linha e âncora, lado a lado.
+	# Sem a âncora aqui, o controle que morde a costura passaria numa casa que a régua
+	# real não tem — fixture que reproduz o bug velho não prova o conserto dele.
+	var ancRx : RegEx = RegEx.new()
+	ancRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):@([A-Za-z_][A-Za-z0-9_]*)`")
 	var recs : Array = []
 	for p in docLines.size():
-		for pm in ptrRx.search_all(String(docLines[p])):
+		var pTxt : String = String(docLines[p])
+		for pm in ptrRx.search_all(pTxt):
 			recs.append([p, pm.get_start(), pm.get_end()])
+		for am in ancRx.search_all(pTxt):
+			recs.append([p, am.get_start(), am.get_end(), true])
 	for i in docLines.size():
 		var matches : Array[RegExMatch] = ptrRx.search_all(String(docLines[i]))
 		for m in matches:
@@ -902,7 +910,7 @@ func SuiteEvidencePointers() -> void:
 	# braço (d) está olhando, e não verde por não ter com o que comparar.
 	var proseOpinion : Dictionary = {}
 	# Nome de suíte em backticks NA MESMA LINHA do ponteiro: é a forma como a prosa deste repo
-	# amarra as duas coisas ("`SuiteRefund` (`tests/IdleTests.gd:7729`)"). Olhar a linha e
+	# amarra as duas coisas ("`SuiteRefund` (`tests/IdleTests.gd:@SuiteRefund`)"). Olhar a linha e
 	# não a janela evita puxar nome de um parágrafo vizinho.
 	var suiteRx : RegEx = RegEx.new()
 	suiteRx.compile("`Suite[A-Za-z0-9_]+`")
@@ -920,6 +928,15 @@ func SuiteEvidencePointers() -> void:
 	if metRx.compile("(shambleta_[a-z0-9_]+)") != OK:
 		Check(false, "o padrão de série de métrica compila")
 		return
+	# A ÂNCORA (#124) não é julgada por este laço — o braço dela é o (8), abaixo, e a
+	# metade de cláusula fica com `scripts/check_doc_drift.sh`. Ela PRECISA estar no
+	# índice de citações da doc, porque o vínculo nome→ponteiro decide por proximidade:
+	# sem a âncora na casa, o nome colado nela é amarrado ao `arquivo:NN` da frase
+	# vizinha, e o vizinho é acusado por uma promessa que não é dele. Foi a costura que
+	# a migração da fatia 3 abriu — 103 números viraram âncora e dois ponteiros
+	# honestos passaram a levar culpa alheia.
+	var ancRx : RegEx = RegEx.new()
+	ancRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):@([A-Za-z_][A-Za-z0-9_]*)`")
 	for docPath in sweep:
 		var wholeProse : bool = ["md", "json"].has(String(docPath).get_extension().to_lower())
 		var docRaw : String = _RepoFile(docPath)
@@ -937,6 +954,11 @@ func SuiteEvidencePointers() -> void:
 				continue
 			for pm in ptrRx.search_all(pLine):
 				ptrRecs.append([p, pm.get_start(), pm.get_end()])
+			# A âncora entra como quarto campo `true`: quem lê o registro pelos três
+			# primeiros não muda de comportamento, e `_OwnerPtr` passa a saber que ali
+			# também há uma citação — com nome, que é o que compete pelo vínculo.
+			for am in ancRx.search_all(pLine):
+				ptrRecs.append([p, am.get_start(), am.get_end(), true])
 		for i in docLines.size():
 			var ptrLine : String = String(docLines[i])
 			# Em código só o comentário é prosa de evidência; em JSON toda linha é, porque não
@@ -1096,9 +1118,8 @@ func SuiteEvidencePointers() -> void:
 	# vereditos são de cláusula, e cláusula tem dois modelos — o da régua bash e um
 	# daqui; reimplementar aqui seria criar a segunda régua que discorda da primeira,
 	# que é justamente a doença que #116 e #123 registram. Então este braço julga
-	# estrutura e declara em voz alta o que não julga.
-	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):@([A-Za-z_][A-Za-z0-9_]*)`")
+	# estrutura e declara em voz alta o que não julga. O `ancRx` é o hoisted de cima — o
+	# mesmo padrão, não uma segunda leitura do shape.
 	var anchorias : Array[String] = []
 	var ancJulgadas : int = 0
 	for ancPath in sweep:
@@ -1135,8 +1156,13 @@ func SuiteEvidencePointers() -> void:
 	# zero. O número NÃO é copiado da régua bash — os dois corpos são diferentes
 	# (a bash pula os registros datados para linha e esta suíte tem a sua lista), e
 	# comparar censos de corpora diferentes seria a discórdia encomendada.
-	Check(ancJulgadas >= 8,
-			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 8 a régua estrutural está verde por não olhar" % ancJulgadas)
+	# 8 → 90 na fatia 3: oito era o censo da fatia 2, e depois de 103 ponteiros
+	# migrados um piso de oito já não distinguia "walk parado" de "metade da migração
+	# invisível". 101 é o medido nesta varredura em 2026-09-30; o piso fica onze abaixo
+	# porque a migração é minha e o que eu quero é que a PRÓXIMA pessoa que encolher o
+	# corpus tenha de explicar, não que o gate verdeje sozinho.
+	Check(ancJulgadas >= 90,
+			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 90 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "fatia 3 migrou 103; 101 é o medido"])
 	# Os três modos de a âncora apodrecer, mordidos em mesa, porque na árvore limpa
 	# eles não têm como aparecer: o control negativo é a única prova de que a
 	# acusação existe. E o positivo, para a régua não virar máquina de acusar.
@@ -1461,6 +1487,31 @@ func SuiteEvidencePointers() -> void:
 	# `proseOpinion`, por isso a casa é a MESMA decisão e não uma contagem à parte.
 	CheckEq(int(fTally.get("prose", 0)), 2,
 			"o braço de prosa teve opinião sobre %d dos três controles F — sem isso ele estaria verde por não olhar nada" % int(fTally.get("prose", 0)))
+	# Classe G — A ÂNCORA NO ÍNDICE DO VÍNCULO. A fatia 3 migrou 103 ponteiros para
+	# `arquivo:@símbolo` e abriu uma costura que nenhuma das duas réguas via: o vínculo
+	# nome→ponteiro é por proximidade, e um nome colado numa âncora ficava a 20 caracteres
+	# do `arquivo:NN` da frase vizinha — que era acusado por uma promessa que não é dele.
+	# Os dois falsos positivos que a migração produziu no gate foram exatamente isso. O
+	# control é a MESMA frase, mesma linha, mesmo símbolo, mudando só a presença da âncora
+	# no índice: com ela, o nome pertence à âncora e o ponteiro de linha cala; sem ela, o
+	# ponteiro é o único dono possível e a régua tem que morder. Sem a segunda perna, o
+	# "silêncio" poderia ser apenas o vínculo cego para âncora — que é trocar uma régua
+	# muda por outra muda.
+	var gDocCom : PackedStringArray = PackedStringArray([
+		"A conta fecha em (`probe_lie.gd:5`) e o símbolo `ZetaLocked` está em (`probe_lie.gd:@ZetaLocked`).",
+	])
+	var gDocSem : PackedStringArray = PackedStringArray([
+		"A conta fecha em (`probe_lie.gd:5`) e o símbolo `ZetaLocked` está ali.",
+	])
+	var gTally : Dictionary = {}
+	var gAncorada : Array[String] = _IdentityJudgeCorpus(gDocCom, lieSrc, lieSpans, "probe_lie.gd:5", gTally)
+	var gSozinha : Array[String] = _IdentityJudgeCorpus(gDocSem, lieSrc, lieSpans, "probe_lie.gd:5", gTally)
+	CheckEq(gAncorada.size(), 0,
+			"âncora no índice: o nome colado em `probe_lie.gd:@ZetaLocked` não é servido pelo `:5` da frase (G): %s" % " | ".join(gAncorada))
+	CheckEq(gSozinha.size(), 1,
+			"a mesma frase sem âncora tem o `:5` como único dono do nome, e a régua morde (G): %s" % " | ".join(gSozinha))
+	Check(int(gTally.get("judged", 0)) >= 1,
+			"o par G apresentou %d nomes à régua — sem isso as duas pernas acima seriam o mesmo silêncio duas vezes" % int(gTally.get("judged", 0)))
 	# A acusação é mecânica: nomeia o símbolo e o número, não descreve o humor da régua.
 	Check(aLie.size() == 1 and aLie[0].contains("ZetaLocked") and aLie[0].contains("5"),
 			"mentira A é detectada pelo símbolo e pela linha: %s" % " | ".join(aLie))
@@ -1491,8 +1542,19 @@ func SuiteEvidencePointers() -> void:
 	# que não deixa um piso absoluto velho virar falha só porque a doc encolheu.
 	Check(comIdentidade >= 50,
 			"ponteiros: %d de %d referências tiveram um símbolo nomeado julgado pela régua de identidade — sem isso, \"0 acusações\" pode significar só que a doc não nomeou nada" % [comIdentidade, conferidos])
-	Check(comIdentidade * 5 >= conferidos,
-			"ponteiros: %d de %d referências julgadas pela régua de identidade é pelo menos um quinto do que ela olha — abaixo disso a mordida medida é do tamanho do que a prosa deixou dizer" % [comIdentidade, conferidos])
+	# Terceira recalibração, 2026-09-30, e ela é de ESCOPO, não de número: a fração de
+	# um quinto foi escrita quando todo ponteiro nomeado era `arquivo:linha`, e a fatia 3
+	# moveu justamente os ponteiros que carregavam nome para `arquivo:@símbolo`. Medidos
+	# na nova árvore: 68 nomes em 455 linhas — 15%, abaixo do quinto. Manter a fórmula
+	# velha seria chamar a migração de perda de cobertura, quando o que aconteceu é que o
+	# nome mudou de casa e a casa nova é julgada pelo braço (8) desta mesma suíte. Então
+	# a fração passa a ser da FAMÍLIA de citação nomeada: ponteiro de linha mais âncora,
+	# nos dois lados da divisão. Não é afrouxamento gratuito — cada âncora do numerador
+	# é uma citação que o braço (8) acusa se o símbolo não resolver, não declarar ou
+	# declarar duas vezes (o `anchorias` acima é um CheckEq em zero), e o denominador
+	# cresce junto. Folga medida: 169/556 = 30%, contra os 22% de antes do outro corpo.
+	Check((comIdentidade + ancJulgadas) * 5 >= conferidos + ancJulgadas,
+			"citação nomeada: %d+%d de %d+%d (linha julgada por símbolo, âncoras vistas) é pelo menos um quinto do que a família olha — abaixo disso a mordida medida é do tamanho do que a prosa deixou dizer" % [comIdentidade, ancJulgadas, conferidos, ancJulgadas])
 	# O braço (d) nasceu nesta rodada, então o piso é o MEDIDO com margem, não o desejado: a
 	# varredura de hoje julga três citações a linha de `.md` com o símbolo nomeado na mesma
 	# cláusula, e uma delas é o registro desta própria régua citando a linha que ele prova —

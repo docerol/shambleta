@@ -19,7 +19,7 @@ class_name Presence
 # Custo — o que decide a forma de cada função aqui:
 #  - o heartbeat NÃO é por jogador, é por processo: `Touch` renova a cauda viva
 #    inteira deste `server_id` com UMA statement. Por personagem custaria um write
-#    por minuto atrás da mesma `queryMutex` do settle (`sources/sql/SQL.gd:7`), que
+#    por minuto atrás da mesma `queryMutex` do settle (`sources/sql/SQL.gd:@queryMutex`), que
 #    é exatamente o degrau que a auditoria apontou. Medido em
 #    `tests/presence_fuzz.gd`.
 #  - escrita de sessão é UPSERT de uma statement chaveada em `char_id`: reconexão

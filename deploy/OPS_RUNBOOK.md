@@ -8,9 +8,9 @@ O que não foi medido está dito como não medido.
 
 | serviço | porta | quem escuta | bind |
 |---|---|---|---|
-| `game` | 6108 | WebSocket do jogo (`EXPOSE` em `deploy/server/Dockerfile:45`; `static var WebSocketPort = 6108` em `sources/network/NetworkCommons.gd:12`) | interface do container |
-| `game` | 9400 | `/healthz` + `/metrics` na `DefaultPort` do painel (`sources/system/MetricsServer.gd:25`) | **só `127.0.0.1`** (`:26`) |
-| `companion` | 8901 | `/health`, `/metrics`, `/checkout/*`, `/webhooks/payments` (`Handler` em `companion/server.py:1398-1469`) | `0.0.0.0` (`deploy/companion/Dockerfile:46`) |
+| `game` | 6108 | WebSocket do jogo (`EXPOSE` em `deploy/server/Dockerfile:45`; `static var WebSocketPort = 6108` em `sources/network/NetworkCommons.gd:@WebSocketPort`) | interface do container |
+| `game` | 9400 | `/healthz` + `/metrics` na `DefaultPort` do painel (`sources/system/MetricsServer.gd:@DefaultPort`) | **só `127.0.0.1`** (`:26`) |
+| `companion` | 8901 | `/health`, `/metrics`, `/checkout/*`, `/webhooks/payments` (`Handler` em `companion/server.py:@Handler`) | `0.0.0.0` (`deploy/companion/Dockerfile:46`) |
 | `web` | 80 | nginx estático + proxy para o companion (`deploy/web/nginx.conf:43`, `deploy/web/nginx.conf:174` e `:205`) | `listen 80` (IPv4) |
 
 Fora do container, TLS termina no proxy do Coolify (ou no `cloudflared`) — nada
@@ -41,7 +41,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://<dominio>/webhooks/payments
 Leituras e honestidade:
 
 - `grant_queue_pending > 0` crescendo é compra paga sem crédito — é o alerta que
-  importa, não o `up`, que é `IsServing()` (`sources/system/MetricsServer.gd:98-102`).
+  importa, não o `up`, que é `IsServing()` (`sources/system/MetricsServer.gd:@IsServing`).
 - `/webhooks/payments` por GET devolve **404** do companion (companion vivo, proxy
   OK — medido: `{"error": "not_found"}`, `companion/server.py:1448`). **502/504** é
   outra coisa: o nginx não alcança o upstream (companion morto ou `resolver` sem
@@ -79,10 +79,10 @@ termina com **exit 143** (128+SIGTERM — disposição padrão, sem handler) e d
 `testing.db-wal` de 1.8 MiB ao lado de um `testing.db` de 94 KiB, com zero
 jogadores conectados. Não há `_notification`/handler de SIGTERM em `sources/`
 (grep: nenhum `NOTIFICATION_WM_CLOSE_REQUEST`), nem no companion
-(`main()` em `companion/server.py:1957` roda `serve_forever()` e só segura `KeyboardInterrupt`; medido: exit 143).
+(`main()` em `companion/server.py:@main` roda `serve_forever()` e só segura `KeyboardInterrupt`; medido: exit 143).
 
 Não é corrupção — o SQLite recupera o WAL na próxima abertura — mas é estado em
-memória perdido: até `BackupPlayersSec` = 600 s de ouro (`sources/sql/SQLCommons.gd:11`).
+memória perdido: até `BackupPlayersSec` = 600 s de ouro (`sources/sql/SQLCommons.gd:@BackupPlayersSec`).
 
 O caminho que fecha direito é o canary:
 
@@ -95,7 +95,7 @@ O que acontece depois do toque (`sources/world/ShutdownCanary.gd:28-59`): recusa
 novas conexões, avisa em 30 s e 15 s, derruba os peers que restam e chama
 `Launcher.Quit()` → `Reset(false,false)` → `SQL.Destroy()` → `backups.Stop()`
 (join de até `BackupCheckIntervalSec` = 2 s) + `db.close_db()`
-(`SQL.Destroy()` em `sources/sql/SQL.gd:1778-1785`, `Stop()` em `sources/sql/SQLBackups.gd:200-203`).
+(`SQL.Destroy()` em `sources/sql/SQL.gd:@Destroy`, `Stop()` em `sources/sql/SQLBackups.gd:@Stop`).
 
 É por isso que `stop_grace_period: 75s` no serviço `game`: 30 + 15 s de aviso + 2 s
 de join, com folga de fsync. O grace não *causa* o shutdown — ele **não mata** um
@@ -130,7 +130,7 @@ zona. Resumo: custo marginal medido **0,206 ms/player/passo**, joelho
 **extrapolado** (reta, não medição) em **~154 players por zona**, período real
 dentro do orçamento de 33,33 ms em todos os níveis medidos até 200. O cap de 20
 por instância (`sources/world/WorldInstance.gd:5`) não é a restrição do processo —
-o total de players somando as instâncias é, e esse tem número medido e fence: **200 players conviventes em 10 instâncias cheias dentro de 33,33 ms/passo**, imposto por `CeilingFencePlayers` (`tests/multi_instance_tick_test.gd:171`) e cobrado por duas checks (`:1662` e `:1665`).
+o total de players somando as instâncias é, e esse tem número medido e fence: **200 players conviventes em 10 instâncias cheias dentro de 33,33 ms/passo**, imposto por `CeilingFencePlayers` (`tests/multi_instance_tick_test.gd:@CeilingFencePlayers`) e cobrado por duas checks (`:1662` e `:1665`).
 
 ### 4.3 Reproduzir as medidas (sem docker, a partir da raiz do repo)
 
@@ -165,10 +165,10 @@ uma semana de beta e transformar as duas reservas em tetos com número próprio.
 
 - `web → game: service_healthy`: o nginx não precisa do jogo para servir estático,
   mas o beta não deve abrir a porta antes do `/healthz` dizer `ok`
-  (`_route()` em `sources/system/MetricsServer.gd:438-449` devolve 503 enquanto
+  (`_route()` em `sources/system/MetricsServer.gd:@_route` devolve 503 enquanto
   `IsServing()` é false).
 - `companion → game: service_healthy`: sem `live.db` o companion sai com **exit 2**
-  (`main()` em `companion/server.py:1957` recusa o banco ausente; reproduzido:
+  (`main()` em `companion/server.py:@main` recusa o banco ausente; reproduzido:
   `--db /tmp/nao-existe.db` → `database not found`, exit 2). Num volume novo, isso
   aconteceria antes de o game criar o banco — crash-loop exatamente na fronteira
   do dinheiro.
@@ -185,7 +185,7 @@ O gate lê os quatro `depends_on` + as portas dos probes contra o código:
 | arquivo:linha | o que muda | por quê |
 |---|---|---|
 | `deploy/web/Dockerfile:50` | remover o `HEALTHCHECK ... wget -qO- http://127.0.0.1/` | o compose agora define o probe honesto; a linha na imagem é um check que não consegue falhar (`try_files ... /index.html`, `deploy/web/nginx.conf:306`) e só sobrevive para confundir quem lê a imagem. |
-| `main()` — `companion/server.py:1957` | instalar handler de `SIGTERM` antes do `serve_forever()`, com join das threads | hoje `docker stop` mata no meio de um webhook (medido: exit 143). O provedor re-tenta, mas a janela entre verificar a assinatura e gravar o grant é exatamente onde o dinheiro vive. |
+| `main()` — `companion/server.py:@main` | instalar handler de `SIGTERM` antes do `serve_forever()`, com join das threads | hoje `docker stop` mata no meio de um webhook (medido: exit 143). O provedor re-tenta, mas a janela entre verificar a assinatura e gravar o grant é exatamente onde o dinheiro vive. |
 | `sources/sql/SQLBackups.gd:92` | `lastDailyBackupTimestamp = 0` (como `:102` faz para o job meta) | redeploy diário zera o relógio do backup diário; ver `deploy/BACKUP_RUNBOOK.md` §2. |
 
 
@@ -193,8 +193,8 @@ O gate lê os quatro `depends_on` + as portas dos probes contra o código:
 espera da `queryMutex` JÁ sai no `/metrics` — `shambleta_sql_query_mutex_waits`,
 `..._wait_seconds`, `..._wait_max_seconds` e os degrades `..._over_1ms`/`..._over_10ms`/
 `..._over_100ms` são emitidos no corpo do `/metrics` (`sources/system/MetricsServer.gd:220-239`,
-dentro de `MetricsBody()` declarada em `sources/system/MetricsServer.gd:122`,
-lidos de `QueryMutexWaitStats()` em `sources/sql/SQL.gd:1584`) — e a regra de alerta que
+dentro de `MetricsBody()` declarada em `sources/system/MetricsServer.gd:@MetricsBody`,
+lidos de `QueryMutexWaitStats()` em `sources/sql/SQL.gd:@QueryMutexWaitStats`) — e a regra de alerta que
 precisava do sinal também já existe: `deploy/alerts.rules.yml:102`. A linha desta tabela
 que dizia o contrário sobreviveu ao trabalho feito, que é exatamente o defeito que faz um
 operador re-inventar uma métrica que já está sendo raspada.
@@ -202,7 +202,7 @@ operador re-inventar uma métrica que já está sendo raspada.
 **Não é mais pendência (e a linha que dizia que era estava errada):** o job de CI
 que invoca `scripts/check_compose.sh` já existe e já bloqueia. `code-health`
 (`.github/workflows/godot-ci.yml:128-140`) roda `bash scripts/test.sh structure`, e
-`structure_gates()` (`scripts/test.sh:717`) chama os 11 gates de estrutura —
+`structure_gates()` (`scripts/test.sh:@structure_gates`) chama os 11 gates de estrutura —
 `check_god_nodes.sh`, `check_doc_drift.sh`, `check_compose.sh`, `check_secrets.sh`,
 `check_ci.sh`, `check_dead_code.sh`, `check_untracked.sh`, `check_gate_log.sh` e
 `check_boot_sandbox.sh`, `check_gate_markers.sh` e

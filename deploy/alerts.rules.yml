@@ -93,7 +93,7 @@ groups:
 
   - name: shambleta-escalabilidade
     rules:
-      # O gargalo do processo é a queryMutex (sources/sql/SQL.gd:7) — um round trip
+      # O gargalo do processo é a queryMutex (sources/sql/SQL.gd:@queryMutex) — um round trip
       # que espera mais de 100 ms é um jogador travado no trabalho de outro, e é o
       # sintoma que antecede o teto de tick medido em deploy/SCALING.md. A média não
       # mostra isso (um passe de backup de 400 ms numa média de 3 µs some na média),

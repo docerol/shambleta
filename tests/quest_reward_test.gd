@@ -3,7 +3,7 @@ extends SceneTree
 # SOM-IDLE: harness da recompensa DECLARADA de quest, paga pelo servidor via
 # ledger. A auditoria mediu (AUDITORIA_INDEPENDENTE_2026-09-24) que quest era a
 # única atividade não-kill sem pagamento: `QuestData.reward` (fontes
-# sources/db/instance/QuestData.gd:11) era texto de vitrine que ninguém lê,
+# sources/db/instance/QuestData.gd:@QuestData) era texto de vitrine que ninguém lê,
 # NpcCommons.SetQuest fechava a quest sem mintar nada (o funil auditado em
 # NpcCommons.gd:167-177, antes desta mudança só emitia notificação), e o que
 # existia de recompensa estava à mão em diálogos que somavam `stat.gp` na
@@ -334,7 +334,7 @@ func _suitePaysOnce():
 	_checkEq(_gpOf(charID) - gpBefore, 1000, "e a carteira não subiu de novo (era exatamente o dupe)")
 	_checkEq(_ledgerRows(charID, reason).size(), 1, "reentrega não duplica a linha de ledger")
 	# Prova DURÁVEL: primeiro a conclusão é PERSISTIDA pelo caminho real do
-	# servidor (Progress.SetQuest → SQL.SetQuest, sources/actor/Progress.gd:15 e
+	# servidor (Progress.SetQuest → SQL.SetQuest, sources/actor/Progress.gd:@SetQuest e
 	# sources/sql/SQL.gd:1171), e
 	# aí o estado é apagado do banco — o caso de Elanore.gd:152, que devolve a quest
 	# a INACTIVE, e do `/quest <name> <state>` na mão de um GM (WorldCommands.gd:1414).

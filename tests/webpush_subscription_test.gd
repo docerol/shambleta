@@ -165,7 +165,7 @@ func _repoFile(path : String) -> String:
 
 # Só código, sem linhas de comentário: uma régua que lê o arquivo inteiro dá
 # verde quando a chamada é apagada e a frase sobrevive na doc de quem a descreveu
-# (mesma razão de `_StripCommentLines` em `tests/IdleTests.gd:6167`).
+# (mesma razão de `_StripCommentLines` em `tests/IdleTests.gd:@_StripCommentLines`).
 func _codeOnly(text : String) -> String:
 	var kept : String = ""
 	for rawLine in text.split("\n"):
@@ -176,7 +176,7 @@ func _codeOnly(text : String) -> String:
 	return kept
 
 # Corpo de uma função: da assinatura até o próximo membro de topo. `_bodyOf` de
-# `tests/web_delivery_test.gd:387` corta só em `\nfunc `, que não existe num
+# `tests/web_delivery_test.gd:@_bodyOf` corta só em `\nfunc `, que não existe num
 # arquivo 100% estático — leria o arquivo inteiro, e a régua de ORDEM passaria
 # sozinha porque os quatro passos estariam todos lá dentro de outro corpo.
 func _funcBody(src : String, signature : String) -> String:

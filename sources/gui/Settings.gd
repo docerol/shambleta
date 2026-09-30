@@ -566,7 +566,7 @@ func _ready():
 	# SOM-IDLE F3: web push toggle (web-only, criado em runtime).
 	# AUDITORIA_INDEPENDENTE W5: a linha é desenhada por OFERTA, não por
 	# entrega-agora. `CanDeliver()` é a conjunção das seis peças
-	# (sources/web/WebPushDelivery.gd:299) e uma delas — o navegador assinando — só
+	# (sources/web/WebPushDelivery.gd:@CanDeliver) e uma delas — o navegador assinando — só
 	# nasce quando o jogador LIGA o toggle: cobrar as duas perguntas uma da outra é
 	# o deadlock que deixava a linha invisível para sempre num client novo, com o
 	# achado "push não entrega" aberto por construção. `WebPushService.CanOfferToggle()`

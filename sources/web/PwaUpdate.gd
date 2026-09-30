@@ -36,7 +36,7 @@ func _pulse() -> void:
 	if not bool(JavaScriptBridge.pwa_needs_update()):
 		return
 	# O one-shot só é consumido quando o diálogo pode abrir: `UICommons.MessageBox` é no-op
-	# silencioso sem a caixa montada (`sources/gui/UICommons.gd:78-80`), e marcar `_asked`
+	# silencioso sem a caixa montada (`sources/gui/UICommons.gd:@MessageBox`), e marcar `_asked`
 	# antes de testar custaria a notificação à sessão inteira se o pulso pegasse o GUI fora
 	# do ar. A porta de login acima já torna isso raro; aqui é o custo de errar.
 	if not (Launcher.GUI and Launcher.GUI.messageBox):

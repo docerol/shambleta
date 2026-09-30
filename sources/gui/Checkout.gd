@@ -256,7 +256,7 @@ func _get_username() -> String:
 func _get_auth_token() -> String:
 	# O token da sessão mora em conf, não no painel: `SaveToken` grava em
 	# `Conf.Type.AUTH_TOKEN` e `Connect()` zera `savedToken` logo depois de usá-lo no
-	# auto-login (sources/gui/Login.gd:311). Ler só o var devolvia "" em qualquer
+	# auto-login (sources/gui/Login.gd:@Connect). Ler só o var devolvia "" em qualquer
 	# sessão — no login por senha porque o var nunca chega a ser atribuído, no por
 	# token porque ele é aparado — e o companion respondia 401 `missing_token` na
 	# frente do pagamento, com a janela aconselhando "lembrar" justamente a quem já

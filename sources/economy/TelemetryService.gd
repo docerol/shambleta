@@ -360,7 +360,7 @@ func FunnelWindowAccounts(sinceSec : int) -> Dictionary:
 # (`sources/ops/OpsCommands.gd:104`), `fraud_metrics`
 # (`sources/economy/FraudeReview.gd`), os seis `sec_*`
 # (`sources/sql/SQLSecurity.gd:67-72`, escritos por `Server.gd` e lidos só por um
-# `CountSecurityEvents` (`sources/sql/SQLSecurity.gd:140`) sem nenhum chamador) e os quatro eventos de marketplace/passe
+# `CountSecurityEvents` (`sources/sql/SQLSecurity.gd:@CountSecurityEvents`) sem nenhum chamador) e os quatro eventos de marketplace/passe
 # (`ah_list`, `ah_list_reject`, `ah_buy`, `ah_cancel`, `pass_claim`, `rebirth`).
 # `ah_list_reject` entrou em `FUNNEL_KINDS` junto: `RecordFunnel` o recusava em
 # silêncio, então a linha nunca chegava a cair na tabela — kind escrito sem

@@ -114,7 +114,7 @@ services:
         max-file: "3"
     # O teto de memória existe para proteger o HOST, não o jogo: SIGKILL num
     # processo que é o único writer do SQLite custa até `BackupPlayersSec` = 600 s
-    # de ouro que só existe em memória (sources/sql/SQLCommons.gd:11; o efeito é o
+    # de ouro que só existe em memória (sources/sql/SQLCommons.gd:@BackupPlayersSec; o efeito é o
     # §7.1 da AUDITORIA_2026-09-27) e deixa `-wal` órfão (medido: 1.8 MiB de
     # testing.db-wal com zero jogadores). Por isso o limite é ~3x o piso medido,
     # não um número apertado:
@@ -128,9 +128,9 @@ services:
     # thread do worker de backup (sources/sql/SQLBackups.gd:183).
     cpus: "2"
     # 75 s cobrem o drain inteiro: até 10 s para o `CheckCanary` ver o arquivo
-    # (duas batidas de `checkInternalSec` = 5 s, sources/world/ShutdownCanary.gd:5)
+    # (duas batidas de `checkInternalSec` = 5 s, sources/world/ShutdownCanary.gd:@checkInternalSec)
     # + 30 s e 15 s dos avisos (sources/world/ShutdownCanary.gd:10-13) + até 2 s do join do worker
-    # (`BackupCheckIntervalSec`, sources/sql/SQLCommons.gd:10 lido em
+    # (`BackupCheckIntervalSec`, sources/sql/SQLCommons.gd:@BackupCheckIntervalSec lido em
     # sources/sql/SQLBackups.gd:187) + folga de fsync no `db.close_db()`
     # (sources/sql/SQL.gd:1785) = 57 s de pior caso, com 18 s de folga.
     # QUEM aciona o drain mudou em 2026-09-28: o `ENTRYPOINT` da imagem
@@ -195,7 +195,7 @@ services:
       # live.db + sql-backups ficam aqui (user:// com HOME=/data →
       # /data/.local/share/Shambleta/, layout conferido por
       # tests/deploy_ops_test.gd). ATENÇÃO: é por isto que o backup nasce
-      # DENTRO do volume do banco: o `GetBackupPath()` (sources/sql/SQLCommons.gd:102)
+      # DENTRO do volume do banco: o `GetBackupPath()` (sources/sql/SQLCommons.gd:@GetBackupPath)
       # vale `user://sql-backups/` (sources/sql/SQLCommons.gd:8 + sources/system/Path.gd:55).
       - game-data:/data
       # Segunda cópia em volume próprio: `docker compose down -v`, um rebuild com

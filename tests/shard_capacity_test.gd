@@ -18,7 +18,7 @@ extends SceneTree
 #   2) O CAMINHO DE WARP: `World.Spawn` (sources/world/World.gd:86) é por onde o
 #      login e todo warp de porta entram, e até aqui ele pegava
 #      `map.instances[instanceID]` e empurrava o player na lista fosse qual fosse a
-#      lotação — `NpcCommons.Warp` sempre passa 0 (sources/actor/agent/NpcCommons.gd:153).
+#      lotação — `NpcCommons.Warp` sempre passa 0 (sources/actor/agent/NpcCommons.gd:@Warp).
 #   3) O BURACO: `PopAgent` fecha instância vazia com `DestroyEmptyInstanceIfUnchanged`
 #      (sources/world/WorldMap.gd:55). O shard seguinte tem de REAPROVEITAR o id
 #      livre, não empilhar id novo por cima dele.
