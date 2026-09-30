@@ -954,6 +954,18 @@ LIT_MIN=40
 # que ele caça não é a prosa nova, é a prosa que suma ou o walk que parou de ler os
 # arquivos — nos dois casos "zero acusacoes" seria a régua muda, não a árvore honesta.
 REG_MIN=2
+# Ratchet da ÂNCORA (#124). Dois números, um só sentido de afrouxamento:
+#  - ANCHOR_MIN é PISO de `arquivo:@simbolo`: só pode subir. Cair âncora significa
+#    ou que a âncora voltou a ser linha (o custo que se quer matar), ou que o walk
+#    parou de ler o arquivo — nos dois casos "zero acusações" é a régua muda.
+#  - LINE_MAX é TETO de `arquivo:linha`: só pode descer. Subir é a marreta sendo
+#    paga de novo, e foi exatamente assim que o custo apareceu: +132 linhas numa
+#    rodada quebraram 21 ponteiros.
+# Os dois valores são o censo medido nesta passada (2026-09-30), depois de migrar
+# os onze ponteiros que o crescimento de `tests/benchmarks.gd` (400→690 linhas)
+# tinha sujado — cada um deles era uma caçada de linha, e virou uma escrita.
+ANCHOR_MIN=11
+LINE_MAX=610
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))
@@ -1017,6 +1029,16 @@ IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # âncoras deslizaram para uma linha com texto mas com o texto errado sem que nada
 # acusasse. ANYCITE vê as duas formas; o que pinha é o literal, não o nome.
 ANYCITE = re.compile(r"(?<![\w./-])" + _TGT + r":(\d+)((?:[-,]\d+)*)")
+
+# A ÂNCORA (#124): `arquivo.ext:@símbolo` no lugar de `arquivo.ext:NN`. O que faz a
+# régua morder nunca foi o número — é ler o CONTEÚDO daquele endereço — e o número é
+# o que cobra marreta: +132 linhas numa rodada quebraram 21 ponteiros e o conf do
+# nginx exigiu 9 reparos. Uma âncora sobrevive a inserção em qualquer ponto do
+# arquivo sem perder julgamento, porque o que se julga é o BLOCO do símbolo: (1) o
+# símbolo é declarado naquele arquivo, uma declaração só — duas são acusação, não
+# escolha; (2) o que a prosa pin-a aparece dentro do bloco. O literal viaja junto,
+# senão a âncora vira "o nome existe", e isso não prova nada.
+ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*)")
 
 
 # ---------------------------------------------------------------------------
@@ -1381,6 +1403,134 @@ def litverdict(clause, spans, target_lines, stem=None):
     return False, True, "", 0
 
 
+# ---------------------------------------------------------------------------
+# ÂNCORA (#124): o modelo de declaração abaixo é o MESMO da régua de span do
+# harness (`_SymbolSpans` em `tests/IdleTestsFrontier.gd`): coluna zero, e o bloco
+# vai da declaração até a linha antes da próxima declaração de coluna zero. Duas
+# réguas lendo duas geografias diferentes do mesmo arquivo é o jeito de um ponteiro
+# ser aprovado por uma e acusado pela outra, e é por isso que o formato é copiado da
+# que já estava certa, não inventado aqui.
+DECL_GD = re.compile(r"^(?:static func |func |static var |const |class_name |enum |var )([A-Za-z_]\w*)")
+DECL_PY = re.compile(r"^(?:async def |def |class )([A-Za-z_]\w*)")
+DECL_SH = re.compile(r"^([A-Za-z_]\w*)\s*\(\)")
+DECL_UP = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=")
+DECLS = {"gd": (DECL_GD,), "py": (DECL_PY, DECL_UP), "sh": (DECL_SH, DECL_UP)}
+
+
+def anchor_ext(path):
+    return os.path.splitext(path)[1].lstrip(".").lower()
+
+
+# A acusação em português, com o `%s` do detalhe. Separado do veredito para o
+# self-test julgar o MOTIVO, não a frase: uma régua que acusa certo mas por um
+# motivo que ninguém plantou é a mesma que um dia absolve por engano.
+ANCHOR_MOTIVOS = {
+    "arquivo": "o alvo é `.%s`, onde nenhuma declaração é legível — âncora só existe onde a casa sabe onde começa e termina o bloco",
+    "inexistente": "`%s` não é declarado neste arquivo — âncora para nome que ninguém declara é linha disfarçada",
+    "duplo": "declarações em %s — duas é acusação, não escolha",
+    "prosa": "nada na cláusula nomeia `%s` — a âncora só prova que o nome existe, e isso não é evidência",
+    "bloco": "%s mora no arquivo, mas fora do bloco do símbolo — a prosa pin-a outra coisa",
+}
+
+
+def anchor_spans(lines, ext):
+    """nome -> lista de [comeco, fim]. LISTA, não par: duplicidade é a acusação.
+
+    Devolve {} para extensão sem modelo de declaração (`.md`, `.json`, `.conf`,
+    `.tscn`). Ali a âncora não tem o que julgar, e fingir que tem é o caminho para
+   aprovar ponteiro que não prova nada — por isso o veredito acusa em vez de calar.
+    """
+    pats = DECLS.get(ext)
+    if not pats:
+        return {}
+    decls = []
+    for i, t in enumerate(lines, 1):
+        for p in pats:
+            m = p.match(t)
+            if m:
+                decls.append((m.group(1), i))
+                break
+    out = {}
+    for k, (nm, start) in enumerate(decls):
+        finish = decls[k + 1][1] - 1 if k + 1 < len(decls) else len(lines)
+        out.setdefault(nm, []).append([start, max(start, finish)])
+    return out
+
+
+def anchorverdict(sym, clause, target_lines, ext):
+    """(ok, motivo, detalhe) de `arquivo:@símbolo`.
+
+    Quatro acusações, cada uma com controle plantado: arquivo onde nenhuma
+    declaração é legível, símbolo que ninguém declara, símbolo declarado duas vezes,
+    âncora cujo par não aparece na prosa (o "o nome existe" que não prova nada), e o
+    literal da cláusula morando FORA do bloco. Aprovar exige os dois juntos: o nome
+    dito na frase E o que a frase pin-a dentro do bloco.
+    """
+    if ext not in DECLS:
+        return False, "arquivo", "." + ext
+    spans = anchor_spans(target_lines, ext)
+    if sym not in spans:
+        return False, "inexistente", sym
+    if len(spans[sym]) > 1:
+        return False, "duplo", [str(s[0]) for s in spans[sym]]
+    if not mentions(sym, clause):
+        return False, "prosa", sym
+    joined = "\n".join(target_lines)
+    a, b = spans[sym][0]
+    block = "\n".join(target_lines[a - 1:b])
+    fora = [c for c in candidates(clause, False) if mentions(c, joined) and not mentions(c, block)]
+    if fora:
+        return False, "bloco", ", ".join(fora)
+    return True, "", ""
+
+
+# ALVO5 é o terreno da ÂNCORA: `GATE_RUN` declarado na 2, `Beta` uma vez só na 4 (e a
+# linha 6, indentada, não é declaração de coluna zero — é corpo do `Beta`), `WAL_SALT`
+# dentro do bloco, `Delta_Load` no bloco seguinte, e `Gamma` que não existe no arquivo.
+# ALVO6 é o arquivo onde o mesmo nome é declarado duas vezes: ali a âncora é acusação,
+# não escolha.
+ALVO5 = ["# cabecalho", "const GATE_RUN : int = 1", "", "func Beta() -> void:",
+         "\tvar WAL_SALT = 1", "\tconst Beta = 1", "func Delta_Load() -> void:",
+         "\tBeta.run()"]
+ALVO6 = ["func Beta() -> void:", "\tpass", "func Beta() -> int:", "\treturn 1"]
+ANCHOR_CONTROLES = [
+    ("âncora honesta: símbolo declarado e nomeado na cláusula",
+     "abre a sessão em `Beta` (`x.gd:@Beta`)", True, ""),
+    ("âncora pinando literal que mora dentro do bloco é aprovada",
+     "a sonda `WAL_SALT` mora em `Beta` (`x.gd:@Beta`)", True, ""),
+    ("inexistente: símbolo que nenhuma linha declara é acusado",
+     "bate em `Gamma` (`x.gd:@Gamma`)", False, "inexistente"),
+    ("duplo: o mesmo nome declarado duas vezes não é escolha de âncora",
+     "bate em `Beta` (`x.gd:@Beta`)", False, "duplo", ALVO6),
+    ("prosa: âncora sem o símbolo na frase só prova que o nome existe",
+     "o número está aqui (`x.gd:@Beta`)", False, "prosa"),
+    ("bloco: literal pinado que mora em outro símbolo é acusado",
+     "a constante `GATE_RUN` mora em `Beta` (`x.gd:@Beta`)", False, "bloco"),
+    ("bloco: o irmão declarado depois não entra no bloco do nomeado",
+     "usa `Delta_Load` junto de `Beta` (`x.gd:@Beta`)", False, "bloco"),
+    ("arquivo: extensão sem declaração legível não ganha âncora",
+     "bate em `Beta` (`x.md:@Beta`)", False, "arquivo"),
+]
+
+
+def anchorselftest():
+    biting = 0
+    for label, text, esp_ok, esp_mot, *fix in ANCHOR_CONTROLES:
+        alvo = fix[0] if fix else ALVO5
+        m = ANCHOR.search(text)
+        clause = lit_clause(None, text[:m.start()], True,
+                            text[m.end():m.end() + 1] == "`")
+        ok, motivo, _det = anchorverdict(m.group(2), clause, alvo,
+                                         anchor_ext(m.group(1)))
+        if ok == esp_ok and motivo == esp_mot:
+            biting += 1
+        else:
+            print("[FAIL] âncora: self-test cego no controle %s (ok=%s motivo=%r, esperava ok=%s motivo=%r)"
+                  % (label, ok, motivo, esp_ok, esp_mot))
+    return biting, len(ANCHOR_CONTROLES)
+
+
+
 # `Betamax` existe na linha 2 e `Beta` so como palavra inteira na 3: e o par que mede
 # a palavra-inteira. Cada controle declara o veredito ESPERADO nos dois cortes, e a
 # diferenga entre eles e a medida do que o corte estreito nao enxerga.
@@ -1531,6 +1681,9 @@ def scan(root, wide, reg):
     lit_accused = 0
     reg_judged = 0
     reg_accused = 0
+    anchor_total = 0
+    anchor_accused = 0
+    line_total = 0
 
     def lines_of(path):
         if path not in cache:
@@ -1545,7 +1698,7 @@ def scan(root, wide, reg):
         dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
         for fn in sorted(filenames):
             rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
-            if rel.startswith("archive/") or os.path.basename(rel) in SKIP_NAMES:
+            if rel.startswith("archive/"):
                 continue
             if not fn.endswith(EXTS):
                 continue
@@ -1563,6 +1716,45 @@ def scan(root, wide, reg):
                 # Em codigo, so comentario: o corpo de uma funcao nao e prosa nomeando
                 # a linha de outra pessoa.
                 if not is_doc and not is_json and not line.lstrip().startswith(("#", "//")):
+                    continue
+                # Régua de ÂNCORA (#124): `arquivo:@símbolo`, julgada pelo bloco da
+                # declaração. Não depende do corte (o símbolo vem do próprio ponteiro,
+                # não da forma de um identificador da cláusula), então os dois passes
+                # têm de ver o mesmo número — a igualdade é invariant e é cobrada em
+                # main(), como a de literal. Ela roda ANTES do atalho de registro
+                # datado abaixo de propósito: `arquivo:NN` em CHANGELOG é história e
+                # não se cobra; âncora não envelhece com inserção, e deixar a forma
+                # nova fora do censo é exatamente o buraco da classe #114 — ponteiro
+                # que nenhuma régua lê.
+                anc_prev_end = 0
+                anc_k = 0
+                for m4 in ANCHOR.finditer(line):
+                    anchor_total += 1
+                    anc_k += 1
+                    tgt = m4.group(1)
+                    if tgt.startswith("res://"):
+                        tgt = tgt[6:]
+                    seg4 = line[anc_prev_end:m4.start()]
+                    anc_prev_end = m4.end()
+                    if "|" in seg4:
+                        seg4 = seg4.rsplit("|", 1)[-1]
+                    tl4 = lines_of(tgt)
+                    if tl4 is None:
+                        anchor_accused += 1
+                        print("[FAIL] âncora: %s:%d cita %s e o arquivo não existe — linha quebra, arquivo quebra também, e sem alvo não há bloco"
+                              % (rel, n, m4.group(0)))
+                        continue
+                    ok4, mot4, det4 = anchorverdict(
+                        m4.group(2),
+                        lit_clause(src[n - 2] if n > 1 else None, seg4, anc_k == 1,
+                                   m4.end() < len(line) and line[m4.end()] == "`"),
+                        tl4, anchor_ext(tgt))
+                    if ok4:
+                        continue
+                    anchor_accused += 1
+                    print("[FAIL] âncora: %s:%d aponta %s e %s"
+                          % (rel, n, m4.group(0), ANCHOR_MOTIVOS[mot4] % det4))
+                if os.path.basename(rel) in SKIP_NAMES:
                     continue
                 prev_end = 0
                 for m in PTR.finditer(line):
@@ -1622,6 +1814,7 @@ def scan(root, wide, reg):
                     lit_accused += 1
                     print("[FAIL] literal: %s:%d promete %r e aponta %s; o literal mora na linha %s"
                           % (rel, n, lit2, m2.group(0), pin2))
+                line_total += lit_k
                 # Regua de registro: o numeral que a frase afirma, contra o tamanho
                 # lido do proprio fonte. Nao depende do corte (compara numero, nao forma
                 # de identificador), entao os dois passes tem de ver o mesmo — a
@@ -1638,7 +1831,7 @@ def scan(root, wide, reg):
                           % (rel, n, m3.group(1),
                              "nenhuma chamada de gate_sh lida (scripts/test.sh nao encontrado)"
                              if reg is None else "%d chamada(s) de gate_sh em structure_gates()" % len(reg)))
-    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused
+    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total
 
 
 def main():
@@ -1646,33 +1839,44 @@ def main():
     biting, cases = selftest()
     lbiting, lcases = litselftest()
     rbiting, rcases = regselftest()
+    abiting, acases = anchorselftest()
     reg = registry(root)
-    narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad = scan(root, False, reg)
-    wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w = scan(root, True, reg)
+    (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
+     anchors, anchor_bad, lines) = scan(root, False, reg)
+    (wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w,
+     anchors_w, anchor_bad_w, lines_w) = scan(root, True, reg)
     accused = narrow_bad + wide_bad
     # A régua de literal não depende do corte: ela compara texto, não forma de
     # identificador. Os dois passes têm de ver o mesmo; divergir é o walk tendo
     # mudado de forma entre os cortes, e aí nenhum dos dois números vale.
     cut_drift = (lit_judged, lit_bad) != (lit_judged_w, lit_bad_w)
     reg_cut_drift = (reg_judged, reg_bad) != (reg_judged_w, reg_bad_w)
+    anchor_cut_drift = (anchors, anchor_bad, lines) != (anchors_w, anchor_bad_w, lines_w)
     print("identidade de ponteiro: %d nomeados no corte narrow (%d acusacoes), %d no corte wide (%d acusacoes), self-test %d/%d controles mordendo"
           % (narrow_judged, narrow_bad, wide_judged, wide_bad, biting, cases))
     print("literal pinado: %d ponteiros com literal único no alvo (%d acusacoes), self-test %d/%d controles mordendo"
           % (lit_judged, lit_bad, lbiting, lcases))
     print("registro de gates de estrutura: %d prosas afirmando a contagem (%d acusações), %s, self-test %d/%d controles mordendo"
           % (reg_judged, reg_bad, "registro NÃO lido" if reg is None else "registro com %d gates" % len(reg), rbiting, rcases))
+    print("âncora de ponteiro: %d `arquivo:@simbolo` no lugar de %d `arquivo:linha` (%d acusações), self-test %d/%d controles mordendo"
+          % (anchors, lines, anchor_bad, abiting, acases))
     if reg_cut_drift:
         print("[FAIL] registro: narrow viu %r e wide viu %r — contagem de numeral não depende do corte"
               % ((reg_judged, reg_bad), (reg_judged_w, reg_bad_w)))
+    if anchor_cut_drift:
+        print("[FAIL] âncora: narrow viu %r e wide viu %r — o símbolo vem do ponteiro, não do corte"
+              % ((anchors, anchor_bad, lines), (anchors_w, anchor_bad_w, lines_w)))
     if cut_drift:
         print("[FAIL] literal: narrow viu %r e wide viu %r — a régua não depende do corte, a igualdade é invariant"
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
-    # Maquina: as tres linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
+    # Maquina: as quatro linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
     print("IDENTIDADE %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting))
     print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
+    print("ANCORA %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting))
     if (biting != cases or accused or narrow_judged < MIN_CHECKS or wide_judged < narrow_judged
-            or cut_drift or reg_cut_drift or lbiting != lcases or rbiting != rcases
+            or cut_drift or reg_cut_drift or anchor_cut_drift or lbiting != lcases
+            or rbiting != rcases or abiting != acases or anchor_bad
             or reg_bad or reg is None):
         return 1
     return 0
@@ -1682,9 +1886,10 @@ sys.exit(main())
 PYEOF
 )"
 	ident_code=$?
-	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO) '
+	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA) '
 	ident_stats="$(printf '%s\n' "$ident_out" | grep '^IDENTIDADE ' | tail -n 1)"
 	lit_stats="$(printf '%s\n' "$ident_out" | grep '^LITERAL ' | tail -n 1)"
+	anc_stats="$(printf '%s\n' "$ident_out" | grep '^ANCORA ' | tail -n 1)"
 	checks=$((checks + 1))
 	if [ -z "$ident_stats" ]; then
 		fail "a régua de identidade não devolveu a linha \`IDENTIDADE\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
@@ -2256,6 +2461,64 @@ else
 		fi
 		if [ "$reg_accused" -eq 0 ] && [ "$reg_biting" -eq "$reg_cases" ] && [ "$reg_n" -ge "$REG_MIN" ]; then
 			echo "[ok] $reg_n prosas afirmando quantos gates de estrutura existem conferidas contra o corpo de \`structure_gates()\`, com os $reg_cases controles do self-test mordendo"
+		fi
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# 28) ÂNCORA de ponteiro (#124): `arquivo:@simbolo`, julgado pelo BLOCO da declaração.
+#
+# O custo recorrente deste repo não era a medição, era a marreta: `arquivo:NN` é
+# verdadeiro até a linha de cima ganhar um comentário. Medido na rodada que originou
+# esta seção — `tests/benchmarks.gd` cresceu de 400 para 690 linhas e isso, sozinho,
+# sujou seis ponteiros que nenhuma régua acusava (a cláusula vazia não nomeia símbolo
+# nenhum, então "linha existe e tem texto" bastava). Cada reparo foi uma caçada; a
+# âncora é uma escrita.
+#
+# O veredito mora em `anchorverdict` no heredoc da seção 23 e não afrouxa nada do que
+# a linha cobrava — cobra a mais: o símbolo tem de ser declarado NO ARQUIVO (zero ou
+# dois é acusação, não escolha), tem de ser NOMEADO NA CLÁUSULA (senão a âncora só
+# prova que o nome existe, que é a mentira que a régua de identidade já caçava) e todo
+# literal pinado pela frase tem de morar DENTRO do bloco. Arquivo sem modelo de
+# declaração (.md, .json, .conf) é acusado em vez de ficar mudo: âncora onde ninguém
+# sabe onde começa o bloco é linha disfarçada.
+#
+# Diferente do `arquivo:NN`, a âncora também é julgada nos registros datados
+# (CHANGELOG, progress, ROADMAP_COMERCIAL, BLIND_JUDGE_PROTOCOL): o que é história
+# ali é o número, e um número gravado em 20 de setembro não deve ser reescrito; mas
+# uma âncora que hoje aponta para outro lugar mente do mesmo jeito, e o walk da seção
+# 23 agora entra nesses arquivos só por causa disso.
+#
+# O ratchet é de um sentido só: ANCHOR_MIN sobe, LINE_MAX desce. Nenhum dos dois é
+# meta — é o preço de reescrever a marreta em vez de pagá-la.
+# ---------------------------------------------------------------------------
+if ! command -v "$PY" >/dev/null 2>&1; then
+	checks=$((checks + 1))
+	fail "python3 indisponível (PYTHON=$PY) — a régua de âncora não rodou; ausência conta como falha, não como pulo"
+else
+	checks=$((checks + 1))
+	if [ -z "$anc_stats" ]; then
+		fail "a régua de âncora não devolveu a linha \`ANCORA\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
+	else
+		anc_n=0
+		anc_accused=0
+		anc_lines=0
+		anc_cases=0
+		anc_biting=0
+		read -r _lab anc_n anc_accused anc_lines anc_cases anc_biting <<< "$anc_stats"
+		checks=$((checks + anc_n + anc_lines))
+		failures=$((failures + anc_accused))
+		if [ "$anc_biting" -ne "$anc_cases" ]; then
+			fail "self-test da âncora mordeu $anc_biting de $anc_cases controles — com a régua cega, nenhuma âncora verde vale nada"
+		fi
+		if [ "$anc_n" -lt "$ANCHOR_MIN" ]; then
+			fail "âncora em $anc_n com piso $ANCHOR_MIN — âncora que voltou a ser linha, ou walk que parou de ler os registros datados"
+		fi
+		if [ "$anc_lines" -gt "$LINE_MAX" ]; then
+			fail "$anc_lines ponteiros \`arquivo:linha\` contra o teto $LINE_MAX — o ratchet só desce; cada linha escrita é marreta comprada de novo"
+		fi
+		if [ "$anc_accused" -eq 0 ] && [ "$anc_biting" -eq "$anc_cases" ] && [ "$anc_n" -ge "$ANCHOR_MIN" ] && [ "$anc_lines" -le "$LINE_MAX" ]; then
+			echo "[ok] $anc_n âncoras \`arquivo:@simbolo\` julgadas pelo bloco da declaração, sobre $anc_lines ponteiros de linha (teto $LINE_MAX), com os $anc_cases controles do self-test mordendo"
 		fi
 	fi
 fi

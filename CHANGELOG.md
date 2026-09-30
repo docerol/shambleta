@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-09-30
 
+### Added
+- A pointer of evidence can now be an ANCHOR: `arquivo:@símbolo`, judged by the block of the
+  declaration instead of by a line number (#124). The motive is price, not taste — a `path:NN`
+  pointer is re-paid with a hammer on every commit that shifts the cited file, and while
+  `tests/benchmarks.gd` grew from 400 to 690 lines this round it dirtied eleven of them, which
+  is the only kind of work in this house that is work without being measurement. The anchor
+  ruler demands three things and accuses in a fixed order: the symbol must exist exactly once in
+  the target (`inexistente`, `duplo`), the clause carrying the pointer must name it (`prosa`),
+  and a literal pinned in that clause must live inside the declaration's block, not merely
+  somewhere in the file (`bloco`). A target with no declaration model — `.md`, `.json`, `.conf`,
+  `.tscn` — is accused as `arquivo` rather than passed in silence, because an anchor is not free
+  there and treating it as free would make the cheap form the trap. The form is cut-invariant,
+  which is the entire point: `anchor_cut_drift` asserts that the narrow and wide cuts agree on
+  anchors, on accused anchors and on judged lines, so growing a file cannot move a verdict. Two
+  one-way ratchets keep the migration honest — `ANCHOR_MIN` is a floor that only rises,
+  `LINE_MAX` is a ceiling that only falls — and the ruler carries eight self-test controls (one
+  honest, seven planted) that must all bite, because a census read off a blind ruler is a number
+  invented. Judging anchors in the dated records required fixing the walk: those file names were
+  skipped before the anchor pass, so the first census reported one anchor where the tree had
+  eleven. Line citations in them stay exempt — they are dated history — but anchors do not rot
+  when lines are inserted above them, so they are judged. The bite was proven in the real tree,
+  not in a fixture: a planted anchor to a nonexistent symbol, a prose anchor in a live doc, a
+  prose anchor inside this file, and a literal pinned outside the block each came back with its
+  own accusation, and both ratchet directions fired. Eleven pointers migrated in this commit,
+  including the ones in `BLIND_JUDGE_PROTOCOL.md` that the growth had just broken.
+
 ### Removed
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`
   (`CraftBudgetCap`, `CraftRarityForUsage`, `CraftSubmitFee`, `CraftNormName`,

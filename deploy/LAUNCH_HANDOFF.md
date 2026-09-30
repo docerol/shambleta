@@ -538,7 +538,8 @@ XP walk era `totalXp += 10` (a auditoria chamou de medir zero) e saiu; entraram 
 asserção de `EXPLAIN QUERY PLAN` (usa `idx_character_leaderboard`, ordem `power_score DESC`, nenhum
 temp B-tree — é o guard da migration 047), browse do leilão via `idx_auction_browse`, progresso em
 lote (`1 ms, 3 queries, 1 tx para 150 entradas`) e orçamento de **taxa** de hitch além do p99
-(`tests/benchmarks.gd:301`), porque com 800 amostras 1% de hitch cai exatamente no furo do p99.
+(`BudgetSlowIterPct` em `tests/benchmarks.gd:@BudgetSlowIterPct`), porque com 800 amostras 1% de hitch
+cai exatamente no furo do p99.
 Medido agora: `Settle benchmark: 1 ms, 11 queries, 1 tx` · `Zone catalog: 0 ms for 24 zones` ·
 `Leaderboard: 1 ms, 50 de 60 personagens` · `Auction browse: 0 ms, 20 de 200 listing(s)` ·
 `Progress save: 1 ms, 3 queries, 1 tx` · `== Benchmarks: 0 failures ==`, `godot exit=0`. A suíte idle

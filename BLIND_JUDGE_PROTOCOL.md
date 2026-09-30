@@ -186,7 +186,7 @@ Vereditos recebidos (copiados para cá assim que chegam, na ordem de chegada):
 | Arquitetura | 8,5 | — | 7,0 | 8,9 | **7,0** | R3A+R3B: `EconomyKernel.GrantItem` (`:44-55`) insere em `ledger_transaction` por `Launcher.SQL.db.query_with_bindings` sob `_eco._get_settle_mutex`, **fora** de `SQL.Transaction()` — ao contrário de `LedgerAppend` (`:33-41`), que declara o contrário no comentário — enquanto `:20-28` lê a mesma tabela pelo funil; e `deploy/SCALING.md:327-328` afirma que "a `queryMutex` de `SQL.gd:7` continua sendo o único funil de escrita" contra 30 escritores `.db.` crus em `sources/` (`GuildService.gd:164,207`, `AuctionHouseService.gd:263`, `CheckoutService.gd:490`), sem nenhum gate de censo. R3B: nada exercita o ledger com DOIS processos servindo a mesma conta — a escala provada é multi-instância intra-processo |
 | Performance | 8,5 | — | 8,0 | 8,7 | **8,0** | R3A: mediu `one benchmarks` sob contenção de outro juiz e o p99 normalizado ficou a ~10% do teto (budget 2.076 µs, 1.881 µs) — a régua aperta, mas `max 549.622 µs` com 3 hitches >50 ms não tem causa confirmada; e **não existe detector do orçamento de passo em produção**: `grep -rn -e TIME_PHYSICS_PROCESS -e get_frames_per_second sources` devolve só `ServerDisplay.gd:13` (painel de dev legível por humano) e o que sai por `/metrics` é espera de mutex (`MetricsServer.gd:173-178`), não ms/passo. R3B: a régua do tick é gated pela MEDIANA; a 200 players o p95/max deu 42,09 ms contra orçamento de 33,33 ms e nenhuma harness compara a cauda com o orçamento |
 | Escalabilidade | 7,4 | — | 7,2 | 7,9 | **7,2** | R3A+R3B: o teto horizontal continua `[NÃO MEDIDO]` e o doc confessa (`SCALING.md:347`: "Dois servidores em duas máquinas não foi medido", contenção entre processos no mesmo WAL em `:225-227`) — o "~200 players conviventes" é teto **por processo único**, e ninguém rodou dois escritores com `SHAMBLETA_SERVER_ID` distintos sobre o mesmo arquivo; a âncora do degrau é unilateral (±100 sobre 200 deixa passar um erro de 2× e só pega queda, não inflação). `deploy/SCALING.md:159-162` afirma um erro por-passo em `AIAgent.gd:64` que o código já não tem; o recipe de `:175` usa `godot --headless -s` cru, classe que o próprio `boot_guard` do `test.sh` recusa |
-| Código | 8,2 | — | 7,3 | 8,6 | **7,3** | R3A+R3B: `harness_marker()` (`scripts/test.sh:459`) só casa `"== [A-Z]+[A-Z ]*:`, então `one benchmarks` (marcador real `== Benchmarks:` em `benchmarks.gd:397`) e `one test_backup_restore` devolvem `GATE VERMELHO` com `godot exit=0` e produto verde — reproduzido pelo R3A em shell para os 7 harnesses explícitos; e `reason_toast_test` é julgado certo **por acidente de ordem textual** (a regex casa o `"== RESULT:` de `_finish` em `:57` antes do `== REASON:` de `_initialize` em `:61` — mover `_finish` para o fim troca o marcador do gate). A superfície também mente: `scripts/test.sh:22` anuncia `gate <log> <marker> <script>` como interface, mas `gate` é função interna — os cases são `all`, `quick`, `idle`, `backup`, `benchmarks`, `rpc`, `companion`, `fixation`, `preflight`, `structure`, `one`, `diag`, `clean`. *A favor, medido por R3A:* 1 TODO/real em 330 `.gd`, e `check_god_nodes.sh` limpo com folgas vivas (`Server.gd 1963/1965`) |
+| Código | 8,2 | — | 7,3 | 8,6 | **7,3** | R3A+R3B: `harness_marker` (`scripts/test.sh:@harness_marker`) só casa `"== [A-Z]+[A-Z ]*:`, então `one benchmarks` (marcador real `== Benchmarks:` de `_run_benchmarks`, `tests/benchmarks.gd:@_run_benchmarks`) e `one test_backup_restore` devolvem `GATE VERMELHO` com `godot exit=0` e produto verde — reproduzido pelo R3A em shell para os 7 harnesses explícitos; e `reason_toast_test` é julgado certo **por acidente de ordem textual** (a regex casa o `"== RESULT:` de `_finish` em `:57` antes do `== REASON:` de `_initialize` em `:61` — mover `_finish` para o fim troca o marcador do gate). A superfície também mente: `scripts/test.sh:22` anuncia `gate <log> <marker> <script>` como interface, mas `gate` é função interna — os cases são `all`, `quick`, `idle`, `backup`, `benchmarks`, `rpc`, `companion`, `fixation`, `preflight`, `structure`, `one`, `diag`, `clean`. *A favor, medido por R3A:* 1 TODO/real em 330 `.gd`, e `check_god_nodes.sh` limpo com folgas vivas (`Server.gd 1963/1965`) |
 | Testes | 8,2 | — | 7,8 | 8,2 | **7,8** | R3A: ~419 de 4.290 linhas de `Check*` casam TEXTO do fonte; `check_ci.sh:190` aceita `needs` de build como portão. R3B: `tests/nginx_hardening_test.gd:570-574` DEGRADA para ler a doc quando não há nginx no host e `deploy/web/Dockerfile:30` só `COPY`a o `nginx.conf` sem `nginx -t` — um proxy que o nginx recusa passa em todos os gates e chega ao prod |
 | UX/UI | 7,5 | — | 7,0 | 7,5 | **7,0** | R3A+R3B: a passada de telefone do `hud_decision_fit_test` (verde medido por R3B: `== RESULT: 68 checks, 0 failures ==` sobre 390x844 com piso de 48 px) só amarra os 7 painéis que vivem no boot — guilda/leilão/forja/vault, que nascem por ação, estão fora da régua; e 66 chaves de conteúdo NPC seguem sem `pt_BR` (`data/i18n/coverage_report.md`) |
 | Social | 5,5 | 9,0 | 8,0 | 6,5 | **5,5** | R3A+R3B: `GuildService.gd:94-97` é read-then-write sem transação nem lock (`JoinReason` conta por `SELECT COUNT(*)` em `GuildRoster.gd:105-107` e o `INSERT` vem solto, ao contrário de `LeaveGuild` logo abaixo) — o próprio código nomeia o buraco em `GuildRoster.gd:82-85` e a PK de `guild_member` impede double-join mas não o teto estourado; falta transação/`CHECK` durável + N joins simultâneos asseridos |
@@ -244,9 +244,10 @@ grep puro o defeito de marcador e confirmou código-vs-doc uma afirmação falsa
   portuguesa "todo", zero marcadores reais; guard-clause e autoridade do par em
   `sources/network/server/Server.gd` derivando de `Peers.GetAccount/GetCharacter` do peer
   de transporte; idempotência do grant com as duas guardas. *Contra, defeito concreto:*
-  `harness_marker()` em `scripts/test.sh:459` casa só `"== [A-Z]+[A-Z ]*:`, mas
-  `tests/benchmarks.gd:397` imprime `== Benchmarks:` e `tests/test_backup_restore.gd:30`
-  imprime `== Backup Restore Probe:` e nenhum dos dois imprime `== RESULT:`; o fallback
+  `harness_marker` (`scripts/test.sh:@harness_marker`) casa só `"== [A-Z]+[A-Z ]*:`, mas
+  `_run_benchmarks` (`tests/benchmarks.gd:@_run_benchmarks`) imprime `== Benchmarks:` e
+  `_Finish` (`tests/test_backup_restore.gd:@_Finish`) imprime `== Backup Restore Probe:` e nenhum
+  dos dois imprime `== RESULT:`; o fallback
   faz `one benchmarks` e `one test_backup_restore` voltar VERMELHO pelo
   `scripts/ci_gate_log.sh` com `godot exit=0` e zero falhas. O `all` disfarça porque fixa
   o marcador (`test.sh:569-570,602,606`), então o buraco é exclusivo do caminho `one` — o
@@ -427,17 +428,16 @@ métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gat
   `== GATES COM RUÍDO: none ==`, com `Load probe: 800 settles — p50 618 µs, p99 1938 µs,
   max 549622 µs (budget p99: 2076 µs), erros: 0` e normalização no mesmo processo (máquina
   a 1,03×; p99 normalizado 1881 µs = 3,62× o baseline). A auto-auditoria recusa folga
-  abaixo do pior p99 normalizado já medido sob carga hostil (`benchmarks.gd:373-375`,
-  `WorstP99NormalizadoSobCargaUs = 1601`) e fecha os dois lados (folga `>4×` deixa passar
+  abaixo do pior p99 normalizado já medido sob carga hostil (`WorstP99NormalizadoSobCargaUs` = 1601, `tests/benchmarks.gd:@WorstP99NormalizadoSobCargaUs`) e fecha os dois lados (folga `>4×` deixa passar
   regresso de 5×; `<2×` flakeia contra o ruído de 1,24× do run ocioso), com a cauda julgada
-  duas vezes — p99 normalizado E taxa de hitch (`benchmarks.gd:388`, porque "com 800
+  duas vezes — p99 normalizado E taxa de hitch (`BudgetSlowIterPct`, `tests/benchmarks.gd:@BudgetSlowIterPct`, porque "com 800
   amostras, 1% de hitch cai exatamente no furo do p99"). Calibre de 4 ms/passo injetado de
   propósito em `tick_capacity_test.gd:81-82,443-445`, com o monitor da engine obrigado a
   ver ≥70% da queima. **Contra:** nenhum detector do orçamento de passo em produção —
   `grep -rn -e TIME_PHYSICS_PROCESS sources` devolve só `ServerDisplay.gd:13` (painel de dev
   legível por humano) e `/metrics` expõe espera de mutex (`MetricsServer.gd:173-178`), não
   ms/passo; o `max 549.622 µs` (3 hitches >50 ms em 800) ficou sem causa confirmada —
-  provavelmente o auto-checkpoint do WAL, como `benchmarks.gd:56-60` declara. *Não remediu*
+  provavelmente o auto-checkpoint do WAL, como `BudgetSlowIterPct` (`tests/benchmarks.gd:@BudgetSlowIterPct`) declara. *Não remediu*
   `tick_capacity_test` nem `multi_instance_tick_test` (outro juiz segurava o lock, visível
   no `GATE SERIALIZADO`), então as escadas de tick ficaram evidência estática, não veredito
   medido.
@@ -460,8 +460,8 @@ métrica de passo em produção, a ordem textual de `reason_toast_test` e o `gat
 - **Código 7,3.** O defeito que ele mais gosta: `one benchmarks` devolve
   `::error::o run não terminou: faltou a linha "== RESULT:" (crash ou timeout)` e
   `GATE VERMELHO: benchmarks` com `godot exit=0` e `== Benchmarks: 0 failures ==` no
-  produto. Causa determinística, apurada em estático: `scripts/test.sh:459` casa só
-  `"== [A-Z]+[A-Z ]*:` e cai no default `== RESULT:`, que `tests/benchmarks.gd:397`
+  produto. Causa determinística, apurada em estático: `harness_marker` (`scripts/test.sh:@harness_marker`) casa só
+  `"== [A-Z]+[A-Z ]*:` e cai no default `== RESULT:`, que `_run_benchmarks` (`tests/benchmarks.gd:@_run_benchmarks`)
   (`== Benchmarks:`) não emite — só o case hardcoded `:604` conhece o marcador real. Mesmo
   defeito em `test_backup_restore` (emite `== Backup Restore Probe:`). E `reason_toast_test`
   é julgado certo **por acidente de ordem textual**: a regex acha o `"== RESULT:` de

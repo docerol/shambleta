@@ -222,6 +222,23 @@ que têm de morder, porque um zero sem controles não é verde, é cegueira:
   tinha texto, e era outra coisa. Medido antes e depois: com a régua no ar, o mesmo
   ponteiro plantado de volta devolve `[FAIL] arquivo:` apontando onde o nome mora; sem
   ela, a passada fica verde sobre a mentira.
+- **âncora (seção 28, corpo na seção 23)**: `arquivo:@símbolo` em vez de `arquivo:NN`.
+  A motivação não é elegância, é preço: `arquivo:NN` é verdadeiro até a linha de cima
+  ganhar um comentário, e o custo de consertar é marreta pura — `tests/benchmarks.gd`
+  cresceu de 400 para 690 linhas numa rodada e isso sujou ponteiros que **nenhuma**
+  régua acusava, porque a cláusula deles não nomeava símbolo declarado nenhum ("linha
+  existe e tem texto" bastava). O veredito cobra três coisas e não afrouxou nenhuma das
+  que a linha já cobrava: o símbolo tem de ser declarado no arquivo (zero declarações é
+  `inexistente`, duas é `duplo` — âncora ambígua é acusação, não escolha), tem de ser
+  nomeado na cláusula (senão a âncora só prova que o nome existe, que é exatamente a
+  mentira que a régua de identidade caça), e todo literal pinado pela frase tem de morar
+  **dentro do bloco** do símbolo. Arquivo sem modelo de declaração — `.md`, `.json`,
+  `.conf`, `.tscn` — é acusado (`arquivo`), não silencioso: âncora onde ninguém sabe onde
+  o bloco começa é linha disfarçada. Diferente do número, a âncora também é julgada nos
+  registros datados (`CHANGELOG.md`, `progress.md`, `ROADMAP_COMERCIAL.md`,
+  `BLIND_JUDGE_PROTOCOL.md`): o que é história ali é o número, e reescrever número
+  gravado é falsificar diário; mas âncora que hoje aponta para outro lugar mente igual, e
+  é por isso que o walk entrou nesses arquivos.
 - **caminho (seção 24)**: um `.md` citado entre backticks tem de existir na árvore. A
   classe nasceu quando os relatórios de auditoria foram para `archive/` e a prosa
   continuou citando a raiz. exceção só com motivo em `scripts/dead_paths.txt`, e caminho
@@ -247,6 +264,17 @@ respectivamente. Os pisos (`IDENT_MIN`, `LIT_MIN`) são queda-para-baixo, não m
 régua que passa a enxergar menos é uma régua quebrada, e o gate diz isso em vez de ficar
 mudo. A régua de comando entrou em 2026-09-29 medindo 76 caminhos em 19 docs de
 receita, zero acusação depois de consertada a receita, com 8 controles mordendo.
+
+A âncora entrou em 2026-09-30 com 11 `arquivo:@símbolo` e 8 controles mordendo. As onze
+estão em `BLIND_JUDGE_PROTOCOL.md` (dez) e `deploy/LAUNCH_HANDOFF.md` (uma), escritas a
+partir de ponteiros de linha que o crescimento de `tests/benchmarks.gd` de 400 para 690
+linhas tinha sujado, e que foram escritos de novo em vez de caçados linha a linha. O
+ratchet tem dois sentidos e um só afrouxamento possível: `ANCHOR_MIN` é piso e só sobe,
+`LINE_MAX` é teto de `arquivo:linha` e só desce. As duas direções foram conferidas na
+árvore verdadeira, não só no self-test: âncora para símbolo que ninguém declara, âncora
+cujo literal mora fora do bloco, âncora sem o nome na cláusula (inclusive escrita dentro
+de `CHANGELOG.md`, que a régua de linha não lê) e âncora convertida de volta em número
+devolvem cada uma o seu `[FAIL] âncora:` e um failure no laudo.
 
 ### A régua de registro (seção 26)
 
