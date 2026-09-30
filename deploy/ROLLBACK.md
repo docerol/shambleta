@@ -113,7 +113,7 @@ pacote em **build** (`SHAMBLETA_SERVER_ADDRESS` é ARG do Dockerfile, `deploy/CO
 §2), então voltar o `web` não muda o endereço. Voltar só o `game` é o caso comum — um
 server que ficou lento ou quebrado; voltar `companion` junto só se o defeito é na
 frente do dinheiro, e lembre que os dois dependem do `game` saudável
-(`deploy/docker-compose.yml:86` e `deploy/docker-compose.yml:249`).
+(`deploy/docker-compose.yml:87` e `deploy/docker-compose.yml:258`).
 
 ### Via Coolify
 

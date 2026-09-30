@@ -761,7 +761,7 @@ func _suitePriceBand() -> void:
 	_sql.call("AddItemToCharacter", seller, _itemWash, 8, "mdx_grant")
 	# Mercadoria da conta-capada: sem estoque a 51ª recusa seria `not_enough_items`
 	# em vez de `list_day_cap` (a porta de volume vem antes do consumo —
-	# `AuctionHouseService.gd:753` vs `:756`) e a liberação no dia limpo não
+	# `AuctionHouseService.gd:754` vs `:757`) e a liberação no dia limpo não
 	# aconteceria. Uma unidade: o passo (6) anuncia 1, é recusado pelo cap, limpa
 	# o contador e anuncia a MESMA unidade de novo.
 	_sql.call("AddItemToCharacter", capped, _itemWash, 1, "mdx_grant")
@@ -901,8 +901,8 @@ func _suiteEscrowLineage() -> void:
 	# Agora a CADEIA de dois saltos. A régua anterior media `LotHistory(lote do
 	# comprador).size() == 2` logo depois desta liquidação — e isso é insatisfazível
 	# por construção, não por defeito do produto: anunciar consome o lote de origem e
-	# `ConsumeItemLotsRaw` APAGA a linha quando leva o lote inteiro
-	# (`SQL.gd:847-849`, `take >= have` → `DeleteRowsRaw`), sendo que o lote de
+	# `ConsumeItemLotsRaw` (`SQL.gd:@ConsumeItemLotsRaw`) APAGA a linha quando leva a
+	# inteireza — o `DeleteRowsRaw` é o ramo do `take >= have` (`SQL.gd:847-851`), sendo que o lote de
 	# origem aqui tinha exatamente 1 unidade. `LotHistory` só anexa um salto quando
 	# `GetItemLot` acha a linha (`SQL.gd:441-443`) e para no pai apagado; o uid
 	# original sobrevive no `parent_uid` do comprador (a linha acima) e em

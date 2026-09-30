@@ -62,7 +62,7 @@ See [deploy/COOLIFY.md](deploy/COOLIFY.md) for the full deployment guide.
 3. Run the main scene (F5)
 
 The server starts automatically in debug builds. Keyboard bindings exist and are
-live: `_input()` in `Action.gd:176-200` dispatches the project's `ui_*` actions (declared in
+live: `_input()` in `Action.gd:@_input` dispatches the project's `ui_*` actions (declared in
 `project.godot`), so `F1` opens the menu, `F2`/`F4`/`F5` open the character hub,
 `F3` inventory, `F6` minimap, `F7` chat, `F8` emote, `F9` social, `F10` settings
 and `F11` fullscreen — the four game-state-only ones are gated on the same line
@@ -73,7 +73,7 @@ is also reachable by tap: the on-screen `Menu` indicator (`_on_button_pressed()`
 opens the 17 `WindowButton` icons declared in `presets/gui/Game.tscn` (Stat,
 Inventory, Skill, Minimap, Chat, Emote, Social, Settings, ZoneMap, Formation, AFK,
 Chests, Shop, Leaderboard, SeasonPass, Cosmetics, Boss), and the idle HUD that `F12`
-toggles got its own button because it had no other caller (`Build()` in `ManualHudBar.gd:84`).
+toggles got its own button because it had no other caller (`Build()` in `ManualHudBar.gd:@Build`).
 
 ## Architecture
 

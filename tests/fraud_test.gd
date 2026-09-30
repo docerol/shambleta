@@ -47,7 +47,7 @@ const FixHour : int = 3600
 # Ouro de bolso dos personagens que compram no leilão (suíte I). Ask do fixture =
 # 1000/unidade; 20000 cobre as duas rodadas do ciclo e as três compras do par
 # legítimo sem encostar em nenhum teto. Não é cap de produto, é endowment de mesa:
-# sem ouro `BuyListing` nem abre a transação (`AuctionHouseService.gd:983`).
+# sem ouro `BuyListing` nem abre a transação (`AuctionHouseService.gd:@BuyListing`).
 const AhPurse : int = 20000
 
 var checks : int = 0

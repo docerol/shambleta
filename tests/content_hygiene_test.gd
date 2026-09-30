@@ -401,8 +401,8 @@ func _suiteBossLadder(worldNode : Node):
 # ------------------------------------------------- (4) ponto cego de import
 
 # Por que esta suíte existe. `presets/maps/server/**` é ARTEFATO: o addon
-# `tiled_importer` o regride de `data/maps/**.tmx` — `tiled_import_plugin.gd:162`
-# grava o `MapServerData` com os `SpawnObject` do mapa e `:169` o amarra no
+# `tiled_importer` é o id (`tiled_import_plugin.gd:30`), e ele regride `data/maps/**.tmx`. O
+# `tiled_import_plugin.gd:162` grava o `MapServerData` com os `SpawnObject` do mapa e `:169` o amarra no
 # `MapData` que virá `MapsDB` (`sources/db/DB.gd:@MapsDB`), lidos pelo `ParseFileDB`.
 # Com o `.godot` morno a engine NÃO reimporta um `.tmx` cujo md5 não mudou, então
 # a máquina local lê o `.tres` committado; o CI regenera o `.godot` do zero e roda
@@ -421,8 +421,8 @@ func _suiteBossLadder(worldNode : Node):
 # A régua: para cada mapa do `MapsDB`, o MULTICONJUNTO de spawns de MONSTRO do
 # `.tmx` tem de ser o do artefato carregado, campo a campo — id, contagem,
 # respawn_delay, posição e offset, estes dois recalculados como o import os
-# calcula (`pos + extents` / `extents`, `set_default_obj_params` dando 0 a
-# width/height ausentes: `tiled_map_reader.gd:627-628` e `:928`). Divergência == o
+# calcula: `pos + extents` e `extents` (`tiled_map_reader.gd:627-628`), e
+# `set_default_obj_params` dando 0 a width/height ausentes (`tiled_map_reader.gd:928`). Divergência == o
 # CI vai reescrever este mapa. Conserta-se o `.tmx` (fonte), nunca o artefato —
 # e nunca se afrouxa a régua. Mordida medida: revertido só o `.tmx` de ship-hold
 # para o de HEAD, 2 falhas nomeando 'Ship Hold' e os 3 grupos que o CI apagaria;

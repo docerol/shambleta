@@ -140,8 +140,8 @@ const DefaultDropItemHash : int = 215387671		# Apple
 # `OfflineSettle` tratar os dois faucets pelo mesmo eixo. 700000 não é escolha de
 # gabinete: é a probabilidade por kill que a mesa viva derruba — a suíte `SuiteIdleLootPipeline`
 # (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`) mediu os mobs da zona 1 e a soma das
-# tabelas `_drops` por kill saiu 0,70, que é a conta que trava contra este número. O offline liquida
-# `parKillsPerHour × horas × eff × OfflineFactor × mods` kills (`OfflineSettle.gd:319`)
+# tabelas `_drops` por kill saiu 0,70, que é a conta que trava contra este número. O offline
+# vai por `_ApplyFormula`: `parKillsPerHour × horas × eff × offFactor × mods` kills (`OfflineSettle.gd:@_ApplyFormula`)
 # e multiplica esta taxa por aquele valor, então a pia de drop sai da mesma régua do
 # XP/ouro, não de uma contagem de segundos.
 #
@@ -512,7 +512,7 @@ static func GetDropForRoll(zoneID : int, roll : int) -> int:
 		# tests/drop_band_content_test.gd trava o ramo como inalcançável para zona
 		# válida. Importante para a curva: o roll responde IDENTIDADE, um item por
 		# roll, nunca quantidade. A contagem de drop por kill vem de `dropRatePPM`
-		# (`OfflineSettle.gd:326`, ppm de KILLS × kills equivalentes) e, no farm
+		# (`OfflineSettle.gd:356`, ppm de KILLS × kills equivalentes) e, no farm
 		# vivo, da soma das tabelas `_drops` do mob — nenhuma das duas lê a pool. Por
 		# isso encher faixa não move o 0,7 drop/kill medido (`SuiteIdleLootPipeline`
 		# amarra os dois em tests/IdleTestsFrontier.gd).

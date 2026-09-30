@@ -1810,8 +1810,8 @@ func Wipe():
 # ------------------------------------------------------------------ WorkOrder #88
 # Mora no fim do arquivo de propósito: `scripts/test.sh structure` e a régua de
 # ponteiros de evidência (`IdleTests.SuiteEvidencePointers`) amarram a prosa de
-# `deploy/`/`README.md` a linhas nomeadas deste arquivo (`SQL.gd:1545-1553`,
-# `SQL.gd:1581`, `SQL.gd:1584`, `SQL.gd:1771-1778`), e inserir no meio das
+# `deploy/`/`README.md` a linhas nomeadas deste arquivo. São elas:
+# `SQL.gd:1545-1553`, `SQL.gd:1581`, `SQL.gd:1584` e `SQL.gd:1771-1778`. Inserir no meio das
 # seções de cima deslocaria todas elas.
 #
 # O ouro do personagem tem DOIS escritores do mesmo `stat.gp`: o agente carregado

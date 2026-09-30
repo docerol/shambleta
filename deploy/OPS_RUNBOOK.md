@@ -13,7 +13,7 @@ O que não foi medido está dito como não medido.
 | `companion` | 8901 | `/health`, `/metrics`, `/checkout/*`, `/webhooks/payments` (`Handler` em `companion/server.py:@Handler`) | `0.0.0.0` (`deploy/companion/Dockerfile:46`) |
 | `web` | 80 | nginx estático + proxy para o companion (`deploy/web/nginx.conf:43`, `deploy/web/nginx.conf:174` e `:205`) | `listen 80` (IPv4) |
 
-Fora do container, TLS termina no proxy do Coolify (ou no `cloudflared`) — nada
+Fora do container, TLS termina no proxy do Coolify (ou no `cloudflared`). Nada
 aqui deve ter porta publicada (`deploy/docker-compose.yml:15-22`).
 
 ## 2. Saúde: como ler, e o que cada leitura NÃO prova
@@ -50,8 +50,8 @@ Leituras e honestidade:
   shell do jogo é o shell do jogo (`index.js` no corpo de `/index.html`) — ele
   **não** prova nada sobre o companion nem sobre o `game`, de propósito: o `web`
   não pode ficar unhealthy por causa de outro serviço quando o próprio nginx está
-  servindo (mesmo raciocínio do `depends_on: companion: service_started`,
-  `deploy/docker-compose.yml:56-66`).
+  servindo (mesmo raciocínio do `companion:` com `condition: service_started`,
+  `deploy/docker-compose.yml:95-96`).
 - `cloudflared` não tem healthcheck: a imagem não traz shell nem wget, e um probe
   que falha por falta de ferramenta é ruído. O túnel se mede pela origem pública
   (`curl -sI https://<dominio>/index.html`; 530 = origem inalcançável). **[NÃO

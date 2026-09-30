@@ -154,7 +154,7 @@ A fronteira de dinheiro não tem módulo GDScript para o webhook: assinatura é
 validada no companion (`companion/server.py`, HMAC + re-fetch autoritativo,
 fail-closed). A `grant_queue` tem os dois lados: o companion escreve o que o
 pagador confirmou, e o servidor do jogo escreve o que ele próprio concedeu —
-`EnqueueGrant()` (`CheckoutService.gd:181`) insere com `price_paid`/`currency` da migration 044, que
+`EnqueueGrant()` (`CheckoutService.gd:@EnqueueGrant`) insere com `price_paid`/`currency` da migration 044, que
 é a coluna que separa dinheiro real de sandbox. Consumir a fila é o que o servidor
 faz com o resto.
 

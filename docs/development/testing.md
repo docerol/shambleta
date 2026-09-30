@@ -146,7 +146,7 @@ harness em vez de propriedade da carga da máquina. Antes de rodar qualquer harn
 o **preflight de compilação** de todos os harnesses: `godot --check-only --script` em
 cada arquivo (um processo `--check-only` por arquivo, então o tempo cresce com a
 tabela — é por isso que esta seção não grava segundos). O motivo é um defeito que custou três execuções do
-portão: `_run_tests()` em `run_idle_tests.gd:81` faz `load("res://tests/IdleTestsFrontier.gd")` e chama
+portão: `_run_tests()` (`run_idle_tests.gd:@_run_tests`) faz `load("res://tests/IdleTestsFrontier.gd")` e chama
 `.new()` — se o arquivo não compila (um `CheckEq` recebendo `String` onde a
 assinatura é `(int, int, String)`), nenhuma suíte roda, `== RESULT:` nunca
 aparece e o gate descobre isso só no timeout de 1200 s. A régua é ancorada no

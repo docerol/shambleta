@@ -247,8 +247,8 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   2026-09-24 o boot reclama sozinho se o diretório não vier
   (`SQL: nenhum patch visível em res://data/conf/migrations/`). Confirmar no primeiro deploy:
   `docker compose logs game | grep "nenhum patch"` vazio **e** a versão da base lida
-  com o probe read-only do companion (a imagem do `game` não traz `sqlite3` —
-  `deploy/server/Dockerfile:27` instala só `ca-certificates` e `curl`; quem abre o
+  com o probe read-only do companion. A imagem do `game` não traz `sqlite3`. Instala
+  só `ca-certificates` e `curl` (`deploy/server/Dockerfile:27`); quem abre o
   banco aqui é o `python3` do companion, que monta o mesmo `game-data`):
   `docker compose -f deploy/docker-compose.yml run --rm --no-deps --entrypoint python3 companion -c 'import sqlite3;c=sqlite3.connect("file:/data/.local/share/Shambleta/live.db?mode=ro",uri=True);print(c.execute("SELECT version FROM migration").fetchone()[0])'`
   devolvendo o número de patches de `data/conf/migrations/` — âncora
@@ -314,7 +314,7 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   (`sources/network/server/Peers.gd` → `if rememberMe:`). Testar então os dois
   casos: com "lembrar" o corpo leva `auth_token` não-vazio e a resposta é 200;
   sem "lembrar" a janela deve mostrar **"Entre com lembrar-me para ativar o
-  checkout"** (chave `Log in with remember-me to enable checkout`, `ui.csv:925`)
+  checkout"** (chave `Log in with remember-me to enable checkout`, `ui.csv:926`)
   e **nem sair o POST**. Um 401 `missing_token` com "lembrar" marcado é
   a volta do defeito corrigido em 2026-09-24 — `Checkout.gd` lia o token de sessão
   do `var` do painel (sempre vazio: o `Connect()` do login o aparava depois do
@@ -616,11 +616,11 @@ literal nos letreiros que `Shop.gd` monta em `ShowState`, e assim `VIP: inactive
 porque ela é evidência datada; o que ela não pode é virar especificação lida fora da data.
 
 **Um detalhe que a sonda achou, e que não é bug do produto.** Na primeira rodada passei
-`"drops": []` no `NetClient.LastAFKReport` e o `ShowReport` morreu em
-`SCRIPT ERROR: Trying to assign value of type 'Array' to a variable of type 'Dictionary'` em
-`sources/gui/AfkReport.gd:42`, abortando o render no meio (`Baús: 0` e hint vazio). É bug da sonda:
-`OfflineSettle` declara `var drops : Dictionary[int,int]` e o `AfkReport.gd:42` tipa o mesmo
-`Dictionary`, então o caminho servidor-cliente de hoje nunca entrega `Array`. Vale registrar
+`"drops": []` no `NetClient.LastAFKReport` e o `ShowReport` morreu na linha que lê
+`drops`: `var drops : Dictionary` (`sources/gui/AfkReport.gd:57`) — o `SCRIPT ERROR` fala
+de 'Array' em 'Dictionary', e o render abortou no meio (`Baús: 0` e hint vazio). É bug da
+sonda: o declarante escreve `var drops : Dictionary[int, int]` (`OfflineSettle.gd:58`) e o
+painel lê o mesmo campo como `Dictionary` (`AfkReport.gd:57`), então o caminho servidor-cliente de hoje nunca entrega `Array`. Vale registrar
 mesmo assim porque é uma fronteira: um payload malformado vindo da rede não degrada a janela, ele
 interrompe o método. Corrigido o fixture para `{9001: 2}`, o render completo saiu como acima.
 

@@ -4707,8 +4707,8 @@ func SuiteFraud(sql : SQLService) -> void:
 	# `trade_daily_cap` viraram dados (`data/conf/economy_base_catalog.json`,
 	# banda declarada em `_knob_ranges`), então restaurar `= 60` no fim carimbaria
 	# o valor do catálogo com um literal e a próxima suíte da corrida rodaria com o
-	# cooldown do harness, não com o do jogo. O laço deriva de `capWas - 1` porque
-	# o trade de `IdleTests.gd:4661` já consumiu um slot do dia.
+# cooldown do harness, não com o do jogo. Porque o trade de
+# `IdleTests.gd:4661` já consumiu um slot do dia, o laço deriva de `capWas - 1`.
 	var cooldownWas : int = EconomyService.TradeCooldownSec
 	var capWas : int = EconomyService.TradeDailyCap
 	Check(capWas >= 1, "o teto diário lido do catálogo é contável (cap=%d)" % capWas)

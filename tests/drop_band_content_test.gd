@@ -26,7 +26,7 @@ extends SceneTree
 #
 #  (3) O PREÇO DE ENCHER FAIXA É ZERO, e isto é régua, não promessa: a contagem
 #      de drop por kill não lê a pool — ela sai de `dropRatePPM`
-#      (`OfflineSettle.gd:326`) no offline e da soma das tabelas `_drops` do mob
+#      (`OfflineSettle.gd:356`) no offline e da soma das tabelas `_drops` do mob
 #      no farm vivo, que é o que a suíte `SuiteIdleLootPipeline`
 #      (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`) mede e costura ao mesmo ppm
 #      dentro de si. Três medidas aqui, nenhuma regravada em texto:
@@ -104,8 +104,8 @@ func _run():
 		await create_timer(0.25).timeout
 		waited += 250
 		_worldNode = _launcher.World
-		# SQL junto com o World: `GetDropPool` acrescenta as templates aprovadas de
-		# `craft_item_template` (`FarmZoneData.gd:377-385`) e cacheia a pool da zona.
+		# SQL junto com o World: `GetDropPool` (`FarmZoneData.gd:@GetDropPool`) acrescenta
+		# as templates aprovadas de `craft_item_template` e cacheia a pool da zona.
 		# Ler a mesa de craft antes do SQL subir produziria pool sem essas entradas
 		# contra um craftSet lido depois — e a régua de "toda entrada existe no
 		# catálogo" fritaria um falso positivo. Mesmo contrato de boot de
@@ -280,7 +280,7 @@ func _suiteAppleScope():
 
 # O que encher faixa NÃO muda: a expectativa de drop por kill. A contagem tem duas
 # origens e nenhuma delas lê a pool — offline `zone.dropRatePPM` × kills equivalentes
-# (`OfflineSettle.gd:326`), online a soma das probabilidades da mesa `_drops` do mob,
+# (`OfflineSettle.gd:356`), online a soma das probabilidades da mesa `_drops` do mob,
 # medida por `SuiteIdleLootPipeline` (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`).
 # Daí três medidas:
 #   (a) nenhuma zona carrega taxa própria escondida: `FarmZoneData.gd:180` dá a

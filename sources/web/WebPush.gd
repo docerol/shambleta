@@ -118,7 +118,7 @@ static func CanDeliver() -> bool:
 # disse "não estou pronto" volta a ser durso: oferecer ali seria prometer entrega
 # que o próprio deploy confessou não fazer. Não é `CanOfferToPlayer()`: essa
 # função é, e continua sendo, a igualdade com `CanDeliver()`
-# (`sources/web/WebPushDelivery.gd:307`, asserrada em
+# (`sources/web/WebPushDelivery.gd:308`, asserrada em
 # `tests/web_delivery_test.gd:736`) — dois sentidos no mesmo nome seria uma das
 # duas mentir.
 const OfferSoftBlockers : Array[String] = ["not_web", "no_bridge", "not_subscribed_yet", "companion_not_probed"]

@@ -95,7 +95,7 @@ Isso já aconteceu de verdade, e a correção está no fonte: um preload em thre
 ninguém juntou é destruído no meio do parse, sob um cache de scripts que o
 teardown já está libertando, e o sintoma era `script = ExtResource(...)` falhando
 na saída seguida de crash. `DrainPendingPreloads` existe para isso
-(`sources/db/DB.gd:232-239`) e é chamado no último hook de árvore ainda viva do
+(`sources/db/DB.gd:@DrainPendingPreloads`) e é chamado no último hook de árvore ainda viva do
 autoload — `sources/launcher/Launcher.gd:254-258` —, o que cobre produção e
 qualquer harness que suba o `Launcher`, mesmo os que não o chamam por conta própria.
 Os que chamam explicitamente (`grep -rn DrainPendingPreloads tests`) são os que

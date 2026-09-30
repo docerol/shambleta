@@ -941,6 +941,14 @@ fi
 # nome ANTES do número, que é o formato em que toda a varredura abaixo acontece.
 # ---------------------------------------------------------------------------
 IDENT_MIN=120
+# Piso da RESOLUÇÃO de nome, e ela existe porque a resolução É uma régua nova: aberto
+# o índice por base de nome, o bash passou a ler os 87 ponteiros que citam o arquivo
+# sem caminho, e eles devolveram 37 acusações que nenhum portão barato imprimia. Antes
+# disso só o GDScript do harness resolvia — dois leitores da mesma árvore, um cego e um
+# mudo, e a árvore se mostrava verde (#116). Sem piso, um walk que para de resolver
+# devolve "0 acusações" julgando 180 nomes, e 180 passa no IDENT_MIN acima: o zero não
+# prova nada, o 87 é que prova que a classe foi lida.
+RESOL_MIN=87
 # Piso da régua de literal: o censo medido no run de 2026-09-28 é 54 ponteiros
 # pinados. É pouco porque a régua só julga o literal que mora UMA vez no arquivo-alvo
 # — duas ocorrências não pinham nada e o caso devolve "não julgado" — e a maioria das
@@ -998,11 +1006,26 @@ REG_MIN=2
 # pela porta dos fundos — nenhuma régua a acusaria, porque o arquivo é citado sem
 # caminho e a linha citada continua cheia. É o custo da marreta em cifra exata: uma
 # frase sobre âncora custa dois minutos de re-fluxo enquanto o ponteiro for de linha.
-# Os dois valores são o censo medido nesta passada (2026-09-30), depois de migrar
-# os onze ponteiros que o crescimento de `tests/benchmarks.gd` (400→690 linhas)
-# tinha sujado — cada um deles era uma caçada de linha, e virou uma escrita.
-ANCHOR_MIN=128
-LINE_MAX=496
+# O censo de 2026-09-30 é a passada da resolução, e ela baixou o teto sem marreta:
+# oito ponteiros viraram âncora (README dois, `architecture.md`, `debugging.md`,
+# `testing.md`, `FarmZoneData.gd`, `drop_band_content_test.gd`, `fraud_test.gd`), e a
+# prosa honesta cobrou quatro linhas de volta — a sonda do `AfkReport` precisou de uma
+# para o declarante e uma para o leitor, porque os dois moram em arquivos diferentes e
+# a frase antiga acusava o `AfkReport` de mentir sobre `OfflineSettle`; o id do addon
+# ganhou a sua (`tiled_importer` mora na 30, não na 162); `set_default_obj_params`
+# ganhou a sua pela mesma razão. O nono ponteiro convertido não tirou linha nenhuma: no
+# `marketplace_depth_test.gd` a âncora nomeia a função e o ponteiro de faixa fica,
+# porque apagar linha é afirmação sobre um ramo de `if`, e âncora não declara ramo. Os
+# outros vinte e oito casos das 37 eram número errado pago no próprio ponteiro — a chave do
+# i18n tinha escorregado uma linha, o bloco citado do compose era o de outro serviço, o
+# `return` do painel era a linha de baixo, e a faixa do apagador parava antes do `elif`
+# — ou a régua julgando a frase errada: o
+# braço de identidade comia o prefixo bruto da linha enquanto o de literal cortava a
+# oração, e dois juízes da MESMA promessa liam duas promessas. Agora os dois chamam
+# `lit_clause` e os dois perdoam o nome do próprio arquivo; cada isenção entrou no
+# self-test com o espelho que prova que não é manto, e os controles mordem 50/50.
+ANCHOR_MIN=137
+LINE_MAX=491
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))
@@ -1325,8 +1348,16 @@ def sealed(target_lines, a, b):
     return True, None
 
 
-def verdict(clause, ptr, target_lines, wide):
-    """(ok, candidatos, onde_mora, motivo). `clause` e o texto da frase ANTES deste ponteiro."""
+def verdict(clause, ptr, target_lines, wide, stem=None):
+    """(ok, candidatos, onde_mora, motivo). `clause` e o texto da oração ANTES deste ponteiro.
+
+    `stem` é o nome do arquivo-alvo sem extensão, e um candidato igual a ele é
+    descartado antes de qualquer julgamento — pela mesma razão declarada na régua de
+    literal ("homonímia"): nomear o próprio arquivo é dizer como a coisa se chama, não
+    onde ela mora. As duas réguas da mesma frase liam doutro modo, e `SkillTrainer.gd`
+    citando `NpcScript.gd:353` para falar da classe `NpcScript` era acusado pela de
+    nome enquanto a de literal o perdoava: dois juízes, uma promessa (#116).
+    """
     a, b = int(ptr.group(2)), ptr.group(3)
     last = int(b) if b else a
     # A borda do intervalo e o que quem abre o arquivo le. A regua de nome julga o
@@ -1352,7 +1383,8 @@ def verdict(clause, ptr, target_lines, wide):
     # linha de vizinhança; fora disso, a âncora deslizou para um texto cheio de outra
     # coisa — a classe que a régua de literal não vê porque o nome multiplicado não
     # pinha uma linha só.
-    dots = [c for c in dotcands(clause) if mentions(c, joined)]
+    dots = [c for c in dotcands(clause) if mentions(c, joined)
+            and (stem is None or os.path.splitext(c)[0] != stem)]
     if dots and not any(mentions(c, span) for c in dots):
         lo, hi = lit_chunk(target_lines, a, last)
         neighborhood = "\n".join(target_lines[max(0, a - 2):min(len(target_lines), last + 1)])
@@ -1361,7 +1393,8 @@ def verdict(clause, ptr, target_lines, wide):
             first = dots[0]
             where = [i + 1 for i, t in enumerate(target_lines) if mentions(first, t)][:4]
             return False, dots, where, "arquivo"
-    cands = [c for c in candidates(clause, wide) if mentions(c, joined)]
+    cands = [c for c in candidates(clause, wide) if mentions(c, joined)
+             and (stem is None or c != stem)]
     if not cands:
         return True, [], [], "nome"
     if any(mentions(c, span) for c in cands):
@@ -1597,6 +1630,12 @@ ALVO3 = ["# cabecalho", "\tgate_sh a.log scripts/check_alpha.sh", "",
          "\t# o mesmo check_alpha.sh e citado adentro",
          "\tgate_sh b.log scripts/check_beta.sh", "\tgate_sh c.log nada", "}", "",
          "echo pronto"]
+# ALVO7 é o terreno da HOMONÍMIA na régua de nome: a classe tem o nome do arquivo
+# (`npc_script`, na 2) e o ponteiro aponta para a 4, a função. Isentado o nome-próprio,
+# o outro nome da oração (`WAL_SALT`, na 5) tem de continuar sendo cobrado — é o espelho
+# que prova que a isenção não virou manto.
+ALVO7 = ["# cabecalho", "class_name npc_script", "", "func Load() -> void:",
+         "\tWAL_SALT.run()"]
 CONTROLES = [
     ("positivo: simbolo na linha citada e aprovado", "abre a sessao em `Beta` (`x.gd:3`)", True, True),
     ("negativo: um linha acima, e substring pura, e acusado", "abre a sessao em `Beta` (`x.gd:2`)", True, False),
@@ -1638,6 +1677,20 @@ CONTROLES = [
      "roda em `Beta` (`x.gd:2-3`)", False, False, ALVO4),
     ("faixa: ponteiro solto não promete fim de nada e passa",
      "roda em `Beta` (`x.gd:2`)", True, True, ALVO4),
+    # Os quatro abaixo são o MODELO DE ORAÇÃO e a HOMONÍMIA na régua de nome — as
+    # duas coisas que a régua de literal já fazia e a de nome não: o `return` de
+    # `sources/map/Map.gd` (linha 165) acusado por uma frase que não promete
+    # `return` em parte nenhuma, e o `NpcScript` de `SkillTrainer.gd` acusado por
+    # dizer o nome da classe. Cada isenção entra com o espelho que prova que ela não
+    # é manto: o outro nome da mesma oração continua sendo cobrado.
+    ("oração: o nome da oração coordenada anterior não é promessa deste ponteiro",
+     "bate em `gate`, e roda em (`x.gd:2`)", True, True),
+    ("oração: sem a vírgula, o mesmo nome é da oração e é acusado no wide",
+     "bate em `gate` e roda em (`x.gd:2`)", True, False),
+    ("homonímia: nomear o próprio arquivo não é prometer uma linha dele",
+     "o `npc_script` abre na função (`npc_script.gd:4`)", True, True, ALVO7),
+    ("homonímia não é manto: o outro nome da oração continua acusado",
+     "o `npc_script` usa `WAL_SALT` (`npc_script.gd:4`)", False, False, ALVO7),
 ]
 LIT_CONTROLES = [
     ("positivo: literal único exatamente na linha citada", "o `func Beta() -> void:` mora em x.gd:3", True, True),
@@ -1705,7 +1758,18 @@ def selftest():
             total += 1
             alvo = fixture[0] if fixture else ALVO
             esperado = esperado_w if wide else esperado_n
-            ok, cands, where, motivo = verdict(text[:text.index("`x.gd")], PTR.search(text), alvo, wide)
+            # O ponteiro é procurado de verdade, a cláusula é cortada pela MESMA
+            # função que `scan()` usa e o `stem` vem do alvo: as três coisas que
+            # faltavam para um controle poder provar o modelo da oração e o da
+            # homonímia. Cortar na substring fixa "`x.gd" deixaria o segundo sem como
+            # existir — é justamente um ponteiro cujo nome é o do próprio arquivo.
+            mp = PTR.search(text)
+            seg = text[:mp.start()]
+            clause = lit_clause(None, seg, True,
+                                text[mp.end():mp.end() + 1] == "`")
+            ok, cands, where, motivo = verdict(clause, mp, alvo, wide,
+                                               os.path.splitext(
+                                                   os.path.basename(mp.group(1)))[0])
             if ok == esperado:
                 biting += 1
             else:
@@ -1714,7 +1778,31 @@ def selftest():
     return biting, total
 
 
-def scan(root, wide, reg):
+def build_index(root):
+    # indice basename -> ate tres caminhos, para resolver ponteiro citado por NOME NU.
+    # A medicao desta passada: 95 ponteiros fora dos registros datados tem alvo que nao
+    # existe como foi escrito, e 89 deles resolvem um unico arquivo. Nenhum braco abaixo
+    # os lia: `lines_of` exigia o caminho literal, entao o ponteiro de nome nu saia pela
+    # porta dos invisiveis e a linha citada nunca era conferida -- exatamente a classe
+    # que o #79 registrou como escapando da identidade e do literal. O cap de 3 e a
+    # exigencia de unicidade sao os mesmos de `_PtrResolve` (`tests/IdleTestsFrontier.gd`):
+    # nome ambiguo nao tem como decidir, nome ausente e historico legitimo (a prosa que
+    # fala do `gut_runner.gd` apagado tem que poder existir). `build`/`dist` ficam fora
+    # porque copia gerada nao e alvo de evidencia -- entrar no indice seria trocar uma
+    # citacao verdadeira por "ambigua" so porque alguem rodou o export antes.
+    idx = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in KEEP and d not in ("build", "dist")
+                       and (not d.startswith(".") or d == ".github")]
+        for fn in filenames:
+            bucket = idx.setdefault(fn, [])
+            if len(bucket) < 3:
+                bucket.append(os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/"))
+    return idx
+
+
+def scan(root, wide, reg, index):
     cache = {}
     lit_judged = 0
     lit_accused = 0
@@ -1723,12 +1811,31 @@ def scan(root, wide, reg):
     anchor_total = 0
     anchor_accused = 0
     line_total = 0
+    resolvidos = [0]
 
     def lines_of(path):
+        # Ordem de resolucao -- a mesma do `_PtrResolve` do harness: caminho literal;
+        # caminho que e sufixo unico da arvore (o nome bate e o diretorio esta errado);
+        # nome nu unico na arvore. Os dois ultimos eram justamente o que a classe nao
+        # tinha: o walk so abria arquivo pelo caminho como ele foi escrito, e um ponteiro
+        # por nome nu saia pela porta dos invisiveis sem a linha citada ser conferida.
         if path not in cache:
             full = os.path.join(root, path)
-            cache[path] = open(full, encoding="utf-8", errors="replace").read().split("\n") \
-                if os.path.isfile(full) else None
+            target = path if os.path.isfile(full) else None
+            if target is None:
+                arr = index.get(os.path.basename(path)) or []
+                suffix = [p for p in arr if p.endswith("/" + path)]
+                if len(suffix) == 1:
+                    target = suffix[0]
+                elif "/" not in path and len(arr) == 1:
+                    target = arr[0]
+            if target is None:
+                cache[path] = None
+            else:
+                if target != path:
+                    resolvidos[0] += 1
+                cache[path] = open(os.path.join(root, target), encoding="utf-8",
+                                   errors="replace").read().split("\n")
         return cache[path]
 
     accused = 0
@@ -1796,19 +1903,32 @@ def scan(root, wide, reg):
                 if os.path.basename(rel) in SKIP_NAMES:
                     continue
                 prev_end = 0
+                ptr_k = 0
                 for m in PTR.finditer(line):
                     target = m.group(1)
                     if target.startswith("res://"):
                         target = target[6:]
                     clip = line[prev_end:m.start()]
                     prev_end = m.end()
+                    ptr_k += 1
                     if "|" in clip:
                         clip = clip.rsplit("|", 1)[-1]
                     tl = lines_of(target)
                     if tl is None:
                         continue
                     judged += 1
-                    ok, cands, where, motivo = verdict(clip, m, tl, wide)
+                    # A MESMA oração que a régua de literal julga (#116). Antes desta
+                    # linha o braço de identidade comia o prefixo bruto da linha desde o
+                    # ponteiro anterior, e os dois juízes da mesma frase liam duas
+                    # promessas diferentes: a linha 165 de `Map.gd` foi acusada de
+                    # mentir porque a ORAÇÃO ANTERIOR, na mesma linha, citava o
+                    # `return` — e a frase sobre o chamador não promete `return` em
+                    # lugar nenhum. Régua que julga a frase errada acusa a frase certa.
+                    ok, cands, where, motivo = verdict(
+                        lit_clause(src[n - 2] if n > 1 else None, clip, ptr_k == 1,
+                                   m.end() < len(line) and line[m.end()] == "`"),
+                        m, tl, wide,
+                        os.path.splitext(os.path.basename(target))[0])
                     if ok:
                         continue
                     accused += 1
@@ -1870,7 +1990,7 @@ def scan(root, wide, reg):
                           % (rel, n, m3.group(1),
                              "nenhuma chamada de gate_sh lida (scripts/test.sh nao encontrado)"
                              if reg is None else "%d chamada(s) de gate_sh em structure_gates()" % len(reg)))
-    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total
+    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0]
 
 
 def main():
@@ -1880,10 +2000,11 @@ def main():
     rbiting, rcases = regselftest()
     abiting, acases = anchorselftest()
     reg = registry(root)
+    index = build_index(root)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
-     anchors, anchor_bad, lines) = scan(root, False, reg)
+     anchors, anchor_bad, lines, resolvidos) = scan(root, False, reg, index)
     (wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w,
-     anchors_w, anchor_bad_w, lines_w) = scan(root, True, reg)
+     anchors_w, anchor_bad_w, lines_w, resolvidos_w) = scan(root, True, reg, index)
     accused = narrow_bad + wide_bad
     # A régua de literal não depende do corte: ela compara texto, não forma de
     # identificador. Os dois passes têm de ver o mesmo; divergir é o walk tendo
@@ -1891,8 +2012,12 @@ def main():
     cut_drift = (lit_judged, lit_bad) != (lit_judged_w, lit_bad_w)
     reg_cut_drift = (reg_judged, reg_bad) != (reg_judged_w, reg_bad_w)
     anchor_cut_drift = (anchors, anchor_bad, lines) != (anchors_w, anchor_bad_w, lines_w)
-    print("identidade de ponteiro: %d nomeados no corte narrow (%d acusacoes), %d no corte wide (%d acusacoes), self-test %d/%d controles mordendo"
-          % (narrow_judged, narrow_bad, wide_judged, wide_bad, biting, cases))
+    # Resolver por nome nao depende do corte: a arvore e a mesma, e os dois passes tem de
+    # abrir os mesmos alvos. Divergir e o indice tendo mudado entre os dois `scan`, e ai
+    # nenhum dos censos acima vale.
+    resol_cut_drift = resolvidos != resolvidos_w
+    print("identidade de ponteiro: %d nomeados no corte narrow (%d acusacoes), %d no corte wide (%d acusacoes), %d alvos abertos por resolucao de nome, self-test %d/%d controles mordendo"
+          % (narrow_judged, narrow_bad, wide_judged, wide_bad, resolvidos, biting, cases))
     print("literal pinado: %d ponteiros com literal único no alvo (%d acusacoes), self-test %d/%d controles mordendo"
           % (lit_judged, lit_bad, lbiting, lcases))
     print("registro de gates de estrutura: %d prosas afirmando a contagem (%d acusações), %s, self-test %d/%d controles mordendo"
@@ -1905,16 +2030,20 @@ def main():
     if anchor_cut_drift:
         print("[FAIL] âncora: narrow viu %r e wide viu %r — o símbolo vem do ponteiro, não do corte"
               % ((anchors, anchor_bad, lines), (anchors_w, anchor_bad_w, lines_w)))
+    if resol_cut_drift:
+        print("[FAIL] resolução: narrow abriu %d alvos por nome e wide abriu %d — a árvore é a "
+              "mesma entre os dois passes, e divergir aqui é o índice tendo mudado no meio"
+              % (resolvidos, resolvidos_w))
     if cut_drift:
         print("[FAIL] literal: narrow viu %r e wide viu %r — a régua não depende do corte, a igualdade é invariant"
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
     # Maquina: as quatro linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
-    print("IDENTIDADE %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting))
+    print("IDENTIDADE %d %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting, resolvidos))
     print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting))
     if (biting != cases or accused or narrow_judged < MIN_CHECKS or wide_judged < narrow_judged
-            or cut_drift or reg_cut_drift or anchor_cut_drift or lbiting != lcases
+            or cut_drift or reg_cut_drift or anchor_cut_drift or resol_cut_drift or lbiting != lcases
             or rbiting != rcases or abiting != acases or anchor_bad
             or reg_bad or reg is None):
         return 1
@@ -1938,7 +2067,8 @@ PYEOF
 		ident_accused=0
 		ident_cases=0
 		ident_biting=0
-		read -r _lab ident_narrow ident_wide ident_accused ident_cases ident_biting <<< "$ident_stats"
+		ident_resol=0
+		read -r _lab ident_narrow ident_wide ident_accused ident_cases ident_biting ident_resol <<< "$ident_stats"
 		checks=$((checks + ident_narrow + ident_wide))
 		failures=$((failures + ident_accused))
 		if [ "$ident_biting" -ne "$ident_cases" ]; then
@@ -1947,8 +2077,11 @@ PYEOF
 		if [ "$ident_narrow" -lt "$IDENT_MIN" ] || [ "$ident_wide" -lt "$ident_narrow" ]; then
 			fail "identidade julgou pouco (narrow=$ident_narrow com piso $IDENT_MIN, wide=$ident_wide) — um walk quebrado também devolve zero acusações"
 		fi
-		if [ "$ident_accused" -eq 0 ] && [ "$ident_biting" -eq "$ident_cases" ] && [ "$ident_narrow" -ge "$IDENT_MIN" ] && [ "$ident_wide" -ge "$ident_narrow" ]; then
-			echo "[ok] $((${ident_narrow} + ${ident_wide})) ponteiros nomeados conferidos linha a linha nos dois cortes (borda em branco acusada), com os ${ident_cases} controles do self-test mordendo"
+		if [ "$ident_resol" -lt "$RESOL_MIN" ]; then
+			fail "resolução de nome abriu $ident_resol alvos contra o piso $RESOL_MIN — o walk que para de resolver devolve zero acusações sem ler a classe que o #116 escondeu"
+		fi
+		if [ "$ident_accused" -eq 0 ] && [ "$ident_biting" -eq "$ident_cases" ] && [ "$ident_narrow" -ge "$IDENT_MIN" ] && [ "$ident_wide" -ge "$ident_narrow" ] && [ "$ident_resol" -ge "$RESOL_MIN" ]; then
+			echo "[ok] $((${ident_narrow} + ${ident_wide})) ponteiros nomeados conferidos linha a linha nos dois cortes (borda em branco acusada), $ident_resol alvos abertos por nome, com os ${ident_cases} controles do self-test mordendo"
 		fi
 	fi
 	# ---------------------------------------------------------------------------
