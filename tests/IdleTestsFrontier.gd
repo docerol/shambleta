@@ -201,6 +201,21 @@ static func _SymbolSpans(lines : PackedStringArray, ext : String) -> Dictionary:
 		(spans[nm] as Array).append([start, maxi(start, finish)])
 	return spans
 
+# Estrutura da âncora (#124, fatia 2): `arquivo:@símbolo` só vale se o símbolo RESOLVE
+# no alvo — uma declaração, num arquivo que tenha modelo de declaração. É a metade que
+# o harness pode julgar sem discordar da régua bash: as outras duas (`prosa`, `bloco`)
+# dependem do modelo de cláusula, e dois modelos de cláusula em duas réguas é a
+# discórdia encomendada. Devolve "" quando não há o que acusar.
+static func _AnchorStruct(sym : String, ext : String, symSpans : Dictionary) -> String:
+	if ext != "gd" and ext != "sh" and ext != "py":
+		return "`%s`: âncora em `%s`, arquivo sem modelo de declaração — âncora ali é linha disfarçada" % [sym, ext]
+	var list : Array = symSpans.get(sym, [])
+	if list.is_empty():
+		return "`%s`: nenhuma declaração no alvo — a âncora aponta para um nome que o arquivo não declara" % sym
+	if list.size() > 1:
+		return "`%s`: %d declarações no alvo — âncora ambígua é acusação, não escolha" % [sym, list.size()]
+	return ""
+
 # Nome do símbolo declarado nesta linha de coluna zero, ou "" se a linha não declara.
 static func _SymbolNameAt(line : String, ext : String) -> String:
 	if line.begins_with(" ") or line.begins_with("\t"):
@@ -1072,6 +1087,77 @@ func SuiteEvidencePointers() -> void:
 					comMensagem += 1
 					if hit < from - 2 or hit > to + 2:
 						derrapados.append("%s: %s:%d-%d cita \"%s\", que está em :%d" % [site, cited, from, to, msg, hit])
+	# (8) ÂNCORA (#124, fatia 2): `arquivo:@símbolo`. A régua de §28 do
+	# `scripts/check_doc_drift.sh` julga a âncora inteira — nome na cláusula e literal
+	# dentro do bloco — e é ela que decide a marreta. O braço de cá é o que o harness
+	# precisa poder acusar sozinho, sem python na imagem: a âncora tem de RESOLVER,
+	# porque resolver é o que apodrece quando o símbolo muda de nome, passa a ser
+	# declarado duas vezes ou morre num arquivo sem modelo de declaração. Os outros dois
+	# vereditos são de cláusula, e cláusula tem dois modelos — o da régua bash e um
+	# daqui; reimplementar aqui seria criar a segunda régua que discorda da primeira,
+	# que é justamente a doença que #116 e #123 registram. Então este braço julga
+	# estrutura e declara em voz alta o que não julga.
+	var ancRx : RegEx = RegEx.new()
+	ancRx.compile("`([A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|json|sql|csv|cfg|godot|tscn|md)):@([A-Za-z_][A-Za-z0-9_]*)`")
+	var anchorias : Array[String] = []
+	var ancJulgadas : int = 0
+	for ancPath in sweep:
+		var ancProse : bool = ["md", "json"].has(String(ancPath).get_extension().to_lower())
+		var ancLines : PackedStringArray = _RepoFile(ancPath).split("\n")
+		for a in ancLines.size():
+			var ancLine : String = String(ancLines[a])
+			# Em código só o comentário é prosa de evidência; em `.md` e em JSON toda
+			# linha é — é o corpo que a suíte já usa para o ponteiro de linha.
+			if not ancProse and not ancLine.strip_edges().begins_with("#"):
+				continue
+			for am in ancRx.search_all(ancLine):
+				ancJulgadas += 1
+				var citedFile : String = String(am.get_string(1))
+				var sym : String = String(am.get_string(2))
+				var site : String = "%s:%d" % [String(ancPath).trim_prefix("res://"), a + 1]
+				var target : String = _PtrResolve(citedFile)
+				if target == "":
+					anchorias.append("%s: âncora `%s` não resolve a arquivo na árvore" % [site, citedFile])
+					continue
+				var tExt : String = String(target).get_extension().to_lower()
+				if not lineCache.has(target):
+					lineCache[target] = _RepoFile(target).split("\n")
+				if not symCache.has(target):
+					symCache[target] = _SymbolSpans(lineCache[target], tExt)
+				var verdict : String = _AnchorStruct(sym, tExt, symCache[target])
+				if verdict != "":
+					anchorias.append("%s: %s" % [site, verdict])
+	CheckEq(anchorias.size(), 0, "âncora: %d `arquivo:@símbolo` julgadas pela estrutura, nenhuma cega (%s)" % [ancJulgadas, " | ".join(anchorias)])
+	print("  [info] âncora: %d `arquivo:@símbolo` vistas pela varredura, %d acusadas — o censo é impresso também no verde, porque piso que ninguém lê não discrimina walk parado de árvore honesta" % [ancJulgadas, anchorias.size()])
+	# O piso é do tamanho do que a varredura vê hoje, e a razão de existir dele é a
+	# mesma de todo censo daqui: sem ele, "0 acusações" pode significar que o `sweep`
+	# parou de ler o arquivo onde as âncoras moram, ou que a regex descendeu para
+	# zero. O número NÃO é copiado da régua bash — os dois corpos são diferentes
+	# (a bash pula os registros datados para linha e esta suíte tem a sua lista), e
+	# comparar censos de corpora diferentes seria a discórdia encomendada.
+	Check(ancJulgadas >= 8,
+			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 8 a régua estrutural está verde por não olhar" % ancJulgadas)
+	# Os três modos de a âncora apodrecer, mordidos em mesa, porque na árvore limpa
+	# eles não têm como aparecer: o control negativo é a única prova de que a
+	# acusação existe. E o positivo, para a régua não virar máquina de acusar.
+	var ancMesa : PackedStringArray = PackedStringArray([
+		"# cabecalho",
+		"const GATE_RUN : int = 1",
+		"",
+		"func Beta() -> void:",
+		"\tvar WAL_SALT = 1",
+		"func Beta() -> void:",
+		"\tBeta.run()",
+	])
+	var ancSpans : Dictionary = _SymbolSpans(ancMesa, "gd")
+	Check(_AnchorStruct("GATE_RUN", "gd", ancSpans) == "",
+			"âncora morde no certo: `GATE_RUN` declarado uma vez resolve (%s)" % _AnchorStruct("GATE_RUN", "gd", ancSpans))
+	Check(_AnchorStruct("Zeta_Vivo", "gd", ancSpans).contains("nenhuma declaração"),
+			"âncora morde no inexistente: símbolo que a mesa não declara é acusado (%s)" % _AnchorStruct("Zeta_Vivo", "gd", ancSpans))
+	Check(_AnchorStruct("Beta", "gd", ancSpans).contains("2 declarações"),
+			"âncora morde no duplo: dois `func Beta` na mesa são âncora ambígua, não escolha (%s)" % _AnchorStruct("Beta", "gd", ancSpans))
+	Check(_AnchorStruct("README", "md", ancSpans).contains("sem modelo de declaração"),
+			"âncora morde no arquivo: `.md` não declara, e âncora ali é linha disfarçada (%s)" % _AnchorStruct("README", "md", ancSpans))
 	CheckEq(quebrados.size(), 0, "ponteiros: %d referências arquivo:linha conferidas, nenhuma fora do arquivo (%s)" % [conferidos, " | ".join(quebrados)])
 	CheckEq(vazios.size(), 0, "ponteiros: nenhuma das %d referências cai em linha em branco — ponteiro em branco não mostra nada para quem abre no número citado (%s)" % [conferidos, " | ".join(vazios)])
 	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])

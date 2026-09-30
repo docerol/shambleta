@@ -32,6 +32,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prose anchor inside this file, and a literal pinned outside the block each came back with its
   own accusation, and both ratchet directions fired. Eleven pointers migrated in this commit,
   including the ones in `BLIND_JUDGE_PROTOCOL.md` that the growth had just broken.
+- The anchor is judged in GDScript as well, and the two judges counted the same tree (#124
+  slice 2). The half that lives in `tests/IdleTestsFrontier.gd` is `_AnchorStruct`
+  (`tests/IdleTestsFrontier.gd:@_AnchorStruct`), which needs no model of a clause: the name no
+  line declares, the name declared twice, and an anchor landing where no declaration is legible.
+  `SuiteEvidencePointers` (`tests/IdleTestsFrontier.gd:@SuiteEvidencePointers`) walks it over the
+  same sweep the line pointers use, and prints how many anchors the sweep saw — a census under
+  eight is the ruler green by not looking, so the floor is charged. The two clause-shaped
+  verdicts stay in §28 on purpose: a second model of what a clause says, in a second language,
+  is the disagreement #116 and #123 register rather than double coverage, and the arm says out
+  loud which verdicts it does not judge. Two judges is not redundancy either — the harness runs
+  where the bash ruler cannot, because the runner image has no `python3` (#119), so an anchor
+  that only rots in bash is an anchor the CI never checks. The bite was proven in the live tree,
+  not in a fixture: with two anchors planted in `docs/development/testing.md` — one to a symbol
+  declared nowhere, one to a `README.md` — the idle gate returned 3243 checks and ONE failure,
+  and that single failure named all four accusations (two `inexistente`, two `arquivo`), while
+  `scripts/check_doc_drift.sh` returned the same four across both cuts. Census with the plant in:
+  21 anchors seen by each judge; with it out: 17, and 19 once this entry cites the arm by name
+  instead of by line — the number the floor now holds.
+- What one commit pays in pointer tax, counted in this tree rather than argued: growing two
+  files cost fifteen re-citations — two in `docs/development/testing.md`, ten in code comments,
+  three in this file. Nine of the ten in code named a file and a number, and the number was
+  wrong while every ruler stayed green: the line arm judges the file, the blank edge, the sealed
+  chain and the named symbol — all four of which survive an insertion above the cited lines —
+  not whether the interval still holds the construct the sentence describes. That was tested
+  rather than asserted: putting one stale number back into `sources/idle/FarmZoneData.gd` left
+  the ruler at 2291 checks and 0 failures, which is the difference between an invisible class and
+  an unfixed one. The tenth named no
+  file at all (a bare interval citation), which is invisible to a regex that requires a path
+  before the colon; measuring that class gives 105 bare citations repo-wide, 20 of them outside
+  the four dated registers the walk exempts, and that is #124 slice 3's first target. The ratchet
+  moved with the migration it is meant to hold: `ANCHOR_MIN` 11 → 19 and `LINE_MAX` 610 → 608.
 - The settle's drain of the write-ahead log is now attributed rather than argued, and the
   counterfactual is printed (#125 scope). Each settle above the ceiling is printed with its
   distance to the nearest drain, and `DrainAftermathSettles` in `tests/benchmarks.gd` is the
@@ -58,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The anchor ruler accused with a stutter, and the fix was caught by the ruler itself. The
+  `arquivo` motive returned the extension already carrying its dot while the sentence added
+  another, so every accusation of an anchor in prose printed a doubled dot — a cosmetic defect
+  in the one part of the verdict a human reads to decide whether the ruler is right. Rewriting
+  the comment that records it, in backticks, put that doubled name into the script's own prose,
+  and the path ruler charged it as a citation to a file that exists nowhere: the self-referential
+  tax #124 exists to kill, collected here on the sentence describing the kill.
 - The offline settle paid four statements per dropped item identity, in a loop. `_Apply` called
   `AddItemToCharacter` once per hash and each call was a SELECT of the stack, an UPDATE or INSERT
   of it, an INSERT of the `item_instance` lot, and a `SELECT last_insert_rowid()` to fetch the uid
@@ -796,12 +834,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SuiteEvidencePointers` asks whether the symbol a clause names lives at the cited line,
   and for a `.md` target that question had no teeth: prose declares nothing, so the symbol
   index arrives empty by design and the arm that answers from the whole file
-  (`_IdentityVerdict`, `tests/IdleTestsFrontier.gd:454`) returned "the name is in this
+  (`_IdentityVerdict`, `tests/IdleTestsFrontier.gd:@_IdentityVerdict`) returned "the name is in this
   document" and stayed silent about the number. Found while writing the #107 register: a
   sentence locating `companion_gates()` at testing.md line 99 read green while the row that
   names it is `docs/development/testing.md:115`. The sweep gained a fourth arm,
-  `_ProseTargetVerdict` (`tests/IdleTestsFrontier.gd:428`), gated by `_IsProseTarget`
-  (`tests/IdleTestsFrontier.gd:414`): a prose target that writes the name somewhere but not
+  `_ProseTargetVerdict` (`tests/IdleTestsFrontier.gd:@_ProseTargetVerdict`), gated by `_IsProseTarget`
+  (`tests/IdleTestsFrontier.gd:@_IsProseTarget`): a prose target that writes the name somewhere but not
   inside the cited window is accused by symbol *and* by line number, and one that writes it
   nowhere returns the same silence the series ruler uses, because a name the document never
   spells is the path and literal rulers' business, not this one's.

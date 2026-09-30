@@ -960,12 +960,22 @@ REG_MIN=2
 #    parou de ler o arquivo — nos dois casos "zero acusações" é a régua muda.
 #  - LINE_MAX é TETO de `arquivo:linha`: só pode descer. Subir é a marreta sendo
 #    paga de novo, e foi exatamente assim que o custo apareceu: +132 linhas numa
-#    rodada quebraram 21 ponteiros.
+#    rodada quebraram 21 ponteiros. Os 608 de agora são os 610 menos dois: escrever
+#    a fatia 2 da âncora em `tests/IdleTestsFrontier.gd` empurrou de si os dois
+#    ponteiros que a doc de teste fazia àquele arquivo — a régua cobrou a marreta no
+#    commit que existe para matá-la, e é por isso que o teto desce. A mesma passada
+#    achou uma citação invisível: `tests/drop_band_content_test.gd` citava a faixa
+#    como `` `:2205-2208` ``, sem arquivo, e o `ptrRx` exige o caminho — um ponteiro
+#    que nenhuma régua via. Qualificado, ele entrou no censo (609) e virou âncora
+#    (14), que é o único formato que não apodrece na próxima linha escrita. Os 19 de
+#    agora são os 17 mais dois: o registro desta rodada cita o braço pelo nome em vez
+#    de citá-lo por linha, que é precisamente o que a forma compra — uma frase sobre a
+#    régua que sobrevive ao harness ganhar linhas.
 # Os dois valores são o censo medido nesta passada (2026-09-30), depois de migrar
 # os onze ponteiros que o crescimento de `tests/benchmarks.gd` (400→690 linhas)
 # tinha sujado — cada um deles era uma caçada de linha, e virou uma escrita.
-ANCHOR_MIN=11
-LINE_MAX=610
+ANCHOR_MIN=19
+LINE_MAX=608
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))
@@ -1467,7 +1477,9 @@ def anchorverdict(sym, clause, target_lines, ext):
     dito na frase E o que a frase pin-a dentro do bloco.
     """
     if ext not in DECLS:
-        return False, "arquivo", "." + ext
+        # O ponto é da frase: devolver ponto mais extensão imprimia dois pontos,
+        # e o self-test julga justamente o motivo impresso.
+        return False, "arquivo", ext
     spans = anchor_spans(target_lines, ext)
     if sym not in spans:
         return False, "inexistente", sym

@@ -312,11 +312,21 @@ o braço que responde pelo arquivo inteiro devolvia "o nome está neste document
 sobre o número. Foi assim que a frase plantando `companion_gates()` em testing.md na linha 99
 ficava verde enquanto a linha que o nomeia é a 115.
 
-O quarto braço é `_ProseTargetVerdict` (`tests/IdleTestsFrontier.gd:428`), escolhido por
-`_IsProseTarget` (`tests/IdleTestsFrontier.gd:414`), e troca o arquivo inteiro pela JANELA
-citada: se o documento escreve o nome em algum lugar mas fora do intervalo, a acusação nomeia
-o símbolo e o número; se não o escreve em lugar nenhum, vale o mesmo silêncio da régua de
-série — um nome que a prosa não soletra é caso do caminho e do literal, não daqui.
+O quarto braço é `_ProseTargetVerdict` (`tests/IdleTestsFrontier.gd:@_ProseTargetVerdict`),
+escolhido por `_IsProseTarget` (`tests/IdleTestsFrontier.gd:@_IsProseTarget`), e troca o
+arquivo inteiro pela JANELA citada: se o documento escreve o nome em algum lugar mas fora do
+intervalo, a acusação nomeia o símbolo e o número; se não o escreve em lugar nenhum, vale o
+mesmo silêncio da régua de série — um nome que a prosa não soletra é caso do caminho e do
+literal, não daqui.
+
+A suíte também lê a ÂNCORA (`arquivo:@símbolo`), mas só pela estrutura: `_AnchorStruct`
+acusa o alvo sem modelo de declaração, o nome que nenhuma linha declara e o nome declarado
+duas vezes, e imprime quantas âncoras a varredura viu — censo abaixo de oito é a régua verde
+por não olhar, não a árvore honesta. Os dois vereditos que faltam (`prosa` e `bloco`) ficam
+deliberadamente com `scripts/check_doc_drift.sh`: cada um depende do modelo de cláusula, e
+dois modelos de cláusula em duas réguas é a discórdia encomendada, não cobertura dobrada. O
+piso daqui também não é copiado do `ANCHOR_MIN` da bash porque os corpos são diferentes; o
+que as duas amarras têm em comum é o sentido — só apertam.
 
 A mordida é conferida a cada gate com três controles sobre um fixture de prosa montado em
 memória (nome na linha errada acusa, na certa cala, ausente cala) e a exigência de que o braço
