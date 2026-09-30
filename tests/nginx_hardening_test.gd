@@ -13,7 +13,11 @@ extends SceneTree
 # de blocos/diretivas (comentário e aspas tratados) e assesta diretiva por diretiva —
 # inclusive qual `location` gana cada URI, na precedência real do nginx
 # (`=` > `^~` > regex > prefixo), porque endurecer duas rotas é exatamente o tipo
-# de edição que come a terceira. Além disso há `nginx -t`, e a suíte E diz QUAL dos
+# de edição que come a terceira, e julga o CONTEXTO da diretiva: o que o nginx só
+# aceita em `http|server` nunca pode aparecer num bloco de rota. Essa metade existe
+# porque `nginx -t` não roda em host sem binário, e foi assim que
+# `client_header_timeout` viveu em quatro `location` até o build da imagem web
+# recusar o arquivo inteiro, em 2026-09-30. Além disso há `nginx -t`, e a suíte E diz QUAL dos
 # três estados ocorreu neste run:
 #   1. binário no host  -> `nginx -t` roda aqui, num invólucro temporário, e o
 #      veredito dele é uma check;
@@ -33,10 +37,11 @@ extends SceneTree
 #     timeout 300 godot --headless --path . -s tests/nginx_hardening_test.gd
 # Saída: "== NGINX HARDENING: <n> checks, <m> failures ==" (exit code = <m>).
 
-# Alvo da leitura. Por padrão o conf do repo; o env override existe para o
-# autoteste de mutação (tests/repo_layout_test.gd e o script de self-test da
-# rodada): a mesma suíte roda contra um conf DESPROVIDO do hardening e tem de
-# ficar vermelha — sem isso não há prova de que o harness mede alguma coisa.
+# Alvo da leitura. Por padrão o conf do repo; o env override é a porta de quem
+# revisa: roda-se a mesma suíte contra um conf DESPROVIDO do hardening, e ela tem
+# de ficar vermelha. Nada no repo usa a porta hoje — o que prova a mordida sem
+# binário no host são os controles injetados (B, C, F, G), que plantam na própria
+# função julgada o que a assersão precisa acusar.
 const CONF_DEFAULT : String = "res://deploy/web/nginx.conf"
 var CONF : String = CONF_DEFAULT
 
@@ -164,6 +169,50 @@ func _dirs(blk : Dictionary, prefix : String) -> Array:
 		if str(d["text"]).begins_with(prefix):
 			out.append(str(d["text"]))
 	return out
+
+# As diretivas cujo contexto é http|server e NUNCA `location`. Lista fechada de
+# propósito: ela só enfileira cujo contexto se enuncia sem consulta — um item
+# errado numa régua de contexto faz config válido virar vermelho, e isso é a mesma
+# doença que a régua combate. O resto da superfície continua coberto pelo
+# `nginx -t` (suíte E, e o build da imagem).
+const NO_LOCATION_CONTEXT : Array[String] = [
+	"client_header_timeout", "client_header_buffer_size", "large_client_header_buffers",
+	"server_tokens", "limit_req_status",
+]
+
+# As violações do tipo "diretiva de http|server plantada dentro de uma rota". É a
+# função que a suíte B cobra E que o controle injeta: medir uma cópia dela seria a
+# régua aprovando o próprio desenho. `limit_except` e qualquer bloco dentro de
+# `location` contam como contexto de rota, porque é o que ele é.
+func _Misplaced(tree : Dictionary, inLocation : bool = false) -> Array[String]:
+	var out : Array[String] = []
+	var here : bool = inLocation or str(tree["header"]).begins_with("location")
+	if here:
+		for name in NO_LOCATION_CONTEXT:
+			if _dir(tree, name) != "":
+				out.append("%s: `%s` (contexto http|server apenas)" % [str(tree["header"]), name])
+	for c in tree["children"]:
+		out.append_array(_Misplaced(c, here))
+	return out
+
+# Uma diretiva de várias linhas chega do `_parse()` em FRAGMENTOS: o parser
+# reinicia o `pending` a cada `\n` (é o que lhe deixa tratar bloco e comentário),
+# então julgar o conteúdo de um `gzip_types` de duas linhas pelo primeiro
+# fragmento é ler a metade e chamar isso de asserção. Aqui as linhas são juntadas
+# até o `;`, no texto já sem comentário.
+func _stmt(prefix : String) -> String:
+	var out : String = ""
+	var aberto : bool = false
+	for raw in stripped.split("\n", false):
+		var s : String = String(raw).strip_edges()
+		if not aberto:
+			if not s.begins_with(prefix):
+				continue
+			aberto = true
+		out += s + " "
+		if s.ends_with(";"):
+			break
+	return out.strip_edges()
 
 func _hasAny(blk : Dictionary, needle : String) -> bool:
 	for d in blk["directives"]:
@@ -339,6 +388,46 @@ func _suiteHttpLevel() -> void:
 	_check(_dirs(server, "limit_req_zone").is_empty(), "nenhum `limit_req_zone` dentro do server (contexto errado = nginx não sobe)")
 	_check(_dir(server, "server_tokens") == "server_tokens off", "`server_tokens off` no server (%s)" % _dir(server, "server_tokens"))
 	_check(_dir(server, "limit_req_status").contains("429"), "estouro de zona responde 429 (retry-able), não o 503 mudo")
+	# Contexto é o que o `nginx -t` sabe e este host não tem binário a quem perguntar.
+	# Em 2026-09-30 o build da imagem web recusou o arquivo: `client_header_timeout`
+	# vivia em quatro `location`, e o nginx respondeu `"client_header_timeout"
+	# directive is not allowed here`. A suíte E declara o SKIP do binário ausente em
+	# vez de fingir validação — o que faltava era uma régua que não dependesse de ter
+	# o nginx na mão, porque foi exatamente a classe que chegou ao prod quebrada.
+	var misplaced : Array[String] = _Misplaced(froot)
+	var rotas : int = 0
+	for blk in _allBlocks(froot, []):
+		if str(blk["header"]).begins_with("location"):
+			rotas += 1
+	_check(rotas >= 8, "a varredura de contexto julga %d blocos de rota — abaixo disso é varredura muda, não inocência" % rotas)
+	_check(misplaced.is_empty(), "nenhuma diretiva de contexto http|server dentro de rota: %s" % str(misplaced))
+	_check(_dir(server, "client_header_timeout") != "", "o teto de cabeçalho lento mora no `server` (%s)" % _dir(server, "client_header_timeout"))
+	# Mordida, nos dois lados: a rota plantada com duas diretivas de http|server — uma
+	# delas dentro de `limit_except`, que é contexto de rota — tem de ser acusada nas
+	# duas, e a lícita no contexto (`client_body_timeout`) tem de sair limpa. Sem o
+	# lado limpo, "acusou" pode ser só um predicado que acusa tudo.
+	var plantada : Dictionary = _parse("location = /x {\n\tclient_header_timeout 10s;\n\tclient_body_timeout 10s;\n\tlimit_except GET {\n\t\tserver_tokens off;\n\t}\n}\n")
+	var mordidas : Array[String] = _Misplaced(plantada)
+	_check(mordidas.size() == 2, "controle: `client_header_timeout` na rota e `server_tokens` dentro de `limit_except` são ambas acusadas: %s" % str(mordidas))
+	_check(not mordidas.any(func(v): return str(v).contains("client_body_timeout")),
+			"controle: `client_body_timeout` em rota NÃO é acusada — essa tem contexto em location")
+	# `text/html` não se lista em `gzip_types`: o nginx comprime text/html sempre, e a
+	# listagem rende o `[warn] duplicate MIME type "text/html"` que o build imprime.
+	# Config que grita sobre linha inócua é config que passa a ser lido como ruído nas
+	# linhas que importam.
+	var gz : String = _stmt("gzip_types ")
+	_check(gz.contains(";"), "o conf declara `gzip_types` (%s)" % gz)
+	_check(not gz.contains("text/html"), "`gzip_types` não lista text/html, que o nginx já comprime sempre: %s" % gz)
+	# O `gzip_types` do conf ocupa DUAS linhas, e `_parse()` corta a diretiva no
+	# primeiro `\n`. Sem o `_stmt` acima a assersão de `text/html` teria olhado só a
+	# metade de cima — o fixture prova que a segunda linha é vista, e prova também
+	# que a leitura não engole a statement seguinte.
+	var guardado : String = stripped
+	stripped = "    gzip_types application/wasm application/json\n               application/octet-stream text/html;\n    gzip_min_length 1024;\n"
+	var junta : String = _stmt("gzip_types ")
+	stripped = guardado
+	_check(junta.contains("text/html;") and not junta.contains("gzip_min_length"),
+			"controle: `_stmt` alcança a segunda linha da diretiva e para no `;` (%s)" % junta)
 	var names : Dictionary = {}
 	for z in zones:
 		var nm : String = _zoneName(str(z))
@@ -374,7 +463,9 @@ func _suiteMoneyRoutes() -> void:
 		var kb : int = _sizeToBytes(body)
 		_check(kb > 0 and kb <= 65536, "%s: teto de corpo cabe JSON (<= 64 KiB): %d bytes" % [tag, kb])
 		_check(_dir(loc, "client_body_timeout") != "", "%s limita corpo lento (slow-loris não segura worker)" % tag)
-		_check(_dir(loc, "client_header_timeout") != "", "%s limita cabeçalho lento" % tag)
+		# O teto de CABEÇALHO não se declara aqui em cima: `client_header_timeout` tem
+		# contexto http|server e posto dentro de `location` o nginx recusa o arquivo
+		# inteiro. A suíte B cobra o valor no `server` e proíbe a linha em toda rota.
 		var csp : String = _dir(loc, "add_header Content-Security-Policy")
 		_check(csp.contains("default-src 'none'"), "%s: CSP default-src 'none' (a resposta é JSON, nada deve carregar)" % tag)
 		_check(csp.contains("frame-ancestors 'none'"), "%s: CSP proíbe enquadramento" % tag)
@@ -479,7 +570,7 @@ func _suitePushRoute() -> void:
 		_check(_hasAny(le, "deny all"), "%s: `deny all` dentro de limit_except (lista sem trava é decorativa)" % tag)
 	_check(_dir(push, "client_max_body_size") != "", "%s: teto de corpo declarado mesmo em GET (o único plafond do caminho é o proxy)" % tag)
 	_check(_sizeToBytes(_dir(push, "client_max_body_size")) <= 4096, "%s: teto de corpo pequeno — a rota não tem escrita" % tag)
-	_check(_dir(push, "client_body_timeout") != "" and _dir(push, "client_header_timeout") != "", "%s: timeouts de corpo e cabeçalho (slow-loris não segura worker)" % tag)
+	_check(_dir(push, "client_body_timeout") != "", "%s: timeout de corpo (slow-loris não segura worker; o de cabeçalho é do `server`, suíte B)" % tag)
 	_check(_dir(push, "add_header Content-Security-Policy").contains("default-src 'none'"), "%s: CSP fechada (a resposta é JSON de estado)" % tag)
 	_check(_dir(push, "add_header X-Content-Type-Options").contains("nosniff"), "%s: nosniff" % tag)
 	_check(_dir(push, "add_header Referrer-Policy") != "", "%s: Referrer-Policy" % tag)
@@ -536,8 +627,8 @@ func _suiteCatalogRoute() -> void:
 		_check(_hasAny(le, "deny all"), "%s: `deny all` dentro de limit_except" % tag)
 	_check(_sizeToBytes(_dir(cat, "client_max_body_size")) <= 4096,
 		"%s: teto de corpo pequeno, a rota não tem escrita (%s)" % [tag, _dir(cat, "client_max_body_size")])
-	_check(_dir(cat, "client_body_timeout") != "" and _dir(cat, "client_header_timeout") != "",
-		"%s: timeouts de corpo e cabeçalho" % tag)
+	_check(_dir(cat, "client_body_timeout") != "",
+		"%s: timeout de corpo (o de cabeçalho é do `server`, suíte B)" % tag)
 	_check(_dir(cat, "add_header Content-Security-Policy").contains("default-src 'none'"),
 		"%s: CSP fechada (a resposta é JSON de preço)" % tag)
 	_check(_dir(cat, "add_header X-Content-Type-Options").contains("nosniff"), "%s: nosniff" % tag)

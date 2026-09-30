@@ -69,7 +69,7 @@ services:
     healthcheck:
       # O probe anterior (o HEALTHCHECK da imagem, deploy/web/Dockerfile:50) era
       # `wget -qO- http://127.0.0.1/` — e `location /` termina em
-      # `try_files $uri $uri/ /index.html` (deploy/web/nginx.conf:298), então
+      # `try_files $uri $uri/ /index.html` (deploy/web/nginx.conf:306), então
       # QUALQUER caminho devolve 200: o check não conseguia falhar, nem com o
       # html/ vazio de build, nem com a landing page no lugar do jogo. Aqui o
       # probe exige o marcador do export no corpo realmente servido:

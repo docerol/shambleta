@@ -22,6 +22,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The web image could not be built, and the reason was a directive in the wrong context.
+  The CI's `Build Deploy Images` job refused the tree at `RUN nginx -t` with
+  `"client_header_timeout" directive is not allowed here in
+  /etc/nginx/conf.d/default.conf:178` and stopped before the game export finished:
+  `client_header_timeout` exists in the `http` and `server` contexts only, and
+  `deploy/web/nginx.conf` carried it in four `location` blocks (the webhook, the
+  checkout, `GET /push/vapid` and `GET /catalog`), so the proxy in front of the money
+  path was a config nginx refuses to load — production web was undeployable, and no gate
+  said so. It is the same defect #89 named from the other side: the file was only ever
+  validated by `nginx -t`, and `nginx -t` does not exist on this machine (`which nginx`
+  is empty, and the harness prints `[SKIP] nginx -t neste host (binário ausente)` rather
+  than pretend). Fixed by moving the timeout to the `server` block, where it covers every
+  route including the static ones, and leaving `client_body_timeout` per-route — that one
+  does have a `location` context, and the right ceiling depends on the body each route
+  accepts. Three of the harness's own assertions were the cause: suite C, suite F and
+  suite G each demanded `client_header_timeout` *inside* the location, so the conf was
+  written to satisfy a ruler that was wrong about nginx. They now ask the body guard of
+  the route and the header guard of the `server`. While there: `text/html` left
+  `gzip_types`, because nginx compresses `text/html` always and listing it produced the
+  `[warn] duplicate MIME type "text/html"` the same build printed.
+  The ruler added is suite B's context arm (`_Misplaced()`, in
+  `tests/nginx_hardening_test.gd`, over a closed list of five directives whose context is
+  `http|server` and can be stated without a lookup — `client_header_timeout`,
+  `client_header_buffer_size`, `large_client_header_buffers`, `server_tokens`,
+  `limit_req_status`), and it walks children too, because `limit_except` is a route
+  context. A census of the blocks it judged is printed
+  (`a varredura de contexto julga 11 blocos de rota`), so a sweep that looked at nothing
+  cannot read as innocence. Its limits are stated rather than papered over: the list is
+  closed, so a directive outside it placed in the wrong context is still only caught by
+  `nginx -t` in the image build, which is the half that bit here.
+  Bite measured on real files, through the harness's own conf override: the planted route
+  with a header timeout gave `== NGINX HARDENING: 157 checks, 1 failures ==` accusing
+  `location ^~ /webhooks/: client_header_timeout (contexto http|server apenas)`; putting
+  `text/html` back on the *second* line of `gzip_types` gave the same `1 failures`, which
+  is what the new `_stmt()` exists for — `_parse()` ends a directive at the first
+  newline, so reading `gzip_types` through `_dir()` sees the top half only, and an
+  assertion written that way would have called the planted warn clean. Green: the same
+  157 checks with `0 failures`, `== GATES VERMELHOS: none ==`, `== FLAKES: none ==`,
+  `== GATES COM RUÍDO: none ==` and teardown inside the measured ceiling (30/101). Eight
+  live `deploy/web/nginx.conf:NN` pointers moved with the file (300 → 308 lines) —
+  `sources/web/WebPush.gd:288`, the two in `tests/IdleTests.gd:6599`, the two in
+  `deploy/OPS_RUNBOOK.md:14`, `deploy/OPS_RUNBOOK.md:176` and `:187`, and
+  `deploy/docker-compose.yml:72`. A ninth pointer, in `scripts/check_ci.sh`, named a line
+  of the harness that no longer holds what its sentence described: the comment reciting
+  finding #89 pointed at `tests/nginx_hardening_test.gd:570-574` for code that had since
+  been replaced, and the anachronism now reads as history without a line number, with the
+  live pointer moved to `_skip()` (`tests/nginx_hardening_test.gd:681-687`) — the code
+  that is there and does what the sentence says. The three citations landing above the
+  insertions (`deploy/WEB_SLIM.md:213` on `:46`, `deploy/OPS_RUNBOOK.md:14` and
+  `deploy/docker-compose.yml:80` on `:43`) were re-read against the file rather than
+  assumed untouched: `:43` is `listen 80;` and `:46` is `index index.html;`.
+- An interrupted gate used to poison the next one, and the poisoning was not a crash: it
+  was a *verdict read from a log two processes were writing*. `flock` belongs to the
+  process that took it, so when the shell holding the gate lock is SIGTERMed — the tool
+  wrapper, a Ctrl-C — the lock dies with the shell while the `godot` child keeps running,
+  desanexado, still holding the `> /tmp/shambleta-<harness>.log` descriptor and the shared
+  sandbox `.test-home/<script>/`. The next run acquires a free lock, truncates the same
+  file and reads the mixture of two runs. Measured 2026-09-30 between 00:05 and 00:22: the
+  orphan survived twenty-odd minutes with an engine clock of `[4254.165]` (the boot
+  restarted on its own clock, not on the wall), two signal-11 blocks and nine
+  `SCRIPT ERROR` lines naming files that exist nowhere —
+  `res://database/Database.tscn:0` and `res://presets/entities/codex/codex_00112.tres:50`,
+  both disproved by `ls`, `git ls-files`, a tree-wide `grep -rl` and the same grep over
+  `.godot/`. A judge reading that stack decode is reading an artifact of my own tooling.
+  The fix is an owner stamp, and it is two checks, because the lock says only who has the
+  *right* to write: `_log_holders()` resolves the log with `realpath`, walks
+  `/proc/[0-9]*/fd` for descriptors pointing at it and reads `/proc/<pid>/fdinfo/<fd>`
+  `flags:` — writable iff `mode != 0` — so a `tail` watching the file is not accused of
+  writing it; `_guard_log_owner()` refuses the boot while a writer holds the descriptor,
+  prints the pid and its `cmdline`, and names `SHAMBLETA_ORPHAN_WAIT` (default 120 s) as
+  the wait; `gate()` calls it before the boot — before `_reap_interrupted_sandbox()`, so
+  the foreign content is never truncated — and again before the verdict, copying the
+  contaminated file to `$log.mixed` and recording
+  `(log concorrente no veredito)` instead of judging it. `gate_sh()` carries both guards
+  and `gate_py()` the post one. The boot itself is now backgrounded with
+  `trap '_stop_boot "$bootPid"; exit 143' TERM INT HUP` around `wait`, and `_stop_boot()`
+  forwards TERM, waits ten seconds for the child to leave, and escalates to KILL — an
+  interrupted gate dies together with its engine instead of leaving it behind.
+  The ruler is `scripts/check_boot_sandbox.sh`, 20 → 33 checks, and it exercises real file
+  descriptors: it extracts `_log_holders`, `_guard_log_owner` and `_stop_boot` out of the
+  runner with `awk` and runs them against a fixture holding a live writer
+  (`sleep 120 >> log &`) and a read-only holder (`sleep 120 < log &`) that must *not* be
+  accused, it asserts the refusal text, the clearance after `kill -TERM`, that
+  `_stop_boot` kills a live sleep, that the machinery degrades to stderr (stdout is the
+  pid stream), that the wait is a default and not a literal, and the ligaments as line
+  numbers — pre-guard before the reap, post-guard before the verdict, backgrounded boot
+  before the trap before the `wait` before `trap -`. Bite measured where it happened: with
+  a `sleep 120` holding the log, the runner printed
+  `LOG CONCORRENTE (gm_gate_fix_test antes do boot)` naming pid 2732541, then
+  `GATE VERMELHO: gm_gate_fix_test (log concorrente no boot)` — with **no godot booted**
+  and the foreign bytes intact; interrupting a real `content_hygiene_test` at boot printed
+  `MORREU JUNTO: godot pid 2733760 não existe mais` with zero fd holders and the `.booting`
+  sentinel left for the reaper. The green half is the ordinary
+  `godot exit=0` / `Gate §24-8 OK … (30/101)` / `== GATES VERMELHOS: none ==` /
+  `== FLAKES: none ==`.
+  The new ruler wrote one false accusation of its own before it was trusted:
+  `[FAIL] ensure_class_cache() roda --import fora do lock de boot — lock=12 import=9`,
+  because it anchored on the bare word `--import`, whose first occurrence in that body is
+  a comment line. Re-anchored on the executable command (`--editor --import --quit`) and
+  tightened to `lock < import < _release`, with the incident kept in the ruler's comment —
+  prose is not evidence of execution. And the +132 lines the fix added to `scripts/test.sh`
+  moved every inbound `path:NN` pointer, so the doc-drift suite came back with 21 failures,
+  all of them mine: seven citations repaired to the verified current lines
+  (`tests/IdleTests.gd`, `tests/repo_layout_test.gd`, `tests/deploy_ops_test.gd`,
+  `tests/hud_wiring_test.gd`, `deploy/OPS_RUNBOOK.md`, `docs/development/setup.md`,
+  `docs/development/testing.md`) and one historical claim in `docs/development/testing.md`
+  rewritten out of the present tense, since "quando a entrada é a linha 532" was true of a
+  state that no longer exists. Nothing was exempted and no ceiling was retuned to reach
+  green; the ruler ended at `== DOC DRIFT: 1660 checks, 0 failures ==`.
 - Five compose gates were red in CI and green here, and they were two different defects.
   Four were the duration parser: `docker compose config` — the canonical path, which only
   exists where docker exists, i.e. the runner — reprints `stop_grace_period: 75` as the Go
@@ -103,10 +212,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PreloadUpdate()`, which is not the line the sentence describes; the sentence says the call
   closes the preload, calls `Load()` and lights `isInitialized`, and that is `:233-235`, so
   all ten moved in place, one line each, without shifting a file another citation reads. The
-  eleventh named a harness that this round deleted: the `ZonePolicy` entry above removed
-  `tests/zone_policy_test.gd`, and the prose in `scripts/check_compose.sh` still cited it as
-  the file that measures the thing — the harness-citation arm caught it as `1 vs 0`
-  (`scripts/check_compose.sh → tests/zone_policy_test.gd`). Two more moved to the lines that
+  eleventh was a name this repo never had, and the entry that recorded it got the story
+  backwards. What git says, and it is checkable: `git log --all --diff-filter=A --
+  '*zone_policy_test*'` is empty — no commit ever added the file — and the name lived in the
+  `DIRT` list of the Python sweep inside `scripts/check_compose.sh` (planted by `7079661`,
+  dropped by `b5691ef`), a list of paths to ignore as untracked dirt, not a promise that a
+  harness measures anything. The harness-citation arm sweeps `scripts/*.sh` for the
+  `tests/<nome>.gd` form, so a dead path parked in a skip list is read as a citation and
+  accused; and the entry above then repeated that path twice while claiming the round had
+  deleted the harness and that the prose had cited it as the measurement — three assertions,
+  none of them true, and the CI's `== RESULT: 3236 checks, 1 failures ==` counted the two
+  repeats in `CHANGELOG.md` as its ghosts. The record is fixed to the measured story, and it
+  names the commits rather than the dead path: writing the path in the pointer form is
+  exactly the promise the arm reads, and a sentence that promises proof it cannot deliver is
+  the lie this suite exists to hunt. Two more moved to the lines that
   actually hold the code (`tiled_map_reader.gd:627-628` for `spawn_position`/`spawn_offset`)
   and one header comment was rewritten so the bare word `name` stops being offered to the
   ruler as a symbol. Verdict read from the marker, not from the file count: `== RESULT: 3236

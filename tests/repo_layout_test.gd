@@ -15,7 +15,7 @@ extends SceneTree
 #     `ProjectSettings.get_global_class_list()`, não no ClassDB nativo). A suíte B
 #     daqui refaz os três fatos com a régua certa e passa a cobrá-los.
 #  C) PORTÃO SEM CHAMADOR. A razão pela qual
-#     `check_secrets.sh` (`scripts/test.sh:579-585`) entrou na lista diz exatamente
+#     `check_secrets.sh` (`scripts/test.sh:711-716`) entrou na lista diz exatamente
 #     isto: um gate não chamado é régua sem efeito — e foi isso que aconteceu com
 #     `check_doc_drift.sh` e `check_compose.sh` (42 checks verdes, zero chamadores).
 #     Esta suíte torna a frase verificável nos dois sentidos: todo `scripts/*.sh` e

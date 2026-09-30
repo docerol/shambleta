@@ -285,7 +285,7 @@ static func _register_service_worker():
 	# `/sw.js` é um SEGUNDO worker que não controla página nenhuma e só existe para
 	# receber `push`: subscription é por registration, não por escopo, então a
 	# entrega funciona igual. O COOP/COEP do build vem do nginx
-	# (deploy/web/nginx.conf:72-79), não do worker, e é por isso que o escopo
+	# (deploy/web/nginx.conf:78-85), não do worker, e é por isso que o escopo
 	# estreito não custa os threads.
 	if not CanDeliver():
 		return

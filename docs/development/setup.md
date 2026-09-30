@@ -77,7 +77,7 @@ O banco de dados (`live.db`) fica em `game-data:/data`.
 **Quantos harnesses são, não vai escrito aqui de propósito.** A lista é derivada
 em `scripts/test.sh`: os nomes em `EXPLICIT_HARNESSES` mais todo
 `tests/*_test.gd`/`tests/*_fuzz.gd`, auto-inscrito por nome (os dois em
-`harnesses_extra()` (`scripts/test.sh:447`)), e o `preflight` conta o total a cada run
+`harnesses_extra()` (`scripts/test.sh:579`)), e o `preflight` conta o total a cada run
 ("Preflight OK: N harnesses, cada um no teto medido de SCRIPT ERROR"). Número fixado em doc é número que apodrece
 no commit seguinte — o que este guia garante é a **porta** e a **regra de
 inscrição**. Os subcomandos listados acima são conferidos um a um pelo gate

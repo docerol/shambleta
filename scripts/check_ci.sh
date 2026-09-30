@@ -353,15 +353,16 @@ for path, doc in docs.items():
 # ---------------------------------------------------------------- finding #89: o nginx.conf tem
 # de ser validado pelo nginx, em algum lugar que rode
 # O par defeito/mentira medido: `deploy/web/Dockerfile` fazia `COPY deploy/web/nginx.conf`
-# sem `nginx -t`, e `tests/nginx_hardening_test.gd:570-574`, quando não havia binário
-# no host, passava a GREPAR no próprio conf a frase que diz que a validação é de build.
-# Ou seja: o harness virou leitor de documentação, e o verde significava "o arquivo
-# afirma que alguém valida" — ninguém validava. O fecho tem duas metades, e as duas
+# sem `nginx -t`, e o harness, quando não havia binário no host, passava a GREPAR no
+# próprio conf a frase que diz que a validação é de build. Ou seja: o harness virou
+# leitor de documentação, e o verde significava "o arquivo afirma que alguém valida" —
+# ninguém validava. O fecho tem duas metades, e as duas
 # são código:
 #   (a) o build da imagem roda `nginx -t` (uma imagem que existe foi validada);
 #   (b) a CI tem um job/step que roda `nginx -t` na IMAGEM BUILDADA, não no host —
 #       é a única parte que sobrevive a um runner sem nginx e é por isso que a
-#       ausência de binário local é SKIP NOMEADO, nunca `[ok]`.
+#       ausência de binário local é SKIP NOMEADO — o `_skip()` de
+#       `tests/nginx_hardening_test.gd:681-687` — nunca `[ok]`.
 def command_code(code):
     # Linha que só IMPRIME texto não executa nada. Sem este filtro, um passo cujo
     # `echo "::error::…"` cite a própria commanda pelo nome engana a régua: foi o

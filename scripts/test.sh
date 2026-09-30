@@ -81,6 +81,95 @@ _release() {
 	eval "exec $fd>&-"
 }
 
+# O CARIMBO DE DONO DO LOG. Medido 2026-09-30 00:05–00:22, mesma máquina: um
+# `test.sh idle` aberto às 23:54 foi morto por fora (SIGTERM no shell, o pai), e o
+# `godot` dele — filho já desanexado, com o fd do `> /tmp/shambleta-idle.log` e do
+# sandbox `.test-home/run_idle_tests/` abertos — continuou vivo por mais de 20 min
+# (`[4254.165]` no log = relógio de engine, não de parede). O `flock` não pegou
+# nenhum dos dois: o lock morre com o processo que o segurou, e quem ficou escrevendo
+# não era o dono de nada. O run das 00:05 acquisition o lock livre, truncou o MESMO
+# arquivo e passou a ler como veredito a mistura dos dois — dois blocos `Program
+# crashed with signal 11` com o handler de crash incapaz de decodificar a própria
+# pilha, e nove `SCRIPT ERROR` nomeando arquivos que não existem em lugar nenhum
+# (`res://database/Database.tscn:0`, `presets/entities/codex/codex_00112.tres`; medido
+# com `ls`, `git ls-files`, `grep -rl` na árvore e em `.godot/`: zero). A pilha depois
+# do crash não é prova de recurso quebrado — é decodificação de memória corrompida.
+# O custo real foi um gate verde virar `== GATES VERMELHOS: import (exit=1) ==`.
+#
+# Então o lock diz quem tem DIREITO de escrever; só o fd diz quem ESTÁ escrevendo.
+# `_log_holders` responde a segunda pergunta, e `gate()` recusa o veredito lido de um
+# arquivo com escritor de fora — não afrouxa a retratada, não ignora, não trata como
+# aviso: veredito de log misturado não existe.
+#
+# stdout é o stream de pids e o anúncio vai para o stderr, pela mesma razão de
+# `foreign_godot_pids` acima: quem chama conta dígitos, e uma frase no lugar errado já
+# vermelhou portões sadios aqui.
+SHAMBLETA_ORPHAN_WAIT="${SHAMBLETA_ORPHAN_WAIT:-120}"
+
+_log_holders() {
+	# `_log_holders <log>` — pids vivos com este arquivo aberto PARA ESCRITA, menos este
+	# shell. Lendo /proc/<pid>/fd e o `flags:` do fdinfo: um `tail` que só LÊ o log não
+	# envenena veredito nenhum, e acusá-lo seria transformar a régua em ruído.
+	local log="$1" real cand pid fd flags mode
+	[ -e "$log" ] || return 0
+	if [ ! -d /proc ]; then
+		echo "LOG-WRITERS: /proc ausente neste host — o carimbo de dono não consegue ler. Ausência de leitura NÃO é \"nenhum escritor\"." >&2
+		return 0
+	fi
+	real="$(realpath -- "$log" 2>/dev/null)" || return 0
+	for cand in $(find /proc/[0-9]*/fd -maxdepth 1 -lname "$real" 2>/dev/null); do
+		pid="${cand#/proc/}"
+		pid="${pid%%/*}"
+		fd="${cand##*/}"
+		[ "$pid" = "$$" ] && continue
+		flags="$(sed -nE 's/^flags:[[:space:]]*([0-9a-fA-F]+).*$/\1/p' "/proc/$pid/fdinfo/$fd" 2>/dev/null)"
+		[ -n "$flags" ] || continue
+		mode=$(( 0x$flags & 3 ))
+		[ "$mode" -ne 0 ] || continue
+		printf '%s\n' "$pid"
+	done
+	return 0
+}
+
+_guard_log_owner() {
+	# `_guard_log_owner <log> <rótulo>` — 0 = o log é nosso; 1 = há escritor de fora, e
+	# isso é dito com os pids e as linhas de comando, porque "log misturado" sem prova é
+	# a mesma frase sem corpo que já fez juiz anotar crash no produto.
+	local log="$1" label="$2" waited=0 holders="" pid cmd
+	holders="$( _log_holders "$log" 2>/dev/null )" || holders=""
+	while [ -n "$holders" ] && [ "$waited" -lt "$SHAMBLETA_ORPHAN_WAIT" ]; do
+		sleep 5
+		waited=$((waited + 5))
+		holders="$( _log_holders "$log" 2>/dev/null )" || holders=""
+	done
+	[ -z "$holders" ] && return 0
+	echo "LOG CONCORRENTE ($label): ${SHAMBLETA_ORPHAN_WAIT}s de espera e ainda há processo com $log aberto para escrita. O flock não segurou porque o dono do lock morreu e o filho ficou escrevendo — veredito lido daqui é a mistura de dois runs (e sandbox dividido, que é o que derruba boot são). Pids:"
+	for pid in $holders; do
+		cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-76)"
+		echo "    pid $pid: ${cmd:-cmdline ilegível}"
+	done
+	echo "    Não é para afrouxar: encerre o pid acima e rode de novo."
+	return 1
+}
+
+_stop_boot() {
+	# `_stop_boot <pid>` — o gate foi interrompido por fora (Ctrl-C, SIGTERM de wrapper de
+	# ferramenta, desligamento): o boot tem de morrer JUNTO, senão é exatamente o órfão
+	# descrito acima. TERM primeiro — `timeout` repassa para o `godot` — e KILL só se o
+	# processo ainda respirar depois de dez segundos, porque órfão com fd do log e do
+	# sandbox abertos custa o veredito do próximo run.
+	local pid="$1" waited=0
+	kill -TERM -- "$pid" 2>/dev/null || true
+	while [ "$waited" -lt 10 ] && kill -0 -- "$pid" 2>/dev/null; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+	if kill -0 -- "$pid" 2>/dev/null; then
+		kill -KILL -- "$pid" 2>/dev/null || true
+		echo "    boot pid $pid não saiu com TERM — KILL aplicado (órfão com o fd do log aberto envenena o veredito alheio)" >&2
+	fi
+}
+
 # DOIS locks, dois domínios. O lock por nome acima só fala do MESMO harness; o que
 # derrubou a passada de 2026-09-28 não foi isso — foi um `godot -s
 # tests/content_hygiene_test.gd` avulso (rodado por um agente, fora do
@@ -280,7 +369,7 @@ _reap_interrupted_sandbox() {
 
 gate() {
 	local log="$1" marker="$2" script="$3" timeout="${4:-900}"
-	local attempt code verdict noise
+	local attempt code verdict noise bootPid
 	for attempt in 1 2; do
 		if ! _acquire "$script"; then
 			record_gate 1 "$script"
@@ -298,18 +387,44 @@ gate() {
 		# Ordem que importa: reapa ANTES de marcar presença (a ordem invertida apaga o
 		# sandbox a cada boot, porque o reaper sempre vê a marca deste run), e marque
 		# presença antes do godot (depois, nenhuma interrupção seria registrada).
+		# O carimbo de dono vem antes de tudo que toca o arquivo: truncar um log que
+		# ainda tem escritor de fora é justamente o que apaga a prova do outro run e
+		# mistura os dois.
+		if ! _guard_log_owner "$log" "$script antes do boot"; then
+			_release 8
+			_release
+			record_gate 1 "$script (log concorrente no boot)"
+			return 0
+		fi
 		_reap_interrupted_sandbox "$script"
 		mkdir -p "$PROJECT/.test-home/$script"
 		: > "$PROJECT/.test-home/$script/.booting"
 		set +e
+		# Boot em segundo plano + `wait`, e não em primeiro plano: é a única forma de o
+		# trap de TERM/INT rodar no meio dos 1200 s e matar o filho JUNTO. Em primeiro
+		# plano o sinal fecha o shell e deixa o `godot` órfão — foi assim que um run
+		# morto às 23:54 escreveu no log do run das 00:05.
 		env XDG_DATA_HOME="$PROJECT/.test-home/$script/data" \
 			XDG_CACHE_HOME="$PROJECT/.test-home/$script/cache" \
-			timeout "$timeout" "$GODOT" --headless --path . -s "tests/$script.gd" > "$log" 2>&1
+			timeout "$timeout" "$GODOT" --headless --path . -s "tests/$script.gd" > "$log" 2>&1 &
+		bootPid=$!
+		trap '_stop_boot "$bootPid"; exit 143' TERM INT HUP
+		wait "$bootPid"
 		code=$?
+		trap - TERM INT HUP
 		set -e
 		_release 8
 		echo "godot exit=$code" >> "$log"
 		verdict=0
+		# Depois do boot, a mesma pergunta: se ainda há escritor de neste arquivo, o que
+		# está nele não é deste run e o `0 failures` lido daí é verde fabricado. A cópia
+		# `.mixed` preserva a prova, que é o que o `mv` da retratada já faz com o crash.
+		if ! _guard_log_owner "$log" "$script depois do boot"; then
+			cp -f "$log" "$log.mixed" 2>/dev/null || true
+			_release
+			record_gate 1 "$script (log concorrente no veredito)"
+			return 0
+		fi
 		bash scripts/ci_gate_log.sh "$log" "$marker" "$code" "$script" || verdict=$?
 		# Verde = o sandbox terminou como acabou. Vermelho com crash deixa a marca de
 		# propósito: a retratada tem de abrir um sandbox limpo, não o mesmo estado sujo
@@ -370,6 +485,12 @@ gate_py() {
 	local code=$?
 	set -e
 	echo "python exit=$code" >> "$log"
+	if ! _guard_log_owner "$log" "$script depois do boot"; then
+		cp -f "$log" "$log.mixed" 2>/dev/null || true
+		_release
+		record_gate 1 "$script (log concorrente no veredito)"
+		return 0
+	fi
 	local verdict=0
 	bash scripts/ci_gate_log.sh "$log" "$marker" "$code" || verdict=$?
 	_release
@@ -411,11 +532,22 @@ gate_sh() {
 		record_gate 1 "$(basename "$script")"
 		return 0
 	fi
+	if ! _guard_log_owner "$log" "$(basename "$script") antes do boot"; then
+		_release
+		record_gate 1 "$(basename "$script") (log concorrente no boot)"
+		return 0
+	fi
 	set +e
 	bash "$script" > "$log" 2>&1
 	local code=$?
 	set -e
 	echo "bash exit=$code" >> "$log"
+	if ! _guard_log_owner "$log" "$(basename "$script") depois do boot"; then
+		cp -f "$log" "$log.mixed" 2>/dev/null || true
+		_release
+		record_gate 1 "$(basename "$script") (log concorrente no veredito)"
+		return 0
+	fi
 	local verdict=0
 	bash scripts/ci_gate_log.sh "$log" "$marker" "$code" || verdict=$?
 	_release

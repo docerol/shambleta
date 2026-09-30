@@ -11,7 +11,7 @@ O que não foi medido está dito como não medido.
 | `game` | 6108 | WebSocket do jogo (`EXPOSE` em `deploy/server/Dockerfile:45`; `static var WebSocketPort = 6108` em `sources/network/NetworkCommons.gd:12`) | interface do container |
 | `game` | 9400 | `/healthz` + `/metrics` na `DefaultPort` do painel (`sources/system/MetricsServer.gd:25`) | **só `127.0.0.1`** (`:26`) |
 | `companion` | 8901 | `/health`, `/metrics`, `/checkout/*`, `/webhooks/payments` (`Handler` em `companion/server.py:1398-1469`) | `0.0.0.0` (`deploy/companion/Dockerfile:46`) |
-| `web` | 80 | nginx estático + proxy para o companion (`deploy/web/nginx.conf:43`, `deploy/web/nginx.conf:164` e `:194`) | `listen 80` (IPv4) |
+| `web` | 80 | nginx estático + proxy para o companion (`deploy/web/nginx.conf:43`, `deploy/web/nginx.conf:174` e `:205`) | `listen 80` (IPv4) |
 
 Fora do container, TLS termina no proxy do Coolify (ou no `cloudflared`) — nada
 aqui deve ter porta publicada (`deploy/docker-compose.yml:15-22`).
@@ -173,7 +173,7 @@ uma semana de beta e transformar as duas reservas em tetos com número próprio.
   aconteceria antes de o game criar o banco — crash-loop exatamente na fronteira
   do dinheiro.
 - `web → companion: service_started` (não healthy): o nginx resolve o upstream por
-  `resolver`/variável a cada request (`deploy/web/nginx.conf:179-181`), então um
+  `resolver`/variável a cada request (`deploy/web/nginx.conf:190-192`), então um
   companion esquentando responde 502 em vez de derrubar o site.
 - `cloudflared → game`: curto, sem condição — o túnel só precisa do container.
 
@@ -184,7 +184,7 @@ O gate lê os quatro `depends_on` + as portas dos probes contra o código:
 
 | arquivo:linha | o que muda | por quê |
 |---|---|---|
-| `deploy/web/Dockerfile:50` | remover o `HEALTHCHECK ... wget -qO- http://127.0.0.1/` | o compose agora define o probe honesto; a linha na imagem é um check que não consegue falhar (`try_files ... /index.html`, `deploy/web/nginx.conf:298`) e só sobrevive para confundir quem lê a imagem. |
+| `deploy/web/Dockerfile:50` | remover o `HEALTHCHECK ... wget -qO- http://127.0.0.1/` | o compose agora define o probe honesto; a linha na imagem é um check que não consegue falhar (`try_files ... /index.html`, `deploy/web/nginx.conf:306`) e só sobrevive para confundir quem lê a imagem. |
 | `main()` — `companion/server.py:1957` | instalar handler de `SIGTERM` antes do `serve_forever()`, com join das threads | hoje `docker stop` mata no meio de um webhook (medido: exit 143). O provedor re-tenta, mas a janela entre verificar a assinatura e gravar o grant é exatamente onde o dinheiro vive. |
 | `sources/sql/SQLBackups.gd:92` | `lastDailyBackupTimestamp = 0` (como `:102` faz para o job meta) | redeploy diário zera o relógio do backup diário; ver `deploy/BACKUP_RUNBOOK.md` §2. |
 
@@ -202,7 +202,7 @@ operador re-inventar uma métrica que já está sendo raspada.
 **Não é mais pendência (e a linha que dizia que era estava errada):** o job de CI
 que invoca `scripts/check_compose.sh` já existe e já bloqueia. `code-health`
 (`.github/workflows/godot-ci.yml:128-140`) roda `bash scripts/test.sh structure`, e
-`structure_gates()` (`scripts/test.sh:585`) chama os 11 gates de estrutura —
+`structure_gates()` (`scripts/test.sh:717`) chama os 11 gates de estrutura —
 `check_god_nodes.sh`, `check_doc_drift.sh`, `check_compose.sh`, `check_secrets.sh`,
 `check_ci.sh`, `check_dead_code.sh`, `check_untracked.sh`, `check_gate_log.sh` e
 `check_boot_sandbox.sh`, `check_gate_markers.sh` e

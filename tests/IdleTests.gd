@@ -6058,7 +6058,7 @@ func SuiteOpsA2(sql : SQLService) -> void:
 					gateNames.append(base)
 			gateNames.sort()
 		# A régua era "três gates de script vivem em scripts/" e mediu 4 quando
-		# `check_secrets.sh` entrou no runner (`scripts/test.sh:589`). O tamanho nunca foi o
+		# `check_secrets.sh` entrou no runner (`scripts/test.sh:721`). O tamanho nunca foi o
 		# contrato — era só o sintoma móvel de um conjunto que precisa ser conhecido e
 		# prestado contas, e é isso que continua cobrado nas duas pontas: (a) cada
 		# `check_*.sh` no disco é chamado pelo runner, que é o laço `orphanGates` logo
@@ -6596,7 +6596,7 @@ func SuiteDeployMode() -> void:
 	Check(nginx.contains("resolver "), "nginx resolve o upstream a cada request (boot do web não morre sem companion)")
 	# O que a régua antiga procurava era `location ~ `, e esse regex SAIU do arquivo: a
 	# rota do dinheiro hoje é um par de prefixos, `location ^~ /webhooks/`
-	# (deploy/web/nginx.conf:164) e `location ^~ /checkout/` (deploy/web/nginx.conf:194),
+	# (deploy/web/nginx.conf:174) e `location ^~ /checkout/` (deploy/web/nginx.conf:205),
 	# separados porque os dois tráfegos têm tetos diferentes. Não achando o header,
 	# `locPattern` vinha vazio e o estrago era assimétrico: os três checks de conteúdo
 	# caíam, mas os quatro "cai no proxy do companion" passavam VAZIOS, porque regex
