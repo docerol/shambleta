@@ -394,6 +394,37 @@ static func _ContStruct(src : PackedStringArray, from : int, to : int) -> String
 		return "a linha %d está em branco" % to
 	return ""
 
+# Os números de uma lista `12,13-15` como pares [de, ate]. Separado do laço porque as duas
+# metades da régua — o veredito e o censo que cerca o veredito — têm de ler a mesma string do
+# mesmo jeito, e um `split` escrito duas vezes é onde as duas começam a discordar em silêncio.
+# A recusa do que não é número existe de propósito: `_ListRx` já garantiu a forma, então o ramo
+# só é alcançável pela mesa de controles, e é ela que prova que a promessa do regex é a
+# promessa do parser.
+static func _ListItems(raw : String, itemRx : RegEx) -> Array:
+	var out : Array = []
+	for part in String(raw).split(","):
+		var pm : RegExMatch = itemRx.search(String(part))
+		if pm == null:
+			continue
+		var de : int = int(pm.get_string(1))
+		var ate : int = de
+		if String(pm.get_string(2)) != "":
+			ate = int(pm.get_string(2))
+		out.append([de, ate])
+	return out
+
+# Metade estrutural de um número de lista, sem árvore e sem registro: as duas bordas cobradas
+# pelo mesmo cano que cobra o `arquivo:NN-NN`, e o meio do intervalo NÃO cobrado — porque o
+# ponteiro simples também não cobra, e uma régua mais dura para a forma barata seria exatamente
+# o incentivo para voltar a escrever cinco backticks. O objetivo desta fatia era matar o custo de
+# ponteiro, não recriá-lo. "" é o número que abre.
+static func _ListVerdict(src : PackedStringArray, de : int, ate : int) -> String:
+	if de < 1 or ate < de or ate > src.size():
+		return "cai em %d, que não cabe num arquivo de %d linhas" % [ate if ate > src.size() else de, src.size()]
+	if _LineBlank(src, de):
+		return "a linha %d está em branco" % de
+	return ""
+
 # Nome do símbolo declarado nesta linha de coluna zero, ou "" se a linha não declara.
 static func _SymbolNameAt(line : String, ext : String) -> String:
 	if line.begins_with(" ") or line.begins_with("\t"):
@@ -1117,13 +1148,14 @@ func SuiteEvidencePointers() -> void:
 	var metricosFora : Array[String] = []
 	var historia : Array[String] = []
 	var mortos : Array[String] = []
+	var listas : Array[String] = []
 	# O balde da história, junto dos sete que cobram: é a única forma de julgar um registro sem
 	# obrigar ninguém a reescrevê-lo. Os mesmos objetos entram nos `CheckEq` de cima pela mão do
 	# `_Acusa`, então não há segunda lista que possa ser esquecida no veredito.
 	var sinks : Dictionary = {
 		"quebrados": quebrados, "derrapados": derrapados, "vazios": vazios,
 		"deslocados": deslocados, "identes": identes, "metricosFora": metricosFora,
-		"historia": historia, "mortos": mortos,
+		"historia": historia, "mortos": mortos, "listas": listas,
 	}
 	var metricos : int = 0
 	var conferidos : int = 0
@@ -2139,6 +2171,134 @@ func SuiteEvidencePointers() -> void:
 			"controle: o mesmo par, com o intervalo cortando uma linha antes, é acusado")
 	Check(_SeriesSpanVerdict(witness, "shambleta_serie_que_nenhum_arquivo_emite", 1, witness.size()) == "muda",
 			"controle: série que o arquivo não emite em lugar nenhum não é julgada — é a trava que impede acusar prosa inocente")
+
+	# ---------------------------------------------------------------------------
+	# (11) PONTEIRO COM VÍRGULA: `arquivo:12,13-15` afirma N linhas de um golpe.
+	#
+	# É a forma que a marreta do #124 empurra a prosa a escrever quando uma frase precisa de
+	# quatro sítios: um backtick em vez de quatro. E porque era nova, nenhum braço a lia aqui
+	# também — `ptrRx` exige o backtick logo depois do número, então `12,13` não casava nem por
+	# ele nem pela continuação, e a citação saía pela porta dos invisíveis. A bash mediu a classe
+	# na mesma passada (seção 31): oito listas fora dos registros datados, vinte e um números,
+	# nenhum julgado. Dois juízes da mesma árvore vendo números diferentes é a doença que o #116
+	# registrou — é por isso que esta fatia fecha nos dois, não só no gate que achou o buraco.
+	#
+	# O que se cobra é o que a frase promete, número a número: o alvo resolve (ou está no
+	# `scripts/dead_paths.txt`, a mesma licença da seção (10), lida pelo mesmo dicionário), a
+	# borda cabe no arquivo e a linha citada não é branca. A cláusula NÃO entra: uma frase
+	# fazendo quatro afirmações não é decomponível pelo recorte de oração que os dois juízes
+	# partilham, e inventar um recorte para ela daria veredito de uma linha à promessa de outra.
+	# O recorte de registro datado é o mesmo `EVIDENCIA_FORA` por nome de arquivo, e a cobrança
+	# dentro dele vai ao balde da história — medido, não cobrado.
+	var listaRx : RegEx = RegEx.new()
+	listaRx.compile("`" + PTR_TGT + ":([0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)+)`")
+	var itemRx : RegEx = RegEx.new()
+	itemRx.compile("^([0-9]+)(?:-([0-9]+))?$")
+	var listasVistas : int = 0
+	var listasNumeros : int = 0
+	var listasFora : int = 0
+	var listasMorto : int = 0
+	var listasPoupados : int = 0
+	for listPath in sweep:
+		var listaReg : bool = _ForaDaEvidencia(String(listPath))
+		var listaProse : bool = ["md", "json"].has(String(listPath).get_extension().to_lower())
+		var listaLines : PackedStringArray = _RepoFile(listPath).split("\n")
+		for q in listaLines.size():
+			var listaLine : String = String(listaLines[q])
+			if not listaProse and not listaLine.strip_edges().begins_with("#"):
+				continue
+			for qm in listaRx.search_all(listaLine):
+				var qItens : Array = _ListItems(String(qm.get_string(2)), itemRx)
+				if listaReg:
+					listasFora += qItens.size()
+					continue
+				listasVistas += 1
+				var qCited : String = String(qm.get_string(1))
+				var qSite : String = "%s:%d" % [String(listPath).trim_prefix("res://"), q + 1]
+				var qTarget : String = _PtrResolve(qCited)
+				if qTarget == "":
+					listasMorto += qItens.size()
+					listasNumeros += qItens.size()
+					if deadReg.has(qCited):
+						listasPoupados += qItens.size()
+					else:
+						_Acusa(sinks, String(listPath), "listas",
+								"%s: %s e nenhum dos %d números pode ser aberto — o alvo não resolve nem por caminho, nem por sufixo, nem por nome; registre o caminho em `scripts/dead_paths.txt` com motivo, senão a frase afirma evidência que ninguém pode abrir" % [qSite, qm.get_string(0), qItens.size()])
+					continue
+				if not lineCache.has(qTarget):
+					lineCache[qTarget] = _RepoFile(qTarget).split("\n")
+				var qSrc : PackedStringArray = lineCache[qTarget]
+				for par in qItens:
+					listasNumeros += 1
+					var qVerdict : String = _ListVerdict(qSrc, int(par[0]), int(par[1]))
+					if qVerdict != "":
+						_Acusa(sinks, String(listPath), "listas",
+								"%s: %s — %s; quem abre a doc cola num sítio que não existe" % [qSite, qm.get_string(0), qVerdict])
+	# O censo que cerca o braço: um walk que não abre intervalo, não confere branco, não resolve
+	# alvo e não conhece o registro. Existe porque número nascido dentro do braço não sobrevive à
+	# remoção dele — apagar o veredito leva os três números a zero junto, e é este que fica dizendo
+	# o que a árvore tem. Piso de nível estaria errado aqui pela razão do #137: converter a última
+	# lista em ponteiros separados é o trabalho do #124 e derrubaria o saldo sem derrubar o walk.
+	var cenListas : int = 0
+	var cenNumeros : int = 0
+	var cenFora : int = 0
+	for cenPath in sweep:
+		var cenReg : bool = _ForaDaEvidencia(String(cenPath))
+		var cenProse : bool = ["md", "json"].has(String(cenPath).get_extension().to_lower())
+		var cenLinhas : PackedStringArray = _RepoFile(cenPath).split("\n")
+		for c in cenLinhas.size():
+			var cenLine : String = String(cenLinhas[c])
+			if not cenProse and not cenLine.strip_edges().begins_with("#"):
+				continue
+			for cm in listaRx.search_all(cenLine):
+				var cNum : int = _ListItems(String(cm.get_string(2)), itemRx).size()
+				if cenReg:
+					cenFora += cNum
+					continue
+				cenListas += 1
+				cenNumeros += cNum
+	CheckEq(listasVistas, cenListas,
+			"cobertura do ponteiro com vírgula: o veredito abriu %d listas e o censo que não julga nada acha %d no mesmo escopo — diferença é braço tendo parado de olhar (%d vs %d)" % [listasVistas, cenListas, listasVistas, cenListas])
+	CheckEq(listasNumeros, cenNumeros,
+			"cobertura dos números da vírgula: o veredito julgou %d (%d em alvo que resolve, %d em alvo que não) e o censo, que não abre intervalo nenhum, conta %d — os dois lados valem, e positivo é lista que nenhum braço abre" % [listasNumeros, listasNumeros - listasMorto, listasMorto, cenNumeros])
+	# As duas leituras do mesmo `EVIDENCIA_FORA`, por nome de arquivo: é onde a isenção cresce
+	# sozinha quando um dos lados passa a cortar por caminho, ou quando a lista muda de ordem.
+	CheckEq(listasFora, cenFora,
+			"recorte da vírgula: o veredito poupou %d números dentro dos registros datados e o censo conta %d no mesmo recorte — as duas leituras de `EVIDENCIA_FORA` deixaram de ser a mesma isenção" % [listasFora, cenFora])
+	print("  [info] ponteiro com vírgula: %d listas com %d números julgados (%d em alvo que não resolve, %d desses poupados pelo registro de %d caminho(s)) e %d números dentro dos registros datados, contra %d listas e %d números e %d fora no censo independente" % [listasVistas, listasNumeros, listasMorto, listasPoupados, deadReg.size(), listasFora, cenListas, cenNumeros, cenFora])
+	# A mesa: os modos de esta forma mentir que a árvore limpa não mostra. Os três primeiros são
+	# o parser — o ramo que recusa não-número é inalcançável pelo corpus, e ramo inalcançável sem
+	# controle é ramo que mudou de comportamento em silêncio. Os três seguintes são o SHAPE, e são
+	# os que valem mais: se `ptrRx` passasse a casar `12,13` os dois braços julgam o mesmo número
+	# e a igualdade de cobertura passaria a somar duas vezes a mesma coisa; se `listaRx` casasse o
+	# ponteiro simples, o braço novo comeria o velho. Os últimos são o veredito, com as duas bordas
+	# cobradas e o meio não — a decisão de ESCOPO escrita em número, que sem controle é comentário.
+	var mesaItens : Array = _ListItems("12,13-15", itemRx)
+	CheckEq(mesaItens.size(), 2, "lista: o parser abre os dois números de `12,13-15` (%s)" % str(mesaItens))
+	Check(mesaItens.size() == 2 and int(mesaItens[0][0]) == 12 and int(mesaItens[0][1]) == 12
+			and int(mesaItens[1][0]) == 13 and int(mesaItens[1][1]) == 15,
+			"lista: número sem traço vale a si mesmo como fim e o traço vira par [de, ate] (%s)" % str(mesaItens))
+	var mesaRecusa : Array = _ListItems("12,x", itemRx)
+	CheckEq(mesaRecusa.size(), 1, "lista: o que não é número não entra, e o vizinho fica (%s)" % str(mesaRecusa))
+	Check(mesaRecusa.size() == 1 and int(mesaRecusa[0][0]) == 12 and int(mesaRecusa[0][1]) == 12,
+			"lista: a recusa é do item errado, não da lista inteira (%s)" % str(mesaRecusa))
+	CheckEq(ptrRx.search_all("`sources/x.gd:12,13`").size(), 0,
+			"lista: o `ptrRx` do ponteiro nomeado NÃO come a vírgula — se comesse, os dois braços julgariam o mesmo número e a cobertura somaria duas vezes a mesma verdade")
+	CheckEq(listaRx.search_all("`sources/x.gd:12`").size(), 0,
+			"lista: o `listaRx` NÃO come o ponteiro simples — se comesse, o braço novo engoliria o velho e a classe sumiria do censo do `arquivo:NN`")
+	var mesaShape : RegExMatch = listaRx.search("abre em `sources/x.gd:12,13-15` no meio da frase")
+	Check(mesaShape != null and String(mesaShape.get_string(1)) == "sources/x.gd"
+			and String(mesaShape.get_string(2)) == "12,13-15",
+			"lista: o grupo 1 é o arquivo e o 2 é a lista, não deslocados (veio \"%s\")" % (str(mesaShape.get_string(1)) if mesaShape != null else "nada"))
+	var mesaSrc : PackedStringArray = PackedStringArray(["cheia", "outra cheia", "", "quarta", "quinta"])
+	Check(_ListVerdict(mesaSrc, 1, 1) == "", "lista morde no são: 1-1 numa linha com conteúdo não é acusação (%s)" % _ListVerdict(mesaSrc, 1, 1))
+	Check(_ListVerdict(mesaSrc, 1, 5) == "", "lista não morde na última linha: fim exatamente no tamanho do arquivo é dentro (%s)" % _ListVerdict(mesaSrc, 1, 5))
+	Check(_ListVerdict(mesaSrc, 1, 6).contains("não cabe"), "lista morde no fim do arquivo: uma linha além é acusada (%s)" % _ListVerdict(mesaSrc, 1, 6))
+	Check(_ListVerdict(mesaSrc, 0, 2).contains("não cabe"), "lista morde no começo zero (%s)" % _ListVerdict(mesaSrc, 0, 2))
+	Check(_ListVerdict(mesaSrc, 4, 2).contains("não cabe"), "lista morde no intervalo invertido: 4-2 não é um sítio (%s)" % _ListVerdict(mesaSrc, 4, 2))
+	Check(_ListVerdict(mesaSrc, 3, 3).contains("em branco"), "lista morde na borda em branco: começar no vão é ponteiro que não mostra nada (%s)" % _ListVerdict(mesaSrc, 3, 3))
+	Check(_ListVerdict(mesaSrc, 2, 4) == "", "lista NÃO morde no meio do intervalo: o vão entre as bordas não é cobrado, porque o `arquivo:NN-NN` simples também não cobra (%s)" % _ListVerdict(mesaSrc, 2, 4))
+	CheckEq(listas.size(), 0, "ponteiro com vírgula: nenhum dos %d números das %d listas julgadas fora dos registros datados cai além da última linha, em branco ou em arquivo que não existe (%s)" % [listasNumeros, listasVistas, " | ".join(listas)])
 
 # Casa única do predicado de fantasma de harness. Um `tests/<nome>.gd` citado é
 # fantasma quando NEM `tests/` o lista NEM algum `scripts/*.sh` o escreve.

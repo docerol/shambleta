@@ -1234,6 +1234,61 @@ ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*(?:\.[A-Za-z0-9_-]
 # significam coisas opostas.
 CONTPTR = re.compile(r"`:(\d+)(?:-(\d+))?`")
 
+# O ponteiro com VIRGULA: `` `arquivo:12,34` ``, ou com intervalos misturados
+# (`` `arquivo:12-15,34` ``). Ele nao e um ponteiro para `PTR`, que exige o backtick
+# colado no ultimo digito — e por isso mesma frase que promete quatro sitios saia do
+# walk sem que nenhuma linha dela fosse conferida. Medido no corpus vivo (fora dos
+# registros datados e fora de `archive/`): nove citacoes assim, todas em arquivo que
+# existe, e nenhum dos numeros julgado. E a forma mais barata de ponteiro que existe
+# — quem escreve uma lista nao pode ser obrigado a abrir cinco backticks para ser
+# lido —, entao fecha-se a porta em vez de proibir a forma.
+#
+# O que se cobra de cada numero e o que a frase afirma e independe da prosa: o sitio
+# existe e tem linha. A clausula nao entra: uma frase fazendo quatro afirmacoes sobre
+# quatro linhas nao e decomponivel pelo parser de oracao, e inventar um recorte para
+# ela seria pior que nao medir nada — daria veredito de uma linha para a promessa de
+# outra. Quem quer que a frase seja conferida escreve ponteiros separados, e ai o
+# `verdict` de identidade ja os ve.
+LISTPTR = re.compile(r"`" + _TGT + r":((?:\d+(?:-\d+)?)(?:,\d+(?:-\d+)?)+)`")
+LISTITEM = re.compile(r"^(\d+)(?:-(\d+))?$")
+
+
+def listitems(raw):
+    """Os numeros de uma lista `12,13-15` como pares (de, ate).
+
+    Separado do laço porque as duas metades da régua — o veredito e o censo que cerca
+    o veredito — têm de ler a mesma string do mesmo jeito, e uma `split` escrita duas
+    vezes é onde as duas começam a discordar em silêncio. A recusa do que não é numero
+    esta aqui de proposito: `LISTPTR` ja garante a forma, entao o ramo so e alcancavel
+    pela mesa de controles, e e ela que prova que a promessa da regex e a promessa da
+    parser.
+    """
+    out = []
+    for part in raw.split(","):
+        m = LISTITEM.match(part)
+        if m is None:
+            continue
+        de = int(m.group(1))
+        ate = int(m.group(2)) if m.group(2) else de
+        out.append((de, ate))
+    return out
+
+
+def listitem_verdict(de, ate, linhas):
+    """O veredito de um numero `de-ate` de uma lista, ou None se a linha abre.
+
+    Puro de proposito, pelo mesmo motivo do `deadjudge`: as duas bordas vem do mesmo
+    cano que cobra o `arquivo:NN-NN` simples, o meio do intervalo nao e cobrado porque o
+    ponteiro simples tambem nao cobra, e uma mesa de controles nao pode nascer de um
+    laço que percorre a arvore. Devolver string-motivo em vez de print deixa o `scan`
+    escolher a frase da acusacao sem escolher a regra.
+    """
+    if de < 1 or ate < de or ate > len(linhas):
+        return "borda"
+    if linhas[de - 1].strip() == "":
+        return "branco"
+    return None
+
 
 class Herdado:
     """Um `:NN` julgado como ponteiro: a interface de `PTR`, com o arquivo emprestado.
@@ -2388,6 +2443,57 @@ def deadselftest():
     return biting, len(DEAD_CONTROLES)
 
 
+# Cada controle é um modo de esta forma mentir, e os três grupos são as três pernas dela.
+# Os três primeiros são o PARSER: o ramo que recusa não-número é inalcançável pelo corpus
+# (`LISTPTR` já garantiu a forma), e ramo inalcançável sem controle é ramo que mudou de
+# comportamento em silêncio — é a prova de que a promessa da regex é a promessa do parser.
+# Os três seguintes são o SHAPE: se `PTR` passasse a casar `12,13` os dois braços julgam o
+# mesmo número e a soma da cobertura deixa de ser um censo; se `LISTPTR` casasse o
+# ponteiro simples, o braço novo comeria o velho. Os últimos são o VEREDITO, com as duas
+# bordas cobradas e o meio não — a decisão de ESCOPO escrita em número, que sem controle
+# é só comentário.
+_LFILL = ["a", "b", "", "d", "e"]
+LISTA_CONTROLES = [
+    ("parse de `12,13-15` devolve os dois pares",
+     lambda: listitems("12,13-15") == [(12, 12), (13, 15)]),
+    ("parse recusa o nao-numero e mantem o vizinho",
+     lambda: listitems("12,x") == [(12, 12)]),
+    ("numero sem traco vale a si mesmo como fim",
+     lambda: listitems("12,13") == [(12, 12), (13, 13)]),
+    ("LISTPTR nao casa o ponteiro simples",
+     lambda: len(LISTPTR.findall("`a.gd:12`")) == 0),
+    ("PTR nao casa a lista",
+     lambda: len(PTR.findall("`a.gd:12,13`")) == 0),
+    ("LISTPTR da o arquivo no grupo 1 e a lista no grupo 2",
+     lambda: [(m.group(1), m.group(2)) for m in LISTPTR.finditer("`a.gd:12,13-15`")]
+             == [("a.gd", "12,13-15")]),
+    ("numero que cabe e nao esta em branco nao e acusado",
+     lambda: listitem_verdict(2, 2, _LFILL) is None),
+    ("fim exatamente na ultima linha nao e borda",
+     lambda: listitem_verdict(1, 5, _LFILL) is None),
+    ("fim uma linha alem do arquivo e borda",
+     lambda: listitem_verdict(1, 6, _LFILL) == "borda"),
+    ("comeco zero e borda",
+     lambda: listitem_verdict(0, 2, _LFILL) == "borda"),
+    ("intervalo invertido e borda",
+     lambda: listitem_verdict(4, 2, _LFILL) == "borda"),
+    ("comeco em branco e acusado",
+     lambda: listitem_verdict(3, 3, _LFILL) == "branco"),
+    ("meio do intervalo em branco nao e cobrado",
+     lambda: listitem_verdict(2, 4, _LFILL) is None),
+]
+
+
+def listaselftest():
+    biting = 0
+    for nome, teste in LISTA_CONTROLES:
+        if teste():
+            biting += 1
+        else:
+            print("[FAIL] ponteiro com vírgula: self-test cego no controle %s" % nome)
+    return biting, len(LISTA_CONTROLES)
+
+
 def build_index(root):
     # indice basename -> ate tres caminhos, para resolver ponteiro citado por NOME NU.
     # A medicao desta passada: 95 ponteiros fora dos registros datados tem alvo que nao
@@ -2476,6 +2582,48 @@ def deadcensus(root, index):
     return seen
 
 
+def listacensus(root, index):
+    """Quantos ponteiros com virgula o corpus tem, contado por um walk proprio.
+
+    Mesmo motivo do `deadcensus`: o numero que cerca um braço nao pode nascer dentro
+    do braço. Este laço nao abre intervalo, nao confere linha em branco, nao conhece o
+    registro de caminhos mortos — conta token e numero, e é com ele que a igualdade de
+    cobertura da secao 31 e cerca. O recorte de registro datado e refeito aqui porque
+    o veredito roda depois dele: censos de escopos diferentes nao sao comparaveis, e a
+    parcela poupada sai como terceiro numero, nao somada aos outros dois.
+    """
+    cache = {}
+    tokens = 0
+    itens = 0
+    poupados = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            if rel.startswith("archive/") or not fn.endswith(EXTS):
+                continue
+            lines = resolve_path(rel, root, index, cache)
+            if lines is None:
+                continue
+            # O mesmo corte do veredito, decidido por NOME e nao por caminho: sem ele os
+            # dois lados estariam contando escopos diferentes, e a igualdade diria
+            # qualquer coisa menos "o braço olhou tudo que o censo viu".
+            e_fora = fn in SKIP_NAMES
+            is_doc = fn.endswith(".md")
+            is_json = fn.endswith(".json")
+            for line in lines:
+                if not is_doc and not is_json and not line.lstrip().startswith(("#", "//")):
+                    continue
+                for m in LISTPTR.finditer(line):
+                    n_itens = len(listitems(m.group(2)))
+                    if e_fora:
+                        poupados += n_itens
+                        continue
+                    tokens += 1
+                    itens += n_itens
+    return tokens, itens, poupados
+
+
 def scan(root, wide, reg, index, dead):
     cache = {}
     lit_judged = 0
@@ -2504,6 +2652,17 @@ def scan(root, wide, reg, index, dead):
     fora = {}
     lin_fora = 0
     anc_fora = 0
+    # O censo do ponteiro com virgula: listas vistas, numeros dentro delas, quantas
+    # linhas o registro datado poupou de cobrança e quantas o alvo não resolveu. Os
+    # quatros saem impressos pela mesma razão dos do ponteiro morto — exceção sem
+    # número não é exceção, é buraco, e "0 acusações" tem de continuar sendo frase
+    # diferente de "ninguém olhou".
+    lista_total = 0
+    lista_itens = 0
+    lista_fora = 0
+    lista_morto = 0
+    lista_spared = 0
+    lista_accused = 0
 
     def lines_of(path):
         return resolve_path(path, root, index, cache, resolvidos)
@@ -2585,7 +2744,47 @@ def scan(root, wide, reg, index, dead):
                     # dizendo "15 cobradas" enquanto o laço não julga mais nenhuma.
                     fora[rel] = fora.get(rel, 0) + 1
                     lin_fora += sum(1 for _ in PTR.finditer(line))
+                    lista_fora += sum(len(listitems(m6.group(2))) for m6 in LISTPTR.finditer(line))
                     continue
+                # O ponteiro com virgula, julgado depois do atalho acima de proposito: a
+                # forma afirma LINHAS, então envelhece com a doc como o `arquivo:NN` e herda
+                # a mesma isenção dos registros datados. O que muda é o oposto do que
+                # mudou no `:NN` de continuação: aquele já era lido por um braço e ganhou
+                # licença; este não era lido por braço nenhum.
+                for m6 in LISTPTR.finditer(line):
+                    lista_total += 1
+                    itens = listitems(m6.group(2))
+                    alvo = m6.group(1)
+                    if alvo.startswith("res://"):
+                        alvo = alvo[6:]
+                    tl6 = lines_of(alvo)
+                    if tl6 is None:
+                        lista_morto += len(itens)
+                        acusar6, poupada6 = deadjudge(alvo, dead)
+                        if poupada6:
+                            lista_spared += len(itens)
+                        elif acusar6:
+                            lista_accused += len(itens)
+                            print("[FAIL] ponteiro com vírgula: %s:%d cita %s e nenhum dos %d números pode ser aberto — o alvo não resolve nem por caminho, nem por sufixo, nem por nome; registre o caminho em scripts/dead_paths.txt com motivo, senão a frase afirma evidência que ninguém pode abrir"
+                                  % (rel, n, m6.group(0), len(itens)))
+                        continue
+                    for (d6, a6) in itens:
+                        lista_itens += 1
+                        # As duas bordas pelo mesmo cano do `arquivo:NN-NN`: o fim fora do
+                        # arquivo é acusação, e o começo em branco também. O meio do
+                        # intervalo não é cobrado porque o ponteiro simples não o cobra —
+                        # uma régua mais dura para a forma barata seria o incentivo exato
+                        # para voltar a escrever cinco backticks.
+                        mot6 = listitem_verdict(d6, a6, tl6)
+                        if mot6 is None:
+                            continue
+                        lista_accused += 1
+                        if mot6 == "borda":
+                            print("[FAIL] ponteiro com vírgula: %s:%d cita %s e o número %d não cabe em %s, que tem %d linhas — quem abre a doc cola num sítio que não existe"
+                                  % (rel, n, m6.group(0), a6 if a6 > len(tl6) else d6, alvo, len(tl6)))
+                        else:
+                            print("[FAIL] ponteiro com vírgula: %s:%d cita %s e a linha %d cai em branco em %s — branco não mostra nada para quem abre no número citado"
+                                  % (rel, n, m6.group(0), d6, alvo))
                 prev_end = 0
                 ptr_k = 0
                 # A CONTINUACAO entra no mesmo laco do ponteiro nomeado, nao num laco
@@ -2722,7 +2921,7 @@ def scan(root, wide, reg, index, dead):
                           % (rel, n, m3.group(1),
                              "nenhuma chamada de gate_sh lida (scripts/test.sh nao encontrado)"
                              if reg is None else "%d chamada(s) de gate_sh em structure_gates()" % len(reg)))
-    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas, len(fora), lin_fora, anc_fora, dead_bad, dead_spared, dead_cont
+    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas, len(fora), lin_fora, anc_fora, dead_bad, dead_spared, dead_cont, lista_total, lista_itens, lista_fora, lista_morto, lista_spared, lista_accused
 
 
 def main():
@@ -2733,6 +2932,7 @@ def main():
     abiting, acases = anchorselftest()
     hbiting, hcases = herdselftest()
     dbiting, dcases = deadselftest()
+    vbiting, vcases = listaselftest()
     cov_n, cov_spared = herdcoverage(root)
     reg = registry(root)
     index = build_index(root)
@@ -2742,13 +2942,16 @@ def main():
     dead = deadset(dead_text)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
      anchors, anchor_bad, lines, resolvidos, cont_n, cont_jn, cont_an, cont_on,
-     fora_n, fora_lin, fora_anc, dead_n, dead_sp, dead_c) = \
+     fora_n, fora_lin, fora_anc, dead_n, dead_sp, dead_c,
+     lista_n, lista_it, lista_f, lista_mt, lista_sp, lista_bad) = \
         scan(root, False, reg, index, dead)
     (wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w,
      anchors_w, anchor_bad_w, lines_w, resolvidos_w, cont_w, cont_jw, cont_aw,
-     cont_ow, fora_n_w, fora_lin_w, fora_anc_w, dead_w, dead_spw, dead_cw) = \
+     cont_ow, fora_n_w, fora_lin_w, fora_anc_w, dead_w, dead_spw, dead_cw,
+     lista_nw, lista_itw, lista_fw, lista_mtw, listaspw, lista_badw) = \
         scan(root, True, reg, index, dead)
     dead_seen = deadcensus(root, index)
+    lista_tok_c, lista_it_c, lista_fora_c = listacensus(root, index)
     accused = narrow_bad + wide_bad
     cont_jugados = cont_jn + cont_jw
     cont_acusados = cont_an + cont_aw
@@ -2838,6 +3041,40 @@ def main():
                                                  1 if dead_cut_drift else 0,
                                                  dead_c, dead_seen,
                                                  1 if dead_cov_drift else 0))
+    # O ponteiro com virgula, cercado pelas mesmas duas igualdades do ponteiro morto. O
+    # corte nao muda nada aqui: `LISTPTR` e regex de forma, e os dois passes leem a
+    # mesma arvore — divergir e o braco tendo parado no meio de um dos dois.
+    lista_cut_drift = ((lista_n, lista_it, lista_f, lista_mt, lista_sp, lista_bad)
+                       != (lista_nw, lista_itw, lista_fw, lista_mtw, listaspw, lista_badw))
+    # Cobertura, nunca piso: quantos token e quantos numero o veredito abriu, contra o
+    # walk que nao abre intervalo nenhum e nao conhece o registro. Um piso de "tem de
+    # haver lista na arvore" acusaria progresso pela razao do #137 — quem converte a
+    # ultima lista em ponteiros separados derruba o saldo sem derrubar o walk.
+    lista_cov_drift = (lista_n != lista_tok_c) or (lista_it + lista_mt != lista_it_c)
+    # Os poupados do recorte sao contados duas vezes de proposito — uma dentro do
+    # veredito, outra dentro do censo — e as duas contam por nomes de arquivo, nao por
+    # caminho. Divergir e o `SKIP_NAMES` tendo sido lido de um lado e do outro, que e o
+    # exato modo de a isencao crescer sem que ninguem a escreva.
+    lista_reg_drift = lista_f != lista_fora_c
+    if lista_reg_drift:
+        print("[FAIL] recorte da vírgula: o veredito poupou %d números dentro dos registros datados e o censo, que não julga nada, conta %d no mesmo recorte — as duas leituras do `SKIP_NAMES` deixaram de ser a mesma isenção"
+              % (lista_f, lista_fora_c))
+    if lista_cut_drift:
+        print("[FAIL] ponteiro com vírgula: narrow viu %d listas / %d números julgados / %d em alvo morto / %d poupados pelo registro, e wide viu %d / %d / %d / %d — a forma não depende do corte, a igualdade é invariant"
+              % (lista_n, lista_it, lista_mt, lista_f, lista_nw, lista_itw, lista_mtw, lista_fw))
+    if lista_cov_drift:
+        print("[FAIL] cobertura do ponteiro com vírgula: o veredito abriu %d listas e %d números (%d vivos + %d em alvo que não resolve) e o censo independente, que não confere linha nenhuma, acha %d listas e %d números no mesmo escopo — diferença é braço tendo parado de olhar, e sem esta cerca o braço pode ser apagado que os dois números caem a zero juntos dentro dele"
+              % (lista_n, lista_it + lista_mt, lista_it, lista_mt, lista_tok_c, lista_it_c))
+    print("ponteiro com vírgula: %d listas com %d números julgados (%d acusados, %d dentro de alvo que não resolve, %d desses poupados pelo registro) e %d números poupados dentro dos registros datados, contra %d listas e %d números no censo independente"
+          % (lista_n, lista_it + lista_mt, lista_bad, lista_mt, lista_sp, lista_f,
+             lista_tok_c, lista_it_c))
+    print("LISTA %d %d %d %d %d %d %d %d %d %d %d %d %d" % (
+        lista_n, lista_it, lista_mt, lista_sp,
+        lista_f, lista_bad,
+        1 if lista_cut_drift else 0,
+        1 if lista_cov_drift else 0,
+        lista_tok_c, lista_it_c, lista_fora_c,
+        len(LISTA_CONTROLES), vbiting))
     wl_fail = False
     if WL_ON:
         # A lista sai ordenada por classe porque é por classe que ela é lida: primeiro a
@@ -2862,6 +3099,8 @@ def main():
             or hbiting != hcases or cont_acusados or cont_cut_drift or fora_cut_drift
             or cont_n != cov_n
             or dbiting != dcases or dead_n or dead_cut_drift or dead_cov_drift
+            or vbiting != vcases or lista_bad or lista_cut_drift or lista_cov_drift
+            or lista_reg_drift
             or wl_fail
             or reg_bad or reg is None):
         return 1
@@ -2872,12 +3111,13 @@ sys.exit(main())
 PYEOF
 )"
 	ident_code=$?
-	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT|MORTOS) '
+	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT|MORTOS|LISTA) '
 	ident_stats="$(printf '%s\n' "$ident_out" | grep '^IDENTIDADE ' | tail -n 1)"
 	lit_stats="$(printf '%s\n' "$ident_out" | grep '^LITERAL ' | tail -n 1)"
 	anc_stats="$(printf '%s\n' "$ident_out" | grep '^ANCORA ' | tail -n 1)"
 	cont_stats="$(printf '%s\n' "$ident_out" | grep '^CONT ' | tail -n 1)"
 	mortos_stats="$(printf '%s\n' "$ident_out" | grep '^MORTOS ' | tail -n 1)"
+	lista_stats="$(printf '%s\n' "$ident_out" | grep '^LISTA ' | tail -n 1)"
 	checks=$((checks + 1))
 	if [ -z "$ident_stats" ]; then
 		fail "a régua de identidade não devolveu a linha \`IDENTIDADE\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
@@ -3648,6 +3888,73 @@ else
 		fi
 		if [ "$dead_a" -eq 0 ] && [ "$dead_biting" -eq "$dead_cases" ] && [ "$dead_cases" -gt 0 ] && [ "$dead_drift" -eq 0 ] && [ "$dead_cov" -eq 0 ] && [ "$dead_reg" -eq "$path_reg" ]; then
 			echo "[ok] $((dead_a + dead_sp)) ponteiros de linha sem alvo na árvore, todos julgados ($dead_a acusados, $dead_sp poupados pelo registro de $dead_reg caminho(s), $dead_cont deles continuação) contra $dead_seen no censo independente, com os $dead_cases controles do self-test mordendo"
+		fi
+	fi
+	# ---------------------------------------------------------------------------
+	# 31) PONTEIRO COM VÍRGULA: `arquivo:12,13-15` afirma N linhas de um golpe.
+	#
+	# É a forma que a marreta de #124 empurra a prosa a escrever quando uma frase precisa
+	# de quatro sítios: um backtick em vez de quatro. E porque era nova, nenhum braço a
+	# lia — `PTR` exige o backtick logo depois do número, então `12,13` não casava nem pela
+	# identidade nem pela continuação, e o walk saia pela mesma porta dos invisíveis que a
+	# seção 30 fechou por outro batente. Medido antes de escrever a régua: nove citações
+	# assim no corpus vivo, todas em arquivo que existe, e nenhum dos números julgado.
+	#
+	# O que se cobra é o que a frase promete, número a número: o alvo resolve (ou está no
+	# registro de caminhos mortos, a mesma licença da seção 30, lida pela mesma função), a
+	# borda cabe no arquivo e a linha citada não é branca. O meio do intervalo não é
+	# cobrado porque o `arquivo:NN-NN` simples também não cobra — régua mais dura para a
+	# forma barata seria exatamente o incentivo para voltar a escrever cinco backticks, e
+	# o objetivo aqui era matar o custo de ponteiro, não recriá-lo. A cláusula não entra:
+	# uma frase fazendo quatro afirmações não é decomponível pelo parser de oração, e
+	# inventar um recorte para ela daria veredito de uma linha para a promessa de outra.
+	#
+	# Três cercas, todas de escopo, nunca de nível (a lição do #137): igualdade entre os
+	# dois cortes, igualdade com `listacensus` — um walk que não abre intervalo e não
+	# conhece registro — e igualdade do recorte de `SKIP_NAMES` entre veredito e censo,
+	# que é onde a isenção cresce sozinha. Mais uma mesa de treze controles, três deles
+	# provando que `PTR` e `LISTPTR` não comem o mesmo token: sem esses, a cobertura passaria
+	# a somar o mesmo número duas vezes e ainda dar igualdade.
+	# ---------------------------------------------------------------------------
+	checks=$((checks + 1))
+	if [ -z "$lista_stats" ]; then
+		fail "a régua do ponteiro com vírgula não devolveu a linha \`LISTA\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
+	else
+		lista_ln=0
+		lista_num=0
+		lista_morto=0
+		lista_poup=0
+		lista_rec=0
+		lista_acus=0
+		lista_corte=0
+		lista_cob=0
+		lista_censo=0
+		lista_censo_n=0
+		lista_censo_r=0
+		lista_cases=0
+		lista_biting=0
+		read -r _lab lista_ln lista_num lista_morto lista_poup lista_rec lista_acus \
+			lista_corte lista_cob lista_censo lista_censo_n lista_censo_r \
+			lista_cases lista_biting <<< "$lista_stats"
+		checks=$((checks + lista_num + lista_morto))
+		failures=$((failures + lista_acus))
+		if [ "$lista_biting" -ne "$lista_cases" ]; then
+			fail "self-test do ponteiro com vírgula mordeu $lista_biting de $lista_cases controles — sem a mesa, parser e veredito podem devolver o que quiserem e o zero de acusações não vale nada"
+		fi
+		if [ "$lista_cases" -eq 0 ]; then
+			fail "a tabela de controles do ponteiro com vírgula está vazia (0 de 0) — \`biting == cases\` é verde vazio sem controle"
+		fi
+		if [ "$lista_corte" -ne 0 ]; then
+			fail "ponteiro com vírgula divergiu entre os dois cortes — a forma não depende do recorte de cláusula, e divergir é o braço tendo parado no meio de um dos dois passes"
+		fi
+		if [ "$lista_cob" -ne 0 ]; then
+			fail "cobertura do ponteiro com vírgula: o veredito abriu $lista_ln listas e $((lista_num + lista_morto)) números e o censo independente, que não confere linha nenhuma, acha $lista_censo listas e $lista_censo_n números no mesmo escopo — o braço parou de olhar, e apagar o braço inteiro leva os dois números a zero dentro dele"
+		fi
+		if [ "$lista_rec" -ne "$lista_censo_r" ]; then
+			fail "recorte da vírgula: o veredito poupou $lista_rec números dentro dos registros datados e o censo, que não julga nada, conta $lista_censo_r no mesmo recorte — as duas leituras de \`SKIP_NAMES\` deixaram de ser a mesma isenção, que é o modo de a licença crescer sem que ninguém a escreva"
+		fi
+		if [ "$lista_acus" -eq 0 ] && [ "$lista_biting" -eq "$lista_cases" ] && [ "$lista_cases" -gt 0 ] && [ "$lista_corte" -eq 0 ] && [ "$lista_cob" -eq 0 ] && [ "$lista_rec" -eq "$lista_censo_r" ]; then
+			echo "[ok] $lista_ln ponteiros com vírgula julgados número a número ($((lista_num + lista_morto)) números, $lista_acus acusados, $lista_morto dentro de alvo que não resolve dos quais $lista_poup poupados pelo registro), $lista_rec números poupados dentro dos registros datados, contra $lista_censo listas e $lista_censo_n números no censo independente, com os $lista_cases controles do self-test mordendo"
 		fi
 	fi
 fi
