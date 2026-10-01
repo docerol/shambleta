@@ -1798,6 +1798,76 @@ def anchorverdict(sym, clause, target_lines, ext):
     return True, "", ""
 
 
+# ---------------------------------------------------------------------------
+# WORKLIST (#124, o custo de marreta). `DRIFT_WORKLIST=1` faz o MESMO walk que
+# cobra os ponteiros devolver, para cada `arquivo:NN` cobrado, o `@simbolo` cujo
+# bloco contém a linha citada e a classe do trabalho que falta para converter.
+# Não é régua: não muda veredito, censo nem saída do portão — é ferramenta de
+# mão, lida por humano. O que ela tira da conversão é a procura (abrir o alvo,
+# caçar a declaração, conferir se a frase já nomeia o nome) e deixa só a frase,
+# que é o custo real registrado no #124: das `prosa` nenhuma sai de graça, mas
+# todas saem de uma linha lida em vez de dois arquivos abertos.
+#
+# A classe é decidida pelos mesmos `anchor_spans`, `mentions` e `lit_clause` da
+# régua, e é por isso que o worklist mora neste arquivo e não num script próprio:
+# um conversor com modelo segundo seria o segundo leitor lendo outra geografia do
+# mesmo alvo (#116), prometendo âncora que o portão acusa.
+#
+# O self-test da ferramenta é o invariante, cobrado em `main()`: a soma das
+# classes é o censo de ponteiros julgados do corte narrow mais os alvos mortos.
+# Laço que para de registrar um ponteiro é lista menor que a árvore, e lista
+# menor que a árvore é exatamente o modo de mentir desta ferramenta — ela não
+# acusa nada, só deixa de dizer.
+# ---------------------------------------------------------------------------
+WL_ON = os.environ.get("DRIFT_WORKLIST") == "1"
+WL_ROWS = []
+WL_TOT = {}
+WL_SPANS = {}
+WL_CLASSES = ("gratis", "prosa", "fora", "sem modelo", "morto")
+
+
+def wl_inner(spans, lnum):
+    """O bloco MAIS INTERNO cobrindo a linha citada.
+
+    `func` morando dentro de `class` são dois vãoes sobre a mesma linha, e o que
+    a frase pin-a é o método: o menor vão é a única âncora que a régua aprova
+    sem reescrever a promessa. Empate de tamanho é desempate por nome, para a
+    lista ser determinística entre duas passadas.
+    """
+    donos = sorted((b - a, nm) for nm, v in spans.items() for (a, b) in v
+                   if a <= lnum <= b)
+    return donos[0][1] if donos else ""
+
+
+def wl_add(classe, site, alvo, cand, clause):
+    WL_TOT[classe] = WL_TOT.get(classe, 0) + 1
+    WL_ROWS.append((classe, site, alvo, cand, (clause or "")[:88].strip()))
+
+
+def wl_judge(site, target, lnum, tl, clause):
+    """Um ponteiro de linha, a classe e o candidato — sem julgar nada."""
+    if tl is None:
+        wl_add("morto", site, target + ":" + lnum, "", clause)
+        return
+    ext = anchor_ext(target)
+    if ext not in DECLS and ext not in YAML_EXT:
+        wl_add("sem modelo", site, target + ":" + lnum, "", clause)
+        return
+    if target not in WL_SPANS:
+        WL_SPANS[target] = anchor_spans(tl, ext)
+    try:
+        primeiro = int(lnum.split("-")[0])
+    except ValueError:
+        primeiro = 0
+    cand = wl_inner(WL_SPANS[target], primeiro)
+    if not cand:
+        wl_add("fora", site, target + ":" + lnum, "", clause)
+    elif mentions(cand, clause):
+        wl_add("gratis", site, target + ":" + lnum, cand, clause)
+    else:
+        wl_add("prosa", site, target + ":" + lnum, cand, clause)
+
+
 # ALVO5 é o terreno da ÂNCORA: `GATE_RUN` declarado na 2, `Beta` uma vez só na 4 (e a
 # linha 6, indentada, não é declaração de coluna zero — é corpo do `Beta`), `WAL_SALT`
 # dentro do bloco, `Delta_Load` no bloco seguinte, e `Gamma` que não existe no arquivo.
@@ -2406,9 +2476,15 @@ def scan(root, wide, reg, index):
                     ptr_k += 1
                     if "|" in clip:
                         clip = clip.rsplit("|", 1)[-1]
+                    clause = lit_clause(src[n - 2] if n > 1 else None, clip, ptr_k == 1,
+                                        m.end() < len(line) and line[m.end()] == "`")
                     tl = lines_of(target)
                     if tl is None:
+                        if WL_ON and not wide and not eh_cont:
+                            wl_judge("%s:%d" % (rel, n), target, m.group(2), None, clause)
                         continue
+                    if WL_ON and not wide and not eh_cont:
+                        wl_judge("%s:%d" % (rel, n), target, m.group(2), tl, clause)
                     if eh_cont:
                         cont_judged += 1
                     else:
@@ -2421,9 +2497,7 @@ def scan(root, wide, reg, index):
                     # `return` — e a frase sobre o chamador não promete `return` em
                     # lugar nenhum. Régua que julga a frase errada acusa a frase certa.
                     ok, cands, where, motivo = verdict(
-                        lit_clause(src[n - 2] if n > 1 else None, clip, ptr_k == 1,
-                                   m.end() < len(line) and line[m.end()] == "`"),
-                        m, tl, wide,
+                        clause, m, tl, wide,
                         os.path.splitext(os.path.basename(target))[0])
                     if ok:
                         continue
@@ -2572,11 +2646,30 @@ def main():
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting, fora_n, fora_lin, fora_anc))
     print("CONT %d %d %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on, cov_n, cov_spared))
+    wl_fail = False
+    if WL_ON:
+        # A lista sai ordenada por classe porque é por classe que ela é lida: primeiro a
+        # que é sintaxe (`gratis`), depois a que é frase (`prosa`), depois as que não têm
+        # âncora a oferecer. Os `:NN` de continuação ficam fora por construção: a classe
+        # deles depende do ponteiro nomeado da mesma linha, e o worklist julgaria o alvo
+        # herdado como se a frase o tivesse nomeado.
+        for row in sorted(WL_ROWS, key=lambda r: (WL_CLASSES.index(r[0]), r[1])):
+            print("WORKLIST %s %s %s %s | %s" % row)
+        soma = sum(WL_TOT.get(c, 0) for c in WL_CLASSES)
+        mortos = WL_TOT.get("morto", 0)
+        print("WORKLIST resumo %s total %d, cobrados %d, mortos %d" % (
+            " ".join("%s=%d" % (c, WL_TOT.get(c, 0)) for c in WL_CLASSES),
+            soma, narrow_judged, mortos))
+        if soma != narrow_judged + mortos:
+            print("[FAIL] worklist: as classes somam %d ponteiros contra os %d julgados mais %d mortos do corte narrow (%d) — a lista parou de registrar algum, e lista mais curta que a árvore é o único modo de esta ferramenta mentir, porque ela não acusa nada, só deixa de dizer"
+                  % (soma, narrow_judged, mortos, narrow_judged + mortos))
+            wl_fail = True
     if (biting != cases or accused or narrow_judged < MIN_CHECKS or wide_judged < narrow_judged
             or cut_drift or reg_cut_drift or anchor_cut_drift or resol_cut_drift or lbiting != lcases
             or rbiting != rcases or abiting != acases or anchor_bad
             or hbiting != hcases or cont_acusados or cont_cut_drift or fora_cut_drift
             or cont_n != cov_n
+            or wl_fail
             or reg_bad or reg is None):
         return 1
     return 0

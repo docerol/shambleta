@@ -550,6 +550,32 @@ par de pernas no `all` dobraria o custo sem medir nada novo. O prefixo `_` é o 
 mantém fora, e `repo_layout_test` exige que uma exceção assim seja ferramenta de mão
 documentada — esta seção é a receita; sem ela o harness é considerado morto.
 
+## Ferramenta de mão: `DRIFT_WORKLIST=1` (a lista do que falta converter)
+
+```bash
+DRIFT_WORKLIST=1 timeout 900 bash scripts/check_doc_drift.sh | grep '^WORKLIST '
+```
+
+O #124 trocou ponteiro de linha por âncora, e o custo que sobrou é a procura: para
+cada `arquivo:NN` cobrado, abrir o alvo, caçar a declaração cujo bloco contém aquela
+linha e conferir se a frase já nomeia o nome. Esta variável de ambiente faz o **mesmo
+walk** que cobra os ponteiros devolver esse resultado linha a linha — classe, sítio,
+alvo, símbolo candidato e a cláusula que a régua lê — em vez de um script próprio com
+um segundo modelo de declaração, que seria dois leitores vendo duas geografias do
+mesmo arquivo (o #116). As classes são `gratis` (a cláusula já nomeia; converter é
+sintaxe), `prosa` (o símbolo existe, a frase não o nomeia; converter é reescrever),
+`fora` (nenhum bloco cobre a linha citada), `sem modelo` (o alvo é Dockerfile, nginx,
+CSV, SQL — ali não há declaração a ancorar) e `morto` (o arquivo não resolve).
+
+A ferramenta não é régua: ela não muda veredito, censo nem saída do portão, e o seu
+self-test é o invariante da lista — as classes têm de somar os ponteiros julgados do
+corte narrow mais os alvos mortos, e uma classe que pare de registrar é acusada,
+porque lista mais curta que a árvore é o único modo de ela mentir. Medido em
+2026-10-01: 231 ponteiros cobrados, sendo 1 `gratis`, 174 `prosa`, 4 `fora`, 45
+`sem modelo` e 7 `morto`. O `sem modelo` é o número que diz que o teto de linha não
+zerou por falta de frase: quarenta e cinco deles não têm âncora a oferecer enquanto
+Dockerfile e nginx não tiverem modelo de declaração.
+
 ## Nota histórica: o harness multiplayer (P4)
 
 Este parágrafo afirmava que `MultiplayerTests.gd` "dependia de `Parse Error`
