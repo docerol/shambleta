@@ -1133,11 +1133,23 @@ REG_MIN=2
 # fatia mordendo quem a documenta, e ela ficou registrada sem número colado ao arquivo — o
 # que é, exatamente, o que #124 diz que um aviso deve fazer quando o número deixa de ser a
 # evidência.
-ANCHOR_MIN=182
-LINE_MAX=452
+# Terceira colheita, 2026-10-01: `deploy/SCALING.md` saiu do ponteiro de linha. Dos catorze
+# cobrados ali, treze viraram âncora e um ficou de linha por motivo MEDIDO: a regra de alerta
+# do Prometheus é discriminada por VALOR (`- alert: QueryMutexTravando`), e o índice YAML julga
+# CAMINHO de chave — `groups.rules.expr` mora catorze vezes no arquivo, então a régua responde
+# `duplo`, que é a acusação certa: caminho repetido não escolhe nada. Pelo mesmo motivo os dois
+# `Dockerfile` de monitoramento ficam na classe `sem modelo`: sem declaração legível, âncora não
+# tem bloco, e fingir um bloco seria aprovar ponteiro que não prova nada.
+# O achado dentro do achado: a doc apontava o throttle de 30 Hz para duas linhas de
+# `sources/launcher/Launcher.gd` que caíram em cima de um comentário de `Reset()`, enquanto o
+# `Engine.set_max_fps` de verdade mora em `_ready()`. Linha cheia, texto presente, julgamento
+# nenhum — é exatamente a classe que a âncora fecha, e ela só apareceu porque converter obriga
+# a abrir o alvo.
+ANCHOR_MIN=205
+LINE_MAX=427
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
-# para cima do laço de âncora, o total cai de 182 para 167 e o `ANCHOR_MIN` acima acusa —
+# para cima do laço de âncora, o total cai de 205 para 190 e o `ANCHOR_MIN` acima acusa —
 # mas acusa "faltam âncoras", sem dizer qual recorte parou de ser lido. Contada no local da
 # cobrança, a mesma mutação zera ESTE número, e aí a frase passa a nomear a classe.
 ANCHOR_FORA_MIN=15

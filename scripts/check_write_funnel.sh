@@ -114,7 +114,7 @@ fi
 # O funil nomeado na doc existe: verde aqui não pode conviver com a `queryMutex`
 # renomeada e o §7 do SCALING voltando a ser prosa inventada.
 if grep -q 'queryMutex : Mutex' sources/sql/SQL.gd; then
-	ok "a queryMutex citada pelo SCALING (sources/sql/SQL.gd:7) existe no fonte"
+	ok "a queryMutex citada pelo SCALING (sources/sql/SQL.gd:@queryMutex) existe no fonte"
 else
 	bad "queryMutex nomeada na doc nao esta no fonte" "var queryMutex : Mutex" "ausente"
 fi
