@@ -77,18 +77,24 @@ RATCHET_SLACK=200
 # padrão das outras fatias do diretório — `RefCounted`, estáticas, store por parâmetro —
 # e a fachada ficou com a delegação, que é o contrato que a doc nomeia. O teto volta ao
 # valor exato medido: quem precisar de linha a mais sobe com o motivo escrito aqui.
-# Exceção registrada: `sources/economy/AuctionHouseService.gd` (1258) e
+# Exceção registrada: `sources/economy/AuctionHouseService.gd` (1155) e
 # `sources/economy/CheckoutService.gd` (923) saíram debaixo do teto duro de 800 porque
 # as ondas #81–#104 acrescentaram os controles de wash do leilão (migration
 # `data/conf/migrations/063_ah_wash_controls.sql`) e o pré-autorizado do checkout
 # (coberto por `tests/preauth_ledger_test.gd`). São escritas sancionadas no funil, não
 # god-node novo; entram na allowlist com o teto no valor exato medido, e a próxima
 # passada que os encolher tem de baixar o teto pela mesma banda.
+# E desceu: 1258 → 1155 em 2026-10-01, por FATIAMENTO. A banda de ask do #93.1
+# (`AHVendorUnitPrice`, `AHPriceAnchor`, `AHPriceBand` e as três consts de faixa) saiu
+# para `sources/economy/AuctionHousePricing.gd` — o critério do corte não é "menor
+# arquivo": é que a banda é função de (item, preço por unidade) mais LEITURA de
+# `ah_price_history`, sem mutex, escrow nem ledger, então ela pode ser estática e o
+# `settleMutex` continua todo na fachada, que é quem a chama.
 declare -A RATCHET=(
   ["sources/network/server/Server.gd"]=1971
   ["sources/world/WorldCommands.gd"]=1925
   ["sources/sql/SQL.gd"]=1821
-  ["sources/economy/AuctionHouseService.gd"]=1258
+  ["sources/economy/AuctionHouseService.gd"]=1155
   ["sources/economy/CheckoutService.gd"]=923
   ["sources/network/client/Client.gd"]=1139
   ["sources/network/Network.gd"]=1277

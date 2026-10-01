@@ -721,8 +721,18 @@ func _panelConnectsResolve() -> bool:
 func _ahScript() -> GDScript:
 	return load("res://sources/economy/AuctionHouseService.gd")
 
+# A banda de ask saiu do serviço para `AuctionHousePricing.gd` quando o ratchet
+# anti-god-node dele estourou. As consts da banda são lidas do arquivo que as
+# DECLARA: ler do serviço seria o harness conferir um número que o serviço não
+# tem mais — e a régua passaria verde mesmo se a banda sumisse do produto.
+func _pricing() -> GDScript:
+	return load("res://sources/economy/AuctionHousePricing.gd")
+
 func _ahConst(name : String) -> int:
 	return int(_ahScript().get_script_constant_map().get(name, 0))
+
+func _pricingConst(name : String) -> int:
+	return int(_pricing().get_script_constant_map().get(name, 0))
 
 func _clearItem(itemID : int) -> void:
 	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d;" % itemID)
@@ -761,12 +771,12 @@ func _suitePriceBand() -> void:
 	_sql.call("AddItemToCharacter", seller, _itemWash, 8, "mdx_grant")
 	# Mercadoria da conta-capada: sem estoque a 51ª recusa seria `not_enough_items`
 	# em vez de `list_day_cap` (a porta de volume vem antes do consumo —
-	# `AuctionHouseService.gd:755` vs `:758`) e a liberação no dia limpo não
+	# `AuctionHouseService.gd:648` vs `:651`) e a liberação no dia limpo não
 	# aconteceria. Uma unidade: o passo (6) anuncia 1, é recusado pelo cap, limpa
 	# o contador e anuncia a MESMA unidade de novo.
 	_sql.call("AddItemToCharacter", capped, _itemWash, 1, "mdx_grant")
-	var maxPct : int = _ahConst("AHBandMaxPct")
-	var minPct : int = _ahConst("AHBandMinPct")
+	var maxPct : int = _pricingConst("AHBandMaxPct")
+	var minPct : int = _pricingConst("AHBandMinPct")
 	var maxLists : int = _ahConst("AHMaxListingsPerDay")
 	var maxBuys : int = _ahConst("AHMaxBuysPerDay")
 	# (1) mercadoria sem histórico e sem vendor: SEM banda. Recusar aqui seria
@@ -774,17 +784,19 @@ func _suitePriceBand() -> void:
 	var seedAsk : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 1, 999999)
 	_check(int(seedAsk.get("id", 0)) > 0, "ask sem âncora de mercado é listado (item novo cria a própria referência)")
 	_checkStrEq(str(seedAsk.get("reason", "")), "ok", "e o veredito diz ok, não 'rejected' genérico")
-	# A régua lê a MESMA função que o funil de anúncio usa para julgar o preço
-	# (`AuctionHouseService.gd:729` chama `AHPriceBand(itemID, unit)`), no instante em
-	# que o anúncio foi julgado. `ListItemForSaleChecked` ecoa `band` só nas recusas
-	# Early (`sources/economy/AuctionHouseService.gd:712,730` devolvem `result`, que tem a
+	# A régua lê a MESMA função `AHPriceBand` que o funil de anúncio usa para
+	# julgar o preço (`sources/economy/AuctionHousePricing.gd:@AHPriceBand`, chamada
+	# por `ListItemForSaleChecked` em `sources/economy/AuctionHouseService.gd:@ListItemForSaleChecked`), no
+	# instante em que o anúncio foi julgado. `ListItemForSaleChecked` ecoa `band` só
+	# nas recusas Early (`sources/economy/AuctionHouseService.gd:603,623` devolvem
+	# `result`, que tem a
 	# chave); o caminho de sucesso devolve `out`, declarado e devolvido dentro de
 	# `ListItemForSaleChecked` (`sources/economy/AuctionHouseService.gd:@ListItemForSaleChecked`),
 	# que nunca teve `band` — buscar a chave no
 	# veredito aceito era `null as Dictionary` e derrubava a suíte inteira com
 	# SCRIPT ERROR. Não é afrouxamento: `no_anchor` continua exigido por nome, e se o
 	# produto passar a ancorar item sem histórico esta linha fecha vermelha.
-	var seedBand : Dictionary = ah.call("AHPriceBand", _itemWash, 999999)
+	var seedBand : Dictionary = _pricing().call("AHPriceBand", _itemWash, 999999)
 	_checkStrEq(str(seedBand.get("reason", "")), "no_anchor", "com o motivo da ausência nomeado")
 	_check(bool(seedBand.get("ok", false)), "e a ausência de âncora NÃO é recusa: item novo cria a própria referência")
 	# (2) âncora real: uma venda a 500/unidade.
@@ -792,7 +804,7 @@ func _suitePriceBand() -> void:
 	_check(anchorListing > 0, "anúncio-âncora criado")
 	_check(bool(_eco.call("BuyListing", buyer, anchorListing)), "âncora liquidada (500/unidade realizada)")
 	# (3) TETO: 6000 = 12× a mediana (500). Máximo = 500 × maxPct%.
-	var band : Dictionary = ah.call("AHPriceBand", _itemWash, 6000)
+	var band : Dictionary = _pricing().call("AHPriceBand", _itemWash, 6000)
 	_checkEq(int(band.get("anchor", -1)), 500, "a âncora lida é a mediana realizada (500)")
 	_checkEq(int(band.get("max", -1)), int(round(500.0 * float(maxPct) / 100.0)), "teto = âncora × AHBandMaxPct")
 	var tooHigh : Dictionary = ah.call("ListItemForSaleChecked", seller, _itemWash, 1, 6000)

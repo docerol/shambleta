@@ -205,7 +205,7 @@ static func SetQuest(caller : BaseAgent, questID : int, state : int):
 # _LedgerAppendLocked).
 
 # Reason por kind no ledger: `quest:<questID>:gold` / `:xp` — o mesmo scheme
-# `domínio:chave` de `ah_buy:<id>` (AuctionHouseService.gd:371) e de
+# `domínio:chave` de `ah_buy:<id>` (AuctionHouseService.gd:781) e de
 # `chest:<id>|<hash>|<seed>` (TradeChestService.gd:152), que é o que permite à
 # auditoria perguntar quanto a quest N mintou sem varrer reason livre.
 static func QuestRewardReason(questID : int, kind : String) -> String:

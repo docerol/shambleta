@@ -26,9 +26,9 @@ const BufferCap : int = 500
 # `tests/telemetry_census_test.gd` fica vermelho quando um writer anunciar um
 # kind que o gate não aceita.
 #
-# O censo achou mais quatro no MESMO estado, na mesma passada: `ah_bid`,
-# `ah_bid_fill`, `ah_bid_cancel`, `ah_expire` — todos anunciados por `_RecordAH`
-# (`sources/economy/AuctionHouseService.gd:407,1140,1164,1240`) e recusados por esta
+# O censo achou mais quatro no MESMO estado, na mesma passada: `ah_expire`,
+# `ah_bid`, `ah_bid_cancel`, `ah_bid_fill` — todos anunciados por `_RecordAH`
+# (`sources/economy/AuctionHouseService.gd:298,1037,1061,1137`) e recusados por esta
 # lista, ou seja: o marketplace emitia quatro eventos que nunca caíram na tabela.
 # Entraram aqui e em `OperationalKinds` (aceito E lido), porque um evento de leilão
 # que o gate joga fora é indistinguível de um funil que nunca existiu.
