@@ -1091,6 +1091,12 @@ REG_MIN=2
 # deixa de ser o que impede a mudança, ele some sozinho na mudança.
 ANCHOR_MIN=148
 LINE_MAX=486
+# O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
+# registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
+# para cima do laço de âncora, o total cai de 148 para 133 e o `ANCHOR_MIN` acima acusa —
+# mas acusa "faltam âncoras", sem dizer qual recorte parou de ser lido. Contada no local da
+# cobrança, a mesma mutação zera ESTE número, e aí a frase passa a nomear a classe.
+ANCHOR_FORA_MIN=15
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))
@@ -2039,6 +2045,11 @@ def scan(root, wide, reg, index):
     cont_orfas = 0
     line_total = 0
     resolvidos = [0]
+    # Censo do RECORTE de registro datado: `fora` conta linhas lidas por arquivo, e os dois
+    # numeros seguintes separam o que a isencao poupa (linha) do que ela nao poupa (ancora).
+    fora = {}
+    lin_fora = 0
+    anc_fora = 0
 
     def lines_of(path):
         # Ordem de resolucao -- a mesma do `_PtrResolve` do harness: caminho literal;
@@ -2085,6 +2096,10 @@ def scan(root, wide, reg, index):
             # censo medido em 2026-09-29: 3 ponteiros em data/conf/*.json no HEAD, e os
             # tres eram falsos; reescrita a prosa, o corpo hoje julga 10.
             is_json = fn.endswith(".json")
+            # O recorte de registro datado decidido UMA vez por arquivo, antes de qualquer
+            # laço: o censo de âncora cobrada precisa nascer no mesmo lugar que a cobrança,
+            # senão ele conta o shape e não o veredito (ver o bloco do SKIP_NAMES).
+            e_fora = fn in SKIP_NAMES
             for n, line in enumerate(src, 1):
                 # Em codigo, so comentario: o corpo de uma funcao nao e prosa nomeando
                 # a linha de outra pessoa.
@@ -2103,6 +2118,8 @@ def scan(root, wide, reg, index):
                 anc_k = 0
                 for m4 in ANCHOR.finditer(line):
                     anchor_total += 1
+                    if e_fora:
+                        anc_fora += 1
                     anc_k += 1
                     tgt = m4.group(1)
                     if tgt.startswith("res://"):
@@ -2127,7 +2144,15 @@ def scan(root, wide, reg, index):
                     anchor_accused += 1
                     print("[FAIL] âncora: %s:%d aponta %s e %s"
                           % (rel, n, m4.group(0), ANCHOR_MOTIVOS[mot4] % det4))
-                if os.path.basename(rel) in SKIP_NAMES:
+                if e_fora:
+                    # O recorte dito em numero, nao so em comentario: quantos ponteiros de
+                    # linha esta isencao poupa. O censo de ANCORA cobrada nao nasce aqui de
+                    # proposito: ele nasce no laco que cobra. Medir o shape no atalho deixa
+                    # o piso ANCHOR_FORA_MIN cego para o unico erro que ele existe para
+                    # ver -- i.e. o atalho subir para cima do laco de ancora continua
+                    # dizendo "15 cobradas" enquanto o laço não julga mais nenhuma.
+                    fora[rel] = fora.get(rel, 0) + 1
+                    lin_fora += sum(1 for _ in PTR.finditer(line))
                     continue
                 prev_end = 0
                 ptr_k = 0
@@ -2245,7 +2270,7 @@ def scan(root, wide, reg, index):
                           % (rel, n, m3.group(1),
                              "nenhuma chamada de gate_sh lida (scripts/test.sh nao encontrado)"
                              if reg is None else "%d chamada(s) de gate_sh em structure_gates()" % len(reg)))
-    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas
+    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas, len(fora), lin_fora, anc_fora
 
 
 def main():
@@ -2258,11 +2283,12 @@ def main():
     reg = registry(root)
     index = build_index(root)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
-     anchors, anchor_bad, lines, resolvidos, cont_n, cont_jn, cont_an, cont_on) = \
+     anchors, anchor_bad, lines, resolvidos, cont_n, cont_jn, cont_an, cont_on,
+     fora_n, fora_lin, fora_anc) = \
         scan(root, False, reg, index)
     (wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w,
      anchors_w, anchor_bad_w, lines_w, resolvidos_w, cont_w, cont_jw, cont_aw,
-     cont_ow) = scan(root, True, reg, index)
+     cont_ow, fora_n_w, fora_lin_w, fora_anc_w) = scan(root, True, reg, index)
     accused = narrow_bad + wide_bad
     cont_jugados = cont_jn + cont_jw
     cont_acusados = cont_an + cont_aw
@@ -2302,6 +2328,16 @@ def main():
     if cont_cut_drift:
         print("[FAIL] continuação: narrow viu %d `:NN` e wide viu %d — a regex do ponteiro não depende do corte"
               % (cont_n, cont_w))
+    # O censo do RECORTE também não depende do corte: a isenção é de classe, não de forma.
+    # Divergir aqui é o `continue` de registro datado tendo subido ou descido no laço entre
+    # os dois passes — ou seja, exatamente o momento em que a âncora deixaria de ser cobrada
+    # dentro do CHANGELOG sem que nenhum dos dois censos de âncora o dissesse.
+    fora_cut_drift = (fora_n, fora_lin, fora_anc) != (fora_n_w, fora_lin_w, fora_anc_w)
+    if fora_cut_drift:
+        print("[FAIL] recorte: narrow viu %d registros / %d linhas poupadas / %d âncoras cobradas, e wide viu %d / %d / %d — o atalho de registro datado não pode depender do corte"
+              % (fora_n, fora_lin, fora_anc, fora_n_w, fora_lin_w, fora_anc_w))
+    print("recorte de registro datado: %d arquivos lidos, %d ponteiros de linha poupados, %d âncoras cobradas MESMO DENTRO do registro"
+          % (fora_n, fora_lin, fora_anc))
     if cut_drift:
         print("[FAIL] literal: narrow viu %r e wide viu %r — a régua não depende do corte, a igualdade é invariant"
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
@@ -2309,12 +2345,12 @@ def main():
     print("IDENTIDADE %d %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting, resolvidos))
     print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
-    print("ANCORA %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting))
+    print("ANCORA %d %d %d %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting, fora_n, fora_lin, fora_anc))
     print("CONT %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on))
     if (biting != cases or accused or narrow_judged < MIN_CHECKS or wide_judged < narrow_judged
             or cut_drift or reg_cut_drift or anchor_cut_drift or resol_cut_drift or lbiting != lcases
             or rbiting != rcases or abiting != acases or anchor_bad
-            or hbiting != hcases or cont_acusados or cont_cut_drift
+            or hbiting != hcases or cont_acusados or cont_cut_drift or fora_cut_drift
             or reg_bad or reg is None):
         return 1
     return 0
@@ -2948,7 +2984,10 @@ else
 		anc_lines=0
 		anc_cases=0
 		anc_biting=0
-		read -r _lab anc_n anc_accused anc_lines anc_cases anc_biting <<< "$anc_stats"
+		anc_fora_n=0
+		anc_fora_lin=0
+		anc_fora_anc=0
+		read -r _lab anc_n anc_accused anc_lines anc_cases anc_biting anc_fora_n anc_fora_lin anc_fora_anc <<< "$anc_stats"
 		checks=$((checks + anc_n + anc_lines))
 		failures=$((failures + anc_accused))
 		if [ "$anc_biting" -ne "$anc_cases" ]; then
@@ -2960,8 +2999,20 @@ else
 		if [ "$anc_lines" -gt "$LINE_MAX" ]; then
 			fail "$anc_lines ponteiros \`arquivo:linha\` contra o teto $LINE_MAX — o ratchet só desce; cada linha escrita é marreta comprada de novo"
 		fi
-		if [ "$anc_accused" -eq 0 ] && [ "$anc_biting" -eq "$anc_cases" ] && [ "$anc_n" -ge "$ANCHOR_MIN" ] && [ "$anc_lines" -le "$LINE_MAX" ]; then
+		# O recorte tem de ser DITO e mordido, não só comentado: `arquivo:NN` dentro de registro
+		# datado é isento, `arquivo:@simbolo` dentro dele é cobrado. Provado em mutação hoje:
+		# subir o atalho para cima do laço de âncora acusa no total (148 → 133), mas o total diz
+		# "faltam âncoras" — este piso é o que diz QUAL recorte, e por isso o número nasce no
+		# laço que cobra, não no shape da linha.
+		if [ "$anc_fora_n" -lt 2 ]; then
+			fail "só $anc_fora_n registro(s) datado(s) na varredura — a lista de SKIP_NAMES parou de casar com a árvore, e ninguém isenta (nem cobra) história"
+		fi
+		if [ "$anc_fora_anc" -lt "$ANCHOR_FORA_MIN" ]; then
+			fail "$anc_fora_anc âncoras cobradas dentro dos registros datados, piso $ANCHOR_FORA_MIN — ou o atalho de registro subiu para cima do laço de âncora (história voltou a não ser lida por ninguém), ou a história foi reescrita sem âncora"
+		fi
+		if [ "$anc_accused" -eq 0 ] && [ "$anc_biting" -eq "$anc_cases" ] && [ "$anc_n" -ge "$ANCHOR_MIN" ] && [ "$anc_lines" -le "$LINE_MAX" ] && [ "$anc_fora_n" -ge 2 ] && [ "$anc_fora_anc" -ge "$ANCHOR_FORA_MIN" ]; then
 			echo "[ok] $anc_n âncoras \`arquivo:@simbolo\` julgadas pelo bloco da declaração, sobre $anc_lines ponteiros de linha (teto $LINE_MAX), com os $anc_cases controles do self-test mordendo"
+			echo "[ok] recorte: $anc_fora_n registros datados lidos, $anc_fora_lin ponteiros de linha poupados de cobrança (aqui eles não são nem lidos) e $anc_fora_anc âncoras cobradas neles — é este o número que o gémeo GDScript tem de ler, classe por classe, e os dois censos não são comparáveis porque o corpo dela varre mais tipos de arquivo"
 		fi
 	fi
 	# ---------------------------------------------------------------------------

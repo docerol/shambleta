@@ -89,6 +89,42 @@ static var _ptrIndex : Dictionary = {}
 # Dockerfile entra sem ponto porque é assim que a doc de deploy o cita.
 const PTR_TGT : String = "((?:[A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|yaml|json|sql|cfg|conf|md|csv|mjs|toml|godot|tscn|example|html))|(?:[A-Za-z0-9_./-]*Dockerfile))"
 
+# Os quatro registros datados têm a acusação de PONTEIRO DE LINHA e de CONTINUAÇÃO medida,
+# não cobrada; a âncora é cobrada neles também. A razão é a da régua bash: num registro, o que
+# a frase diz é o que era vero na rodada em que foi escrito, e cobrar dele a verdade de hoje
+# obriga quem fatia código a reescrever histórico. A âncora não envelhece com inserção de
+# linha, então mente do mesmo jeito dentro de um CHANGELOG — por isso a bash a julga ANTES do
+# atalho dela, e por isso este gémeo também a cobra. O desalinhamento custava o contrário do
+# que parecia: medido em 2026-10-01, duzentos e vinte e dois ponteiros de linha moravam nos
+# registros, e os pisos de cobertura desta suíte estavam sendo pagos por eles — `comSuite` em
+# 4 com três deles em história, e a inteira opinião do eixo de prosa (d) sobre histórico. Ou
+# seja: a régua cobrava marreta de quem só podia medir.
+# Comparação de censo entre os dois juízes continua sem sentido: o corpo da bash varre
+# também comentário de YAML, conf, HTML e mjs por toda a árvore, e isto lê `.md` de toda a
+# árvore mais quatro raízes de código. O que passa a ser o mesmo é o que os dois COBRAM.
+const EVIDENCIA_FORA : Array[String] = ["CHANGELOG.md", "progress.md", "ROADMAP_COMERCIAL.md", "BLIND_JUDGE_PROTOCOL.md"]
+
+# O nome é o que decide, em qualquer diretório — mesma regra da bash, que testa o
+# basename contra a lista. Um `CHANGELOG.md` de subpasta sai junto, e é isso que a
+# mesa abaixo cobra.
+static func _ForaDaEvidencia(path : String) -> bool:
+	return EVIDENCIA_FORA.has(path.get_file())
+
+# Acusação nascida dentro de registro datado é MEDIDA, não cobrada. É o recorte exato que a
+# régua bash faz com o `SKIP_NAMES` dela — história não é especificação viva, e um portão que
+# obriga a reescrever o CHANGELOG para ficar verde é o erro contrário — com uma diferença que
+# existe de propósito: lá o ponteiro de histórico nunca é lido, aqui ele é julgado e o veredito
+# vai para um balde à parte. Assim o censo dos dois juízes continua diferente (corpo diferente,
+# como sempre) mas o que os dois COBRAM é a mesma classe, e a frase "0 acusações" passa a vir
+# acompanhada de quantos ponteiros de história foram olhados e quantos acusariam.
+static func _Acusa(sinks : Dictionary, docPath : String, key : String, msg : String) -> void:
+	if _ForaDaEvidencia(docPath):
+		var historia : Array = sinks["historia"]
+		historia.append("[%s] %s" % [key, msg])
+		return
+	var sink : Array = sinks[key]
+	sink.append(msg)
+
 static func _PtrIndexWalk(dirPath : String) -> void:
 	var dir : DirAccess = DirAccess.open(dirPath)
 	if dir == null:
@@ -941,8 +977,43 @@ func SuiteEvidencePointers() -> void:
 			"varredura acha o comentário de código e o JSON de conf que promete ler: %d arquivos" % proseDocs.size()):
 		return
 	var sweep : Array[String] = []
-	sweep.append_array(docs)
-	sweep.append_array(proseDocs)
+	var foraVarridas : int = 0
+	for scopePath in docs:
+		sweep.append(String(scopePath))
+		if _ForaDaEvidencia(String(scopePath)):
+			foraVarridas += 1
+	for scopePath in proseDocs:
+		sweep.append(String(scopePath))
+		if _ForaDaEvidencia(String(scopePath)):
+			foraVarridas += 1
+	# O próprio fora tem de ser medido: uma lista que deixa de casar com a árvore (renomearam
+	# um registro) alarga o corpus de volta para a história sem que nenhum censo local acuse,
+	# e o número abaixo é o que a varredura efetivamente deixou de ler.
+	if not Check(foraVarridas >= 2,
+			"registros datados estão na varredura com a lista casando: %d dos arquivos achados são registro (abaixo de 2 a lista apodreceu e ninguém mais isenta história)" % foraVarridas):
+		return
+	print("  [info] corpus: %d arquivos lidos, %d são registros datados — dentro deles a âncora é cobrada e a linha é julgada sem cobrança, que é o mesmo recorte, pelo mesmo motivo, que a régua bash faz. Os censos dos dois juízes continuam não-comparáveis porque ela varre mais tipos de arquivo" % [sweep.size(), foraVarridas])
+	# A isenção mordendo em mesa, com o espelho do mesmo tamanho: sem o positivo a lista pode
+	# ter descido para nada (e o corpus volta a cobrar história), sem o negativo ela pode ter
+	# virado manto sobre a prosa viva — que é exatamente a doc de que esta régua existe para
+	# dar razão. O terceiro control fixa a SEMÂNTICA do nome, não a lista: é o basename, em
+	# qualquer diretório, igual ao teste que a bash faz.
+	Check(_ForaDaEvidencia("res://CHANGELOG.md"),
+			"registro datado sai da cobrança de linha: um CHANGELOG na raiz é história, não especificação")
+	Check(not _ForaDaEvidencia("res://deploy/SCALING.md"),
+			"prosa viva não sai com ele: o runbook de escala continua cobrado linha por linha")
+	Check(_ForaDaEvidencia("res://docs/CHANGELOG.md"),
+			"o que decide é o nome, não o lugar: CHANGELOG de subpasta é registro igual (mesma regra da bash)")
+	# E a ROTA da acusação, mordendo em mesa com o par do mesmo tamanho: `_Acusa` é o único
+	# caminho pelo qual um veredito chega a um dos baldes, então ele tem que provar as duas
+	# metades — cobrar a prosa viva e poupar a história. Sem a perna viva, um `_Acusa` que
+	# desviasse tudo para `historia` daria verde absoluto com a régua inteira cega; sem a perna
+	# de história, o recorte não existiria e a bash cobraria o que este gémeo não cobra.
+	var mesaSinks : Dictionary = {"quebrados": [], "vazios": [], "historia": []}
+	_Acusa(mesaSinks, "res://CHANGELOG.md", "quebrados", "mentira de história")
+	_Acusa(mesaSinks, "res://deploy/SCALING.md", "quebrados", "mentira viva")
+	CheckEq(mesaSinks["quebrados"].size(), 1, "o `_Acusa` cobra a prosa viva: só a mentira de `SCALING.md` chega ao balde (%s)" % str(mesaSinks["quebrados"]))
+	CheckEq(mesaSinks["historia"].size(), 1, "o `_Acusa` poupa a história com medida: a mentira de CHANGELOG vai ao balde à parte (%s)" % str(mesaSinks["historia"]))
 	var lineCache : Dictionary = {}
 	var spanCache : Dictionary = {}
 	var symCache : Dictionary = {}
@@ -952,9 +1023,19 @@ func SuiteEvidencePointers() -> void:
 	var deslocados : Array[String] = []
 	var identes : Array[String] = []
 	var metricosFora : Array[String] = []
+	var historia : Array[String] = []
+	# O balde da história, junto dos seis que cobram: é a única forma de julgar um registro sem
+	# obrigar ninguém a reescrevê-lo. Os mesmos objetos entram nos `CheckEq` de cima pela mão do
+	# `_Acusa`, então não há segunda lista que possa ser esquecida no veredito.
+	var sinks : Dictionary = {
+		"quebrados": quebrados, "derrapados": derrapados, "vazios": vazios,
+		"deslocados": deslocados, "identes": identes, "metricosFora": metricosFora,
+		"historia": historia,
+	}
 	var metricos : int = 0
 	var conferidos : int = 0
 	var conferidosCode : int = 0
+	var mdOlhados : int = 0
 	var comMensagem : int = 0
 	var comSuite : int = 0
 	var comIdentidade : int = 0
@@ -1049,14 +1130,19 @@ func SuiteEvidencePointers() -> void:
 				conferidos += 1
 				if not wholeProse:
 					conferidosCode += 1
+				# Quantos ponteiros OLHAM prosa: é o universo do eixo (d), e ele é diferente do
+				# número de opiniões porque a maioria das citações a `.md` não nomeia nada na
+				# cláusula. Separar os dois é o que impõe dizer em voz alta quantos são.
+				if String(resPath).get_extension().to_lower() == "md":
+					mdOlhados += 1
 				if from > src.size() or to > src.size():
-					quebrados.append("%s: %s:%d (%s tem %d linhas)" % [site, cited, to, resPath, src.size()])
+					_Acusa(sinks, String(docPath), "quebrados", "%s: %s:%d (%s tem %d linhas)" % [site, cited, to, resPath, src.size()])
 					continue
 				if _LineBlank(src, from):
-					vazios.append("%s: %s → %s:%d está em branco" % [site, cited, resPath, from])
+					_Acusa(sinks, String(docPath), "vazios", "%s: %s → %s:%d está em branco" % [site, cited, resPath, from])
 					continue
 				if _LineBlank(src, to):
-					vazios.append("%s: %s → %s:%d está em branco" % [site, cited, resPath, to])
+					_Acusa(sinks, String(docPath), "vazios", "%s: %s → %s:%d está em branco" % [site, cited, resPath, to])
 					continue
 				# (5) Nome + número na mesma linha: o número tem que estar dentro da suíte nomeada.
 				var named : String = ""
@@ -1069,7 +1155,7 @@ func SuiteEvidencePointers() -> void:
 					comSuite += 1
 					var drift : String = _SpanDrift(spanCache[resPath], named, from, to)
 					if drift != "":
-						deslocados.append("%s: %s → %s" % [site, cited, drift])
+						_Acusa(sinks, String(docPath), "deslocados", "%s: %s → %s" % [site, cited, drift])
 				# (6) IDENTIDADE: o símbolo que a cláusula deste ponteiro serve tem que estar
 				# declarado no arquivo citado e o intervalo citado tem que tocar o span dele
 				# — ou, quando o alvo é prosa, o nome tem que estar na própria linha citada.
@@ -1095,7 +1181,7 @@ func SuiteEvidencePointers() -> void:
 								comIdentidade += 1
 							var idrift : String = _IdentityVerdict(symSpans, src, symName, String(served[0]), from, to, cited, proseOpinion)
 							if idrift != "":
-								identes.append("%s: %s → %s" % [site, cited, idrift])
+								_Acusa(sinks, String(docPath), "identes", "%s: %s → %s" % [site, cited, idrift])
 				# (7) SÉRIE NOMEADA × ARQUIVO QUE A EMITE. Um ponteiro pode jurar que a
 				# linha `X.gd:A-B` é onde `shambleta_foo` é emitida sem nomear símbolo de
 				# código nenhum — e a régua de identidade, que julga identificadores
@@ -1121,7 +1207,7 @@ func SuiteEvidencePointers() -> void:
 					var verdictSerie : String = _SeriesSpanVerdict(src, serie, from, to)
 					if verdictSerie == "fora":
 						metricos += 1
-						metricosFora.append("%s: %s → `%s` é emitida em %s mas não nas linhas %d-%d" % [site, cited, serie, resPath, from, to])
+						_Acusa(sinks, String(docPath), "metricosFora", "%s: %s → `%s` é emitida em %s mas não nas linhas %d-%d" % [site, cited, serie, resPath, from, to])
 					elif verdictSerie == "dentro":
 						metricos += 1
 				for msgMatch in msgRx.search_all(window):
@@ -1168,7 +1254,7 @@ func SuiteEvidencePointers() -> void:
 						continue
 					comMensagem += 1
 					if hit < from - 2 or hit > to + 2:
-						derrapados.append("%s: %s:%d-%d cita \"%s\", que está em :%d" % [site, cited, from, to, msg, hit])
+						_Acusa(sinks, String(docPath), "derrapados", "%s: %s:%d-%d cita \"%s\", que está em :%d" % [site, cited, from, to, msg, hit])
 	# (8) ÂNCORA (#124, fatia 2): `arquivo:@símbolo`. A régua de §28 do
 	# `scripts/check_doc_drift.sh` julga a âncora inteira — nome na cláusula e literal
 	# dentro do bloco — e é ela que decide a marreta. O braço de cá é o que o harness
@@ -1182,7 +1268,16 @@ func SuiteEvidencePointers() -> void:
 	# mesmo padrão, não uma segunda leitura do shape.
 	var anchorias : Array[String] = []
 	var ancJulgadas : int = 0
+	# Os dois números do recorte, medidos na mesma passada: quantas âncoras de registro estão
+	# SENDO cobradas (a isenção não pode escorrer para esta classe) e quantos ponteiros de
+	# linha ela está poupando (a isenção tem de estar poupando algo, senão é lista morta).
+	# O de âncora é contado DENTRO do laço que cobra, não no shape da linha: medido fora, ele
+	# diria "15" num braço que parou de julgar história — que é o único erro que o piso do
+	# recorte existe para ver, e foi o que a mutação de hoje mostrou na régua bash.
+	var ancEmFora : int = 0
+	var linhaEmFora : int = 0
 	for ancPath in sweep:
+		var ancFora : bool = _ForaDaEvidencia(String(ancPath))
 		var ancProse : bool = ["md", "json"].has(String(ancPath).get_extension().to_lower())
 		var ancLines : PackedStringArray = _RepoFile(ancPath).split("\n")
 		for a in ancLines.size():
@@ -1191,8 +1286,12 @@ func SuiteEvidencePointers() -> void:
 			# linha é — é o corpo que a suíte já usa para o ponteiro de linha.
 			if not ancProse and not ancLine.strip_edges().begins_with("#"):
 				continue
+			if ancFora:
+				linhaEmFora += ptrRx.search_all(ancLine).size()
 			for am in ancRx.search_all(ancLine):
 				ancJulgadas += 1
+				if ancFora:
+					ancEmFora += 1
 				var citedFile : String = String(am.get_string(1))
 				var sym : String = String(am.get_string(2))
 				var site : String = "%s:%d" % [String(ancPath).trim_prefix("res://"), a + 1]
@@ -1210,12 +1309,31 @@ func SuiteEvidencePointers() -> void:
 					anchorias.append("%s: %s" % [site, verdict])
 	CheckEq(anchorias.size(), 0, "âncora: %d `arquivo:@símbolo` julgadas pela estrutura, nenhuma cega (%s)" % [ancJulgadas, " | ".join(anchorias)])
 	print("  [info] âncora: %d `arquivo:@símbolo` vistas pela varredura, %d acusadas — o censo é impresso também no verde, porque piso que ninguém lê não discrimina walk parado de árvore honesta" % [ancJulgadas, anchorias.size()])
+	# A assimetria do recorte, mordida: é o único control que distingue "a âncora continua
+	# cobrada dentro do registro" de "a isenção de linha escorreu para a âncora". Medido no
+	# shape, ele não distinguia nada: um braço que pulasse a história dentro do laço de âncora
+	# derrubaria `ancJulgadas` de 121 para ~106, nenhum piso acusaria (o piso é 90) e o censo
+	# continuaria dizendo 15. Os dois números abaixo são o preço e o lucro do recorte,
+	# impressos juntos.
+	Check(ancEmFora >= 2,
+			"âncora de registro datado continua COBRADA: %d âncoras julgadas dentro dos %d registros (zero significa que a isenção de linha escorreu para a âncora, que é o que a bash NÃO faz)" % [ancEmFora, foraVarridas])
+	print("  [info] recorte: %d ponteiros de linha julgados dentro dos registros sem cobrança, %d âncoras de história cobradas — a bash poupou os mesmos %d de cobrança e não lê nenhum" % [linhaEmFora, ancEmFora, linhaEmFora])
+	Check(linhaEmFora >= 50,
+			"a família de linha ainda julga a história (sem cobrar): %d ponteiros de linha dentro dos registros — abaixo de 50 ou a lista parou de casar com o corpo, ou o `sweep` encolheu" % linhaEmFora)
+	# O balde da história é o número que a régua bash não tem e este gémeo passou a ter: quantos
+	# ponteiros de histórico MENTIRIAM hoje. Ele não falha o portão — é a medição que impõe dizer
+	# se a isenção está escondendo acusação, que é a única coisa que torna "0 falhas" uma frase.
+	print("  [info] história julgada sem cobrança: %d acusações haveria dentro dos registros datados (%s)" % [historia.size(), "; ".join(historia) if historia.size() > 0 else "nenhuma"])
 	# O piso é do tamanho do que a varredura vê hoje, e a razão de existir dele é a
 	# mesma de todo censo daqui: sem ele, "0 acusações" pode significar que o `sweep`
 	# parou de ler o arquivo onde as âncoras moram, ou que a regex descendeu para
-	# zero. O número NÃO é copiado da régua bash — os dois corpos são diferentes
-	# (a bash pula os registros datados para linha e esta suíte tem a sua lista), e
-	# comparar censos de corpora diferentes seria a discórdia encomendada.
+	# zero. O número NÃO é copiado da régua bash: desde 2026-10-01 os dois julgam a âncora
+	# sobre os MESMOS arquivos — inclusive dentro dos quatro registros datados, que é onde a
+	# lista `EVIDENCIA_FORA` deste topo não corta — e o que a lista isenta, de um lado e de
+	# outro, é a família de linha. O corpo continua diferente: ela varre comentário de YAML,
+	# conf, HTML e mjs pela árvore toda, e isto lê `.md` de toda a árvore mais quatro raízes
+	# de código e o JSON de conf. Comparar censos de corpora diferentes continua sendo a
+	# discórdia encomendada; o que se comparou, desta vez, foi o ESCOPO por classe.
 	# 8 → 90 na fatia 3: oito era o censo da fatia 2, e depois de 103 ponteiros
 	# migrados um piso de oito já não distinguia "walk parado" de "metade da migração
 	# invisível". 101 é o medido nesta varredura em 2026-09-30; o piso fica onze abaixo
@@ -1255,14 +1373,13 @@ func SuiteEvidencePointers() -> void:
 	var contLidas : int = 0
 	var contJulgadas : int = 0
 	var contOrfas : int = 0
-	# Os quatro registros datados ficam fora, com a mesma lista e pela mesma razão da régua bash:
-	# num registro um número sem arquivo cita o que a frase dizia NAQUELA rodada, e reescrevê-lo
-	# é editar história — herdá-lo da linha de cima para torná-lo legível seria introduzir aqui o
-	# defeito que este braço existe para não ter. É folga de ESCOPO, não de métrica: o censo
-	# impresso abaixo é o medido com esses arquivos fora, e diz quantos ficaram dentro.
-	var contSkip : Array[String] = ["CHANGELOG.md", "progress.md", "ROADMAP_COMERCIAL.md", "BLIND_JUDGE_PROTOCOL.md"]
+	# A lista dos registros é a `EVIDENCIA_FORA` do topo do arquivo, e o `sweep` inteiro a
+	# contém: quem isenta é o braço, não a varredura, porque a âncora é cobrada neles e a
+	# continuação não. O motivo continua o mesmo: num registro, um número sem arquivo cita o
+	# que a frase dizia NAQUELA rodada, e herdá-lo da linha de cima para torná-lo legível
+	# seria introduzir aqui o defeito que este braço existe para não ter.
 	for contPath in sweep:
-		if contSkip.has(String(contPath).get_file()):
+		if _ForaDaEvidencia(String(contPath)):
 			continue
 		var contProse : bool = ["md", "json"].has(String(contPath).get_extension().to_lower())
 		var contLines : PackedStringArray = _RepoFile(contPath).split("\n")
@@ -1721,7 +1838,7 @@ func SuiteEvidencePointers() -> void:
 	var comProse : int = int(proseOpinion.get("prose", 0))
 	Check(comProse >= 2,
 			"ponteiros: %d citações a linha de `.md` tiveram o nome julgado contra a própria linha — sem isso o eixo novo está verde por não olhar nada" % comProse)
-	print("  [info] ponteiros: %d referências arquivo:linha (%d em prosa fora de `.md`), %d com mensagem de check na prosa, %d com suíte nomeada na mesma linha, %d com símbolo nomeado na cláusula, %d nomes de suíte, %d pares (série, intervalo) julgados, %d alvos de `.md` julgados por linha" % [conferidos, conferidosCode, comMensagem, comSuite, comIdentidade, citadas.size(), metricos, comProse])
+	print("  [info] ponteiros: %d referências arquivo:linha (%d em prosa fora de `.md`), %d com mensagem de check na prosa, %d com suíte nomeada na mesma linha, %d com símbolo nomeado na cláusula, %d nomes de suíte, %d pares (série, intervalo) julgados, %d olham arquivo de prosa e %d desses tiveram o nome julgado por linha" % [conferidos, conferidosCode, comMensagem, comSuite, comIdentidade, citadas.size(), metricos, mdOlhados, comProse])
 
 	# ---------------------------------------------------------------- régua de série (7)
 	# O veredito do que a régua achou na doc do beta, e o piso do que ela julgou: "0
