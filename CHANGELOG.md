@@ -235,6 +235,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Eleven line pointers in `deploy/BACKUP_RUNBOOK.md` died, and the clause that now has to name its
+  symbol turned up three that had never pointed where the sentence said (`#152`). The mechanism that
+  hid them is narrow and worth writing down: a line pointer IS read line by line, but only when the
+  sentence around it already names a declaration — 354 of them were charged that way before this
+  edit, 332 after. An unnamed pointer has one duty, which is not to be blank. The anchor format has
+  no unnamed form, because `prosa` accuses a pointer whose clause does not name the symbol it cites,
+  so adopting it forces the sentence to declare the declaration it means — and then three of these
+  declarations turned out to be about a different job than the sentence. Retention: §2 said 7 daily /
+  4 weekly / 12 monthly was declared at `sources/sql/SQLCommons.gd:34-38`; those five lines are the
+  tail of the LEDGER-retention comment and its two constants, so the range ends on
+  `LedgerRetentionIntervalSec` (`sources/sql/SQLCommons.gd:@LedgerRetentionIntervalSec`) and
+  `LedgerRetentionEnv` — a different retention of a different store, and the reason an operator
+  reading for "retention" stops there is that the very next line does cite the pruner. The backup
+  limits are `BackupLimits` (`sources/sql/SQLCommons.gd:@BackupLimits`). Cadence: §2 cited the trigger as
+  `sources/sql/SQLBackups.gd:149-162`, which is the tail of the season clock and the ledger-retention
+  job, while the daily/weekly/monthly firing is at 164-180 inside `Run()`
+  (`sources/sql/SQLBackups.gd:@Run`). Snapshot: `sources/sql/SQLBackups.gd:167-170` is the daily's
+  offsite push and the opening of the weekly copy, and the player snapshot fires at 182-185, also
+  inside `Run()` (`sources/sql/SQLBackups.gd:@Run`), on the cadence `BackupPlayersSec`
+  (`sources/sql/SQLCommons.gd:@BackupPlayersSec`). None of it is drift, and that is checked rather
+  than asserted: `sources/sql/SQLBackups.gd` has not been touched since `2fad68b` (2026-09-27) and
+  `sources/sql/SQLCommons.gd` since `855b0a7` (2026-09-28), `git blame` puts the three sentences at
+  `2fad68b`, `855b0a7` and `689c9e7` (2026-09-30), and `git show` of each of those commits' own trees
+  holds `BackupLimits` at 45-49 and the cadence at 164-180 — false at birth, and false for four days
+  because the format could not be wrong. The third one is the finding inside the finding: `689c9e7`
+  is the commit that called itself "A âncora liquida 103 ponteiros numa passada", and in this very
+  file it converted three pointers to anchors — including the `PruneBackups()` citation on the very
+  next line below the lying retention range — while the range itself stayed. What the conversion
+  gives up is stated rather than buried: `Run()` is a 104-line block, so a cadence sentence anchored
+  to it is now judged as "does this fire inside the worker's own loop" and no longer claims a line,
+  and one true pointer that pinned three constants by range (`:13-15`) became three named anchors
+  because a range cannot be charged a name. Two pointers stay lines:
+  `deploy/server/Dockerfile:37` for `ENV HOME=/data`, because a file with no extension has no
+  identity model in either judge, and `tests/test_backup_restore.gd:86-113`, a slice of a body inside
+  a fenced recipe block where an anchor would be strictly coarser than the claim — opened and true
+  today. The runbook slice alone moves the repo census 255 → 268 anchors against 393 → 382 line
+  pointers and 2147 → 2122 checks, the first pair measured on the untouched tree in a clean worktree
+  at `91fa546` and the 2122 re-measured on the same tree with only this runbook replaced; this entry
+  is then five more anchors and six more checks, so
+  the run that closed the gate prints 273 anchors against 382 line pointers, `0 acusações` and
+  `== DOC DRIFT: 2128 checks, 0 failures ==`. The GDScript twin read 240 anchors on the runbook slice
+  and 245 with this entry in the corpus, 0 acusadas nas duas passadas, e fechou
+  `== RESULT: 3313 checks, 0 failures ==` em ambas: o censo de âncora é uma linha impressa pelo walk,
+  não um check por âncora, então o que se move de uma passada para a outra é só o número daquela linha.
 - The attribution return leg accused the runner and passed here, and neither verdict was about
   the game (`#151`). `tests/multi_instance_tick_test.gd` demanded that the work come back to
   within 15% ABSOLUTE of the full rung. That sentence compared a single window — both the pause

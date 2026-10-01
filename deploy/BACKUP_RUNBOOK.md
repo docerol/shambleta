@@ -1,6 +1,7 @@
 # Runbook de backup — o que roda, onde cai, como se verifica, como se restaura
 
-Escrito contra o estado da árvore em 2026-09-27. Toda afirmação tem arquivo:linha;
+Escrito contra o estado da árvore em 2026-09-27. Toda afirmação tem arquivo e alvo —
+linha quando a frase é sobre a linha, âncora quando é sobre a declaração;
 toda medida tem o comando de reprodução. Nada aqui é heredado de doc antigo: o que
 não foi conferido no código está marcado como **[NÃO MEDIDO]**.
 
@@ -8,9 +9,9 @@ não foi conferido no código está marcado como **[NÃO MEDIDO]**.
 
 | dado | caminho lógico | caminho no container | origem |
 |---|---|---|---|
-| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `sources/sql/SQLCommons.gd:7` (`DBName`) + `Local` = `user://` (`sources/system/Path.gd:@Local`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
-| histórico de backup | `user://sql-backups/{DAILY,WEEKLY,MONTHLY}/AAAA-MM-DD_HH-MM-SS.db` | dentro do **mesmo** `/data` | `sources/sql/SQLCommons.gd:8` (`BackupPath`), `sources/sql/SQLBackups.gd:10-19` (`CreateDailyBackup()`) |
-| cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `sources/sql/SQLCommons.gd:107-108`, `sources/sql/SQLBackups.gd:35-51` (`PushOffsite()`), `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
+| banco | `user://live.db` | `/data/.local/share/Shambleta/live.db` | `DBName` (`sources/sql/SQLCommons.gd:@DBName`) + `Local` = `user://` (`sources/system/Path.gd:@Local`) + `ENV HOME=/data` (`deploy/server/Dockerfile:37`) |
+| histórico de backup | `user://sql-backups/{DAILY,WEEKLY,MONTHLY}/AAAA-MM-DD_HH-MM-SS.db` | dentro do **mesmo** `/data` | `BackupPath` (`sources/sql/SQLCommons.gd:@BackupPath`), `CreateDailyBackup()` (`sources/sql/SQLBackups.gd:@CreateDailyBackup`) |
+| cópia offsite | `$SHAMBLETA_OFFSITE_BACKUPS/<mesmo nome>` | `/data-backups` (volume `game-backups`) | `GetOffsiteBackupPath()` (`sources/sql/SQLCommons.gd:@GetOffsiteBackupPath`), `PushOffsite()` (`sources/sql/SQLBackups.gd:@PushOffsite`), `deploy/docker-compose.yml` (`SHAMBLETA_OFFSITE_BACKUPS`, `- game-backups:/data-backups`) |
 
 Os diretórios são **MAIÚSCULOS** e isto não é cosmetismo: o nome vem das chaves do
 enum `BackupFrequency` (`sources/sql/SQLCommons.gd:@BackupFrequency`, `{DAILY, WEEKLY, MONTHLY}`,
@@ -32,11 +33,14 @@ gate recusa compose que o apague ou que o aponte para o mesmo volume do banco.
 
 ## 2. Cadência real do worker
 
-- diário a cada `DailyBackupIntervalSec` = 24 h, semanal 7 d, mensal 28 d
-  (`sources/sql/SQLCommons.gd:13-15`, disparo em `sources/sql/SQLBackups.gd:149-162`).
-- A cópia é feita pela API de backup online do SQLite (`Launcher.SQL.db.backup_to`,
-  `sources/sql/SQLBackups.gd:14`) — arquivo único e consistente **sem** o `-wal`.
-- Retensão local: 7 diários / 4 semanais / 12 mensais (`sources/sql/SQLCommons.gd:34-38`),
+- diário a cada `DailyBackupIntervalSec` (`sources/sql/SQLCommons.gd:@DailyBackupIntervalSec`)
+  = 24 h, semanal 7 d (`WeeklyBackupIntervalSec`: `sources/sql/SQLCommons.gd:@WeeklyBackupIntervalSec`)
+  e mensal 28 d (`MonthlyBackupIntervalSec`: `sources/sql/SQLCommons.gd:@MonthlyBackupIntervalSec`),
+  com o disparo dentro de `Run()` (`sources/sql/SQLBackups.gd:@Run`).
+- A cópia é feita pela API de backup online do SQLite (`Launcher.SQL.db.backup_to`),
+  chamada dentro de `CreateDailyBackup()` (`sources/sql/SQLBackups.gd:@CreateDailyBackup`) —
+  arquivo único e consistente **sem** o `-wal`.
+- Retensão local: 7 diários / 4 semanais / 12 mensais (`BackupLimits`: `sources/sql/SQLCommons.gd:@BackupLimits`),
   podada por `PruneBackups()` (`sources/sql/SQLBackups.gd:@PruneBackups`).
 - O push acontece **depois** do diário: `CreateDailyBackup()`
   (`sources/sql/SQLBackups.gd:@CreateDailyBackup`)
@@ -130,13 +134,14 @@ docker compose run --rm --no-deps game \
 Isso ainda é **mesmo host**. Para virar backup de verdade, aponte
 `SHAMBLETA_OFFSITE_BACKUPS` (painel do Coolify, não o repositório) para uma
 montagem NFS/S3-fuse e adicione o mount correspondente ao serviço `game` — o
-código só copia para o caminho que a env disser, sem inventar nada
-(`sources/sql/SQLCommons.gd:108`).
+código só copia para o caminho que a env disser, sem inventar nada — é
+`GetOffsiteBackupPath()` (`sources/sql/SQLCommons.gd:@GetOffsiteBackupPath`).
 
 ## 6. O que nada aqui cobre
 
-- O snapshot de jogadores (`BackupPlayers`, cadência `BackupPlayersSec` = 600 s,
-  `sources/sql/SQLCommons.gd:@BackupPlayersSec` + `sources/sql/SQLBackups.gd:167-170`) não é
+- O snapshot de jogadores (`BackupPlayers`) é disparado por `Run()`
+  (`sources/sql/SQLBackups.gd:@Run`) a cada `BackupPlayersSec` = 600 s
+  (`sources/sql/SQLCommons.gd:@BackupPlayersSec`) e não é
   backup: é o que se perde quando o processo morre sem drain. A causa raiz
   (memória por cima do banco) está em `archive/AUDITORIA_2026-09-27.md` §7.1, não é
   resolvida por backup e não é deste runbook.
