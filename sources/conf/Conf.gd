@@ -27,8 +27,8 @@ static var cache : Dictionary					= {}
 #
 # `Usable()`: `Type.NONE = -1` é o default de todo getter, e `Array` do Godot aceita
 # índice negativo — `confFiles[-1]` devolve o ÚLTIMO arquivo da lista, que é
-# `AUTH_TOKEN` (a régua de `tests/IdleTests.gd:6708-6710` é justamente sobre o token morear
-# ali). Sem o piso em `Type.SETTINGS`, um `GetString(section, key)` que esqueceu o tipo
+# `AUTH_TOKEN` (a régua `SuiteDeployMode` (`tests/IdleTests.gd:@SuiteDeployMode`) é sobre o token
+# morear ali). Sem o piso em `Type.SETTINGS`, um `GetString(section, key)` que esqueceu o tipo
 # lia a credencial e devolvia como se fosse preferência do usuário, sem um pio.
 static func Ensure():
 	if confFiles.is_empty():

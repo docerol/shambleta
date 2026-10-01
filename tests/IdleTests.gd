@@ -2647,6 +2647,13 @@ func SuiteCrafting(sql : SQLService, charID : int, accountID : int) -> void:
 	var matNeed : int = CraftCatalog.MaterialPerCraft(1)
 	Check(matT1 != DB.UnknownHash, "a faixa do tier 1 declara uma matéria-prima")
 	Check(matNeed > 0, "o craft de tier 1 cobra %d unidades dela" % matNeed)
+	# A pilha do insumo começa vazia por CONSTRUÇÃO, não por sorte: `SuiteChests` roda
+	# antes desta no MESMO personagem, e o rolo do baú sai da pool da faixa da zona —
+	# que a régua de conteúdo obriga a conter a matéria-prima declarada. Quando o rolo
+	# caía nela, a asserção abaixo contava 37 contra os 36 semeados aqui e as duas de
+	# drenagem iam a 1 contra 0 (CI 36832301856): a régua media o seed mais o acaso, e
+	# a recusa por `no_stock` logo abaixo media um personagem que não estava sem insumo.
+	_SetInventory(sql, charID, matT1, 0)
 	var gpNoMat : int = int(sql.db.select_rows("stat", "char_id = %d" % charID, ["gp"])[0].get("gp", 0))
 	var noMat : Dictionary = economy.SubmitCraft(charID, accountID, 6, shortSwordHash, "NoMatBlade", {"Attack" = 5})
 	Check(not bool(noMat["ok"]), "sem matéria-prima a forja recusa mesmo com ouro")
