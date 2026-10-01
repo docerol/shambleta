@@ -1089,8 +1089,14 @@ REG_MIN=2
 # aviso verdadeiro sobrevive no texto novo, sem número. É a primeira vez que esta régua
 # desce por causa de fatiamento de código, e é o que #124 promete: quando o ponteiro
 # deixa de ser o que impede a mudança, ele some sozinho na mudança.
-ANCHOR_MIN=148
-LINE_MAX=486
+# Sobe outra vez em 2026-10-01 com as 12 trocas de linha por âncora que a régua já aceitava
+# de graça (medido: dos 260 ponteiros de linha cobrados, só 12 tinham o símbolo declarado no
+# alvo e nomeado na cláusula — o resto é prosa que precisa ser reescrita, não atalho). O que
+# estas doze custaram de verdade não foi o número, foi a cláusula: seis foram recusadas por
+# `prosa` até a frase levar o nome para o MESMO segmento de vírgula do ponteiro, que é a
+# régua dizendo que âncora citada longe do que ela nomeia não é evidência de nada.
+ANCHOR_MIN=160
+LINE_MAX=474
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
 # para cima do laço de âncora, o total cai de 148 para 133 e o `ANCHOR_MIN` acima acusa —
