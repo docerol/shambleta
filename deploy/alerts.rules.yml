@@ -126,7 +126,9 @@ groups:
       # um GC; 5% de todos os passos é o laço não cabendo no tick. O corte de 5% é
       # escolha declarada (a 30 Hz são ~1,5 passo por segundo sem relógio), não
       # número medido — medir o ponto de ruptura é o `multi_instance_tick_test`,
-      # que agora cobra a mesma cauda por degrau.
+      # que cobra nos degraus afirmados a mesma fração deste `expr` e lê o número
+      # aqui, do próprio arquivo: muda o percentual nesta regra e a escada muda com
+      # ele; desaparece o `expr` e a escada fica vermelha em vez de guardar cópia.
       - alert: PassoForaDoOrcamento
         expr: rate(shambleta_step_over_budget_total[5m]) / rate(shambleta_steps_measured_total[5m]) > 0.05
         for: 10m

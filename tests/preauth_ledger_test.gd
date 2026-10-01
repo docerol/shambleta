@@ -12,8 +12,9 @@ extends SceneTree
 #       tentativa (o MÁXIMO observado, não o tamanho final) contra `MaxAddressWindows`.
 #       A poda é recriada em memória com a linha de poda arrancada do texto, e a mesma
 #       injeção serve às duas: a do produto passa, a do controle ia a VERMELHO. O
-#       crescimento de RAM (`OS.get_static_memory_usage()`, a mesma régua de
-#       tests/multi_instance_tick_test.gd:762) sai impresso por faixa de 1024 endereços e
+#       crescimento de RAM (`OS.get_static_memory_usage()`, a mesma régua que
+#       `tests/multi_instance_tick_test.gd` chama de `staticMb`) sai impresso por
+#       faixa de 1024 endereços e
 #       em KiB por 1k endereços, produto contra controle — o dado, não a frase. O
 #       bytes/entrada MEDIDO no controle (que é linear, portanto mensurável) é o número
 #       conferido contra os 512 B/entrada que o comentário do produto afirma.

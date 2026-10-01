@@ -35,19 +35,30 @@ extends SceneTree
 #      multiplicação na etiqueta: sem censo, 100 players numa instância só faria a
 #      linha dizer "5 instâncias".
 #   3) OS DOIS DETECTORES de estouro, os mesmos de `tests/tick_capacity_test.gd`
-#      (mesmo orçamento, mesmo `ServerMaxFPS`, mesma janela de 120 `physics_frame`
-#      aguardados, 30 descartados de transitório): o PERÍODO real de parede e o
-#      TRABALHO auto-relatado (`Performance.TIME_PHYSICS_PROCESS` +
-#      `Performance.TIME_PROCESS`). Publicamos os dois e a discordança entre eles,
-#      porque é ela que manda o número do beta ser o conservador (trabalho).
-#   3b) A RÉGUA DE CAUDA nos degraus afirmados: p95 e max, por passo de parede e por
-#      trabalho, cobrados CONTRA O ORÇAMENTO na pior passada (`CheckCeiling`). Antes
-#      dela o verde era a mediana, e mediana dentro do orçamento convive com cauda
-#      fora: um degrau cujo centro cabe e cujo p95 não cabe entrega passos estourados
-#      a jogador real e ainda assim imprimia `[ok]`. A mesma grandeza passa a sair por
-#      `/metrics` (`sources/launcher/Launcher.gd` + `sources/system/MetricsServer.gd`),
-#      e o nível conferido: o contador exportado e esta janela têm de contar o mesmo
-#      passo, senão o alerta pagina etiqueta e não medição.
+#      (mesmo orçamento, mesmo `ServerMaxFPS`, mesma janela de 120 passos, 30
+#      descartados de transitório): o PERÍODO real de parede e o TRABALHO auto-relatado
+#      (`Performance.TIME_PHYSICS_PROCESS` + `Performance.TIME_PROCESS`). Publicamos os
+#      dois e a discordança entre eles, porque é ela que manda o número do beta ser o
+#      conservador (trabalho). O período é medido na FRONTIERA DE TICK (um node comum
+#      em `_physics_process`), não no instante em que `await physics_frame` acorda: a
+#      acordada é a iteração do engine, e o sleep de pacing paga o atraso de um passo
+#      encurtando a iteração seguinte — lida sozinha, ela dizia 33,6 ms lisos num
+#      degrau em que o produto contava 16 passos fora do orçamento.
+#   3b) A RÉGUA DE CAUDA nos degraus afirmados: p95 e max do TRABALHO, cobrados CONTRA
+#      O ORÇAMENTO na pior passada (`CheckCeiling`); e a cauda do PERÍODO cobrada por
+#      TAXA de passos acima de orçamento+folga, contra o corte lido de
+#      `deploy/alerts.rules.yml` — a mesma grandeza que o alerta pagina. Antes dela o
+#      verde era a mediana, e mediana dentro do orçamento convive com cauda fora: um
+#      degrau cujo centro cabe e cujo p95 não cabe entrega passos estourados a jogador
+#      real e ainda assim imprimia `[ok]`. Por que a cauda de parede não é um teto
+#      absoluto: porque o máximo de um servidor ocioso já passava de orçamento+folga
+#      (34,08 ms contra 34,33 ms) sem que nenhum passo se perdesse — um teto que fica
+#      vermelho por sono do engine não mede carga; o que separa degrau é quantos passos
+#      passam (0 até ~40 players, 4 em 100, 16 em 200), e a mordida dessa taxa é provada
+#      na perna (b) com 40 ms/passo injetados. A mesma grandeza passa a sair por `/metrics` (`sources/launcher/Launcher.gd` +
+#      `sources/system/MetricsServer.gd`), e o nível conferido: o contador exportado e
+#      esta janela têm de contar o mesmo passo, senão o alerta pagina etiqueta e não
+#      medição.
 #   4) MEMÓRIA E CPU DO PROCESSO, lidos do próprio kernel: `VmRSS` de
 #      `/proc/self/status` (é RSS, a grandeza que o `mem_limit` do compose morde —
 #      `OS.get_static_memory_usage()` é só o heap do engine e é impresso junto, não
@@ -119,10 +130,12 @@ const CalibrationFloorPct : float = 0.60
 const CalibrationCeilPct : float = 1.30
 const OverloadBurnUs : int = 40000		# 40 ms/passo > orçamento: tem de estourar de verdade
 const PeriodToleranceMs : float = 1.0	# folga do throttle, medida em tests/tick_capacity_test.gd
-# Banda de concordância entre os dois instrumentos do mesmo passo (os `await
-# physics_frame` deste harness e o acumulador do laço de produção): a fronteira da
-# janela é contada em dois lugares, e dois passos é o que cabe dessa diferença sem
-# cobrar exatidão de relógio.
+# Banda de concordância entre os dois instrumentos do MESMO passo de física (a
+# `Cadence` deste harness e o acumulador do laço de produção, ambos registros dentro
+# do despacho de `_physics_process`): são dois pontos diferentes do mesmo tick, e a
+# diferença entre eles é o trabalho que corre entre um e outro. Seis passos numa
+# janela de 120 é o que cabe dessa diferença mais a borda da janela, sem cobrar
+# exatidão de relógio.
 const PeriodTailAgreementSteps : int = 6
 const CpuOverPeriodPct : float = 1.10	# CPU do passo nunca pode passar do muro do período
 const AttributionFloorPct : float = 0.50	# a pausa tem de devolver >= 50% do custo marginal previsto
@@ -207,6 +220,7 @@ var zoneBase : int = 1000
 var bossBase : int = 9000
 var serverFps : int = 30
 var calib : Node = null
+var cadence : Node = null
 var agents : Array = []
 var charIDs : Array = []
 var rows : Array = []
@@ -220,6 +234,7 @@ var nofileHard : int = -1
 var nprocSoft : int = -1
 var proofsRan : int = 0
 var floorMs : float = 0.0
+var alertPagePct : float = -1.0
 var onePlayerMs : float = 0.0
 var marginalUs : float = 0.0
 var marginalInsideUs : float = 0.0
@@ -249,6 +264,20 @@ class Burn extends Node:
 		steps += 1
 		while Time.get_ticks_usec() - started < us:
 			pass
+
+# Fronteira de TICK. O `_physics_process` de um node comum roda uma vez por passo de
+# física, no MESMO ponto do despacho onde `sources/launcher/Launcher.gd` registra o
+# período que sai por `/metrics` — é por isso que ele é o instrumento da régua de
+# cauda, e não o laço aguardado abaixo. Medido neste harness, degrau a degrau: o
+# contador do produto viajava de 0 a 10 passos acima de orçamento+folga por janela
+# enquanto a série de `await physics_frame` não via NENHUM — a régua de concordância
+# estava lendo a própria cegueira do instrumento.
+class Cadence extends Node:
+	var armed : bool = false
+	var marks : Array = []
+	func _physics_process(_delta : float) -> void:
+		if armed:
+			marks.append(Time.get_ticks_usec())
 
 func Check(condition : bool, label : String) -> bool:
 	checks += 1
@@ -366,6 +395,39 @@ func _p(value : float, values : Array) -> float:
 	sorted.sort()
 	var idx : int = clampi(int(ceil(float(sorted.size()) * value)) - 1, 0, sorted.size() - 1)
 	return float(sorted[idx])
+
+# Delta em milissegundos entre marcas consecutivas de `Time.get_ticks_usec()`: uma
+# observação por fronteira, sem média móvel no meio. Uma marca só devolve série vazia
+# (sem passo anterior não existe período), e é por isso que o censo de observações é
+# impresso e conferido, não presumido.
+func _periods(marks : Array) -> Array:
+	var out : Array = []
+	var previous : int = 0
+	for mark in marks:
+		var now : int = int(mark)
+		if previous > 0:
+			out.append(float(now - previous) / 1000.0)
+		previous = now
+	return out
+
+# O corte de página do produto, LIDO do próprio `deploy/alerts.rules.yml` (a regra
+# `PassoForaDoOrcamento`). A régua de cauda deste harness cobra a mesma grandeza com o
+# mesmo número, e por isso não guarda cópia: zero expressões casadas, ou mais de uma, é
+# vermelho — um `expr` que mudou de forma deixaria de ser conferido, e "conferido" que
+# não lê nada é etiqueta.
+static func _alertPagePct() -> float:
+	var file : FileAccess = FileAccess.open("res://deploy/alerts.rules.yml", FileAccess.READ)
+	if file == null:
+		return -1.0
+	var text : String = file.get_as_text()
+	file.close()
+	var regex : RegEx = RegEx.create_from_string("rate\\(shambleta_step_over_budget_total\\[5m\\]\\)\\s*/\\s*rate\\(shambleta_steps_measured_total\\[5m\\]\\)\\s*>\\s*([0-9]+\\.?[0-9]*)")
+	if regex == null:
+		return -1.0
+	var found : Array[RegExMatch] = regex.search_all(text)
+	if found.size() != 1:
+		return -1.0
+	return float(found[0].get_string(1)) * 100.0
 
 func _frames(count : int) -> void:
 	for i in range(count):
@@ -711,9 +773,10 @@ func _setDedicadosPaused(paused : bool) -> int:
 
 # Amostra `SampleFrames` passos de física. Trabalho por passo = soma dos dois
 # monitores que o próprio engine acumula em janela móvel de 1 s (mesma dupla e mesma
-# calibração de `tests/tick_capacity_test.gd`), período = parede/passos aguardados.
-# Aqui entram também RSS e ms de CPU por passo, que é o que confronta o total de
-# players com `mem_limit` e `cpus` do compose.
+# calibração de `tests/tick_capacity_test.gd`), período = fronteira de TICK (`Cadence`
+# acima), com a fronteira de iteração impressa ao lado. Aqui entram também RSS e ms de
+# CPU por passo, que é o que confronta o total de players com `mem_limit` e `cpus` do
+# compose.
 func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictionary:
 	var work : Array = []
 	var physSamples : Array = []
@@ -721,15 +784,27 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 	# CAUDA POR PASSO. As amostras de `work` são monitores de média móvel de 1 s: a
 	# p95 delas é a cauda das JANELAS, não dos passos — e foi exatamente isso que
 	# deixou 42,09 ms de p95 conviver com um verde de mediana. Estes aqui são deltas
-	# de parede entre dois `physics_frame` consecutivos: uma observação por passo,
-	# com a qual um p95/max significa "quantos passos não couberam no tick".
+	# de parede entre duas fronteiras consecutivas: uma observação por passo, com a
+	# qual um p95/max significa "quantos passos não couberam no tick".
+	#
+	# DUAS FRONTEIRAS, e é a segunda que manda. `stepPeriodsMs` marca a ITERAÇÃO do
+	# engine (o instante em que `physics_frame` é emitido e a corrotina acorda);
+	# `tickPeriodsMs` marca o PASSO de física, no mesmo despacho onde o produto
+	# registra o seu. A primeira é o instrumento que deixou esta régua ler-se a si
+	# mesma: quando o pacing dorme e come o atraso de um passo na iteração seguinte, a
+	# série de iteração fica lisa em 33,6 ms enquanto o passo real passa de 34,3.
 	var stepPeriodsMs : Array = []
+	var tickPeriodsMs : Array = []
 	var sqlStart : int = int(sql.call("QueryCount"))
 	var mutexStart : Dictionary = sql.call("QueryMutexWaitStats")
 	# Instrumento do PRODUCTO, lido na mesma janela: o acumulado que o próprio
 	# processo exporta por /metrics (sources/launcher/Launcher.gd). Se a régua daqui
 	# e a métrica de lá não contarem o mesmo passo, uma das duas é etiqueta.
 	var prodBefore : Dictionary = launcher.call("StepBudgetSnapshot")
+	# Armado colado no retrato do produto: as duas janelas têm de começar no mesmo
+	# instante, senão a concordância abaixo compara contagens de janelas diferentes.
+	cadence.set("marks", [])
+	cadence.set("armed", true)
 	var framesStart : int = int(Engine.get_physics_frames())
 	var wallStart : int = Time.get_ticks_usec()
 	var cpuStart : int = _cpuUs()
@@ -754,6 +829,8 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		physSamples.append(phys)
 		idleSamples.append(idle)
 		work.append(phys + idle)
+	cadence.set("armed", false)
+	tickPeriodsMs = _periods(cadence.get("marks"))
 	var prodAfter : Dictionary = launcher.call("StepBudgetSnapshot")
 	var sqlEnd : int = int(sql.call("QueryCount"))
 	var mutexEnd : Dictionary = sql.call("QueryMutexWaitStats")
@@ -763,18 +840,26 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		cpuUs = 0
 	# Quantos passos NÃO couberam em orçamento+folga na janela inteira, contado antes
 	# de podar o transitório: é a mesma janela que o acumulador do produto viu, e é
-	# com ela que a régua de concordância abaixo fala.
+	# com ela que a régua de concordância abaixo fala. A contagem é pela FRONTIERA DE
+	# TICK; a de iteração sai ao lado como testemunha, porque foi ela que escondeu.
 	var tailLimitMs : float = budgetMs + PeriodToleranceMs
 	var stepsOverBudget : int = 0
-	for stepMs in stepPeriodsMs:
+	for stepMs in tickPeriodsMs:
 		if float(stepMs) > tailLimitMs:
 			stepsOverBudget += 1
+	var iterOverBudget : int = 0
+	for stepMs in stepPeriodsMs:
+		if float(stepMs) > tailLimitMs:
+			iterOverBudget += 1
+	var tickSteps : int = tickPeriodsMs.size()
 	for cut in range(mini(SkipFrames, work.size())):
 		work.pop_front()
 		physSamples.pop_front()
 		idleSamples.pop_front()
 		if not stepPeriodsMs.is_empty():
 			stepPeriodsMs.pop_front()
+		if not tickPeriodsMs.is_empty():
+			tickPeriodsMs.pop_front()
 	var wallMs : float = float(wallEnd - wallStart) / 1000.0
 	# De quanta CPU da máquina esta janela precisou, e de quanta dela não foi deste
 	# processo. As duas juntas são o que decide se o número abaixo é medido ou é o
@@ -815,11 +900,14 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		"idleMs": _median(idleSamples),
 		"p95Ms": _p(0.95, work),
 		"maxMs": float(work.max()) if not work.is_empty() else 0.0,
-		"periodP95Ms": _p(0.95, stepPeriodsMs),
-		"periodMaxMs": float(stepPeriodsMs.max()) if not stepPeriodsMs.is_empty() else 0.0,
-		"periodSamples": stepPeriodsMs.size(),
+		"periodP95Ms": _p(0.95, tickPeriodsMs),
+		"periodMaxMs": float(tickPeriodsMs.max()) if not tickPeriodsMs.is_empty() else 0.0,
+		"periodSamples": tickPeriodsMs.size(),
+		"iterP95Ms": _p(0.95, stepPeriodsMs),
+		"iterMaxMs": float(stepPeriodsMs.max()) if not stepPeriodsMs.is_empty() else 0.0,
+		"iterOverBudget": iterOverBudget,
 		"stepsOverBudget": stepsOverBudget,
-		"periodSteps": awaited,
+		"periodSteps": tickSteps,
 		"prodSteps": int(prodAfter.get("steps", 0)) - int(prodBefore.get("steps", 0)),
 		"prodOverBudget": int(prodAfter.get("overBudget", 0)) - int(prodBefore.get("overBudget", 0)),
 		"prodLost": int(prodAfter.get("lost", 0)) - int(prodBefore.get("lost", 0)),
@@ -855,9 +943,11 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		int(row["mobs"]), int(row["policies"]), float(row["queriesPerTick"]), float(row["mutexUsPerTick"]),
 		int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)), int(row["samples"]),
 		coresCount, foreignShare, ownShare, float(row["loadavg1"])])
-	print("  . cauda por passo (%d observações, uma por fronteira de física): p95 %.2f ms, max %.2f ms | %d/%d passos acima de orçamento+folga (%.2f ms)" % [
+	print("  . cauda por passo na FRONTIERA DE TICK (%d observações, uma por `_physics_process`): p95 %.2f ms, max %.2f ms | %d/%d passos acima de orçamento+folga (%.2f ms)" % [
 			int(row["periodSamples"]), float(row["periodP95Ms"]), float(row["periodMaxMs"]),
-			stepsOverBudget, awaited, tailLimitMs])
+			stepsOverBudget, tickSteps, tailLimitMs])
+	print("  . fronteira de ITERAÇÃO (os %d `await physics_frame`): p95 %.2f ms, max %.2f ms | %d acima de %.2f ms — é aqui que o pacing come o atraso do passo" % [
+			awaited, float(row["iterP95Ms"]), float(row["iterMaxMs"]), iterOverBudget, tailLimitMs])
 	print("  . instrumento do produto na MESMA janela (o que sai por /metrics): +%d passos amostrados, +%d acima do orçamento, +%d passos perdidos" % [
 			int(row["prodSteps"]), int(row["prodOverBudget"]), int(row["prodLost"])])
 	return row
@@ -907,7 +997,7 @@ func _measurePasses(label : String, totalPlayers : int, instances : int) -> Dict
 	for passID in range(MeasurePasses):
 		passes.append(await _measure("%s p%d" % [label, passID + 1], totalPlayers, instances))
 	var keep : Dictionary = passes[passes.size() - 1]
-	for medianaKey in ["medianMs", "physMs", "idleMs", "p95Ms", "maxMs", "periodP95Ms", "periodMaxMs", "stepsOverBudget", "prodOverBudget", "periodMs", "achievedHz", "cpuMsPerStep", "cores", "queriesPerTick", "mutexUsPerTick", "foreignPct"]:
+	for medianaKey in ["medianMs", "physMs", "idleMs", "p95Ms", "maxMs", "periodP95Ms", "periodMaxMs", "iterP95Ms", "iterMaxMs", "iterOverBudget", "stepsOverBudget", "prodOverBudget", "periodMs", "achievedHz", "cpuMsPerStep", "cores", "queriesPerTick", "mutexUsPerTick", "foreignPct"]:
 		var samples : Array = []
 		for rowPass in passes:
 			samples.append(float(rowPass[medianaKey]))
@@ -916,12 +1006,31 @@ func _measurePasses(label : String, totalPlayers : int, instances : int) -> Dict
 	# que "um teto cumprido numa janela suja continua cumprido na quieta" vale para o
 	# valor central; para uma cauda, a passada que a máquina entregou mais devagar é
 	# justamente a que o jogador sentiu, e ela não pode ser medianada para fora.
-	for tailPair in [["worstP95Ms", "p95Ms"], ["worstMaxMs", "maxMs"],
-			["worstPeriodP95Ms", "periodP95Ms"], ["worstPeriodMaxMs", "periodMaxMs"]]:
+	for tailPair in [["worstP95Ms", "p95Ms"], ["worstMaxMs", "maxMs"]]:
 		var worst : float = 0.0
 		for rowPass in passes:
 			worst = maxf(worst, float(rowPass[tailPair[1]]))
 		keep[tailPair[0]] = worst
+	# A cauda de PERÍODO, porém, é cobrada como TAXA e não como valor absoluto: o corte
+	# que o produto declara para paginar (`deploy/alerts.rules.yml`) é fração de passos
+	# acima do orçamento, e um teto absoluto de orçamento+folga no PIOR passo da janela é
+	# mais severo que o alerta — medido, o próprio piso do processo (0 players) entregava
+	# 34,08 ms de máximo contra o teto de 34,33 ms, e 5x20 entregava 34,46 ms sem que
+	# nenhum jogador perdesse um passo. O que discrimina carga é quantos passos passaram:
+	# 0 até ~40 players, 4 em 100, 16 em 200. p95 e max do período continuam medianados,
+	# impressos por passada e presentes na tabela; só deixaram de ser a régua.
+	var worstOverPct : float = 0.0
+	var worstOverPass : Dictionary = passes[0]
+	for rowPass in passes:
+		var passOverPct : float = 100.0 * float(rowPass["stepsOverBudget"]) / maxf(float(rowPass["periodSteps"]), 1.0)
+		if passOverPct >= worstOverPct:
+			worstOverPct = passOverPct
+			worstOverPass = rowPass
+	keep["worstOverPct"] = worstOverPct
+	# Os numeradores impressos vêm da MESMA passada que produziu a pior taxa: medianar
+	# a fração e imprimir a contagem de outra passada é contar uma janela imaginária.
+	keep["worstStepsOver"] = int(worstOverPass["stepsOverBudget"])
+	keep["worstWindowSteps"] = int(worstOverPass["periodSteps"])
 	var medians : Array = []
 	for rowPass in passes:
 		medians.append(float(rowPass["medianMs"]))
@@ -1082,9 +1191,19 @@ func _run() -> void:
 	calib = Burn.new()
 	calib.name = "MultiInstCalibre"
 	root.add_child(calib)
+	cadence = Cadence.new()
+	cadence.name = "MultiInstCadencia"
+	root.add_child(cadence)
 	await _frames(4)
 	Check(bool(calib.is_node_ready()) and calib.get_parent() == root,
 			"calibre ligado na mesma árvore das WorldInstances (us=%d desligado)" % int(calib.get("us")))
+	Check(bool(cadence.is_node_ready()) and cadence.get_parent() == root,
+			"fronteira de tick ligada na mesma árvore das WorldInstances (é o instrumento da régua de cauda)")
+	# O corte da régua de cauda é LIDO do fonte que pagina, não digitado aqui: muda o
+	# percentual em `deploy/alerts.rules.yml` e esta escada muda com ele. Não achá-lo é
+	# a régua perdendo o chão, e é check — não fallback para um número órfão.
+	alertPagePct = _alertPagePct()
+	Check(alertPagePct > 0.0, "o corte que pagina foi lido do fonte (%.1f%% dos passos acima de orçamento+folga)" % alertPagePct)
 	var floorRow : Dictionary = await _measurePasses("piso 0 players", 0, 0)
 	floorMs = float(floorRow["medianMs"])
 	rows.pop_back()
@@ -1146,7 +1265,8 @@ func _run() -> void:
 		if not _checkShape(level, newInst, census):
 			continue
 		var row : Dictionary = await _measurePasses(label, total, level)
-		Check(int(row["samples"]) >= SampleFrames - SkipFrames - 5, "nível %s: %d amostras de tick (janela não truncada)" % [label, int(row["samples"])])
+		Check(int(row["samples"]) >= SampleFrames - SkipFrames - 5, "nível %s: %d amostras dos monitores (janela não truncada)" % [label, int(row["samples"])])
+		Check(int(row["periodSamples"]) >= SampleFrames - SkipFrames - 5, "nível %s: %d passos na série de período por tick (sem instrumento vivo não há cauda)" % [label, int(row["periodSamples"])])
 		Check(row["rssMb"] > 0, "nível %s: RSS medido com players no processo (%d MB)" % [label, int(row["rssMb"])])
 		# A régua de relógio nos degraus AFIRMADOS: enquanto o trabalho couber no
 		# orçamento o sleep preenche o resto e o período é o próprio orçamento. Estes
@@ -1174,8 +1294,9 @@ func _run() -> void:
 			# num degrau em que a cauda sai do orçamento e o centro não, `medianMs`
 			# continua verde e o jogador recebe passos estourados. Verde daqui significa
 			# uma frase só, e é ela: em TODAS as passadas deste nível, 95% dos passos de
-			# física fecharam dentro do orçamento, e o pior passo da janela também
-			# fechou dentro de orçamento+folga. Não significa "o nível coube" para a
+			# trabalho fecharam dentro do orçamento, o pior passo de trabalho também
+			# coube, e a fração de passos de parede acima de orçamento+folga nunca
+			# alcançou o corte que o produto pagina. Não significa "o nível coube" para a
 			# mediana — significa que a cauda coube.
 			#
 			# Por que `CheckCeiling` e não `CheckTiming`: um teto de cauda tem a
@@ -1188,25 +1309,33 @@ func _run() -> void:
 			# porque vermelharia o run por causa do vizinho e o veredito deixaria de ser
 			# do produto. A elegibilidade é a mesma da função: é UMA janela, não a
 			# diferença entre duas.
-			var tailLimit : float = budgetMs + PeriodToleranceMs
 			CheckCeiling(float(row["worstP95Ms"]) <= budgetMs,
 					"nível %s: p95 do trabalho por passo %.2f ms dentro do orçamento de %.2f ms na PIOR passada — o verde não é mais da mediana" % [
 						label, float(row["worstP95Ms"]), budgetMs])
 			CheckCeiling(float(row["worstMaxMs"]) <= budgetMs,
 					"nível %s: o pior passo de trabalho da janela (%.2f ms na pior passada) cabe no orçamento" % [
 						label, float(row["worstMaxMs"])])
-			CheckCeiling(float(row["worstPeriodP95Ms"]) <= tailLimit,
-					"nível %s: p95 do período de parede por passo %.2f ms dentro de orçamento+folga (%.2f ms) na pior passada" % [
-						label, float(row["worstPeriodP95Ms"]), tailLimit])
-			CheckCeiling(float(row["worstPeriodMaxMs"]) <= tailLimit,
-					"nível %s: nenhum passo de parede desta janela passou de %.2f ms na pior passada (pior: %.2f ms)" % [
-						label, tailLimit, float(row["worstPeriodMaxMs"])])
-			# CONCORDÂNCIA DE INSTRUMENTO: a mesma grandeza, medida por dois caminhos —
-			# os `await physics_frame` deste harness e o acumulador do LAÇO DE PRODUTO
-			# (`sources/launcher/Launcher.gd`), que é o número que sai por /metrics e que
-			# `deploy/alerts.rules.yml` pagina. Dois passos de margem pela fronteira da
-			# janela; passa disso, a métrica exportada não é o que a escada cobra, e o
-			# alerta estaría paginando uma etiqueta.
+			# A cauda de PERÍODO cobrada por TAXA, contra o mesmo número que o alerta
+			# pagina. Verde aqui diz uma frase só: posto este degrau em produção,
+			# `PassoForaDoOrcamento` não dispararia nele. O valor absoluto do pior passo
+			# deixou de ser régua porque o relógio de um tick carrega o pacing consigo: um
+			# processo ocioso já entregava máximo acima de orçamento+folga sem que nenhum
+			# passo se perdesse, e um teto que fica vermelho por dormir não mede carga. O
+			# que separa degrau é quantos passos passaram.
+			CheckCeiling(float(row["worstOverPct"]) <= alertPagePct,
+					"nível %s: %.1f%% dos passos da pior passada acima de orçamento+folga, contra o corte de %.1f%% que pagina (%d de %d passos; período p95 %.2f ms, max %.2f ms)" % [
+						label, float(row["worstOverPct"]), alertPagePct, int(row["worstStepsOver"]), int(row["worstWindowSteps"]),
+						float(row["periodP95Ms"]), float(row["periodMaxMs"])])
+			# CONCORDÂNCIA DE INSTRUMENTO: a mesma grandeza, medida por dois caminhos — a
+			# `Cadence` deste harness (fronteira de TICK, um node comum no mesmo despacho)
+			# e o acumulador do LAÇO DE PRODUTO (`sources/launcher/Launcher.gd`), que é o
+			# número que sai por /metrics e que `deploy/alerts.rules.yml` pagina. Seis
+			# passos de margem numa janela de 120, pela borda da janela e pelo ponto de
+			# cada instrumento dentro do despacho; passa disso, a métrica exportada não é
+			# o que a escada cobra e o alerta paginaria uma etiqueta. Foi medindo
+			# `await physics_frame` — fronteira de ITERAÇÃO, que o sleep de pacing alisa —
+			# que esta régua ficou verde enquanto o produto contava 16 passos estourados na
+			# mesma janela.
 			var overDelta : int = int(row["prodOverBudget"]) - int(row["stepsOverBudget"])
 			Check(absi(overDelta) <= PeriodTailAgreementSteps,
 					"nível %s: o contador que o produto exporta viu %d passos acima de orçamento+folga, esta janela viu %d (diff %d, banda %d) — /metrics e escada medem o mesmo passo" % [
@@ -1214,6 +1343,9 @@ func _run() -> void:
 			CheckCeiling(int(row["prodSteps"]) >= int(row["periodSteps"]) - PeriodTailAgreementSteps,
 					"nível %s: o acumulador do produto amostrou %d passos numa janela de %d — a série existe neste processo, não é bloco morto do /metrics" % [
 						label, int(row["prodSteps"]), int(row["periodSteps"])])
+			Check(int(row["periodSteps"]) >= int(row["prodSteps"]) - PeriodTailAgreementSteps,
+					"nível %s: a fronteira de tick deste harness amostrou %d passos numa janela onde o produto amostrou %d — o instrumento não perdeu a perna" % [
+						label, int(row["periodSteps"]), int(row["prodSteps"])])
 			if periodOK and workOK and hzOK:
 				insideCount += 1
 		else:
@@ -1339,6 +1471,14 @@ func _proofOverload(top : Dictionary, total : int, level : int) -> void:
 	CheckTiming(float(overloaded["periodMs"]) >= float(top["periodMs"]) + float(OverloadBurnUs) / 2000.0,
 			"no degrau saturado a queima vira período, não fração: %.2f ms -> %.2f ms com %d ms/passo injetados" % [
 				float(top["periodMs"]), float(overloaded["periodMs"]), OverloadBurnUs / 1000])
+	# MORDIDA da régua de cauda: com 40 ms/passo injetados a FRAÇÃO de passos acima de
+	# orçamento+folga tem de ULtrapassar o corte que pagina. É o lado avesso do teto
+	# cobrado nos degraus afirmados, e existir porque uma régua de taxa sem mordida pode
+	# ser verde para sempre: ou a queima real passa do corte, ou o número lido do fonte
+	# não é o que a janela está cobrando.
+	var burnOverPct : float = 100.0 * float(overloaded["stepsOverBudget"]) / maxf(float(overloaded["periodSteps"]), 1.0)
+	Check(burnOverPct > alertPagePct, "a régua de cauda morde: %d ms/passo injetados deixaram %.1f%% dos passos (%d de %d) acima de orçamento+folga, contra o corte de %.1f%% que pagina" % [
+			OverloadBurnUs / 1000, burnOverPct, int(overloaded["stepsOverBudget"]), int(overloaded["periodSteps"]), alertPagePct])
 	rows.pop_back()	# sobrecarga artificial não é nível de capacidade
 
 # (c) ATRIBUIÇÃO: no degrau mais carregado todas as instâncias de farm vão para
