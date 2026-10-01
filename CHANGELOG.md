@@ -865,6 +865,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from that zero rather than presented as a separation that was never measured.
 
 ### Changed
+- The one pointer CI's twin judge accused became an anchor, and the ceiling fell with it (#124
+  slice #149). The idle job came back with a single failure, quoted verbatim from the runner:
+  ``tests/map_load_test.gd:108: Launcher.gd → 205-205 não declara nem usa `Action``, declarado em
+  8-8: 1 vs 0. The comment was honest the day it was written and rotted in the next commit that
+  touched the file — this project's own #136 grew `sources/launcher/Launcher.gd` by forty-six
+  lines and moved `func Client()` from 172 to 218, so line 205 became `return false`, and the
+  harness comment went on citing it. Nothing in bash said a word, and that is not a bug in the
+  bash ruler but the corpus split #132 registered: `.gd` comments are read by the GDScript twin
+  only, and the twin runs in CI, so a rotted pointer in a harness is a failure that arrives after
+  the push. The citation now names the declaration instead of a coordinate: the clause points at
+  `Client` (`sources/launcher/Launcher.gd:@Client`), and what makes the claim true is in that
+  block — `add_child.call_deferred(Action)` — which is better evidence than the old target ever
+  was, because the line it pinned was a comment inside `Reset()` repeating the fact rather than
+  the code stating it. One line pointer died: `LINE_MAX` 407 → 406, and `ANCHOR_MIN` rose to the
+  census the gate measures with this text in it. `check_doc_drift.sh` is green with zero failures
+  at that census. The GDScript twin is NOT green, and the reason is not this pointer: its series
+  arm floors the number of (named series, cited interval) pairs it judges at three, and the #147
+  migration took that corpus in the same stroke — the ROLLBACK rows that named `shambleta_up` and
+  friends next to a range now name them next to an anchor, which the twin does not judge by
+  literal (#128 kept the clause model in bash on purpose). The run of this commit prints
+  `1 pares (série, intervalo) julgados` against the floor of 3. That is a level floor accusing
+  progress, the same defect #137 registered for the continuation class, and it is filed as #150
+  rather than lowered here — a floor moved to make a gate pass is the one edit this house does
+  not get to make on the way to something else.
 - Seven line ranges that lived inside one function became one anchor (#124 slice #147). The
   alta-latência step of `deploy/ROLLBACK.md` enumerated the seven families the `/metrics` body
   publishes and pinned each with its own range, and all seven ranges sat inside

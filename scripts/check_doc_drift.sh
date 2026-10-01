@@ -1167,8 +1167,18 @@ REG_MIN=2
 # acusação de `bloco` porque a frase pin-ava `MetricsServer`, nome que mora na classe e fora do
 # bloco da constante, e o conserto foi um ponto no lugar do travessão — prova de que a mordida
 # julga a promessa, não o caminho percorrido.
-ANCHOR_MIN=234
-LINE_MAX=407
+# Sexta colheita, 2026-10-01, e é a primeira colhida pela GÉMEA: o ponteiro apodrecido estava
+# num comentário de harness, corpus que a régua bash não lê (#132), então a mordida só apareceu
+# no job idle da CI — `tests/map_load_test.gd` citava a linha 205 de `Launcher.gd` como a linha
+# que registra que só `Action` entra na árvore no client. A linha era verdadeira quando foi
+# escrita (era o comentário dentro de `Reset()` que repete o fato) e o próprio #136 empurrou o
+# quarenta e seis linhas, movendo `func Client()` de 172 para 218. Convertida para âncora ao
+# declarante, que é melhor evidência que o alvo antigo: o corpo de `Client` contém o
+# `add_child.call_deferred(Action)` que faz a afirmação, enquanto a linha pinada era prosa
+# repetindo-a. Um ponteiro de linha a menos, e nenhum literal pinado precisou de oração nova —
+# a cláusula já nomeava o símbolo antes de apontar para ele.
+ANCHOR_MIN=239
+LINE_MAX=406
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
 # para cima do laço de âncora, o total cai de 215 para 200 e o `ANCHOR_MIN` acima acusa —

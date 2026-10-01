@@ -105,8 +105,9 @@ func _run() -> void:
 		return
 
 	_map = _launcher.get("Map")
-	# `Map` NÃO está na árvore e isso é projeto, não acidente: `Launcher.gd:205` registra
-	# que só `Action` é add_child'ado em `Client()`. O que tem que estar na árvore é o Nó
+	# `Map` NÃO está na árvore e isso é projeto, não acidente: o corpo de `Client`
+	# (`sources/launcher/Launcher.gd:@Client`) registra que só `Action` é add_child'ado ali.
+	# O que tem que estar na árvore é o Nó
 	# do mapa, que `LoadMapNode` pendura em `Launcher`. Exigir árvore no serviço seria
 	# acusar o desenho; aceitar um serviço nulo seria não exigir nada.
 	if not Check(_map != null and bool(_map.get("isInitialized")), "Launcher.Map é o serviço vivo e pós-launch no client headless"):
