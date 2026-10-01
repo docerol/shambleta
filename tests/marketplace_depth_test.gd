@@ -761,7 +761,7 @@ func _suitePriceBand() -> void:
 	_sql.call("AddItemToCharacter", seller, _itemWash, 8, "mdx_grant")
 	# Mercadoria da conta-capada: sem estoque a 51ª recusa seria `not_enough_items`
 	# em vez de `list_day_cap` (a porta de volume vem antes do consumo —
-	# `AuctionHouseService.gd:754` vs `:757`) e a liberação no dia limpo não
+	# `AuctionHouseService.gd:755` vs `:758`) e a liberação no dia limpo não
 	# aconteceria. Uma unidade: o passo (6) anuncia 1, é recusado pelo cap, limpa
 	# o contador e anuncia a MESMA unidade de novo.
 	_sql.call("AddItemToCharacter", capped, _itemWash, 1, "mdx_grant")
