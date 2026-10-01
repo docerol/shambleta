@@ -949,7 +949,7 @@ IDENT_MIN=120
 # devolve "0 acusações" julgando 180 nomes, e 180 passa no IDENT_MIN acima: o zero não
 # prova nada, o 87 é que prova que a classe foi lida.
 RESOL_MIN=87
-# Piso da régua de CONTINUAÇÃO (#124, fatia órfão). O braço nasceu nesta passada e foi
+# Régua de CONTINUAÇÃO (#124, fatia órfão). O braço nasceu nesta passada e foi
 # rodado contra a árvore ANTES do conserto (be573ce): 33 `:NN` lidos — 22 ÓRFÃOS (numero
 # sem arquivo na linha) e 11 herdando — e 24 acusações, porque além dos 22 órfãos dois
 # herdando mentiam: em COOLIFY a faixa 111-120 de SQLBackups caia numa linha em branco,
@@ -957,14 +957,15 @@ RESOL_MIN=87
 # e 166. O piso NÃO é 33, e a razão é a mesma que faz o braço existir: cobrar 33
 # continuações seria cobrar que os 22 órfãos continuassem na árvore, porque a única
 # forma de manter esse piso verde é não consertar os órfãos — piso que só fica verde com
-# a doença presente é prêmio à doença. O censo de agora é 8 lidos, 8 julgados pelo
-# arquivo herdado, 0 órfãos, 0 acusações, e é esse o piso: afrouxamento de população
-# medida, não de métrica, com o mesmo predicado nos mesmos dois cortes. O que impede a
-# volta do órfão não é este piso, é a acusação: `herdado is None` entra em
+# a doença presente é prêmio à doença. O censo daquela passada era 8 lidos, 8 julgados
+# pelo arquivo herdado, 0 órfãos, 0 acusações, e foi esse o nível escrito: afrouxamento
+# de população medida, não de métrica, com o mesmo predicado nos mesmos dois cortes. O
+# que impede a volta do órfão não é o nível, é a acusação: `herdado is None` entra em
 # `cont_accused`, que é somado às falhas do portão — órfão novo é vermelho na hora, e foi
-# assim que os 22 saíram, não por edição a olho. Este piso guarda só o walk mudo: 0
-# lidos com 8 na árvore é braço parado, e o que prova que o braço lê é o self-test
-# mordendo os 12 controles (dois deles exatamente o órfão e o off-by-one de grupo).
+# assim que os 22 saíram, não por edição a olho. O nível guardava só o walk mudo (0
+# lidos com 8 na árvore é braço parado), e o que prova que o braço lê nunca foi ele: é o
+# self-test mordendo os controles (dois deles exatamente o órfão e o off-by-one de
+# grupo). Ver o bloco da 25b abaixo, que trocou o nível por cobertura.
 #
 # O 9 virou 8 na passada do gémeo (`tests/IdleTestsFrontier.gd`, braço (9)), e o que
 # desceu é doença, não régua: um daqueles nove não era ponteiro nenhum, era a PORTA do
@@ -984,7 +985,11 @@ RESOL_MIN=87
 # que é o que um predicado cobra. Os quatro controles novos (três na régua de identidade
 # e um no adaptador da continuação) nomeiam zero coisas do alvo de propósito, porque só
 # assim eles provam o predicado em vez de passarem pela porta da régua de nome.
-CONT_MIN=8
+#
+# O piso de NÍVEL que havia aqui (`CONT_MIN=8`) não existe mais, e a razão é a classe
+# que ele acusava: ele não distinguia "o braço parou" de "um ponteiro foi consertado".
+# Descrito na 25b, com o substituto (censo de COBERTURA, diferença e não nível) e com
+# a anti-vacuidade do `cont_cases > 0`, que era o único buraco real que o nível tapava.
 # Piso da régua de literal: o censo medido no run de 2026-10-01 é 59 ponteiros
 # pinados (54 no run de 2026-09-28; não decomponho os cinco que se somaram — nenhuma
 # régua desta fatia mediu a classe de literal, e número que sobe sem medição não entra
@@ -2088,6 +2093,92 @@ HERD_ADAPTADOR = [
      "(`x.gd:4`), a porta está na `:9`", False),
 ]
 
+# ---------------------------------------------------------------------------
+# 25b) COBERTURA da continuação: quantos tokens da forma `:NN` EXISTEM no escopo
+# lido, contado por um laço que não passa por `herancas()` nem pelo `scan()`.
+#
+# Isto substitui o piso de NÍVEL (`CONT_MIN=8`), e o motivo é a classe que o piso
+# acusava ser defeito: converter um `:NN` em âncora — que é exatamente o #124 —
+# tira um do saldo, e o piso gritava "um walk que para de herdar devolve zero
+# acusações" sobre um walk que lia tudo. Medido nesta fatia: três continuações
+# viraram âncora (o ramo de Ryan, o `CopyBackup` do runbook de backup e o
+# `BindAddress` do runbook de operação), o censo foi de 8 a 5, e o portão ficou
+# verde; com o nível de 8 o PRIMEIRO deles já era vermelho. O outro lado do mesmo
+# defeito: com população acima do piso, um walk que perdesse metade continuava
+# verde — o nível só acusava depois de cair abaixo de um número escrito à mão.
+#
+# O que o piso guardava, guardado por escrito e sem falso positivo:
+#   (i)  o braço lê os CONTROLES -- é `herdselftest`, e agora com o censo de
+#        controles cobrado em `cont_cases > 0`, porque `biting == cases` é verde
+#        vazio se alguém apagar a tabela (0 == 0).
+#   (ii) o braço lê a ÁRVORE -- é o laço abaixo. Cobra-se a DIFERENÇA, não o
+#        nível: todo token da forma `:NN` no escopo lido tem de estar no saldo do
+#        walk. Converter um ponteiro derruba os dois números juntos, então a
+#        diferença não se mexe; um `continue` tendo subido por cima da herança
+#        mexe, e é acusado no tamanho exato do que sumiu — medido com o predicado
+#        de escopo do `scan()` trocado por `startswith`, que lê 7 contra os 8 do
+#        censo e imprime "sumiram 1".
+#
+# A independência é o ponto do desenho: `herd_cov_count` reimplementa a regra de
+# escopo (doc, JSON, comentário em código) SEM chamar `herancas()`, e `scan()`
+# mantém a condição inline dela. Os dois laços concordando é a afirmação; divergir
+# é um dos dois tendo mudado. O regex é reescrito à mão abaixo de propósito -- se
+# ele fosse o `CONTPTR` compartilhado, afivelar o `CONTPTR` afivelaria a testemunha.
+#
+# O que esta régua NÃO julga, julgado por censo impresso: o `poupados` é o que o
+# recorte de registro datado deixa de ler. Alargar `SKIP_NAMES` move tokens de
+# cobráveis para poupados sem tocar na diferença -- mudança de ESCOPO, declarada no
+# número que sai no log, não métrica afrouxada. Para o recorte há réguas próprias
+# (o teto de linha e o piso de âncora cobrada dentro do registro).
+# ---------------------------------------------------------------------------
+HERD_COV = [
+    ("cobertura: comentário de código é escopo lido", ".gd", "# abre em `:4`", 1),
+    ("cobertura: corpo de função não é prosa e não entra no censo", ".gd", "\tvar a = `:4`", 0),
+    ("cobertura: doc conta, inclusive linha de tabela", ".md", "| `x.gd:1` | `:4` |", 1),
+    ("cobertura: JSON não tem marcador de comentário, e ainda assim é lido", ".json", '"_note": "`:4`"', 1),
+    ("cobertura: YAML fora de comentário não é escopo lido", ".yml", "  port: `:4`", 0),
+    ("cobertura: YAML em comentário é escopo lido", ".yml", "# porta em `:4`", 1),
+    ("cobertura: faixa `:4-6` é UM token, não dois", ".gd", "# mora em `x.gd:3` e a cadeia em `:4-6`", 1),
+    ("cobertura: dois `:NN` na mesma linha são dois tokens", ".gd", "# `:4` e `:5`", 2),
+    ("cobertura: ponteiro nomeado não é continuação", ".gd", "# `x.gd:4` nomeado", 0),
+    ("cobertura: porta escrita como `:NN` sem backtick não é token", ".yml", "# target 127.0.0.1:9400", 0),
+]
+
+
+def herd_cov_count(ext, line):
+    """Tokens de continuação nesta linha, se a linha estiver no escopo lido."""
+    if not (ext == ".md" or ext == ".json"
+            or line.lstrip().startswith(("#", "//"))):
+        return 0
+    return len(re.findall(r"`:[0-9]+(?:-[0-9]+)?`", line))
+
+
+def herdcoverage(root):
+    """(cobráveis, poupados) no escopo de `scan()`, contado sem `herancas()`."""
+    cobravamos = 0
+    poupados = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            if rel.startswith("archive/"):
+                continue
+            ext = os.path.splitext(fn)[1]
+            if ext not in EXTS:
+                continue
+            try:
+                src = open(os.path.join(dirpath, fn), encoding="utf-8",
+                           errors="replace").read().split("\n")
+            except OSError:
+                continue
+            soma = sum(herd_cov_count(ext, line) for line in src)
+            if fn in SKIP_NAMES:
+                poupados += soma
+            else:
+                cobravamos += soma
+    return cobravamos, poupados
+
 
 def herdselftest():
     biting = 0
@@ -2127,6 +2218,14 @@ def herdselftest():
             else:
                 print("[FAIL] continuação: self-test %s cego no controle %s (%s)"
                       % (nome, label, err))
+    for label, ext, line, esperado in HERD_COV:
+        total += 1
+        visto = herd_cov_count(ext, line)
+        if visto == esperado:
+            biting += 1
+        else:
+            print("[FAIL] continuação: cobertura cega no controle %s (leu %d tokens, esperado %d)"
+                  % (label, visto, esperado))
     return biting, total
 
 
@@ -2403,6 +2502,7 @@ def main():
     rbiting, rcases = regselftest()
     abiting, acases = anchorselftest()
     hbiting, hcases = herdselftest()
+    cov_n, cov_spared = herdcoverage(root)
     reg = registry(root)
     index = build_index(root)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
@@ -2434,6 +2534,8 @@ def main():
           % (lit_judged, lit_bad, lbiting, lcases))
     print("continuação de ponteiro: %d `:NN` no corte narrow (%d acusações), %d no corte wide (%d acusações), %d sem antecedente na linha, self-test %d/%d controles mordendo"
           % (cont_n, cont_an, cont_w, cont_aw, cont_on, hbiting, hcases))
+    print("cobertura da continuação: o censo independente acha %d tokens no escopo lido, o walk leu %d, e %d ficaram poupados pelo recorte de registro datado"
+          % (cov_n, cont_n, cov_spared))
     print("registro de gates de estrutura: %d prosas afirmando a contagem (%d acusações), %s, self-test %d/%d controles mordendo"
           % (reg_judged, reg_bad, "registro NÃO lido" if reg is None else "registro com %d gates" % len(reg), rbiting, rcases))
     print("âncora de ponteiro: %d `arquivo:@simbolo` no lugar de %d `arquivo:linha` (%d acusações), self-test %d/%d controles mordendo"
@@ -2469,11 +2571,12 @@ def main():
     print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting, fora_n, fora_lin, fora_anc))
-    print("CONT %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on))
+    print("CONT %d %d %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on, cov_n, cov_spared))
     if (biting != cases or accused or narrow_judged < MIN_CHECKS or wide_judged < narrow_judged
             or cut_drift or reg_cut_drift or anchor_cut_drift or resol_cut_drift or lbiting != lcases
             or rbiting != rcases or abiting != acases or anchor_bad
             or hbiting != hcases or cont_acusados or cont_cut_drift or fora_cut_drift
+            or cont_n != cov_n
             or reg_bad or reg is None):
         return 1
     return 0
@@ -3158,10 +3261,14 @@ else
 	# #116 de novo. Sem antecedente, o `:NN` é órfão e é ACUSADO — a alternativa é
 	# adivinhar o arquivo, e adivinhação em gate é manto.
 	#
-	# Piso de volume (o censo acima) e self-test próprio, porque a régua nova tem dois
-	# modos de mentir verde: não reconhecer a continuação nenhuma (walk mudo) e
+	# Cobertura (o censo abaixo) e self-test próprio, porque a régua nova tem três
+	# modos de mentir verde: não reconhecer a continuação nenhuma (walk mudo),
 	# reconhecer trocando os grupos do regex — `CONTPTR` numera a linha no grupo 1 e
-	# `PTR` no grupo 2, e um off-by-one julgaria o arquivo como se fosse o número.
+	# `PTR` no grupo 2, e um off-by-one julgaria o arquivo como se fosse o número — e
+	# apagar a tabela de controles, que deixa `biting == cases` verde com 0 de 0. O
+	# nível (`CONT_MIN`) foi trocado por diferença contra o censo independente da 25b:
+	# os dois modos de sumir continuam acusados, e o reparo do #124 — converter um
+	# ponteiro em âncora — deixa de ser contado como um deles.
 	# ---------------------------------------------------------------------------
 	checks=$((checks + 1))
 	if [ -z "$cont_stats" ]; then
@@ -3173,17 +3280,22 @@ else
 		cont_biting=0
 		cont_seen=0
 		cont_orfas=0
-		read -r _lab cont_j cont_a cont_cases cont_biting cont_seen cont_orfas <<< "$cont_stats"
+		cont_cov=0
+		cont_spared=0
+		read -r _lab cont_j cont_a cont_cases cont_biting cont_seen cont_orfas cont_cov cont_spared <<< "$cont_stats"
 		checks=$((checks + cont_j))
 		failures=$((failures + cont_a))
 		if [ "$cont_biting" -ne "$cont_cases" ]; then
 			fail "self-test da continuação mordeu $cont_biting de $cont_cases controles — com a herança quebrada, o \`:NN\` vira número sem arquivo e o zero de acusações não vale nada"
 		fi
-		if [ "$cont_seen" -lt "$CONT_MIN" ]; then
-			fail "continuação leu $cont_seen \`:NN\` no corte narrow contra o piso $CONT_MIN — um walk que para de herdar devolve zero acusações julgando o resto"
+		if [ "$cont_cases" -eq 0 ]; then
+			fail "a tabela de controles da continuação está vazia (0 de 0) — \`biting == cases\` é verde vazio sem controle, e era o piso de nível que tapava este buraco"
 		fi
-		if [ "$cont_a" -eq 0 ] && [ "$cont_biting" -eq "$cont_cases" ] && [ "$cont_seen" -ge "$CONT_MIN" ]; then
-			echo "[ok] $cont_seen ponteiros de continuação \`:NN\` lidos, $cont_j julgados pelo arquivo herdado nos dois cortes (órfão é acusação), com os $cont_cases controles do self-test mordendo"
+		if [ "$cont_seen" -ne "$cont_cov" ]; then
+			fail "cobertura da continuação: o censo independente acha $cont_cov tokens no escopo lido e o walk leu $cont_seen — sumiram $((cont_cov - cont_seen)), e é exatamente o que o piso de nível deixava passar enquanto o saldo ficasse acima de 8"
+		fi
+		if [ "$cont_a" -eq 0 ] && [ "$cont_biting" -eq "$cont_cases" ] && [ "$cont_cases" -gt 0 ] && [ "$cont_seen" -eq "$cont_cov" ]; then
+			echo "[ok] $cont_seen ponteiros de continuação \`:NN\` lidos de $cont_cov no censo independente (0 sem testemunha), $cont_j julgados pelo arquivo herdado nos dois cortes (órfão é acusação), $cont_spared poupados pelo recorte de registro datado, com os $cont_cases controles do self-test mordendo"
 		fi
 	fi
 fi

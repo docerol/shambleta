@@ -14,7 +14,8 @@ não foi conferido no código está marcado como **[NÃO MEDIDO]**.
 
 Os diretórios são **MAIÚSCULOS** e isto não é cosmetismo: o nome vem das chaves do
 enum `BackupFrequency` (`sources/sql/SQLCommons.gd:@BackupFrequency`, `{DAILY, WEEKLY, MONTHLY}`,
-usado em `sources/sql/SQLBackups.gd:12` e `:22`), e o
+usado no `CreateDailyBackup` (`sources/sql/SQLBackups.gd:@CreateDailyBackup`) e no
+`CopyBackup` (`sources/sql/SQLBackups.gd:@CopyBackup`), e o
 container é case-sensitive. Um `ls` na variante minúscula desse caminho devolve vazio
 num banco que tem backups — a aparência de "o backup nunca rodou" vem do `ls`, não
 do worker. O `ls` do §3.1 de `ROLLBACK.md` já usa o caminho certo.

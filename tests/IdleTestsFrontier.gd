@@ -1518,10 +1518,11 @@ func SuiteEvidencePointers() -> void:
 					contos.append("%s: continuação %s herda `%s:%d-%d`, que %s" % [csite, cmatch.get_string(0), cfile, cfrom, cto, cverdict])
 	CheckEq(contos.size(), 0, "continuação: %d números sem arquivo lidos, %d julgados pelo antecedente da MESMA linha, %d órfãos (%s)" % [contLidas, contJulgadas, contOrfas, " | ".join(contos)])
 	print("  [info] continuação: %d números sem arquivo vistos fora dos registros datados, %d julgados pelo arquivo herdado, %d órfãos — o censo sai também no verde porque piso sem número impresso não discrimina walk parado de árvore honesta" % [contLidas, contJulgadas, contOrfas])
-	# O piso é o medido, e o medido é pequeno porque a classe é pequena: oito números na árvore de
-	# hoje. A comparação é o ponto desta fatia — se um dos dois censos se mover e o outro não, a
-	# primeira pergunta é qual dos dois parou de ler —, e é por isso que aqui não há a folga de
-	# onze que o piso da âncora tem: com população oito, folga três deixaria três arquivos
+	# A classe é pequena: oito números na árvore quando este braço nasceu, cinco hoje. O piso que
+	# havia aqui era esse medido, e a comparação é o ponto desta fatia — se um dos dois censos se
+	# mover e o outro não, a primeira pergunta é qual dos dois parou de ler —, e é por isso que
+	# não havia aqui a folga de onze que o piso da âncora tem: com população oito, folga três
+	# deixaria três arquivos
 	# inteiros saírem da varredura em silêncio. Oito, e não os nove que a régua bash leu na
 	# passada do órfão, porque um daqueles nove era uma PORTA escrita em forma de continuação: no
 	# runbook de escala o Alertmanager tinha o número de porta colado a dois-pontos dentro de
@@ -1530,13 +1531,34 @@ func SuiteEvidencePointers() -> void:
 	# naquele momento: o `verdict` de lá não tinha predicado de fim de arquivo — a fatia de
 	# faixa era cortada pelo comprimento do arquivo e o check de branco era condicionado a a
 	# borda estar dentro dele, então número depois da última linha fatiava vazio e devolvia
-	# "nada a acusar". A porta voltou a ser porta na prosa, o censo desceu um, e o piso desce
-	# com ele aqui e em `CONT_MIN` na bash, com os dois números medidos e ditos. O predicado
+	# "nada a acusar". A porta voltou a ser porta na prosa e o censo desceu um. O predicado
 	# foi escrito na passada seguinte (motivo `alem` no `verdict` de lá, com quatro controles
 	# novos), e a auditoria que ele permitia fez junto: zero ponteiros nomeados da árvore caía
 	# além do fim do alvo. Os dois juízes voltam a ler a mesma classe.
-	Check(contLidas >= 8,
-			"continuação: %d números sem arquivo na varredura — abaixo de 8 o braço está verde por não olhar (%s)" % [contLidas, "8 é o medido fora dos quatro registros datados"])
+	#
+	# O piso de NÍVEL saiu dos dois juízes na fatia da cobertura — a bash descreve o substituto no
+	# bloco da 25b — e pelo mesmo motivo: ele não distinguia "o braço parou" de "um ponteiro foi
+	# consertado". Converter um número sem arquivo em âncora, que é o trabalho do #124, derruba o
+	# saldo sem derrubar o walk. Medido na passada do conversor: três continuações viraram âncora
+	# (Ryan, `CreateDailyBackup`, `BindAddress`), o censo foi de oito a cinco, e o piso de oito
+	# vermelhava o reparo. Fica a diferença contra um censo que não passa por `_ContHerdancas`, e a
+	# mordida dele foi medida aqui: tirando só o `strip_edges()` do predicado de escopo do censo, o
+	# walk lê 5 contra os 4 do censo e o check acusa 1 de 611.
+	var contCobertura : int = 0
+	var contShape : RegEx = RegEx.create_from_string("`:[0-9]+(?:-[0-9]+)?`")
+	for covPath in sweep:
+		if _ForaDaEvidencia(String(covPath)):
+			continue
+		var covProse : bool = ["md", "json"].has(String(covPath).get_extension().to_lower())
+		var covLines : PackedStringArray = _RepoFile(covPath).split("\n")
+		for c in covLines.size():
+			var covLine : String = String(covLines[c])
+			if not covProse and not covLine.strip_edges().begins_with("#"):
+				continue
+			contCobertura += contShape.search_all(covLine).size()
+	CheckEq(contLidas, contCobertura,
+			"cobertura da continuação: o walk leu %d números sem arquivo e o censo que não chama `_ContHerdancas` acha %d no mesmo escopo — diferença de %d token(s) (positivo é o censo vendo o que o walk não viu, negativo é o walk vendo o que não existe), que é o modo de mentir verde que o piso de nível só pegava quando o saldo inteiro caía" % [
+				contLidas, contCobertura, contCobertura - contLidas])
 	# A herança mordendo em mesa, nos modos que a árvore limpa não mostra: sem o control negativo
 	# o braço pode estar verde por não acusar nada, e sem o positivo vira máquina de acusar
 	# citação honesta. A linha é inventada de propósito — o que se prova aqui é a aritmética do

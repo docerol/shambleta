@@ -197,8 +197,9 @@ static func SetQuest(caller : BaseAgent, questID : int, state : int):
 # tests/quest_reward_test.gd; os diálogos hoje só têm no lugar do pagamento o
 # comentário que diz para onde o número foi — `Nina.gd:144`, `Frost.gd:54`,
 # `Mauro.gd:47`, `Nathan.gd:89`, `ThiefsChest.gd:30`, `Eridu.gd:85`,
-# `Riskim.gd:123`). Continua à mão o que um número por quest não declara: os ramos
-# de `Ryan.gd:102`/`:115` (1000 OU 2000) e os estados intermediários de
+# `Riskim.gd:123`). Continua à mão o que um número por quest não declara: em Ryan.gd
+# o ramo `OnNickosAlive` soma 1000 (`Ryan.gd:@OnNickosAlive`). O `OnNickosDead` soma
+# 2000 (`Ryan.gd:@OnNickosDead`); ficam os estados intermediários de
 # `PeterGlobal.gd`, `Ekinu.gd` e `Kael.gd`. Todo ganho de dinheiro do resto do
 # projeto já passa pelo kernel (EconomyKernel.gd:142 MoveGold, :247
 # _LedgerAppendLocked).

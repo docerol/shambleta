@@ -9,7 +9,7 @@ O que não foi medido está dito como não medido.
 | serviço | porta | quem escuta | bind |
 |---|---|---|---|
 | `game` | 6108 | WebSocket do jogo (`EXPOSE` em `deploy/server/Dockerfile:45`; `static var WebSocketPort = 6108` em `sources/network/NetworkCommons.gd:@WebSocketPort`) | interface do container |
-| `game` | 9400 | `/healthz` + `/metrics` na `DefaultPort` do painel (`sources/system/MetricsServer.gd:@DefaultPort`) | **só `127.0.0.1`** (`:26`) |
+| `game` | 9400 | `/healthz` + `/metrics` na `DefaultPort` do painel (`sources/system/MetricsServer.gd:@DefaultPort`) | **só `127.0.0.1`**, o `BindAddress` do painel (`sources/system/MetricsServer.gd:@BindAddress`) |
 | `companion` | 8901 | `/health`, `/metrics`, `/checkout/*`, `/webhooks/payments` (`Handler` em `companion/server.py:@Handler`) | `0.0.0.0` (`deploy/companion/Dockerfile:46`) |
 | `web` | 80 | nginx estático + proxy para o companion (`deploy/web/nginx.conf:43`, `deploy/web/nginx.conf:174` e `:205`) | `listen 80` (IPv4) |
 
