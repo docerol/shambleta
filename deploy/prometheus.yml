@@ -17,8 +17,9 @@
 # confere os dois lados: a referência a `alerts.rules.yml` e a existência do
 # arquivo copiado.
 #
-# Scrape do `game`: o `/metrics` do jogo binda SOMENTE 127.0.0.1:9400, sem auth, sem TLS
-# (`sources/system/MetricsServer.gd:21-22`). De outro
+# Scrape do `game`: o `/metrics` do jogo binda SOMENTE 127.0.0.1:9400, sem auth e sem
+# TLS, que é a segurança que a própria classe `MetricsServer` declara no seu cabeçalho
+# (`sources/system/MetricsServer.gd:@MetricsServer`). De outro
 # container aquilo é inalcançável — não existe "firewall para liberar". O serviço
 # `prometheus` no compose por isso roda com `network_mode: "service:game"`: o
 # mesmo namespace de rede do processo do jogo, onde `127.0.0.1:9400` É o jogo.

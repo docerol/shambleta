@@ -1159,8 +1159,16 @@ REG_MIN=2
 # converter. Corrigido no puxamento, com dois controles novos: o do corte, e o espelho, que
 # continua descendo e acusando quando a linha de cima não prometeu nada. Sem o espelho, o
 # conserto seria indistinguível de manto.
-ANCHOR_MIN=215
-LINE_MAX=417
+# Quinta colheita, 2026-10-01, e é a que mostra o rate do lado do DOCUMENTO: sete itens da
+# mesma lista de famílias do `/metrics`, em `deploy/ROLLBACK.md`, apontavam sete faixas dentro
+# de `MetricsBody()` — corpo que a mudança do orçamento de passo acabou de editar, e cada `# HELP`
+# escrito acima da 190 move as sete faixas de uma vez. Viraram a MESMA âncora repetida oito
+# vezes. A régua também cobrou o preço de converter com pressa: `deploy/STAGING.md` deu
+# acusação de `bloco` porque a frase pin-ava `MetricsServer`, nome que mora na classe e fora do
+# bloco da constante, e o conserto foi um ponto no lugar do travessão — prova de que a mordida
+# julga a promessa, não o caminho percorrido.
+ANCHOR_MIN=234
+LINE_MAX=407
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
 # para cima do laço de âncora, o total cai de 215 para 200 e o `ANCHOR_MIN` acima acusa —

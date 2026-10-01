@@ -192,8 +192,8 @@ O gate lê os quatro `depends_on` + as portas dos probes contra o código:
 **Não é mais pendência (2026-09-28, conferido no arquivo, não na memória):** a
 espera da `queryMutex` JÁ sai no `/metrics` — `shambleta_sql_query_mutex_waits`,
 `..._wait_seconds`, `..._wait_max_seconds` e os degrades `..._over_1ms`/`..._over_10ms`/
-`..._over_100ms` são emitidos no corpo do `/metrics` (`sources/system/MetricsServer.gd:220-239`,
-dentro de `MetricsBody()` declarada em `sources/system/MetricsServer.gd:@MetricsBody`,
+`..._over_100ms` são emitidos no corpo do `/metrics`, dentro de `MetricsBody()` declarada em
+`sources/system/MetricsServer.gd:@MetricsBody`,
 lidos de `QueryMutexWaitStats()` em `sources/sql/SQL.gd:@QueryMutexWaitStats`) — e a regra de alerta que
 precisava do sinal também já existe: `deploy/alerts.rules.yml:102`. A linha desta tabela
 que dizia o contrário sobreviveu ao trabalho feito, que é exatamente o defeito que faz um

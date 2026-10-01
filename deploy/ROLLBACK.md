@@ -365,15 +365,15 @@ chegou a rodar. Base **acima** = binário mais velho que o schema, que é o esta
 ### Alta latência
 
 1. Verificar CPU/memória dos containers: `docker stats`
-2. Ler o `/metrics` do `game` pelo lado de dentro: `docker compose exec game curl -fsS http://127.0.0.1:9400/metrics`. A lista do que existe é o próprio corpo (as linhas `# HELP`). O que cada família mede, com a linha que a emite:
+2. Ler o `/metrics` do `game` pelo lado de dentro: `docker compose exec game curl -fsS http://127.0.0.1:9400/metrics`. A lista do que existe é o próprio corpo (as linhas `# HELP`). O que cada família mede, com o bloco que a emite — as sete famílias abaixo saem todas de `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`), e é o bloco que a citação aponta, não a linha, porque a função cresce e as sete faixas apodreceriam juntas:
 
-   - processo: `shambleta_up`, `shambleta_uptime_seconds` — `sources/system/MetricsServer.gd:190-195`
-   - mundo: `shambleta_players_online`, `shambleta_accounts_logged_in` — `sources/system/MetricsServer.gd:196-201`
-   - fila de dinheiro: `shambleta_grant_queue_pending`, `shambleta_grant_queue_failed`, `shambleta_grant_queue_refunded` — `sources/system/MetricsServer.gd:202-210`
-   - reconcile e fraude: `shambleta_reconcile_divergences`, `shambleta_reconcile_age_seconds`, `shambleta_fraud_flags_open` — `sources/system/MetricsServer.gd:211-219`
-   - espera da `queryMutex`: `shambleta_sql_query_mutex_waits`, `shambleta_sql_query_mutex_wait_seconds`, `shambleta_sql_query_mutex_wait_max_seconds` — `sources/system/MetricsServer.gd:220-228`
-   - caudas da mutex: `shambleta_sql_query_mutex_wait_over_1ms`, `shambleta_sql_query_mutex_wait_over_10ms`, `shambleta_sql_query_mutex_wait_over_100ms` — `sources/system/MetricsServer.gd:231-239`
-   - migrations: `shambleta_schema_version`, `shambleta_migration_patches_visible`, `shambleta_migration_stalled` — `sources/system/MetricsServer.gd:246-254`
+   - processo: `shambleta_up`, `shambleta_uptime_seconds` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+   - mundo: `shambleta_players_online`, `shambleta_accounts_logged_in` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+   - fila de dinheiro: `shambleta_grant_queue_pending`, `shambleta_grant_queue_failed`, `shambleta_grant_queue_refunded` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+   - reconcile e fraude: `shambleta_reconcile_divergences`, `shambleta_reconcile_age_seconds`, `shambleta_fraud_flags_open` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+   - espera da `queryMutex`: `shambleta_sql_query_mutex_waits`, `shambleta_sql_query_mutex_wait_seconds`, `shambleta_sql_query_mutex_wait_max_seconds` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+   - caudas da mutex: `shambleta_sql_query_mutex_wait_over_1ms`, `shambleta_sql_query_mutex_wait_over_10ms`, `shambleta_sql_query_mutex_wait_over_100ms` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+   - migrations: `shambleta_schema_version`, `shambleta_migration_patches_visible`, `shambleta_migration_stalled` — no bloco `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
 
    As séries de espera da `queryMutex` acima são o que a frase original desta linha negava existir; a negação era **falsa** e foi retirada (o gate de CI quebra qualquer doc que volte a negá-la): quem a leu no meio de um incêndio procurou uma grandeza que o server publica e concluiu que a observação não existia. O alerta que pagina sobre a cauda de 100 ms é `QueryMutexTravando` (`deploy/alerts.rules.yml:101`), e a régua de leitura está em `deploy/OPS_RUNBOOK.md`. Se a fila de grants é que está presa, o sinal continua sendo `shambleta_grant_queue_pending` crescendo — as duas coisas são filas diferentes e agora as duas têm métrica.
 3. Considerar reduzir `MaxPlayerCount`

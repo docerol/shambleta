@@ -834,6 +834,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from that zero rather than presented as a separation that was never measured.
 
 ### Changed
+- Seven line ranges that lived inside one function became one anchor (#124 slice #147). The
+  alta-latência step of `deploy/ROLLBACK.md` enumerated the seven families the `/metrics` body
+  publishes and pinned each with its own range, and all seven ranges sat inside
+  `MetricsBody()` (`sources/system/MetricsServer.gd:@MetricsBody`) — the very body #136 had just
+  edited, so one `# HELP` inserted near the top would have moved all seven citations at once and
+  made seven of them wrong. They now point at that single anchor (repeated eight times, once per
+  row plus the intro clause that says the rows share it), which is what the conversion is for:
+  the sentence carries no positional claim, so the block can grow. Same harvest, three more
+  pointers: the mutex paragraph in `deploy/OPS_RUNBOOK.md` carried a range *and* the anchor for
+  the same thing and keeps only the anchor; `deploy/STAGING.md` migrated its `BindAddress`
+  citation to `sources/system/MetricsServer.gd:@BindAddress`; and `deploy/prometheus.yml` now
+  reads its security claim off `MetricsServer` (`sources/system/MetricsServer.gd:@MetricsServer`),
+  whose own header pins the loopback-only bind and says no TLS and no auth. Measured census of
+  the conversion itself: ten line pointers died and ten anchors were born, 417 → 407 positional
+  against 224 → 234 anchored, both ratchets moved (`ANCHOR_MIN=234`, `LINE_MAX=407` in
+  `scripts/check_doc_drift.sh`), and the gate that judges them closed green with this entry in
+  the tree: `== DOC DRIFT: 2172 checks, 0 failures ==`, with 237 anchors judged by the
+  declaration's block over 407 line pointers against a ceiling of 407, and the 17 self-test
+  controls biting.
+  The ruler charged a price for converting in a hurry, and the price is the evidence it works:
+  `deploy/STAGING.md` came back accused of `bloco` because its sentence pinned the token
+  `MetricsServer`, which resolves in the class header and therefore *outside* the block of the
+  constant the same clause pointed at. The fix narrowed the sentence — a full stop where the
+  em-dash had been, so the clause names only what the anchor's block declares — which is a
+  scope correction in the doc, not a loosening in the ruler: the accusation judges the promise
+  a pointer makes, not the path taken to satisfy it.
+
 - The step-budget page now reads the DISPATCH, not the wall period (finding #136). The
   exported predicate was `periodUs > budget + tolerance`, and the period is the wall time
   between two physics frontiers of the same process — so it is budget PLUS the sleep of the

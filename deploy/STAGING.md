@@ -167,8 +167,8 @@ Staging is used for:
   `ws://` plain na 6108 com `SHAMBLETA_PROXY_TLS=1`. O `healthcheck` do compose é um
   GET real em `http://127.0.0.1:9400/healthz` (plain) servido pelo próprio
   processo do jogo — ver `deploy/COOLIFY.md`. **`127.0.0.1` literal, nunca
-  `localhost`**: o `MetricsServer` binda somente IPv4 — a constante `BindAddress`
-  está em `sources/system/MetricsServer.gd:26` e a porta `DefaultPort` em
+  `localhost`**: o `MetricsServer` binda somente IPv4. A constante `BindAddress`
+  está em `sources/system/MetricsServer.gd:@BindAddress` e a porta `DefaultPort` em
   `sources/system/MetricsServer.gd:@DefaultPort`, então
   num container com `::1` no `/etc/hosts` o `localhost` tenta IPv6 primeiro e leva
   connection refused — o probe falha num servidor saudável. É por isto que o
