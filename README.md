@@ -6,9 +6,10 @@
 
 ## About the Project
 
-**Engine:** Godot 4.7.1 (client and server) — the pin is
-`.github/workflows/godot-ci.yml:8` + `GODOT_VERSION`, the `barichello/godot-ci:4.7.1`
-images in `.github/workflows/`, `deploy/server/Dockerfile` and `deploy/web/Dockerfile`.
+**Engine:** Godot 4.7.1 (client and server) — the pin is the workflow's
+`env.GODOT_VERSION` (`.github/workflows/godot-ci.yml:@env.GODOT_VERSION`), the
+`barichello/godot-ci:4.7.1` images in `.github/workflows/`, `deploy/server/Dockerfile`
+and `deploy/web/Dockerfile`.
 Where a runbook says "medido em Godot 4.7.2" (`deploy/OPS_RUNBOOK.md`,
 `deploy/TLS.md`), that is the local binary the measurement ran on, not the pinned
 engine — the divergence is tracked, not denied.

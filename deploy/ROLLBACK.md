@@ -13,13 +13,13 @@ hora de cada invocação, então `build` e `up` precisam vê-lo igual.
 Os cinco serviços que o compose **builda** declaram imagem nomeada e tag vinda de um
 knob único:
 
-| serviço | imagem | linha no compose |
+| serviço | imagem | chave no compose |
 |---|---|---|
-| `web` | `shambleta/web:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:50` |
-| `game` | `shambleta/game:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:102` |
-| `companion` | `shambleta/companion:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:211` |
-| `prometheus` | `shambleta/prometheus:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:319` |
-| `alertmanager` | `shambleta/alertmanager:${SHAMBLETA_TAG:-local-unpinned}` | `deploy/docker-compose.yml:374` |
+| `web` | `shambleta/web:${SHAMBLETA_TAG:-local-unpinned}` | `services.web.image` em `deploy/docker-compose.yml:@services.web.image` |
+| `game` | `shambleta/game:${SHAMBLETA_TAG:-local-unpinned}` | `services.game.image` em `deploy/docker-compose.yml:@services.game.image` |
+| `companion` | `shambleta/companion:${SHAMBLETA_TAG:-local-unpinned}` | `services.companion.image` em `deploy/docker-compose.yml:@services.companion.image` |
+| `prometheus` | `shambleta/prometheus:${SHAMBLETA_TAG:-local-unpinned}` | `services.prometheus.image` em `deploy/docker-compose.yml:@services.prometheus.image` |
+| `alertmanager` | `shambleta/alertmanager:${SHAMBLETA_TAG:-local-unpinned}` | `services.alertmanager.image` em `deploy/docker-compose.yml:@services.alertmanager.image` |
 
 Os cinco trazem também `pull_policy: never`
 (`deploy/docker-compose.yml:51,103,212,320,375`), cada um na linha seguinte ao seu
@@ -113,8 +113,9 @@ Uma linha sobre os três serviços juntos: `web` embute o endereço do game serv
 pacote em **build** (`SHAMBLETA_SERVER_ADDRESS` é ARG do Dockerfile, `deploy/COOLIFY.md`
 §2), então voltar o `web` não muda o endereço. Voltar só o `game` é o caso comum — um
 server que ficou lento ou quebrado; voltar `companion` junto só se o defeito é na
-frente do dinheiro, e lembre que os dois dependem do `game` saudável
-(`deploy/docker-compose.yml:87` e `deploy/docker-compose.yml:258`).
+frente do dinheiro, e lembre que os dois dependem do `game` saudável — o
+`services.web.depends_on.game` (`deploy/docker-compose.yml:@services.web.depends_on.game`) e o
+`services.companion.depends_on.game` (`deploy/docker-compose.yml:@services.companion.depends_on.game`).
 
 ### Via Coolify
 
@@ -238,7 +239,8 @@ Três estados, três assinaturas:
   nenhuma imagem nova aparece no `docker images` com o tag que você pisou. Nada foi
   tocado no host: nenhum container mudou, o volume não foi aberto, nenhuma migration
   rodou (patch só aplica no boot do processo, não no build). Os dois healthchecks que
-  importam (`deploy/docker-compose.yml:156` e `deploy/docker-compose.yml:81`) continuam
+  importam — o `services.game.healthcheck.test` (`deploy/docker-compose.yml:@services.game.healthcheck.test`) e o
+  `services.web.healthcheck.test` (`deploy/docker-compose.yml:@services.web.healthcheck.test`) continuam
   apontando para a imagem velha, que continua servindo.
 * **Subiu e não fica saudável** — `ps` mostra `unhealthy` ou o container em
   restart-loop, e é aqui que o `--no-build` do rollback precisa de você: compare as
@@ -303,7 +305,8 @@ Isso dá ao operador três coisas que a frase "o número está certo" nunca deu:
 3. **O `/healthz` recusa junto — e mesmo assim a métrica é o sinal.** A decisão está em
    `ServingFor()` (`sources/system/MetricsServer.gd:@ServingFor`): com o flag parado ela devolve
    falso, o `/healthz` responde 503 e o healthcheck do
-   `game` (`deploy/docker-compose.yml:98`) marca o container como não saudável. Antes
+   `services.game` (`deploy/docker-compose.yml:@services.game`) marca o container como não
+   saudável. Antes
    desta alavanca o probe media só o processo de pé, e um boot parado num patch ficava
    verde: o cliente autenticava e morria na primeira RPC que tocasse a tabela ausente.
    Hoje a mesma flag fecha a porta de entrada antes do teto de conexões — o motivo é

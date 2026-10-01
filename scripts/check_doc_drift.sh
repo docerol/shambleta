@@ -985,9 +985,11 @@ RESOL_MIN=87
 # e um no adaptador da continuação) nomeiam zero coisas do alvo de propósito, porque só
 # assim eles provam o predicado em vez de passarem pela porta da régua de nome.
 CONT_MIN=8
-# Piso da régua de literal: o censo medido no run de 2026-09-28 é 54 ponteiros
-# pinados. É pouco porque a régua só julga o literal que mora UMA vez no arquivo-alvo
-# — duas ocorrências não pinham nada e o caso devolve "não julgado" — e a maioria das
+# Piso da régua de literal: o censo medido no run de 2026-10-01 é 59 ponteiros
+# pinados (54 no run de 2026-09-28; não decomponho os cinco que se somaram — nenhuma
+# régua desta fatia mediu a classe de literal, e número que sobe sem medição não entra
+# aqui como entendimento). É pouco porque a régua só julga o literal que mora UMA vez no
+# arquivo-alvo — duas ocorrências não pinham nada e o caso devolve "não julgado" — e a maioria das
 # citações deste repo nomeia um identificador (cobrado pela régua de identidade acima)
 # em vez de prometer um trecho de código. O piso é queda-para-baixo, não meta: um walk
 # que passa a enxergar menos é o walk quebrado, e foi um zero assim que esta régua foi
@@ -1101,11 +1103,36 @@ REG_MIN=2
 # quebra), não eram nada disso — o nome não estava na oração. Dos que sobraram, seis já
 # nomeavam o bloco e esperavam. Custaram zero prosa: `:NN` virou `:@simbolo`, e o que a
 # frase dizia continua sendo o que o bloco contém.
-ANCHOR_MIN=166
-LINE_MAX=468
+# A fatia do YAML cobra o preço que a de cima não cobrou, e é honesto escrevê-lo: dos 25
+# ponteiros `.yml` sob a régua, dezesseis viraram âncora, e nenhum deles de graça. Uma
+# chave de compose não tem nome próprio — `mem_limit: 1536M` mora em três serviços e a
+# linha sozinha não diz qual — então o caminho `services.game.mem_limit` É a afirmação,
+# e a cláusula tem de dizê-lo. Cada conversão custou uma oração reescrita, não uma
+# marreta: a régua de `prosa` é que exigiu a frase, e é ela que impede a âncora de virar
+# número disfarçado. Os nove que sobraram são posição de verdade (linha de comentário,
+# item de lista `- alert:` repetido dez vezes, `--flag` de argv) e ficam de linha.
+#
+# A mordida da fatia, nos dois sentidos: um `#Shift` inserido na segunda linha do compose, que
+# é exatamente o evento que a âncora existe para absorver. No HEAD a mutação acusou dez linhas
+# citando o compose, de seis ponteiros distintos: dois `branco` (ROLLBACK e SCALING, ambos na
+# linha 98 do arquivo), três de identidade (linhas 87, 123 e 129) e o `service_started` que
+# `deploy/OPS_RUNBOOK.md` cita na linha 54. Nesta árvore a mesma mutação acusa duas linhas: o
+# mesmo ponteiro do runbook, uma por corte. Os cinco que calaram são as conversões; o que
+# continuou acusando ficou de linha de propósito — item de lista é valor sem chave, e o caminho
+# da chave não o alcança. Isenção de cobrança não é silêncio da régua, e é isso que os dois
+# números provam juntos.
+#
+# A frase acima foi reescrita três vezes porque a régua leu o próprio comentário: no rascunho,
+# citar os números na forma de ponteiro custou quatro órfãos de continuação, uma identidade
+# mentindo por `service_started` e o teto de ponteiros estourado em dois. É a tese desta
+# fatia mordendo quem a documenta, e ela ficou registrada sem número colado ao arquivo — o
+# que é, exatamente, o que #124 diz que um aviso deve fazer quando o número deixa de ser a
+# evidência.
+ANCHOR_MIN=182
+LINE_MAX=452
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
-# para cima do laço de âncora, o total cai de 166 para 151 e o `ANCHOR_MIN` acima acusa —
+# para cima do laço de âncora, o total cai de 182 para 167 e o `ANCHOR_MIN` acima acusa —
 # mas acusa "faltam âncoras", sem dizer qual recorte parou de ser lido. Contada no local da
 # cobrança, a mesma mutação zera ESTE número, e aí a frase passa a nomear a classe.
 ANCHOR_FORA_MIN=15
@@ -1181,7 +1208,12 @@ ANYCITE = re.compile(r"(?<![\w./-])" + _TGT + r":(\d+)((?:[-,]\d+)*)")
 # símbolo é declarado naquele arquivo, uma declaração só — duas são acusação, não
 # escolha; (2) o que a prosa pin-a aparece dentro do bloco. O literal viaja junto,
 # senão a âncora vira "o nome existe", e isso não prova nada.
-ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*)")
+# Em mapa YAML o símbolo é o CAMINHO pontilhado (`services.web.mem_limit`), e só
+# a forma pontilhada resolve: o segmento final sozinho mora em dois serviços do
+# mesmo compose. Os pontos entram no capturado, não no `_TGT` — o delimitador de
+# alvo continua sendo o `:`, e um `@a.b` sem ponto capturado seria `@a` seguido de
+# lixo, que é como uma âncora YAML viraria âncora `.gd` por acidente.
+ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*(?:\.[A-Za-z0-9_-]+)*)")
 
 # A CONTINUACAO de ponteiro: `:NN` ou `:NN-MM` sem arquivo, herdando o alvo do
 # ponteiro anterior. Nem `PTR` nem `ANYCITE` nem `ANCHOR` a veem, porque as tres
@@ -1642,6 +1674,53 @@ DECL_SH = re.compile(r"^([A-Za-z_]\w*)\s*\(\)")
 DECL_UP = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=")
 DECLS = {"gd": (DECL_GD,), "py": (DECL_PY, DECL_UP), "sh": (DECL_SH, DECL_UP)}
 
+# YAML (#124, fatia 6): num mapa, declarar é escrever CHAVE, e o bloco é a SUBÁRVORE.
+# O índice é o caminho pontilhado, e a forma pontilhada é a única julgável: `mem_limit`
+# sozinho mora em dois serviços do mesmo compose, então âncora que não diz de quem é a
+# chave não é escolha — é o `duplo` com a crase caída. O nível é a COLUNA DA CHAVE, não
+# a do traço: em `- name: game` seguido de `  image: x`, os dois têm a chave na mesma
+# coluna e são irmãos; contar o espaço antes do traço faria `image` filho de `name`,
+# que é exatamente a geografia diferente que o #116 proíbe entre os dois juízes. Raiz
+# de um segmento (`services`, `jobs`, `on`) não entra no índice: é seção, não
+# declaração, e aprová-la daria à doc uma âncora que julga o arquivo inteiro com uma
+# palavra — o `@services` que aprovaria qualquer linha do compose. E bloco escalar
+# (`run: |`) é opaco: o que mora dentro é script, não par do mapa, e indexar o
+# `foo: bar` de um `|` seria dar âncora a um texto que o próprio YAML não lê como chave.
+KEY_YAML = re.compile(r"^( *)(?:- +)?([A-Za-z_][A-Za-z0-9_-]*):(?=\s|$)(.*)$")
+ESCALA = re.compile(r"^\s*[|>]")
+YAML_EXT = ("yml", "yaml")
+
+
+def yaml_spans(lines):
+    pilha, decls = [], []
+    for i, raw in enumerate(lines, 1):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        m = KEY_YAML.match(raw)
+        if not m:
+            continue
+        col, key = m.start(2), m.group(2)
+        while pilha and pilha[-1][0] >= col:
+            pilha.pop()
+        if pilha and pilha[-1][2]:
+            # O pai é bloco escalar (`run: |`, `command: >`): o que vem dentro é
+            # SCRIPT, não par do mapa. Indexar o `foo: bar` de dentro de um `|` daria
+            # à doc uma âncora para um texto que o próprio YAML não lê como chave.
+            continue
+        decls.append((".".join([s[1] for s in pilha] + [key]), i, col))
+        pilha.append((col, key, ESCALA.match(m.group(3) or "") is not None))
+    out = {}
+    for k, (path, start, col) in enumerate(decls):
+        if "." not in path:
+            continue
+        fim = len(lines)
+        for j in range(k + 1, len(decls)):
+            if decls[j][2] <= col:
+                fim = decls[j][1] - 1
+                break
+        out.setdefault(path, []).append([start, max(start, fim)])
+    return out
+
 
 def anchor_ext(path):
     return os.path.splitext(path)[1].lstrip(".").lower()
@@ -1666,6 +1745,8 @@ def anchor_spans(lines, ext):
     `.tscn`). Ali a âncora não tem o que julgar, e fingir que tem é o caminho para
    aprovar ponteiro que não prova nada — por isso o veredito acusa em vez de calar.
     """
+    if ext in YAML_EXT:
+        return yaml_spans(lines)
     pats = DECLS.get(ext)
     if not pats:
         return {}
@@ -1692,7 +1773,7 @@ def anchorverdict(sym, clause, target_lines, ext):
     literal da cláusula morando FORA do bloco. Aprovar exige os dois juntos: o nome
     dito na frase E o que a frase pin-a dentro do bloco.
     """
-    if ext not in DECLS:
+    if ext not in DECLS and ext not in YAML_EXT:
         # O ponto é da frase: devolver ponto mais extensão imprimia dois pontos,
         # e o self-test julga justamente o motivo impresso.
         return False, "arquivo", ext
@@ -1721,6 +1802,15 @@ ALVO5 = ["# cabecalho", "const GATE_RUN : int = 1", "", "func Beta() -> void:",
          "\tvar WAL_SALT = 1", "\tconst Beta = 1", "func Delta_Load() -> void:",
          "\tBeta.run()"]
 ALVO6 = ["func Beta() -> void:", "\tpass", "func Beta() -> int:", "\treturn 1"]
+# ALVO7/8/9 são o terreno do YAML: `services.web.image` declarado uma vez, o MESMO
+# caminho `ports.target` nascendo de dois itens de lista (duplo), raiz de um segmento
+# fora do índice, item de lista IRMÃO e não filho, bloco escalar opaco, e o literal
+# `health_check` morando num caminho diferente do nomeado.
+ALVO7 = ["services:", "  web:", "    image: nginx", "    ports:",
+         "      - target: 80", "      - target: 443",
+         "  db:", "    run: |", "      checks: pass"]
+ALVO8 = ["jobs:", "  build:", "    steps:", "      - name: sobe", "        run: make"]
+ALVO9 = ["services:", "  web:", "    health_check:", "      retention: 7d", "    mem_limit: 512M"]
 ANCHOR_CONTROLES = [
     ("âncora honesta: símbolo declarado e nomeado na cláusula",
      "abre a sessão em `Beta` (`x.gd:@Beta`)", True, ""),
@@ -1738,6 +1828,27 @@ ANCHOR_CONTROLES = [
      "usa `Delta_Load` junto de `Beta` (`x.gd:@Beta`)", False, "bloco"),
     ("arquivo: extensão sem declaração legível não ganha âncora",
      "bate em `Beta` (`x.md:@Beta`)", False, "arquivo"),
+    # Os sete de baixo são o YAML: o índice é o caminho, e cada um planta um modo de
+    # o caminho mentir. Sem estes, "182 âncoras, 0 acusações" poderia significar que a
+    # régua aceitou `@services` como âncora do arquivo inteiro.
+    ("yaml: caminho de folha declarado uma vez é âncora legível",
+     "a imagem do `web` é `services.web.image` (`x.yml:@services.web.image`)", True, "", ALVO7),
+    ("yaml: raiz de um segmento é seção, não declaração",
+     "o mapa inteiro vive em `services` (`x.yml:@services`)", False, "inexistente", ALVO7),
+    ("yaml: o mesmo caminho nascendo de dois itens de lista é duplo",
+     "a porta publicada é `services.web.ports.target` (`x.yml:@services.web.ports.target`)",
+     False, "duplo", ALVO7),
+    ("yaml: item de lista é IRMÃO do nome do item, não filho",
+     "o script do step é `jobs.build.steps.run` (`x.yml:@jobs.build.steps.run`)", True, "", ALVO8),
+    ("yaml: a nesting que o traço mal contado inventaria não está no arquivo",
+     "corre em `jobs.build.steps.name.run` (`x.yml:@jobs.build.steps.name.run`)",
+     False, "inexistente", ALVO8),
+    ("yaml: bloco escalar é opaco — o que mora num `run: |` não é chave",
+     "o script faz `checks: pass` em `services.db.run.checks` (`x.yml:@services.db.run.checks`)",
+     False, "inexistente", ALVO7),
+    ("yaml: literal nomeado que mora em outro caminho é acusado",
+     "a `health_check` é de `services.web.mem_limit` (`x.yml:@services.web.mem_limit`)",
+     False, "bloco", ALVO9),
 ]
 
 

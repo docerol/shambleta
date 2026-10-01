@@ -109,6 +109,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8, 7 and 7 that the p99 of the survivors would tolerate. Two of the three would go green, the
   third would not. The verdict itself still absolves only the hitches the ruler attributes, and
   the p99 gate remains red at 4.98× the baseline against a 4× headroom.
+- YAML keys became anchors in both judges, and the migration was priced, not granted (#124
+  slice 6). A compose file has no identifiers, so the symbol of an anchor into one is the
+  dotted KEY PATH: `yaml_spans` (`scripts/check_doc_drift.sh`) and `_YamlSpans`
+  (`tests/IdleTestsFrontier.gd`) index a map by path, and the level is the COLUMN OF THE KEY —
+  so `- name: build` and its sibling `run: make` are siblings, because counting the space
+  before the dash would invent a nesting the file does not have. One-segment roots (`services`,
+  `jobs`, `on`) stay out of the index: they are sections, not declarations, and approving one
+  would hand the prose an anchor that judges an entire file with a single word. A block scalar
+  (`run: |`) is opaque — what lives inside is a script, not a pair, and indexing it would give
+  an anchor to text that YAML itself does not read as a key. The dotted form is the only
+  judgable one: `mem_limit` sits in three services of the same compose, so an anchor that does
+  not say whose key it is has no verdict to return. Sixteen `.yml` pointers moved — the engine
+  pin in `README.md`, the five images plus the two `depends_on` and the two healthchecks of
+  `deploy/ROLLBACK.md` plus its `game` service, four in `deploy/SCALING.md`, and the budget
+  anchor in `sources/network/server/Admission.gd` — and not one was free: `prosa` refused each
+  sentence until it said the path inside the same comma-cut clause, and a bare key alone came
+  back `duplo`. Nine stayed lines because they are position for real: comment lines, a repeated
+  `- alert:` list item, argv flags, and `- service_started`, a value with no key that no path
+  can reach. `ANCHOR_MIN` 166 → 182 and `LINE_MAX` 468 → 452; the twin's anchor floor 90 → 120
+  over 155 measured (139 before), and its named-citation sum 187 → 203 = 48 identities + 155
+  anchors with identities UNCHANGED, because those sixteen were positional pointers that never
+  entered the identity ruler — the one conversion that adds coverage instead of moving it, and
+  the reason the sum floor stayed at 180: the arm that skips history inside the anchor loop
+  returns 188, and a floor above that would accuse it by census arithmetic rather than by the
+  control that exists for it. The bite, in both directions: one `#Shift` line inserted at the
+  top of the compose, which is exactly the event an anchor exists to absorb. On HEAD that
+  mutation accused ten lines across six distinct pointers (two `branco`, three identity, one
+  `service_started`); on this tree the same mutation accuses two lines, both the surviving
+  runbook pointer, one per cut — and the 182-anchor census passes with zero accusations. Five
+  silences and one bite from a single mutation is the claim of this slice: exemption from
+  charge is not silence of the ruler. Parity was proven three ways — seven planted controls in
+  bash (including `bloco` over a YAML block, via a terrain the twin does not carry because
+  clause judging has exactly one owner) against six mirrored mesa controls in the twin, and the
+  two judges reading the same recorte on the real tree: 222 line pointers spared and 15 anchors
+  charged in both. Gates: `== DOC DRIFT: 2236 checks, 0 failures ==` and the idle twin green.
+  The ruler then bit its own documentation: the first draft of the note inside
+  `scripts/check_doc_drift.sh` cited those line numbers in pointer form and cost four orphan
+  continuations, one identity lie about `service_started` and a two-pointer breach of
+  `LINE_MAX` — recorded here because that is the thesis, and rewritten without numbers glued
+  to filenames.
 
 ### Removed
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`

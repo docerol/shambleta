@@ -212,6 +212,62 @@ static func _SpanDrift(spans : Dictionary, suiteName : String, from : int, to : 
 		return ""
 	return "%s-%d fora de `%s`, que vai em %d-%d" % [from, to, suiteName, int(span[0]), int(span[1])]
 
+# YAML (#124, fatia 6): o MESMO modelo da régua bash (`yaml_spans` em
+# `scripts/check_doc_drift.sh`), copiado e não reinventado — duas réguas lendo duas
+# geografias do mesmo compose é o #116, e quem cita compose é a doc que este gémeo lê.
+# Três decisões de nível, e cada uma tem control plantado embaixo: o nível é a COLUNA
+# DA CHAVE (o traço de item de lista conta), então `- name: sobe` e o `run: make` do
+# MESMO item são irmãos — contar só o espaço antes do traço faria `run` filho de
+# `name`, que é um mapa que o YAML não tem; raiz de um segmento (`services`, `jobs`)
+# fica fora do índice porque é seção, não declaração, e aprová-la daria uma âncora que
+# julga o arquivo inteiro com uma palavra; e bloco escalar (`run: |`) é opaco — o que
+# mora dentro é script, não par do mapa.
+static func _YamlSpans(lines : PackedStringArray) -> Dictionary:
+	var rx : RegEx = RegEx.new()
+	rx.compile("^( *)(?:- +)?([A-Za-z_][A-Za-z0-9_-]*):(?=\\s|$)(.*)$")
+	var esc : RegEx = RegEx.new()
+	esc.compile("^\\s*[|>]")
+	var pilha : Array = []
+	var decls : Array = []
+	for i in lines.size():
+		var bruto : String = String(lines[i])
+		if bruto.strip_edges() == "" or bruto.strip_edges().begins_with("#"):
+			continue
+		var m : RegExMatch = rx.search(bruto)
+		if m == null:
+			continue
+		var col : int = m.get_start(2)
+		while pilha.size() > 0 and int((pilha[pilha.size() - 1] as Array)[0]) >= col:
+			pilha.pop_back()
+		if pilha.size() > 0 and bool((pilha[pilha.size() - 1] as Array)[2]):
+			continue
+		var chave : String = m.get_string(2)
+		var partes : Array = []
+		for s in pilha:
+			partes.append(String((s as Array)[1]))
+		partes.append(chave)
+		var caminho : String = ""
+		for p in partes.size():
+			caminho += (("." if p > 0 else "") + String(partes[p]))
+		decls.append([caminho, i + 1, col])
+		pilha.append([col, chave, esc.search(m.get_string(3)) != null])
+	var out : Dictionary = {}
+	for k in decls.size():
+		var caminho2 : String = String(decls[k][0])
+		if not caminho2.contains("."):
+			continue
+		var inicio : int = int(decls[k][1])
+		var meuCol : int = int(decls[k][2])
+		var fim : int = lines.size()
+		for j in range(k + 1, decls.size()):
+			if int((decls[j] as Array)[2]) <= meuCol:
+				fim = int((decls[j] as Array)[1]) - 1
+				break
+		if not out.has(caminho2):
+			out[caminho2] = []
+		(out[caminho2] as Array).append([inicio, maxi(inicio, fim)])
+	return out
+
 # Identidade declared -> span, para TODA declaração de coluna zero (não só `func`).
 # A régua de span acima julga `Suite*` com o nome NA MESMA LINHA do número; isto aqui
 # julga qualquer símbolo nomeado na cláusula, de qualquer arquivo de código, e é o que
@@ -230,6 +286,8 @@ static func _SpanDrift(spans : Dictionary, suiteName : String, from : int, to : 
 # não tem declaração é a receita para a régua chorar lobo.
 static func _SymbolSpans(lines : PackedStringArray, ext : String) -> Dictionary:
 	var spans : Dictionary = {}
+	if ext == "yml" or ext == "yaml":
+		return _YamlSpans(lines)
 	if ext != "gd" and ext != "sh" and ext != "py":
 		return spans
 	var decls : Array = []
@@ -255,7 +313,7 @@ static func _SymbolSpans(lines : PackedStringArray, ext : String) -> Dictionary:
 # dependem do modelo de cláusula, e dois modelos de cláusula em duas réguas é a
 # discórdia encomendada. Devolve "" quando não há o que acusar.
 static func _AnchorStruct(sym : String, ext : String, symSpans : Dictionary) -> String:
-	if ext != "gd" and ext != "sh" and ext != "py":
+	if ext != "gd" and ext != "sh" and ext != "py" and ext != "yml" and ext != "yaml":
 		return "`%s`: âncora em `%s`, arquivo sem modelo de declaração — âncora ali é linha disfarçada" % [sym, ext]
 	var list : Array = symSpans.get(sym, [])
 	if list.is_empty():
@@ -586,7 +644,7 @@ static func _IdentityJudgeCorpus(docLines : PackedStringArray, src : PackedStrin
 	# Sem a âncora aqui, o controle que morde a costura passaria numa casa que a régua
 	# real não tem — fixture que reproduz o bug velho não prova o conserto dele.
 	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*)`")
+	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_-]+)*)`")
 	var recs : Array = []
 	for p in docLines.size():
 		var pTxt : String = String(docLines[p])
@@ -1070,7 +1128,7 @@ func SuiteEvidencePointers() -> void:
 	# a migração da fatia 3 abriu — 103 números viraram âncora e dois ponteiros
 	# honestos passaram a levar culpa alheia.
 	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*)`")
+	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_-]+)*)`")
 	# O número SEM ARQUIVO (#124, fatia 5): o `:` colado no backtick de abertura é o que separa
 	# esta classe da de ponteiro nomeado, e exigir o backtick é o que impede um endereço com porta
 	# de ser lido como continuação da frase anterior. Os grupos numeram DESLOCADOS em relação ao
@@ -1312,9 +1370,10 @@ func SuiteEvidencePointers() -> void:
 	# A assimetria do recorte, mordida: é o único control que distingue "a âncora continua
 	# cobrada dentro do registro" de "a isenção de linha escorreu para a âncora". Medido no
 	# shape, ele não distinguia nada: um braço que pulasse a história dentro do laço de âncora
-	# derrubaria `ancJulgadas` de 121 para ~106, nenhum piso acusaria (o piso é 90) e o censo
-	# continuaria dizendo 15. Os dois números abaixo são o preço e o lucro do recorte,
-	# impressos juntos.
+	# derrubaria `ancJulgadas` de 155 para 140 — os 15 do recorte são os mesmos que o print
+	# abaixo conta — e nenhum piso de censo acusaria (o piso é 120, e 140 passa) enquanto o
+	# censo de âncoras de registro continuaria dizendo 15. Os dois números abaixo são o preço
+	# e o lucro do recorte, impressos juntos.
 	Check(ancEmFora >= 2,
 			"âncora de registro datado continua COBRADA: %d âncoras julgadas dentro dos %d registros (zero significa que a isenção de linha escorreu para a âncora, que é o que a bash NÃO faz)" % [ancEmFora, foraVarridas])
 	print("  [info] recorte: %d ponteiros de linha julgados dentro dos registros sem cobrança, %d âncoras de história cobradas — a bash poupou os mesmos %d de cobrança e não lê nenhum" % [linhaEmFora, ancEmFora, linhaEmFora])
@@ -1334,13 +1393,19 @@ func SuiteEvidencePointers() -> void:
 	# conf, HTML e mjs pela árvore toda, e isto lê `.md` de toda a árvore mais quatro raízes
 	# de código e o JSON de conf. Comparar censos de corpora diferentes continua sendo a
 	# discórdia encomendada; o que se comparou, desta vez, foi o ESCOPO por classe.
-	# 8 → 90 na fatia 3: oito era o censo da fatia 2, e depois de 103 ponteiros
-	# migrados um piso de oito já não distinguia "walk parado" de "metade da migração
-	# invisível". 101 é o medido nesta varredura em 2026-09-30; o piso fica onze abaixo
-	# porque a migração é minha e o que eu quero é que a PRÓXIMA pessoa que encolher o
-	# corpus tenha de explicar, não que o gate verdeje sozinho.
-	Check(ancJulgadas >= 90,
-			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 90 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "fatia 3 migrou 103; 101 é o medido"])
+	# 8 → 90 na fatia 3, e 90 → 120 na fatia do YAML: oito era o censo da fatia 2, e depois
+	# de 103 ponteiros migrados um piso de oito já não distinguia "walk parado" de "metade da
+	# migração invisível". 155 é o medido nesta varredura no run de 2026-10-01 (era 139 antes
+	# dos dezesseis `arquivo:linha` de compose e do workflow virarem âncora), e o piso fica
+	# trinta e cinco abaixo porque a migração é minha e o que eu quero é que a PRÓXIMA pessoa
+	# que encolher o corpus tenha de explicar, não que o gate verdeje sozinho. Ele também não
+	# sobe para perto de 132, que é 155 menos os vinte e três ponteiros `.@` que apontam para
+	# YAML nesta árvore: matar o modelo de chave é ofício dos seis controles de mesa abaixo,
+	# que caem se `_YamlSpans` emudecer, e piso de censo colado no medido passa a acusar a
+	# próxima migração legítima — o erro que a quarta recalibração desta suíte nomeou. O que
+	# este piso caça é corpus encolhendo, não modelo YAML morto.
+	Check(ancJulgadas >= 120,
+			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 120 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "155 é o medido no run de 2026-10-01; 139 antes das dezesseis conversões"])
 	# Os três modos de a âncora apodrecer, mordidos em mesa, porque na árvore limpa
 	# eles não têm como aparecer: o control negativo é a única prova de que a
 	# acusação existe. E o positivo, para a régua não virar máquina de acusar.
@@ -1362,6 +1427,47 @@ func SuiteEvidencePointers() -> void:
 			"âncora morde no duplo: dois `func Beta` na mesa são âncora ambígua, não escolha (%s)" % _AnchorStruct("Beta", "gd", ancSpans))
 	Check(_AnchorStruct("README", "md", ancSpans).contains("sem modelo de declaração"),
 			"âncora morde no arquivo: `.md` não declara, e âncora ali é linha disfarçada (%s)" % _AnchorStruct("README", "md", ancSpans))
+	# Os seis de baixo são o YAML (#124, fatia 6), e são a MESMA mesa da régua bash
+	# (`ALVO7`/`ALVO8` em `scripts/check_doc_drift.sh`): mesma árvore de texto, mesma
+	# expectativa de veredito. Copiados e não reinventados porque é o #116 — dois juízes
+	# lendo duas geografias do mesmo compose. O que a mesa planta, cada um em uma casa:
+	# folha declarada uma vez aprova; raiz de um segmento não está no índice (é seção);
+	# o mesmo caminho nascendo de dois itens de lista é duplo; item de lista é IRMÃO do
+	# nome do item (o traço mal contado faria `run` filho de `name`); bloco escalar é
+	# opaco. O sétimo control da bash (`bloco`) fica de fora de propósito: `prosa` e
+	# `bloco` são cláusula, e cláusula tem um só dono.
+	var yamlMesa7 : PackedStringArray = PackedStringArray([
+		"services:",
+		"  web:",
+		"    image: nginx",
+		"    ports:",
+		"      - target: 80",
+		"      - target: 443",
+		"  db:",
+		"    run: |",
+		"      checks: pass",
+	])
+	var yamlMesa8 : PackedStringArray = PackedStringArray([
+		"jobs:",
+		"  build:",
+		"    steps:",
+		"      - name: sobe",
+		"        run: make",
+	])
+	var sp7 : Dictionary = _SymbolSpans(yamlMesa7, "yml")
+	var sp8 : Dictionary = _SymbolSpans(yamlMesa8, "yml")
+	Check(_AnchorStruct("services.web.image", "yml", sp7) == "",
+			"âncora yaml morde no certo: `services.web.image` declarado uma vez resolve (%s)" % _AnchorStruct("services.web.image", "yml", sp7))
+	Check(_AnchorStruct("services", "yml", sp7).contains("nenhuma declaração"),
+			"âncora yaml morde na raiz: `services` é seção, não declaração (%s)" % _AnchorStruct("services", "yml", sp7))
+	Check(_AnchorStruct("services.web.ports.target", "yml", sp7).contains("2 declarações"),
+			"âncora yaml morde no duplo: `target` de dois itens de lista é acusação, não escolha (%s)" % _AnchorStruct("services.web.ports.target", "yml", sp7))
+	Check(_AnchorStruct("jobs.build.steps.run", "yml", sp8) == "",
+			"âncora yaml morde no irmão: o `run:` do step é filho de `steps`, não de `name` (%s)" % _AnchorStruct("jobs.build.steps.run", "yml", sp8))
+	Check(_AnchorStruct("jobs.build.steps.name.run", "yml", sp8).contains("nenhuma declaração"),
+			"âncora yaml morde na nesting inventada: traço mal contado criaria um caminho que o arquivo não tem (%s)" % _AnchorStruct("jobs.build.steps.name.run", "yml", sp8))
+	Check(_AnchorStruct("services.db.run.checks", "yml", sp7).contains("nenhuma declaração"),
+			"âncora yaml morde no bloco escalar: o que mora num `run: |` é script, não chave (%s)" % _AnchorStruct("services.db.run.checks", "yml", sp7))
 	# (9) CONTINUAÇÃO (#124, fatia 5): o número SEM ARQUIVO. A régua de bash passou a ler esta
 	# classe na passada do órfão e este gémeo não a lia: dois juízes da mesma árvore vendo
 	# números diferentes é a doença que o #116 registrou, não um detalhe de paridade de código.
@@ -1822,8 +1928,18 @@ func SuiteEvidencePointers() -> void:
 	# acusa progresso — e piso que acusa progresso é o que faz alguém não migrar mais nada.
 	# O piso da SOMA é o que não pode ser enganado pela migração; o da classe fica em 40, que é
 	# abaixo do que uma rodada move, e continua lá só para a régua de identidade não emudecer.
+	# Quinta recalibração, medida no run de 2026-10-01: mais dezesseis `arquivo:linha` viraram
+	# âncora e a soma foi de 187 para 203 = 48 + 155, com `comIdentidade` parado em 48. Não é
+	# contradição com a quarta: esses dezesseis eram ponteiros POSICIONAIS, linha citada sem
+	# símbolo nomeado na cláusula, então nunca entraram na régua de identidade e a conversão não
+	# tirou cobertura de ninguém — acrescentou. É o único movimento que a soma faz para cima sem
+	# prosa nova, e por isso a classe de âncora ganhou piso próprio (90 → 120) enquanto a SOMA
+	# continua em 180: o braço que pula a história dentro do laço de âncora devolve
+	# 188 = 48 + 140, e um piso de soma acima disso acusaria esse braço por aritmética de censo,
+	# não pelo control que existe para ele. Piso que acusa por flanco é ruído, e ruído em gate de
+	# doc é o que mata o gate.
 	Check(comIdentidade + ancJulgadas >= 180,
-			"citação nomeada: %d+`%d` = %d (linha julgada por símbolo + âncora julgada pelo bloco) — abaixo de 180 a família inteira perdeu olhares, e converter linha em âncora NÃO baixa este número (%s)" % [comIdentidade, ancJulgadas, comIdentidade + ancJulgadas, "medido 187 = 48+139, e era 187 = 54+133 antes das seis trocas"])
+			"citação nomeada: %d+`%d` = %d (linha julgada por símbolo + âncora julgada pelo bloco) — abaixo de 180 a família inteira perdeu olhares, e converter linha em âncora NÃO baixa este número (%s)" % [comIdentidade, ancJulgadas, comIdentidade + ancJulgadas, "medido 203 = 48+155; 187 = 48+139 antes das dezesseis conversões de posicional"])
 	Check(comIdentidade >= 40,
 			"ponteiros: %d de %d referências tiveram um símbolo nomeado julgado pela régua de identidade — sem isso, \"0 acusações\" pode significar só que a doc não nomeou nada" % [comIdentidade, conferidos])
 	# Terceira recalibração, 2026-09-30, e ela é de ESCOPO, não de número: a fração de
@@ -1836,7 +1952,10 @@ func SuiteEvidencePointers() -> void:
 	# nos dois lados da divisão. Não é afrouxamento gratuito — cada âncora do numerador
 	# é uma citação que o braço (8) acusa se o símbolo não resolver, não declarar ou
 	# declarar duas vezes (o `anchorias` acima é um CheckEq em zero), e o denominador
-	# cresce junto. Folga medida hoje: 187/591 = 32% (48 identidades de linha + 139 âncoras).
+	# cresce junto. Folga medida no run de 2026-10-01: 203/591 = 34% (48 identidades de linha +
+	# 155 âncoras) sobre 436 referências conferidas — o denominador voltou ao mesmo 591 da
+	# quarta recalibração porque as dezesseis conversões saem de `conferidos` e entram em
+	# `ancJulgadas` na mesma conta, que é exatamente o que a fórmula da família quer dizer.
 	Check((comIdentidade + ancJulgadas) * 5 >= conferidos + ancJulgadas,
 			"citação nomeada: %d+%d de %d+%d (linha julgada por símbolo, âncoras vistas) é pelo menos um quinto do que a família olha — abaixo disso a mordida medida é do tamanho do que a prosa deixou dizer" % [comIdentidade, ancJulgadas, conferidos, ancJulgadas])
 	# O braço (d) nasceu nesta rodada, então o piso é o MEDIDO com margem, não o desejado: a

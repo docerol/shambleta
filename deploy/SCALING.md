@@ -210,8 +210,8 @@ resultado do harness e regravá-la neste arquivo é o número que mente no commi
   acima de 20).
 - **Observabilidade**: o `/metrics` binda só `127.0.0.1:9400`
   (`sources/system/MetricsServer.gd:25-26`), então o scraper precisa compartilhar
-  o namespace do jogo — `network_mode: service:game` em
-  `deploy/docker-compose.yml:330`, porta do Prometheus `--web.listen-address=:9090`
+  o namespace do jogo — o `services.prometheus.network_mode`
+  (`deploy/docker-compose.yml:@services.prometheus.network_mode`), porta do Prometheus `--web.listen-address=:9090`
   (`deploy/docker-compose.yml:352`) e Alertmanager na porta 9093
   (`deploy/docker-compose.yml:402`). As regras viajam dentro da imagem
   (`deploy/monitoring/prometheus.Dockerfile:19-20`,
@@ -255,9 +255,10 @@ bash scripts/test.sh one shard_capacity_test
   que o beta precisa") foi substituída pela escada do §3.1: **200 players conviventes
   dentro de 33,33 ms/passo** (10 instâncias cheias), 221 µs por player, com fence
   imposta por `tests/multi_instance_tick_test.gd`. O confronto com os limites do
-  serviço `game` (`deploy/docker-compose.yml:98`) contra os limites declarados dele
-  (`mem_limit` em `deploy/docker-compose.yml:123` e `cpus` em
-  `deploy/docker-compose.yml:129`) agora tem número dos dois lados: a
+  serviço `services.game` (`deploy/docker-compose.yml:@services.game`) contra os limites
+  declarados dele — o `services.game.mem_limit` em
+  `deploy/docker-compose.yml:@services.game.mem_limit` e o `services.game.cpus` em
+  `deploy/docker-compose.yml:@services.game.cpus` — agora tem número dos dois lados: a
   inclinação medida de RSS (0,671 MB/player) diria ~1.428 players antes dos
   `mem_limit: 1536M`, e a CPU medida no pior degrau é 1,00 core dos `cpus: 2` — os
   dois folgam por 5× e 2× respectivamente, então **quem vincula o beta é o tick, não o

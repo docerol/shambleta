@@ -75,7 +75,8 @@ var WindowSec : int						= NetworkCommons.PreAuthWindowSec
 
 # TETO DURO da cesta pré-auth (#85), em ENTRADAS, e a conta dele em números:
 #
-#   - âncora de orçamento: `deploy/docker-compose.yml:123` dá `mem_limit: 1536M` ao
+#   - âncora de orçamento: o `services.game.mem_limit` de
+#     `deploy/docker-compose.yml:@services.game.mem_limit` dá `mem_limit: 1536M` ao
 #     serviço `game`, que é o processo onde esta cesta vive;
 #   - a régua admite no pior caso 1/256 desse teto para a cesta: 6 MiB;
 #   - custo por entrada, MEDIDO (não estimado) por tests/preauth_ledger_test.gd em
