@@ -43,7 +43,8 @@ if [ ! -d "$tpl" ]; then
 	echo "   o pacote de templates para ${tpl}. Sem ele não há export Web — nem local, nem na CI."
 	exit 1
 fi
-# `variant/extensions_support=true` no preset Web (export_presets.cfg:956) = GDExtension
+# A extensao do preset Web vem de `preset.5.options.variant/extensions_support`
+# (`export_presets.cfg:@preset.5.options.variant/extensions_support`) = GDExtension
 # (gdsqlite) dentro do pacote, que é o template *dlink*, não o plain.
 if [ ! -f "$tpl/web_dlink_release.zip" ]; then
 	echo "::error::${tpl}/web_dlink_release.zip ausente — o preset Web usa extensions_support."

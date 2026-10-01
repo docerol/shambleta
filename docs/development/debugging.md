@@ -12,9 +12,9 @@ Não existe atalho in-game: nenhum binding de F3 (ou de qualquer tecla) abre um
 painel de performance, e `sources/gui/ServerDisplay.gd` — o único script que lê o
 singleton `Performance` — não chega à tela por outro motivo: a cena existe
 (`presets/gui/Server.tscn:4` anexa o script, e `presets/Server.tscn:4` instancia
-essa cena), mas **nenhum carregador chama `presets/Server.tscn`**. O `main_scene`
-do projeto é `res://presets/Default.tscn` (`project.godot:15`) e nenhuma linha de
-`sources/`, `presets/` ou `export_presets.cfg` carrega a cena do servidor — o que
+essa cena), mas **nenhum carregador chama `presets/Server.tscn`**. O `main_scene` do projeto
+vem de `application.run/main_scene` e é `res://presets/Default.tscn` (`project.godot:@application.run/main_scene`)
+e nenhuma linha de `sources/`, `presets/` ou `export_presets.cfg` carrega a cena do servidor — o que
 não existe é o caminho que a abre, não a cena. Para medir frame time/FPS/memória use
 o **Profiler** e os **Monitors** do editor do Godot, ou leia `Performance.get_monitor(...)`
 num harness próprio (`./scripts/test.sh benchmarks`).
@@ -120,7 +120,7 @@ P4 de fragmentar `Network.gd` em seis módulos (revertida). Na ordem:
    faltando". Esta foi a causa raiz real da suíte bloqueada.
 2. Confirme que nenhum `class_name` novo colide com os seis autoloads de
    `project.godot` (`Launcher`, `Network`, `FSM`, `Monitoring`, `WebPush`,
-   `PwaUpdate` — `[autoload]` em `project.godot:29-36`). <!-- DRIFT autoload_count 6 -->
+   `PwaUpdate` — `[autoload]` em `project.godot:@autoload`). <!-- DRIFT autoload_count 6 -->
    <!-- DRIFT autoload_names FSM,Launcher,Monitoring,Network,PwaUpdate,WebPush -->
 3. Não procure guard `Engine.has_singleton` em `FSM.gd` `EnterState` nem em
    `Network.gd` `_init()`: eles **foram removidos**, e a razão está escrita no

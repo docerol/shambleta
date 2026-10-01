@@ -1177,8 +1177,16 @@ REG_MIN=2
 # `add_child.call_deferred(Action)` que faz a afirmação, enquanto a linha pinada era prosa
 # repetindo-a. Um ponteiro de linha a menos, e nenhum literal pinado precisou de oração nova —
 # a cláusula já nomeava o símbolo antes de apontar para ele.
-ANCHOR_MIN=239
-LINE_MAX=406
+# Sétima colheita, 2026-10-01, e é a que fecha a última gramática de conf da árvore: os
+# treze ponteiros que apontavam para `project.godot` e `export_presets.cfg` viram âncora pelo
+# CAMINHO DA CHAVE (`ini_spans`), a fatia 7. Nove deles eram cobrados aqui e quatro só pela
+# gémea (#132), e os quatro de código são a razão de a máquina estar nos dois juízes: faixa de
+# linha de conf escrita dentro de comentário de harness é justamente o que apodrece sem barulho,
+# porque linha de conf é a que mais muda de posição quando alguém adiciona uma chave. O censo novo também cobra pedágio em quem escreve a régua: o comentário que explica
+# por que a barra entrou no regex da âncora cita uma âncora, e a cláusula precisou nomear o
+# caminho — `prosa` morde quem explica sem prometer.
+ANCHOR_MIN=253
+LINE_MAX=393
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
 # para cima do laço de âncora, o total cai de 215 para 200 e o `ANCHOR_MIN` acima acusa —
@@ -1262,10 +1270,14 @@ ANYCITE = re.compile(r"(?<![\w./-])" + _TGT + r":(\d+)((?:[-,]\d+)*)")
 # senão a âncora vira "o nome existe", e isso não prova nada.
 # Em mapa YAML o símbolo é o CAMINHO pontilhado (`services.web.mem_limit`), e só
 # a forma pontilhada resolve: o segmento final sozinho mora em dois serviços do
-# mesmo compose. Os pontos entram no capturado, não no `_TGT` — o delimitador de
-# alvo continua sendo o `:`, e um `@a.b` sem ponto capturado seria `@a` seguido de
-# lixo, que é como uma âncora YAML viraria âncora `.gd` por acidente.
-ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*(?:\.[A-Za-z0-9_-]+)*)")
+# mesmo compose. Em INI o caminho é `seção.chave` e a chave já vem com barra
+# (`html/head_include`, `window/stretch/mode`), porque no dialeto do Godot a barra
+# é pedaço do NOME da chave, não hierarquia de arquivo — por isso ela entra no
+# capturado aqui, e por isso `display.window/stretch/mode` é um símbolo só. Os
+# pontos entram no capturado, não no `_TGT` — o delimitador de alvo continua sendo
+# o `:`, e um `@a.b` sem ponto capturado seria `@a` seguido de lixo, que é como uma
+# âncora YAML viraria âncora `.gd` por acidente.
+ANCHOR = re.compile(r"(?<![\w./-])" + _TGT + r":@([A-Za-z_]\w*(?:\.[A-Za-z0-9_/-]+)*)")
 
 # A CONTINUACAO de ponteiro: `:NN` ou `:NN-MM` sem arquivo, herdando o alvo do
 # ponteiro anterior. Nem `PTR` nem `ANYCITE` nem `ANCHOR` a veem, porque as tres
@@ -1839,6 +1851,97 @@ def yaml_spans(lines):
     return out
 
 
+# INI (#124, fatia 7): o dialeto do Godot (`project.godot`, `export_presets.cfg`,
+# `plugin.cfg`). Declarar aqui é escrever uma das duas coisas que o formato tem: o
+# cabeçalho `[seção]` ou o par `chave=valor` na coluna zero. O índice é
+# `seção.chave`, e a BARRA é pedaço do nome da chave, não hierarquia —
+# `html/head_include` é uma chave só, e era exatamente ela que nenhum ponteiro
+# deste repo podia ancorar até aqui (a régua de âncora devolvia `arquivo` para
+# `.cfg` e `.godot`, e os treze sítios que citam esses dois arquivos estavam todos
+# no worklist como `sem modelo`).
+#
+# Nível 0 é a seção, 1 é a chave, e é isso que dá a cada uma o bloco certo: a chave
+# termina na DECLARAÇÃO SEGUINTE (outra chave, ou a próxima seção) e a seção
+# termina na PRÓXIMA SEÇÃO. A chave sozinha diria "uma linha"; a seção sozinha
+# diria "o arquivo inteiro por um nome" — e é por isso que ela entra aqui e não
+# entrou no YAML: um mapa YAML tem uma raiz que é o documento, enquanto `[autoload]`
+# tem borda de verdade (a próxima `[`) e o que a prosa jura dele — "os seis
+# autoloads registrados" — é uma afirmação sobre o bloco, não sobre uma linha.
+#
+# O resto é a borda do VALOR. `html/head_include="` abre uma string de 174 linhas
+# de HTML e JavaScript, e `texture={` abre um objeto de 20: dentro deles há linhas
+# que têm a forma exata de uma declaração (`window.ShambletaPush = (function() {`,
+# `"compress/mode": 0`), na coluna zero, com `=`. Indexar isso daria âncora a um
+# nome que o arquivo não declara, e — o pior, porque é silencioso — o bloco da
+# chave verdadeira passaria a terminar cedo. A máquina é a paridade das aspas com
+# escape, mais a profundidade das chaves `{}` fora de string; aspas dentro de
+# string escapada (`\"sentry-bundle.js\"`) não fecham nada, e a barra de
+# continuação é o que segura os 174 linhas no bloco certo.
+INI_EXT = ("godot", "cfg")
+SEC_INI = re.compile(r"^\[([A-Za-z0-9_.:-]+)\]$")
+KEY_INI = re.compile(r"^([A-Za-z0-9_./@:-]+)=")
+
+
+def ini_open(text, q, depth):
+    """(string-aberta, profundidade-de-objeto) depois de ler `text`.
+
+    Escape só conta DENTRO da string, que é onde o dialeto o usa: `\"` não fecha a
+    string, e `\\` come o próprio antiáspado. Fora dela, `{` e `}` são o objeto
+    (`texture={`, o `ui_close={` de `[input]`) e aspas abrem/fecham.
+    """
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if q:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                q = False
+        elif c == '"':
+            q = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        i += 1
+    return q, depth
+
+
+def ini_spans(lines):
+    decls, sect = [], ""
+    q, depth = False, 0
+    for i, raw in enumerate(lines, 1):
+        if q or depth > 0:
+            q, depth = ini_open(raw, q, depth)
+            continue
+        m = SEC_INI.match(raw)
+        if m:
+            decls.append((m.group(1), i, 0))
+            sect = m.group(1)
+            continue
+        if not raw.strip() or raw.lstrip().startswith((";", "#")):
+            continue
+        m = KEY_INI.match(raw)
+        if m:
+            decls.append(((sect + "." + m.group(1)) if sect else m.group(1), i, 1))
+            q, depth = ini_open(raw[m.end():], q, depth)
+            continue
+        # Linha de coluna zero sem `=` e sem cabeçalho: corpo órfão de um conf
+        # malformado. Não declara nada, e mesmo assim passa pela máquina — fechar
+        # os olhos aqui é o que deixaria uma aspa solta comer o resto do arquivo.
+        q, depth = ini_open(raw, q, depth)
+    out = {}
+    for k, (path, start, lvl) in enumerate(decls):
+        fim = len(lines)
+        for j in range(k + 1, len(decls)):
+            if decls[j][2] <= lvl:
+                fim = decls[j][1] - 1
+                break
+        out.setdefault(path, []).append([start, max(start, fim)])
+    return out
+
+
 def anchor_ext(path):
     return os.path.splitext(path)[1].lstrip(".").lower()
 
@@ -1861,9 +1964,13 @@ def anchor_spans(lines, ext):
     Devolve {} para extensão sem modelo de declaração (`.md`, `.json`, `.conf`,
     `.tscn`). Ali a âncora não tem o que julgar, e fingir que tem é o caminho para
    aprovar ponteiro que não prova nada — por isso o veredito acusa em vez de calar.
+   `.cfg` e `.godot` saíram dessa lista na fatia 7: eles declaram, e a máquina é
+   `ini_spans`.
     """
     if ext in YAML_EXT:
         return yaml_spans(lines)
+    if ext in INI_EXT:
+        return ini_spans(lines)
     pats = DECLS.get(ext)
     if not pats:
         return {}
@@ -1890,7 +1997,7 @@ def anchorverdict(sym, clause, target_lines, ext):
     literal da cláusula morando FORA do bloco. Aprovar exige os dois juntos: o nome
     dito na frase E o que a frase pin-a dentro do bloco.
     """
-    if ext not in DECLS and ext not in YAML_EXT:
+    if ext not in DECLS and ext not in YAML_EXT and ext not in INI_EXT:
         # O ponto é da frase: devolver ponto mais extensão imprimia dois pontos,
         # e o self-test julga justamente o motivo impresso.
         return False, "arquivo", ext
@@ -1962,7 +2069,7 @@ def wl_judge(site, target, lnum, tl, clause):
         wl_add("morto", site, target + ":" + lnum, "", clause)
         return
     ext = anchor_ext(target)
-    if ext not in DECLS and ext not in YAML_EXT:
+    if ext not in DECLS and ext not in YAML_EXT and ext not in INI_EXT:
         wl_add("sem modelo", site, target + ":" + lnum, "", clause)
         return
     if target not in WL_SPANS:
@@ -1998,6 +2105,26 @@ ALVO7 = ["services:", "  web:", "    image: nginx", "    ports:",
          "  db:", "    run: |", "      checks: pass"]
 ALVO8 = ["jobs:", "  build:", "    steps:", "      - name: sobe", "        run: make"]
 ALVO9 = ["services:", "  web:", "    health_check:", "      retention: 7d", "    mem_limit: 512M"]
+# ALVO10/11 são o terreno do INI (fatia 7), e cada linha existe para uma decisão da
+# máquina: chave `seção.chave` com barra no nome (2-4), seção como bloco com borda na
+# próxima seção (5-8), `;` de comentário que não declara (8), objeto `texture={...}`
+# opaco (10-12), a MESMA chave escrita duas vezes na mesma seção (14 e 16), chave antes
+# de qualquer seção (1) — e na 11, a string de sete linhas que tem dentro dela duas
+# linhas com a forma exata de `chave=valor` na coluna zero (4 e 5) e uma aspa escapada
+# em número ÍMPAR (3), que é o que separa a paridade de aspas da paridade cega ao
+# escape: cega, ela fecha a string na 3, indexa `crossorigin` e `bridge_salt` como
+# chaves e ainda engole a chave de verdade que vem depois do fechamento (7).
+ALVO10 = ["config_version=5", "[application]", 'config/name="Shambleta"',
+          'run/main_scene="res://presets/Default.tscn"', "[display]",
+          'window/stretch/mode="canvas_items"', 'window/stretch/aspect="expand"',
+          "; comentario com janela=2 nao e chave", "[importer_defaults]",
+          "texture={", '"compress/mode": 0,', "}", "[autoload]",
+          'Launcher="*res://sources/launcher/Launcher.gd"',
+          'Network="*res://sources/network/Network.gd"',
+          'Launcher="*res://sources/launcher/Outro.gd"']
+ALVO11 = ["[preset.0.options]", 'html/head_include="', "<script src=\\\"bridge.js>",
+          'crossorigin="anonymous"', "bridge_salt=1", "</script>\"",
+          "html/canvas_resize_policy=2"]
 ANCHOR_CONTROLES = [
     ("âncora honesta: símbolo declarado e nomeado na cláusula",
      "abre a sessão em `Beta` (`x.gd:@Beta`)", True, ""),
@@ -2046,6 +2173,50 @@ ANCHOR_CONTROLES = [
     ("continuação sem citação na linha de cima desce mesmo: literal fora do bloco é acusado",
      "\t# (`x.gd:@Delta_Load`) fecha o preload", False, "bloco", ALVO5,
      "\t# usa `Delta_Load()` e a constante `GATE_RUN`"),
+    # Os nove de baixo são o INI (fatia 7). Cada um planta UM modo de o caminho mentir
+    # num arquivo que não tem indentação nenhuma para se enganar: chave com barra no
+    # nome, seção com borda, `{}` opaco, `;` que não declara, a mesma chave duas vezes
+    # e — o único que não existe em YAML nenhum — a string de 174 linhas que tem
+    # `chave=valor` de coluna zero dentro de si.
+    ("ini: `seção.chave` com barra no nome é âncora legível",
+     'a cena vem de `application.run/main_scene` (`x.godot:@application.run/main_scene`)',
+     True, "", ALVO10),
+    ("ini: a seção é bloco com borda na próxima seção, e o literal dela está dentro",
+     'estão em `display` os dois valores `canvas_items` e `expand` (`x.godot:@display`)',
+     True, "", ALVO10),
+    ("ini: a mesma chave escrita duas vezes na mesma seção é duplo, não escolha",
+     'o autoload `Launcher` está em `autoload.Launcher` (`x.godot:@autoload.Launcher`)',
+     False, "duplo", ALVO10),
+    ("ini: chave que o arquivo não escreveu não vira âncora",
+     'o modo de escala seria `display.window/stretch/fit` (`x.godot:@display.window/stretch/fit`)',
+     False, "inexistente", ALVO10),
+    ("ini: objeto `{ ... }` é opaco — o que mora dentro não é chave da seção",
+     'a compressão é `importer_defaults.texture.compress/mode` (`x.godot:@importer_defaults.texture.compress/mode`)',
+     False, "inexistente", ALVO10),
+    ("ini: linha de comentário `;` não declara, mesmo com `=` na coluna zero",
+     'a janela do comentário é `display.janela` (`x.godot:@display.janela`)',
+     False, "inexistente", ALVO10),
+    ("ini: literal que mora na chave IRMÃ não entra no bloco da nomeada",
+     'o aspecto é `display.window/stretch/aspect` e usa `canvas_items` (`x.godot:@display.window/stretch/aspect`)',
+     False, "bloco", ALVO10),
+    ("ini: chave antes de qualquer seção ancora pelo nome dela, sem prefixo",
+     'a versão do conf mora em `config_version` (`x.godot:@config_version`)',
+     True, "", ALVO10),
+    ("ini: prosa que não nomeia o caminho só prova que o nome existe",
+     'os seis registrados estão em (`x.godot:@autoload`)', False, "prosa", ALVO10),
+    # Os três de 11 são a STRING MULTI-LINHA, e são o coração da fatia: sem a
+    # paridade das aspas com escape, `crossorigin` e `bridge_salt` viram chaves e a
+    # chave que vem depois do fechamento some do índice. Os três juntos só passam
+    # com a máquina certa.
+    ("ini: o valor entre aspas estende o bloco da própria chave, e o literal dele é dele",
+     'a bridge injeta `bridge_salt` por `preset.0.options.html/head_include` (`x.cfg:@preset.0.options.html/head_include`)',
+     True, "", ALVO11),
+    ("ini: a string fecha no escape certo — a chave seguinte continua indexada",
+     'o resize é `preset.0.options.html/canvas_resize_policy` (`x.cfg:@preset.0.options.html/canvas_resize_policy`)',
+     True, "", ALVO11),
+    ("ini: `chave=valor` DENTRO da string não é declaração",
+     'o atributo seria `preset.0.options.crossorigin` (`x.cfg:@preset.0.options.crossorigin`)',
+     False, "inexistente", ALVO11),
 ]
 
 

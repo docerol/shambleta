@@ -89,6 +89,14 @@ static var _ptrIndex : Dictionary = {}
 # Dockerfile entra sem ponto porque é assim que a doc de deploy o cita.
 const PTR_TGT : String = "((?:[A-Za-z0-9_./-]+\\.(?:gd|py|sh|yml|yaml|json|sql|cfg|conf|md|csv|mjs|toml|godot|tscn|example|html))|(?:[A-Za-z0-9_./-]*Dockerfile))"
 
+# O SÍMBOLO de uma âncora, UMA lista para os dois regexes deste arquivo (`_IdentityJudgeCorpus`
+# e a varredura), pelo mesmo motivo do `PTR_TGT` acima: os dois juízes têm de ler a mesma classe.
+# A barra dentro do segmento é a fatia 7: no dialeto Godot a barra é parte do NOME da chave
+# (`window/stretch/mode`, `html/head_include`), não um nível de hierarquia, e sem ela a âncora
+# de `display.window/stretch/mode` (`project.godot:@display.window/stretch/mode`) seria lida só
+# até a barra e acusada como inexistente num arquivo que declara o caminho inteiro.
+const ANC_SYM : String = "([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_/-]+)*)"
+
 # Os quatro registros datados têm a acusação de PONTEIRO DE LINHA e de CONTINUAÇÃO medida,
 # não cobrada; a âncora é cobrada neles também. A razão é a da régua bash: num registro, o que
 # a frase diz é o que era vero na rodada em que foi escrito, e cobrar dele a verdade de hoje
@@ -302,6 +310,99 @@ static func _YamlSpans(lines : PackedStringArray) -> Dictionary:
 		(out[caminho2] as Array).append([inicio, maxi(inicio, fim)])
 	return out
 
+# INI (#150, fatia 7): `.godot` e `.cfg` declaram, e a máquina é a MESMA da régua bash
+# (`ini_spans` em `scripts/check_doc_drift.sh`): copiado e não reinventado, porque `project.godot`
+# é citado dos dois corpos e dois juízes lendo duas geografias do mesmo arquivo é o #116.
+# Três decisões, cada uma com control plantado embaixo. Nível 0 é `[seção]` e nível 1 é a
+# chave de coluna zero `chave=valor`; o bloco da SEÇÃO termina na próxima seção, então
+# `@autoload` cobre as seis chaves de registro abaixo dele, e o bloco da CHAVE termina na
+# próxima declaração de nível <= 1. O índice é `seção.chave` e a chave GUARDA a barra
+# (`window/stretch/mode`), porque no dialeto Godot a barra é parte do NOME da chave, não
+# hierarquia. E uma chave antes de qualquer seção fica com o nome puro (`config_version`):
+# é o contrário do que a fatia de YAML fez com raiz de um segmento, e a razão é a borda —
+# `[seção]` tem borda de direita (o próximo `[`), uma raiz de YAML não tem borda nenhuma.
+# `;` e `#` não declaram. Valor entre aspas pode atravessar linhas (`html/head_include="`
+# abre em :962 e fecha só em :1135) e objeto pode aninhar (`texture={`), então a passada
+# carries um par (string-aberta, profundidade) e nada dentro deles é declarado.
+static func _IniOpen(texto : String, q : bool, depth : int) -> Array:
+	# Máquina esquerda-para-direita, byte a byte igual à de bash: dentro da string a
+	# aspa fecha e a barra escapa o próximo caractere; FORA dela a barra não escapa
+	# nada (é parte do caminho `res://`) e só `{` `}` mexem na profundidade. É isso
+	# que torna a paridade de escape mordida: uma linha com UMA aspa escapada
+	# (`<script src=\"bridge.js>`) mantém a string aberta para quem conta a barra e
+	# fecha para quem não conta — e quem não conta indexa `crossorigin=` como chave e
+	# engole a chave real que vem depois do `"` que fecha.
+	var i : int = 0
+	var n : int = texto.length()
+	while i < n:
+		var c : String = texto[i]
+		if q:
+			if c == "\\":
+				i += 2
+				continue
+			if c == '"':
+				q = false
+		else:
+			if c == '"':
+				q = true
+			elif c == "{":
+				depth += 1
+			elif c == "}":
+				depth -= 1
+		i += 1
+	return [q, depth]
+
+static func _IniSpans(lines : PackedStringArray) -> Dictionary:
+	var sec : RegEx = RegEx.new()
+	sec.compile("^\\[([A-Za-z0-9_.:-]+)\\]$")
+	var key : RegEx = RegEx.new()
+	key.compile("^([A-Za-z0-9_./@:-]+)=")
+	var decls : Array = []
+	var secto : String = ""
+	var aberta : bool = false
+	var profundidade : int = 0
+	for i in lines.size():
+		var bruto : String = String(lines[i])
+		if aberta or profundidade > 0:
+			var estadoDentro : Array = _IniOpen(bruto, aberta, profundidade)
+			aberta = bool(estadoDentro[0])
+			profundidade = int(estadoDentro[1])
+			continue
+		var ms : RegExMatch = sec.search(bruto)
+		if ms != null:
+			decls.append([ms.get_string(1), i + 1, 0])
+			secto = ms.get_string(1)
+			continue
+		if bruto.strip_edges() == "" or bruto.strip_edges().begins_with(";") or bruto.strip_edges().begins_with("#"):
+			continue
+		var mk : RegExMatch = key.search(bruto)
+		if mk != null:
+			decls.append([(secto + "." + mk.get_string(1)) if secto != "" else mk.get_string(1), i + 1, 1])
+			var estadoFora : Array = _IniOpen(bruto.substr(mk.get_end(0)), aberta, profundidade)
+			aberta = bool(estadoFora[0])
+			profundidade = int(estadoFora[1])
+			continue
+		# Coluna zero sem `=` e sem cabeçalho: corpo órfão de um conf malformado. Não
+		# declara nada, e MESMO ASSIM passa pela máquina — fechar os olhos aqui é o que
+		# deixaria uma aspa solta comer o resto do arquivo sem ninguém acusar.
+		var estadoOrfao : Array = _IniOpen(bruto, aberta, profundidade)
+		aberta = bool(estadoOrfao[0])
+		profundidade = int(estadoOrfao[1])
+	var out : Dictionary = {}
+	for k in decls.size():
+		var nivel : int = int((decls[k] as Array)[2])
+		var fim : int = lines.size()
+		for j in range(k + 1, decls.size()):
+			if int((decls[j] as Array)[2]) <= nivel:
+				fim = int((decls[j] as Array)[1]) - 1
+				break
+		var caminho : String = String((decls[k] as Array)[0])
+		if not out.has(caminho):
+			out[caminho] = []
+		var inicio : int = int((decls[k] as Array)[1])
+		(out[caminho] as Array).append([inicio, maxi(inicio, fim)])
+	return out
+
 # Identidade declared -> span, para TODA declaração de coluna zero (não só `func`).
 # A régua de span acima julga `Suite*` com o nome NA MESMA LINHA do número; isto aqui
 # julga qualquer símbolo nomeado na cláusula, de qualquer arquivo de código, e é o que
@@ -315,13 +416,16 @@ static func _YamlSpans(lines : PackedStringArray) -> Dictionary:
 # `def nome(`/`class Nome`/`NOME =`. Shell e python só indexam atribuição MAIÚSCULA de
 # propósito: em `.sh` uma atribuição minúscula de coluna zero é variável de loop, e
 # doc que nomeia `checks` falando do `scripts/check_doc_drift.sh` não está citando a
-# declaração dele. Arquivo sem modelo de identidade (`.md`, `.json`, `.tscn`, `.cfg`)
-# devolve índice vazio e a régua fica inertes nele — inventar regra para formato que
-# não tem declaração é a receita para a régua chorar lobo.
+# declaração dele. Arquivo sem modelo de identidade (`.md`, `.json`, `.tscn`) devolve
+# índice vazio e a régua fica inertes nele — inventar regra para formato que
+# não tem declaração é a receita para a régua chorar lobo. `.cfg` e `.godot` saíram
+# dessa lista na fatia 7: eles declaram, e a máquina é `_IniSpans`.
 static func _SymbolSpans(lines : PackedStringArray, ext : String) -> Dictionary:
 	var spans : Dictionary = {}
 	if ext == "yml" or ext == "yaml":
 		return _YamlSpans(lines)
+	if ext == "godot" or ext == "cfg":
+		return _IniSpans(lines)
 	if ext != "gd" and ext != "sh" and ext != "py":
 		return spans
 	var decls : Array = []
@@ -347,7 +451,7 @@ static func _SymbolSpans(lines : PackedStringArray, ext : String) -> Dictionary:
 # dependem do modelo de cláusula, e dois modelos de cláusula em duas réguas é a
 # discórdia encomendada. Devolve "" quando não há o que acusar.
 static func _AnchorStruct(sym : String, ext : String, symSpans : Dictionary) -> String:
-	if ext != "gd" and ext != "sh" and ext != "py" and ext != "yml" and ext != "yaml":
+	if ext != "gd" and ext != "sh" and ext != "py" and ext != "yml" and ext != "yaml" and ext != "godot" and ext != "cfg":
 		return "`%s`: âncora em `%s`, arquivo sem modelo de declaração — âncora ali é linha disfarçada" % [sym, ext]
 	var list : Array = symSpans.get(sym, [])
 	if list.is_empty():
@@ -709,7 +813,7 @@ static func _IdentityJudgeCorpus(docLines : PackedStringArray, src : PackedStrin
 	# Sem a âncora aqui, o controle que morde a costura passaria numa casa que a régua
 	# real não tem — fixture que reproduz o bug velho não prova o conserto dele.
 	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_-]+)*)`")
+	ancRx.compile("`" + PTR_TGT + ":@" + ANC_SYM + "`")
 	var recs : Array = []
 	for p in docLines.size():
 		var pTxt : String = String(docLines[p])
@@ -1208,7 +1312,7 @@ func SuiteEvidencePointers() -> void:
 	# a migração da fatia 3 abriu — 103 números viraram âncora e dois ponteiros
 	# honestos passaram a levar culpa alheia.
 	var ancRx : RegEx = RegEx.new()
-	ancRx.compile("`" + PTR_TGT + ":@([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_-]+)*)`")
+	ancRx.compile("`" + PTR_TGT + ":@" + ANC_SYM + "`")
 	# O número SEM ARQUIVO (#124, fatia 5): o `:` colado no backtick de abertura é o que separa
 	# esta classe da de ponteiro nomeado, e exigir o backtick é o que impede um endereço com porta
 	# de ser lido como continuação da frase anterior. Os grupos numeram DESLOCADOS em relação ao
@@ -1487,19 +1591,20 @@ func SuiteEvidencePointers() -> void:
 	# discórdia encomendada; o que se comparou, desta vez, foi o ESCOPO por classe.
 	# 8 → 90 na fatia 3, e 90 → 120 na fatia do YAML: oito era o censo da fatia 2, e depois
 	# de 103 ponteiros migrados um piso de oito já não distinguia "walk parado" de "metade da
-	# migração invisível". 188 é o medido nesta varredura no run de 2026-10-01, e é o número
+	# migração invisível". 225 é o medido nesta varredura no run da fatia 7 (2026-10-01), e é o
+	# número
 	# DESTA passada, não um livro-razão de quem converteu o quê: as colheitas de doc subiram
 	# o censo depois que os antigos 155 foram assinados, e é precisamente por isso que o piso
-	# não é função do medido. Ele fica trinta e cinco abaixo do censo de sempre porque a
+	# não é função do medido. Ele fica cem abaixo do censo de sempre porque a
 	# migração é minha e o que eu quero é que a PRÓXIMA pessoa
 	# que encolher o corpus tenha de explicar, não que o gate verdeje sozinho. Ele também não
-	# sobe para perto de 165, que é 188 menos os vinte e três ponteiros `.@` que apontam para
-	# YAML nesta árvore: matar o modelo de chave é ofício dos seis controles de mesa abaixo,
-	# que caem se `_YamlSpans` emudecer, e piso de censo colado no medido passa a acusar a
-	# próxima migração legítima — o erro que a quarta recalibração desta suíte nomeou. O que
-	# este piso caça é corpus encolhendo, não modelo YAML morto.
+	# sobe para perto do medido: matar um modelo de declaração — o de YAML ou o de INI que
+	# entrou nesta fatia — é ofício dos controles de mesa abaixo, que caem se `_YamlSpans` ou
+	# `_IniSpans` emudecerem, e piso de censo colado no medido passaria a acusar a próxima
+	# migração legítima — o erro que a quarta recalibração desta suíte nomeou. O que
+	# este piso caça é corpus encolhendo, não modelo de declaração morto.
 	Check(ancJulgadas >= 120,
-			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 120 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "188 é o medido no run de 2026-10-01"])
+			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 120 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "225 é o medido no run da fatia 7"])
 	# Os três modos de a âncora apodrecer, mordidos em mesa, porque na árvore limpa
 	# eles não têm como aparecer: o control negativo é a única prova de que a
 	# acusação existe. E o positivo, para a régua não virar máquina de acusar.
@@ -1562,6 +1667,67 @@ func SuiteEvidencePointers() -> void:
 			"âncora yaml morde na nesting inventada: traço mal contado criaria um caminho que o arquivo não tem (%s)" % _AnchorStruct("jobs.build.steps.name.run", "yml", sp8))
 	Check(_AnchorStruct("services.db.run.checks", "yml", sp7).contains("nenhuma declaração"),
 			"âncora yaml morde no bloco escalar: o que mora num `run: |` é script, não chave (%s)" % _AnchorStruct("services.db.run.checks", "yml", sp7))
+	# Os dez de baixo são o INI (#150, fatia 7) na MESMA mesa da régua bash
+	# (`ALVO10`/`ALVO11` em `scripts/check_doc_drift.sh`): mesmo texto de arquivo, mesma
+	# expectativa de veredito, copiados e não reinventados porque é o #116. O que cada casa
+	# planta: chave `seção.chave` com barra no nome resolve; a SEÇÃO resolve (é declaração com
+	# borda, ao contrário da raiz de YAML, que é acusada acima); a mesma chave escrita duas
+	# vezes é duplo; caminho inventado é inexistente; o que mora dentro de `texture={...}` é
+	# órfão; `;` de comentário não declara; chave antes de qualquer seção fica com o nome
+	# puro. As duas últimas mesas são a STRING de sete linhas: a aspa escapada em número ÍMPAR
+	# mantém o `html/head_include` aberto para quem conta o escape, e quem não conta indexa
+	# `crossorigin` como chave e engole a chave real que vem depois do fechamento — que é
+	# exatamente a `canvas_resize_policy` mordida logo abaixo. `prosa` e `bloco` ficam de fora
+	# de propósito: são cláusula, e cláusula tem um só dono.
+	var iniMesa10 : PackedStringArray = PackedStringArray([
+		"config_version=5",
+		"[application]",
+		"config/name=\"Shambleta\"",
+		"run/main_scene=\"res://presets/Default.tscn\"",
+		"[display]",
+		"window/stretch/mode=\"canvas_items\"",
+		"window/stretch/aspect=\"expand\"",
+		"; comentario com janela=2 nao e chave",
+		"[importer_defaults]",
+		"texture={",
+		"\"compress/mode\": 0,",
+		"}",
+		"[autoload]",
+		"Launcher=\"*res://sources/launcher/Launcher.gd\"",
+		"Network=\"*res://sources/network/Network.gd\"",
+		"Launcher=\"*res://sources/launcher/Outro.gd\"",
+	])
+	var iniMesa11 : PackedStringArray = PackedStringArray([
+		"[preset.0.options]",
+		"html/head_include=\"",
+		"<script src=\\\"bridge.js>",
+		"crossorigin=\"anonymous\"",
+		"bridge_salt=1",
+		"</script>\"",
+		"html/canvas_resize_policy=2",
+	])
+	var si10 : Dictionary = _SymbolSpans(iniMesa10, "godot")
+	var si11 : Dictionary = _SymbolSpans(iniMesa11, "cfg")
+	Check(_AnchorStruct("application.run/main_scene", "godot", si10) == "",
+			"âncora ini morde no certo: a barra é parte do NOME da chave e `application.run/main_scene` resolve (%s)" % _AnchorStruct("application.run/main_scene", "godot", si10))
+	Check(_AnchorStruct("display", "godot", si10) == "",
+			"âncora ini morde na seção: `[display]` tem borda de direita, então é declaração e não raiz sem dono (%s)" % _AnchorStruct("display", "godot", si10))
+	Check(_AnchorStruct("config_version", "godot", si10) == "",
+			"âncora ini morde no pré-seção: chave antes de cabeçalho fica com o nome puro (%s)" % _AnchorStruct("config_version", "godot", si10))
+	Check(_AnchorStruct("autoload.Launcher", "godot", si10).contains("2 declarações"),
+			"âncora ini morde no duplo: o mesmo `Launcher` escrito duas vezes na seção não é escolha de âncora (%s)" % _AnchorStruct("autoload.Launcher", "godot", si10))
+	Check(_AnchorStruct("display.window/stretch/fit", "godot", si10).contains("nenhuma declaração"),
+			"âncora ini morde no inexistente: `fit` não está na mesa (%s)" % _AnchorStruct("display.window/stretch/fit", "godot", si10))
+	Check(_AnchorStruct("importer_defaults.texture.compress/mode", "godot", si10).contains("nenhuma declaração"),
+			"âncora ini morde no objeto: o que mora dentro de `texture={...}` é valor, não chave (%s)" % _AnchorStruct("importer_defaults.texture.compress/mode", "godot", si10))
+	Check(_AnchorStruct("display.janela", "godot", si10).contains("nenhuma declaração"),
+			"âncora ini morde no comentário: `;` de coluna zero não declara, mesmo tendo a forma de `chave=valor` (%s)" % _AnchorStruct("display.janela", "godot", si10))
+	Check(_AnchorStruct("preset.0.options.html/head_include", "cfg", si11) == "",
+			"âncora ini morde na aspa escapada: com ÍMPAR de aspas escapadas a string continua ABERTA e `html/head_include` sobrevive (%s)" % _AnchorStruct("preset.0.options.html/head_include", "cfg", si11))
+	Check(_AnchorStruct("preset.0.options.crossorigin", "cfg", si11).contains("nenhuma declaração"),
+			"âncora ini morde dentro da string: `crossorigin=` é atributo de HTML, não chave do conf (%s)" % _AnchorStruct("preset.0.options.crossorigin", "cfg", si11))
+	Check(_AnchorStruct("preset.0.options.html/canvas_resize_policy", "cfg", si11) == "",
+			"âncora ini morde no depois do fechamento: a chave real que vem após o `\"` não é engolida pelas duas de dentro (%s)" % _AnchorStruct("preset.0.options.html/canvas_resize_policy", "cfg", si11))
 	# (9) CONTINUAÇÃO (#124, fatia 5): o número SEM ARQUIVO. A régua de bash passou a ler esta
 	# classe na passada do órfão e este gémeo não a lia: dois juízes da mesma árvore vendo
 	# números diferentes é a doença que o #116 registrou, não um detalhe de paridade de código.

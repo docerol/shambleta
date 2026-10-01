@@ -180,6 +180,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuations, one identity lie about `service_started` and a two-pointer breach of
   `LINE_MAX` — recorded here because that is the thesis, and rewritten without numbers glued
   to filenames.
+- INI keys became anchors in both judges, and that was the last grammar in the tree (#124
+  slice 7). `project.godot` and `export_presets.cfg` have no identifiers either, so the symbol is
+  again the dotted path — `application.run/main_scene`, `preset.5.options.html/head_include` —
+  with one twist the YAML slice did not have: in the Godot dialect the slash is part of the
+  KEY'S NAME, not a level of hierarchy, so the anchor regex had to widen its segment charset
+  before a path with a slash in it could be read at all. The widening was proven harmless before
+  it was used: the census stayed at 239 anchors with zero accusations, so no existing anchor was
+  re-shaped by the new characters. Level 0 is `[section]`, level 1 is a column-zero `key=value`;
+  a section's block ends at the NEXT section, which is why `@autoload` covers the six keys under
+  it, and a key's block ends at the next declaration of level ≤ 1. A key before any section keeps
+  its bare name (`config_version`) — deliberately the opposite of what the YAML slice does with a
+  one-segment root, because an INI section has a real right border (`[`…`]` to the next `[`) and
+  a YAML root is the whole document. `;` and `#` do not declare, and neither does anything inside
+  a value that crosses lines or inside a `{…}` object: the walk carries one pair,
+  (string-open, brace-depth), line to line. That parity is load-bearing and was designed to bite:
+  a line holding an ODD number of quote characters, all of them escaped — `<script src=\"…` —
+  keeps the string open for the machine that reads escapes and closes it for the one that does
+  not, and the escape-blind judge then indexes `crossorigin=` as a key and swallows the real key
+  that comes after the closing quote. Thirteen pointers moved: nine charged by bash (five in
+  `deploy/WEB_SLIM.md`, two in `docs/development/setup.md`, two in `docs/development/debugging.md`)
+  and four read only by the twin (`sources/gui/GuiUiScale.gd`, twice in `tests/panel_fit_test.gd`,
+  once in `scripts/export_web.sh`) — those four are the reason the model is in both judges, and
+  they are #132 in one sentence: a range of config lines cited from a harness comment is the
+  class that rots loudest and was invisible to the cheap gate. None was free. `prosa` refused the
+  sentences until they said the path inside the same comma-cut clause, two of the twelve new
+  controls were blind on the first run — one expected to pass and came back `prosa` because a
+  comma had cut the clause between the literals and the symbol, and one expected `prosa` and came
+  back `duplo`, because accusation is a fixed pipeline and a planted expectation has to know the
+  order. `ANCHOR_MIN` 239 → 253 and `LINE_MAX` 406 → 393, thirteen each way, and for the first
+  time the two judges agree class-by-class on the recorte: 222 line pointers spared and 22 anchors
+  charged, in both. The twin carries ten of the twelve controls as its own mesa — the two it does
+  not are `prosa` and `bloco`, clause, and clause has exactly one owner. Gates:
+  `== DOC DRIFT: 2146 checks, 0 failures ==` and the idle twin green at 3313 checks, its anchor
+  census now 225 with zero accusations. The ruler bit its own documentation twice in one slice
+  and both are recorded here because that is the thesis: the harvest note inside
+  `scripts/check_doc_drift.sh` cited a range of `project.godot` lines in pointer form and became
+  the one pointer the slice was supposed to delete, and the comment in the twin that explains why
+  the slash entered the regex cited an anchor without naming the path in its own clause, which
+  came back accused twice — an explanation of a rule is a citation, and is charged as one.
 
 ### Removed
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`

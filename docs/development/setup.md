@@ -87,7 +87,8 @@ inscrição**. Os subcomandos listados acima são conferidos um a um pelo gate
 
 - **GDScript**: static typing, snake_case, **tab** para indentar (a régua é o
   `check_god_nodes.sh`/os portões de estrutura, não uma contagem de arquivos
-  congelada nesta página; `treat_warnings_as_errors=true` em `project.godot:43`,
+  congelada nesta página; `debug.gdscript/warnings/treat_warnings_as_errors=true` em
+  `project.godot:@debug.gdscript/warnings/treat_warnings_as_errors`,
   então um warning no `.gd` quebra o build tanto quanto um erro)
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`)
 - **Branches**: `main` (produção), `develop` (staging), `feature/*`
@@ -102,7 +103,7 @@ domínio fica em `sources/network/server/` (`Server.gd`, `Peers.gd`, `ChatModera
 `OnlineList.gd`, `EmailService.gd`) e no cliente em `sources/network/client/Client.gd`.
 A versão do protocolo é derivada dos `@rpc` por `NetworkCommons.ComputeProtocolVersion`.
 Os autoloads registrados são **seis**: `Launcher`, `Network`, `FSM`, `Monitoring`,
-`WebPush`, `PwaUpdate` (`[autoload]` em `project.godot:29-36`) — o resto é
+`WebPush`, `PwaUpdate` (`[autoload]` em `project.godot:@autoload`) — o resto é
 `class_name` global ou serviço composto no `Launcher`.
 <!-- DRIFT autoload_count 6 -->
 <!-- DRIFT autoload_names FSM,Launcher,Monitoring,Network,PwaUpdate,WebPush -->

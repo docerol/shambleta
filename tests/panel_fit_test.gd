@@ -35,8 +35,8 @@ extends SceneTree
 # A régua acima mede contra o viewport do PROJETO (1280x720). Ela nunca respondeu a
 # pergunta "a UI CABE num telefone?", porque nenhuma passada existia num viewport de
 # telefone. Agora existe, e ela é dura por um motivo que também é medido aqui: com
-# `window/stretch/mode="canvas_items"` + `aspect="expand"` e base 1280x720
-# (project.godot:48-51), uma janela de 390x844 CSS px não vira um design space de
+# `window/stretch/mode="canvas_items"` + `aspect="expand"` da base `display` em 1280x720
+# (`project.godot:@display`), uma janela de 390x844 CSS px não vira um design space de
 # 390x844 — vira 1280x2770, ou seja, o motor espreme o layout de desktop em 0,30 CSS
 # px por pixel de design (a passada lê esse número do próprio motor, linha abaixo).
 # É por isso que a pergunta que vale é a de 1:1: se o telefone fosse o espaço de
@@ -574,8 +574,8 @@ func _phonePass() -> void:
 	var savedSize : Vector2i = win.size
 	var savedWindows : Vector2 = windows.get_size()
 	# (1) O que o aparelho recebe com a base do projeto. Com
-	# `window/stretch/mode="canvas_items"` + `aspect="expand"` e base 1280x720
-	# (project.godot:48-51), um telefone de 390x844 CSS px nao ganha um espaco de
+	# `window/stretch/mode="canvas_items"` + `aspect="expand"` da base `display` em 1280x720
+	# (`project.godot:@display`), um telefone de 390x844 CSS px nao ganha um espaco de
 	# design de 390x844: a largura fica presa a base e a altura desce. Medido,
 	# porque e este numero que diz por que "cabe no viewport de 1280x720" nunca foi
 	# evidencia de que cabe no aparelho. Se alguem mexer na base/stretch, o check

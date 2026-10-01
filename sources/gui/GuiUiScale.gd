@@ -30,8 +30,9 @@ const TouchTargetFloor : int = 44
 # MOLDURA DE TELEFONE DO PRODUTO (lado de produto, não de teste): 390x844 CSS px,
 # retrato iPhone 12/13/14. De onde vem o número: (a) o shell web entrega
 # `width=device-width` (`deploy/web/checkout_return.html:5`, `landing/index.html:5`),
-# ou seja, o CSS viewport do aparelho É o viewport do jogo; (b) `project.godot:46-51`
-# fixa a base em 1280x720 com `stretch/mode="canvas_items"` + `aspect="expand"`,
+# ou seja, o CSS viewport do aparelho É o viewport do jogo; (b) `display`
+# (`project.godot:@display`) fixa a base em 1280x720 com `stretch/mode="canvas_items"`
+# + `aspect="expand"`,
 # então o espaço de design nunca é o do aparelho — é a moldura abaixo que a régua
 # impõe no container real. Este é o ÚNICO lugar onde o tamanho de telefone existe em
 # produto; `tests/hud_decision_fit_test.gd` lê daqui em vez de inventar número.

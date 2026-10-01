@@ -135,7 +135,7 @@ redução da imagem em si (o `.ctex` é quase do mesmo tamanho do PNG de origem,
 
 ## Corte 2026-09-26 — `tests/` e logo de imprensa fora do `.pck`
 
-Quatro padrões entram no `exclude_filter` do preset Web (`export_presets.cfg:937`):
+Quatro padrões entram no `preset.5.exclude_filter` do preset Web (`export_presets.cfg:@preset.5.exclude_filter`):
 `tests/*`, `data/press/logo/*.png`, `data/press/logo/logo_bw.svg`,
 `data/press/logo/logo_colored.svg`. Medido com o mesmo
 `scripts/export_web.sh`, mesma máquina, template 4.7:
@@ -202,7 +202,7 @@ dono, não do corte de pacote, então fica aqui em vez de executado.
 
 ## Shell mobile: o que foi alegado, o que foi medido, e a decisão (2026-09-28)
 
-A alegação de auditoria: "o preset exporta com `custom_html_shell=""` (`export_presets.cfg:961`),
+A alegação de auditoria: "o preset exporta com `preset.5.options.html/custom_html_shell=""` (`export_presets.cfg:@preset.5.options.html/custom_html_shell`),
 logo o produto promete mobile e o shell não declara viewport — promessa falsa; ou se
 conserta o shell, ou se apaga a promessa do documento". Verificada antes de agir, e a
 premissa não sobrevive ao grep. As três partes abaixo são o que ficou.
@@ -217,7 +217,7 @@ Nada foi escrito por nós ali, e nada precisava ser: a promessa de viewport est�
 declarada. As duas páginas que *nós* escrevemos também declaram o delas
 (`deploy/web/landing/index.html:5`, `deploy/web/checkout_return.html:5`). Quando um
 meta extra for necessário, a porta já existe e não exige shell próprio:
-`html/head_include` (`export_presets.cfg:962`) injeta a bridge de push/Sentry dentro
+`preset.5.options.html/head_include` (`export_presets.cfg:@preset.5.options.html/head_include`) injeta a bridge de push/Sentry dentro
 do shell padrão — é por ali que ele entraria.
 
 **2) Safe-area não é promessa falsa: não é promessa.** `git grep -n "safe-area"` e
@@ -230,8 +230,8 @@ não substituição de shell.
 **3) A promessa que era falsa, e era a maior, é outra: "tem modo mobile" sem prova de
 que a UI cabe no aparelho.** Medida dentro do motor, não em cabeçalho:
 
-- Com base 1280×720, `window/stretch/mode="canvas_items"` e `aspect="expand"`
-  (`project.godot:48-51`) e `html/canvas_resize_policy=2` (`export_presets.cfg:1136`
+- Com base 1280×720, `window/stretch/mode="canvas_items"` e `aspect="expand"` estão em
+  `display` (`project.godot:@display`) e `preset.5.options.html/canvas_resize_policy=2` (`export_presets.cfg:@preset.5.options.html/canvas_resize_policy`
   — quem manda no tamanho é a janela CSS), um iPhone 12/13/14 (390×844 CSS px) não
   recebe um design space de 390×844. Recebe **1280×2690** no container de janelas
   flutuantes, lido por `tests/panel_fit_test.gd`. **1 px de design vale 0,30 CSS px.**
