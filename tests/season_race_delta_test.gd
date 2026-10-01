@@ -132,7 +132,7 @@ func _initialize():
 		quit(1)
 		return
 	# O catálogo de conteúdo NÃO sobe junto com `SQL.isInitialized`: `DB.Preload()`
-	# empilha os `load_threaded_request` (`sources/db/DB.gd:224`) e o `PreloadUpdate()`
+	# empilha os `load_threaded_request` de `Preload` (`sources/db/DB.gd:@Preload`) e o `PreloadUpdate()`
 	# (`sources/db/DB.gd:@PreloadUpdate`) fecha o preload, chama `Load()` e acende `isInitialized`,
 	# re-armado a cada `process_frame` — portanto precisa de FRAMES. Esperar só o SQL e medir com o
 	# catálogo ainda vazio: aqui os frames caem antes do `quit()`, no runner da CI não,

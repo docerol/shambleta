@@ -1481,17 +1481,19 @@ func SuiteEvidencePointers() -> void:
 	# discórdia encomendada; o que se comparou, desta vez, foi o ESCOPO por classe.
 	# 8 → 90 na fatia 3, e 90 → 120 na fatia do YAML: oito era o censo da fatia 2, e depois
 	# de 103 ponteiros migrados um piso de oito já não distinguia "walk parado" de "metade da
-	# migração invisível". 155 é o medido nesta varredura no run de 2026-10-01 (era 139 antes
-	# dos dezesseis `arquivo:linha` de compose e do workflow virarem âncora), e o piso fica
-	# trinta e cinco abaixo porque a migração é minha e o que eu quero é que a PRÓXIMA pessoa
+	# migração invisível". 188 é o medido nesta varredura no run de 2026-10-01, e é o número
+	# DESTA passada, não um livro-razão de quem converteu o quê: as colheitas de doc subiram
+	# o censo depois que os antigos 155 foram assinados, e é precisamente por isso que o piso
+	# não é função do medido. Ele fica trinta e cinco abaixo do censo de sempre porque a
+	# migração é minha e o que eu quero é que a PRÓXIMA pessoa
 	# que encolher o corpus tenha de explicar, não que o gate verdeje sozinho. Ele também não
-	# sobe para perto de 132, que é 155 menos os vinte e três ponteiros `.@` que apontam para
+	# sobe para perto de 165, que é 188 menos os vinte e três ponteiros `.@` que apontam para
 	# YAML nesta árvore: matar o modelo de chave é ofício dos seis controles de mesa abaixo,
 	# que caem se `_YamlSpans` emudecer, e piso de censo colado no medido passa a acusar a
 	# próxima migração legítima — o erro que a quarta recalibração desta suíte nomeou. O que
 	# este piso caça é corpus encolhendo, não modelo YAML morto.
 	Check(ancJulgadas >= 120,
-			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 120 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "155 é o medido no run de 2026-10-01; 139 antes das dezesseis conversões"])
+			"âncora: %d `arquivo:@símbolo` encontradas na varredura — abaixo de 120 a régua estrutural está verde por não olhar (%s)" % [ancJulgadas, "188 é o medido no run de 2026-10-01"])
 	# Os três modos de a âncora apodrecer, mordidos em mesa, porque na árvore limpa
 	# eles não têm como aparecer: o control negativo é a única prova de que a
 	# acusação existe. E o positivo, para a régua não virar máquina de acusar.

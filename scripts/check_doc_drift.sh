@@ -1145,11 +1145,25 @@ REG_MIN=2
 # `Engine.set_max_fps` de verdade mora em `_ready()`. Linha cheia, texto presente, julgamento
 # nenhum — é exatamente a classe que a âncora fecha, e ela só apareceu porque converter obriga
 # a abrir o alvo.
-ANCHOR_MIN=205
-LINE_MAX=427
+# Quarta colheita, na mesma tarde, e é a que responde pelo rate do #124: a frase duplicada é o
+# ponteiro mais barato que existe. Dez harnesses carregam a MESMA sentença sobre o boot do
+# catálogo, apontando a mesma linha do mesmo arquivo, e os dez viraram âncora com uma
+# substituição só — custo de prosa zero por casa, porque a prosa foi escrita uma vez e copiada
+# nove. O custo de marreta que o #124 caçava nunca foi o da régua por ponteiro: é o do censo
+# repetir em dez arquivos uma frase que ninguém relia havia meses.
+# Essa colheita cobrou conserto na GRAMÁTICA, não na frase. O puxamento de cláusula cortava a
+# linha de cima pelo último ponteiro de LINHA dela; linha terminando em ÂNCORA não tinha corte
+# nenhum, a cauda vinha inteira, e o literal que a âncora de cima já tinha julgado descia como
+# se fosse promessa da âncora de baixo. Foram dez acusações de bloco por causa de sintaxe, num
+# texto cujo sentido não mudou uma palavra — e é o tipo de mordida que faria alguém desistir de
+# converter. Corrigido no puxamento, com dois controles novos: o do corte, e o espelho, que
+# continua descendo e acusando quando a linha de cima não prometeu nada. Sem o espelho, o
+# conserto seria indistinguível de manto.
+ANCHOR_MIN=215
+LINE_MAX=417
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
-# para cima do laço de âncora, o total cai de 205 para 190 e o `ANCHOR_MIN` acima acusa —
+# para cima do laço de âncora, o total cai de 215 para 200 e o `ANCHOR_MIN` acima acusa —
 # mas acusa "faltam âncoras", sem dizer qual recorte parou de ser lido. Contada no local da
 # cobrança, a mesma mutação zera ESTE número, e aí a frase passa a nomear a classe.
 ANCHOR_FORA_MIN=15
@@ -1496,13 +1510,23 @@ def lit_clause(prev, seg, first, bt):
     antes já foi promessa daquele. O backtick que cola nesse resto é o de FECHAMENTO
     do ponteiro carregado; sem descascá-lo o par desbalanceia e a promessa some do
     censo.
+
+    O "último ponteiro" é das DUAS formas. Medido na primeira árvore onde uma linha
+    passou a terminar em âncora (`tests/ops_fix_test.gd` e os outros nove harnesses
+    que citam `DB.gd`): cortando só por `ANYCITE`, a linha sem `:NN` não tinha corte,
+    a cauda era o linha inteira e o literal que a ÂNCORA de cima já tinha julgado
+    descia como promessa da âncora de baixo — dez acusações `bloco` honestas por
+    sintaxe, de um texto que não mudou de sentido em nada. Âncora é citação, e o que
+    ela prometeu já foi cobrado por ela.
     """
     if bt and seg.endswith("`"):
         seg = seg[:-1]
     if first and prev is not None and "`" not in seg and "`" in prev:
         pm = None
-        for pm2 in ANYCITE.finditer(prev):
-            pm = pm2
+        for rx in (ANYCITE, ANCHOR):
+            for pm2 in rx.finditer(prev):
+                if pm is None or pm2.start() > pm.start():
+                    pm = pm2
         tail = prev[pm.end():] if pm else prev
         if tail.startswith("`"):
             tail = tail[1:]
@@ -1994,6 +2018,16 @@ ANCHOR_CONTROLES = [
     ("yaml: literal nomeado que mora em outro caminho é acusado",
      "a `health_check` é de `services.web.mem_limit` (`x.yml:@services.web.mem_limit`)",
      False, "bloco", ALVO9),
+    # Os dois de baixo são o puxamento de cláusula na presença de ÂNCORA, classe que
+    # só nasceu quando uma linha passou a terminar em `:@símbolo`. O primeiro é a
+    # correção; o segundo é o espelho, e sem ele o corte novo seria manto: puxar
+    # continua trazendo o literal de cima quando a linha de cima não prometeu nada.
+    ("continuação: âncora no fim da linha de cima é citação, e o literal dela não desce",
+     "\t# (`x.gd:@Delta_Load`) fecha o preload", True, "", ALVO5,
+     "\t# empilha os `GATE_RUN` de `Beta` (`x.gd:@Beta`) e o `Delta_Load()`"),
+    ("continuação sem citação na linha de cima desce mesmo: literal fora do bloco é acusado",
+     "\t# (`x.gd:@Delta_Load`) fecha o preload", False, "bloco", ALVO5,
+     "\t# usa `Delta_Load()` e a constante `GATE_RUN`"),
 ]
 
 
@@ -2001,8 +2035,9 @@ def anchorselftest():
     biting = 0
     for label, text, esp_ok, esp_mot, *fix in ANCHOR_CONTROLES:
         alvo = fix[0] if fix else ALVO5
+        prev = fix[1] if len(fix) > 1 else None
         m = ANCHOR.search(text)
-        clause = lit_clause(None, text[:m.start()], True,
+        clause = lit_clause(prev, text[:m.start()], True,
                             text[m.end():m.end() + 1] == "`")
         ok, motivo, _det = anchorverdict(m.group(2), clause, alvo,
                                          anchor_ext(m.group(1)))
