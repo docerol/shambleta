@@ -950,8 +950,18 @@ func _listingExpiry() -> void:
 	_checkEq(before.size(), 2, "dois lotes antes de anunciar")
 	var listing : int = int(_eco.call("ListItemForSale", seller, _itemAge, 2, 1000))
 	_check(listing > 0, "anúncio de 2 unidades criado")
-	_checkEq(int(_one("SELECT expires_at FROM auction_listing WHERE id = %d;" % listing).get("expires_at", 0)) - now, ttl,
+	# O prazo é do `created_at` da linha, não do `now` do harness: as duas leituras de
+	# relógio não caem no mesmo segundo, e cobrar `expires_at - now == ttl` tornava o
+	# veredito moeda de cara — o CI mediu 259201 porque o segundo virou entre a leitura
+	# desta régua e a do serviço. O que tem de valer EXATO (sem tolerância) é a
+	# afirmação do produto, `expires_at = created_at + AHListingTtlSec`; a idade da
+	# linha continua cobrada, senão a igualdade acima vale também para um `created_at`
+	# de ontem.
+	var born : Dictionary = _one("SELECT created_at, expires_at FROM auction_listing WHERE id = %d;" % listing)
+	_checkEq(int(born.get("expires_at", 0)) - int(born.get("created_at", 0)), ttl,
 		"o anúncio nasce com prazo = AHListingTtlSec (não espera o comprador para sempre)")
+	_check(abs(int(born.get("created_at", 0)) - now) <= 2,
+		"e a linha nasceu nesta janela (created_at %d contra o agora %d do harness)" % [int(born.get("created_at", 0)), now])
 	_checkEq(_eco.call("_ItemCountRaw", seller, _itemAge), 0, "com o prazo, a mercadoria saiu do inventário")
 	_sql.db.query("UPDATE auction_listing SET expires_at = %d WHERE id = %d;" % [now - 1, listing])
 	var reap : Dictionary = ah.call("ReapExpiredListings", now, 50)

@@ -523,7 +523,8 @@ func EnsureAuctionBots() -> int:
 			elif stock == qty:
 				if not sql.DeleteRowsRaw("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemHash, botChar]):
 					return false
-			if not sql.db.query_with_bindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?, ?);", [botChar, botAccount, itemHash, qty, int(spec.get("price", 1)), _eco._UIDList(consumed), SQLCommons.Timestamp(), SQLCommons.Timestamp() + AHListingTtlSec]):
+			var seededAt : int = SQLCommons.Timestamp()
+			if not sql.db.query_with_bindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 0, 'open', ?, ?);", [botChar, botAccount, itemHash, qty, int(spec.get("price", 1)), _eco._UIDList(consumed), seededAt, seededAt + AHListingTtlSec]):
 				return false
 			var seedID : int = sql.LastInsertRowIDRaw()
 			if seedID <= 0:
@@ -804,8 +805,11 @@ func ListItemForSaleChecked(sellerChar : int, itemID : int, count : int, priceGo
 			out["reason"] = "fee_ledger"
 			return false
 		# #93.4: o anúncio nasce com prazo. `created_at + AHListingTtlSec`, no mesmo
-		# commit do escrow — um anúncio sem prazo é um item sequestrado.
-		if not sql.db.query_with_bindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?);", [sellerChar, accountID, itemID, count, priceGold, _eco._UIDList(consumed), creatorAccount, SQLCommons.Timestamp(), SQLCommons.Timestamp() + AHListingTtlSec]):
+		# commit do escrow — um anúncio sem prazo é um item sequestrado. Uma leitura do
+		# relógio só: duas leituras davam `expires_at = created_at + ttl + 1` quando o
+		# segundo virava entre elas, e foi assim que o CI mediu 259201 contra 259200.
+		var born : int = SQLCommons.Timestamp()
+		if not sql.db.query_with_bindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?);", [sellerChar, accountID, itemID, count, priceGold, _eco._UIDList(consumed), creatorAccount, born, born + AHListingTtlSec]):
 			out["reason"] = "insert_failed"
 			return false
 		var listingID : int = sql.LastInsertRowIDRaw()
