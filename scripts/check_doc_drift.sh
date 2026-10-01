@@ -2679,6 +2679,151 @@ def listacensus(root, index):
     return tokens, itens, poupados
 
 
+# ---------------------------------------------------------------------------
+# 32) ENTRADA ÓRFÃ de registro datado: o bloco que abre indentado perdeu a frase-mãe.
+#
+# A classe nasceu de dano feito por este próprio histórico, e sobreviveu a três leituras
+# humanas: consertando uma cláusula de âncora no `CHANGELOG.md`, o commit do #136 comeu a
+# linha que abria a entrada do forge fee (#107) e a entrada passou a começar pela própria
+# continuação — `to land in is measured at both edges`, sem sujeito. Nada acusou: a
+# isenção de `SKIP_NAMES` é de FORMA de ponteiro (história não se reescreve), e foi lida
+# como isenção de tudo. Medido antes de escrever a régua, na árvore: oito blocos abrem
+# indentado, sete deles legítimos porque estão em `deploy/` e `docs/`, onde indentar sob o
+# passo numerado É a sintaxe da lista ordenada, e um só dentro dos registros datados — o
+# órfão.
+#
+# O escopo é de NOME, espelhando a isenção que o criou: cobra-se só dentro dos quatro
+# registros. Dentro deles a forma é fixa (`- ` na coluna 0 abre entrada, dois espaços
+# continuam), então um bloco que abre indentado depois de linha em branco é texto sem pai.
+# O primeiro bloco do arquivo não é julgado: sem linha em branco antes dele não havia mãe
+# nenhuma a perder, e essa é também a borda que deixa as duas implementações — a do
+# veredito, que anda linha a linha, e a do censo, que recorta por regex — comparáveis.
+# ---------------------------------------------------------------------------
+FENCE = re.compile(r"^\s*```")
+ORFABLANK = re.compile(r"\n[ \t]*\n(?=[ \t]+\S)")
+
+
+def orfastem(fn):
+    """A régua é do mesmo recorte da isenção: por NOME, não por caminho."""
+    return fn in SKIP_NAMES
+
+
+def orfajudge(lines):
+    """(linha, texto) de cada bloco que abre indentado fora de fence."""
+    out = []
+    infence = False
+    prev_blank = False
+    for i, l in enumerate(lines, 1):
+        if FENCE.match(l):
+            # A linha de fence conta como conteúdo: órfão é sempre `branco + indentado`,
+            # e é exatamente isso que o censo (regex sobre chunks) procura. Fences sem
+            # linha em branco depois não abrem bloco em markdown, e as duas réguas teriam
+            # de discordar se uma delas chamasse aquilo de órfão.
+            infence = not infence
+            prev_blank = False
+            continue
+        if infence:
+            prev_blank = (l.strip() == "")
+            continue
+        if l.strip() == "":
+            prev_blank = True
+            continue
+        if prev_blank and l[:1] in (" ", "\t"):
+            out.append((i, l.strip()))
+        prev_blank = False
+    return out
+
+
+# Oito controles, e os que NÃO mordem são os que importam: sem eles a régua poderia estar
+# acusando indentação (o que quebraria qualquer registro escrito em parágrafos), ou lendo
+# dentro de fence (o que acusaria código), ou julgando o primeiro bloco do arquivo (que não
+# tem mãe nenhuma a perder), ou tratando fence fechado sem branco como abertura de bloco (o
+# que a regex do censo jamais veria, e as duas réguas deixariam de ser comparáveis). O último
+# prova o escopo, que é a decisão de classe escrita em código: sem ele, a mesma régua comeria
+# os sete blocos legítimos de `deploy/` e o conserto viraria reescrever a doc de operação.
+ORFA_CONTROLES = [
+    ("bullet na coluna 0 com continuação colada não é acusado",
+     lambda: orfajudge(["- entrada", "  continua"]) == []),
+    ("bloco indentado depois de linha em branco é órfão",
+     lambda: [n for n, _ in orfajudge(["- entrada", "  continua", "", "  sem mãe"])] == [4]),
+    ("primeiro bloco do arquivo não é julgado (não havia mãe)",
+     lambda: orfajudge(["  abre já indentado", "", "- entrada"]) == []),
+    ("indentação dentro de fence não é acusação",
+     lambda: orfajudge(["```gdscript", "    var x = 1", "```"]) == []),
+    ("linha em branco dentro de fence não desliga a régua",
+     lambda: orfajudge(["- entrada", "```", "", "    codigo", "```"]) == []),
+    ("fechado o fence, um bloco indentado depois de linha em branco volta a ser órfão",
+     lambda: [n for n, _ in orfajudge(["```", "```", "", "  y"])] == [4]),
+    ("fence fechado sem linha em branco não abre bloco",
+     lambda: orfajudge(["```", "```", "  y"]) == []),
+    ("escopo é de nome: o registro é cobrado, o runbook não",
+     lambda: orfastem("CHANGELOG.md") and not orfastem("ROLLBACK.md")),
+]
+
+
+def orfselftest():
+    biting = 0
+    for nome, teste in ORFA_CONTROLES:
+        if teste():
+            biting += 1
+        else:
+            print("[FAIL] entrada órfã: self-test cego no controle %s" % nome)
+    return biting, len(ORFA_CONTROLES)
+
+
+def orfaread(root, index):
+    """Veredito sobre os registros datados: (lidos, órfãos, acusados)."""
+    cache = {}
+    regs = 0
+    openers = 0
+    accused = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            if not orfastem(fn):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            lines = resolve_path(rel, root, index, cache)
+            if lines is None:
+                continue
+            regs += 1
+            for n, t in orfajudge(lines):
+                openers += 1
+                accused += 1
+                print("[FAIL] entrada órfã: %s:%d abre bloco indentado depois de linha em branco — %r — e em registro datado toda entrada começa em `- ` na coluna 0: isto é continuação que perdeu a frase-mãe (o registro está isento de ponteiro por linha, não de texto)"
+                      % (rel, n, t[:64]))
+    return regs, openers, accused
+
+
+def orfacensus(root, index):
+    """Os mesmos órfãos contados por um walk que não chama `orfajudge`.
+
+    Recorta o texto em chunks alternados por ``` (ímpar é dentro de fence) e acha o par
+    `linha em branco + linha indentada` com uma regex, sem estado de linha anterior. É
+    outra implementação de propósito: cerca que reusa o laço do veredito não cerca nada, e
+    número nascido dentro do braço morre com o braço.
+    """
+    cache = {}
+    regs = 0
+    openers = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            if not orfastem(fn):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            lines = resolve_path(rel, root, index, cache)
+            if lines is None:
+                continue
+            regs += 1
+            text = "\n" + "\n".join(lines)
+            for k, chunk in enumerate(text.split("```")):
+                if k % 2:
+                    continue
+                openers += len(list(ORFABLANK.finditer(chunk)))
+    return regs, openers
+
+
 def scan(root, wide, reg, index, dead):
     cache = {}
     lit_judged = 0
@@ -2995,6 +3140,9 @@ def main():
     dead_text = (open(reg_path, encoding="utf-8", errors="replace").read()
                  if os.path.isfile(reg_path) else "")
     dead = deadset(dead_text)
+    obiting, ocases = orfselftest()
+    orfa_regs, orfa_open, orfa_bad = orfaread(root, index)
+    orfa_cregs, orfa_copen = orfacensus(root, index)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
      anchors, anchor_bad, lines, resolvidos, cont_n, cont_jn, cont_an, cont_on,
      fora_n, fora_lin, fora_anc, dead_n, dead_sp, dead_c,
@@ -3130,6 +3278,21 @@ def main():
         1 if lista_cov_drift else 0,
         lista_tok_c, lista_it_c, lista_fora_c,
         len(LISTA_CONTROLES), vbiting))
+    # A entrada órfã não tem corte: ela não lê ponteiro, lê a FORMA do bloco, e a
+    # isenção que a define é de nome de arquivo. O que a cerca é a igualdade com
+    # `orfacensus` — um walk que recorta por regex e não chama `orfajudge` — porque
+    # acusação que nasce dentro do braço morre com o braço, e foi exatamente assim que
+    # uma entrada inteira do `CHANGELOG.md` perdeu a frase de abertura sem que ninguém
+    # lesse o texto.
+    orfa_cov_drift = (orfa_regs, orfa_open) != (orfa_cregs, orfa_copen)
+    if orfa_cov_drift:
+        print("[FAIL] entrada órfã: o veredito leu %d registro(s) e acha %d bloco(s) que abrem indentado, o censo por recorte acha %d e %d no mesmo escopo — as duas leituras divergiram, e enquanto elas baterem entre si o número não diz nada sobre a árvore"
+              % (orfa_regs, orfa_open, orfa_cregs, orfa_copen))
+    print("entrada órfã: %d registros datados lidos, %d blocos que abrem indentado (%d acusações), %d no censo por recorte, self-test %d/%d controles mordendo"
+          % (orfa_regs, orfa_open, orfa_bad, orfa_copen, obiting, ocases))
+    print("ORFAO %d %d %d %d %d %d %d" % (
+        orfa_regs, orfa_open, orfa_bad, orfa_cregs, orfa_copen,
+        len(ORFA_CONTROLES), obiting))
     wl_fail = False
     if WL_ON:
         # A lista sai ordenada por classe porque é por classe que ela é lida: primeiro a
@@ -3156,6 +3319,7 @@ def main():
             or dbiting != dcases or dead_n or dead_cut_drift or dead_cov_drift
             or vbiting != vcases or lista_bad or lista_cut_drift or lista_cov_drift
             or lista_reg_drift
+            or obiting != ocases or ocases == 0 or orfa_bad or orfa_cov_drift or orfa_regs < 2
             or wl_fail
             or reg_bad or reg is None):
         return 1
@@ -3166,13 +3330,14 @@ sys.exit(main())
 PYEOF
 )"
 	ident_code=$?
-	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT|MORTOS|LISTA) '
+	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT|MORTOS|LISTA|ORFAO) '
 	ident_stats="$(printf '%s\n' "$ident_out" | grep '^IDENTIDADE ' | tail -n 1)"
 	lit_stats="$(printf '%s\n' "$ident_out" | grep '^LITERAL ' | tail -n 1)"
 	anc_stats="$(printf '%s\n' "$ident_out" | grep '^ANCORA ' | tail -n 1)"
 	cont_stats="$(printf '%s\n' "$ident_out" | grep '^CONT ' | tail -n 1)"
 	mortos_stats="$(printf '%s\n' "$ident_out" | grep '^MORTOS ' | tail -n 1)"
 	lista_stats="$(printf '%s\n' "$ident_out" | grep '^LISTA ' | tail -n 1)"
+	orfa_stats="$(printf '%s\n' "$ident_out" | grep '^ORFAO ' | tail -n 1)"
 	checks=$((checks + 1))
 	if [ -z "$ident_stats" ]; then
 		fail "a régua de identidade não devolveu a linha \`IDENTIDADE\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
@@ -4010,6 +4175,45 @@ else
 		fi
 		if [ "$lista_acus" -eq 0 ] && [ "$lista_biting" -eq "$lista_cases" ] && [ "$lista_cases" -gt 0 ] && [ "$lista_corte" -eq 0 ] && [ "$lista_cob" -eq 0 ] && [ "$lista_rec" -eq "$lista_censo_r" ]; then
 			echo "[ok] $lista_ln ponteiros com vírgula julgados número a número ($((lista_num + lista_morto)) números, $lista_acus acusados, $lista_morto dentro de alvo que não resolve dos quais $lista_poup poupados pelo registro), $lista_rec números poupados dentro dos registros datados, contra $lista_censo listas e $lista_censo_n números no censo independente, com os $lista_cases controles do self-test mordendo"
+		fi
+	fi
+	# ---------------------------------------------------------------------------
+	# 32) ENTRADA ÓRFÃ de registro datado — o veredito do python acima.
+	#
+	# Cerca de ESCOPO, nunca de nível: a mesa de controles tem de morder, o censo por
+	# recorte tem de bater com o veredito, e os quatro registros têm de ser lidos. Não há
+	# piso dizendo "órfão é no máximo N", porque o certo é zero — e um zero vindo de braço
+	# apagado é exatamente a mentira que deixou a entrada do #107 atravessar dois commits
+	# sem frase de abertura.
+	# ---------------------------------------------------------------------------
+	checks=$((checks + 1))
+	if [ -z "$orfa_stats" ]; then
+		fail "a régua da entrada órfã não devolveu a linha \`ORFAO\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
+	else
+		orfa_regs=0
+		orfa_open=0
+		orfa_bad=0
+		orfa_cregs=0
+		orfa_copen=0
+		orfa_cases=0
+		orfa_biting=0
+		read -r _lab orfa_regs orfa_open orfa_bad orfa_cregs orfa_copen orfa_cases orfa_biting <<< "$orfa_stats"
+		checks=$((checks + orfa_open + orfa_copen))
+		failures=$((failures + orfa_bad))
+		if [ "$orfa_biting" -ne "$orfa_cases" ]; then
+			fail "self-test da entrada órfã mordeu $orfa_biting de $orfa_cases controles — sem a mesa, \`0 acusações\` pode significar tanto registro limpo quanto régua lendo o arquivo errado"
+		fi
+		if [ "$orfa_cases" -eq 0 ]; then
+			fail "a tabela de controles da entrada órfã está vazia (0 de 0) — \`biting == cases\` é verde vazio sem controle"
+		fi
+		if [ "$orfa_regs" -lt 2 ]; then
+			fail "só $orfa_regs registro(s) datado(s) lido(s) pela régua da entrada órfã — a lista de \`SKIP_NAMES\` parou de casar com a árvore, e prosa de história voltou a não ser lida por ninguém"
+		fi
+		if [ "$orfa_regs" -ne "$orfa_cregs" ] || [ "$orfa_open" -ne "$orfa_copen" ]; then
+			fail "cobertura da entrada órfã: o veredito leu $orfa_regs registro(s) e acha $orfa_open bloco(s) que abrem indentado, o censo por recorte lê $orfa_cregs e acha $orfa_copen — as duas leituras divergiram, e enquanto baterem entre si nenhum dos números diz nada sobre a árvore"
+		fi
+		if [ "$orfa_bad" -eq 0 ] && [ "$orfa_biting" -eq "$orfa_cases" ] && [ "$orfa_cases" -gt 0 ] && [ "$orfa_regs" -ge 2 ] && [ "$orfa_regs" -eq "$orfa_cregs" ] && [ "$orfa_open" -eq "$orfa_copen" ]; then
+			echo "[ok] $orfa_regs registros datados lidos, $orfa_open bloco(s) abrindo indentado ($orfa_bad órfão(ãos)), contra $orfa_copen no censo que recorta por regex e não chama o veredito, com os $orfa_cases controles do self-test mordendo"
 		fi
 	fi
 fi

@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-01
 
 ### Added
+- The prose of a dated register is now read by a ruler, because a commit of this project ate a
+  sentence and nothing noticed (#148). The damage is in this file and it is mine: while fixing
+  an anchor clause for #136, the commit deleted the OPENING line of the #107 entry, and the
+  entry began with its own continuation — `to land in is measured at both edges`, with no
+  subject and no bullet. It survived two commits — the one that broke it and the one that did
+  not look — and three human reads, because `SKIP_NAMES` exempts the four registers from
+  positional pointers and that exemption was being read as an exemption from everything. The
+  new ruler charges a shape, not a level: in a dated register, a
+  block that opens indented after a blank line has no parent, because every entry there opens
+  with a bullet at column 0. The scope is by NAME, mirroring the exemption that created the
+  hole — outside those four files an indented block is the syntax of an ordered list, so the
+  census taken before writing says eight blocks open indented in the tree, seven of them
+  legitimate under a numbered step in `deploy/` or `docs/` (three of those seven are exactly
+  the edge the controls plant: prose continuing a code fence that just closed), and exactly one
+  is the orphan. The
+  first block of a file is not judged: with no blank line before it there was no mother to
+  lose, and that is also the edge that makes the two implementations comparable. Eight planted
+  controls, and the ones that do NOT bite carry the weight — indentation glued to its own
+  bullet is not the crime, fence interiors are not read, a fence closed without a blank line
+  does not open a block (the regex census would never see it, so a ruler that did would stop
+  being the same census), and a file that begins indented is not an orphan. Coverage fence:
+  `orfacensus` splits the text on fence markers and finds `blank line + indented line` with one
+  regex, never calling `orfajudge`, and the bash section asserts both walks agree — a number
+  born inside the arm dies with the arm, and that is how this class hid. The bite is proven in
+  the tree, not only in the table: checking out the committed (damaged) register makes the
+  ruler print an `entrada órfã` accusation naming `CHANGELOG.md` and the line that
+  `abre bloco indentado depois de linha em branco`, carrying the orphan's own text as a quoted
+  value, and the gate exits 1 with `1 no censo por recorte` beside its own accusation; the
+  restored entry makes both zero. Restored here, same commit. Gate:
+  `== DOC DRIFT: 2173 checks, 0 failures ==` with `4 registros datados lidos, 0 bloco(s)
+  abrindo indentado (0 órfão(ãos))` and the eight controls biting.
 - A pointer of evidence can now be an ANCHOR: `arquivo:@símbolo`, judged by the block of the
   declaration instead of by a line number (#124). The motive is price, not taste — a `path:NN`
   pointer is re-paid with a hammer on every commit that shifts the cited file, and while
@@ -921,7 +952,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the local run does NOT settle: with a neighbour holding ~85% of the CPU, 28 timing readings
   were demoted to `[RUIDO]`, so the ladder's per-rung ceilings and the marginal-cost ramp are
   CI's to confirm, and the two quotes above are CI's evidence, not this machine's.
-
+- The forge fee reads the zone the character farms in (finding #107), and the band it has
   to land in is measured at both edges. Both gold sinks of
   `sources/economy/ItemForgeService.gd` charged `base × tier²` with no notion of place: a
   tier-9 corruption at zone 27 cost 40 500 gold against a faucet of 3 771 956 gold/h —
