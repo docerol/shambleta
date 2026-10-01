@@ -235,6 +235,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The attribution return leg accused the runner and passed here, and neither verdict was about
+  the game (`#151`). `tests/multi_instance_tick_test.gd` demanded that the work come back to
+  within 15% ABSOLUTE of the full rung. That sentence compared a single window — both the pause
+  and the return legs call `_measure`, one pass — against the three-pass median the level was
+  recorded with (`_measurePasses`, `MeasurePasses = 3`), in a file whose own `PassAgreeTolPct`
+  confesses ±25% between three passes taken back to back, with two other windows lying between
+  the two readings it was comparing, on a rung where the runner delivers a 66.49 ms step period
+  with the loop pinned at 1.00 core while the work it measures is 123.91 ms: past the knee,
+  where `medianMs` is not a per-step quantity any more. Run 36925101247 printed
+  `[FAIL] e o trabalho volta quando as instâncias voltam (1.40 -> 98.64 ms, tolerância de 15%
+  do degrau cheio 123.91 ms)` — 97,24 ms of a 119,40 ms marginal cost had come back, 81% of it,
+  and the ruler called that "the work did not return". The predicate the leg now bills is
+  `resumeRecovers` declared at `tests/multi_instance_tick_test.gd:@resumeRecovers`: it charges
+  the SAME marginal cost as a fraction returned, over the floor `ResumeRecoverFloorPct = 0.70`
+  declared at `tests/multi_instance_tick_test.gd:@ResumeRecoverFloorPct` — and 0,70 is not a
+  new number: it is the identical machine-noise allowance `MonotonicFloorPct` already grants a
+  rung, and the pause leg has always billed in marginal cost (`AttributionFloorPct`). A dead
+  denominator — full rung equal to level 1 — reads FALSE, never vacuous, because a ruler that
+  greens with nothing predicted greens by construction. The constant this leg was supposed to
+  carry, `ResumeFloorPct = 0.15`, was declared and never read: the check hardcoded its own 15%.
+  Five controls planted on the mesa, as every pure predicate in this file is bitten — the exact
+  CI triple green at 81%, nothing returned (destroyed rather than paused) RED, half the marginal
+  RED because the return floor sits above the pause floor, exactly 70% green because the floor
+  is inclusive, dead denominator RED. Re-run here: 97,46 -> 1,13 -> 95,01 ms, 99% of the
+  marginal returned and `== RESULT: 249 checks, 0 failures ==`, `== NOISE-DECLARED: 0 ==`,
+  `== GATES VERMELHOS: none ==`, `== FLAKES: none ==`, teardown 1747 inside the measured
+  ceiling 2247. The old form also passed on this machine — by 2,45 ms of deviation sitting
+  inside 14,62 ms of tolerance, which is margin, not measurement. Nothing here moves a
+  ratchet or re-baselines a level: what changed is WHAT is compared.
 - The anchor ruler accused with a stutter, and the fix was caught by the ruler itself. The
   `arquivo` motive returned the extension already carrying its dot while the sentence added
   another, so every accusation of an anchor in prose printed a doubled dot — a cosmetic defect

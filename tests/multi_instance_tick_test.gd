@@ -78,7 +78,9 @@ extends SceneTree
 #          farm entram em `PROCESS_MODE_DISABLED` e o passo é remedido. O trabalho TEM
 #          de cair, e a queda tem de acompanhar o custo marginal medido x players. É a
 #          perna que prova que o número do nível é o das instâncias carregando players
-#          — e não o piso do boot disfarçado de curva.
+#          — e não o piso do boot disfarçado de curva. A reabertura é cobrada na MESMA
+#          moeda — fração do marginal devolvida, e não concordância absoluta com a
+#          leitura de antes, que o instrumento não sustenta num degrau saturado.
 #      (d) O CENSO MORDE: um player é tirado da instância A e empurrado para a B
 #          (sessão idle desligada antes, devolvida depois). O censo tem de mostrar
 #          A-1, B+1 e uma instância ACIMA do cap — exatamente o estado que a check de
@@ -145,7 +147,21 @@ const PeriodTailAgreementSteps : int = 6
 const CpuOverPeriodPct : float = 1.10	# CPU do passo nunca pode passar do muro do período
 const AttributionFloorPct : float = 0.50	# a pausa tem de devolver >= 50% do custo marginal previsto
 const MonotonicFloorPct : float = 0.70		# degrau mais fundo pode perder <= 30% do passo pro ruído da máquina
-const ResumeFloorPct : float = 0.15			# reabrir as instâncias pode perder <= 15% do degrau cheio
+# RETORNO: reabrir as instâncias tem de devolver >= 70% do MESMO custo marginal, cobrado
+# como (restabelecido − pausa) sobre (degrau cheio − nível 1). Antes era uma concordância
+# absoluta de 15% com o degrau cheio, e ela não media "o trabalho voltou": media que uma
+# JANELA ÚNICA (as pernas de pausa e retorno chamam `_measure`, uma passada) reproduzisse a
+# MEDIANA DE TRÊS PASSADAS do degrau — que é o número de `top` — melhor do que o próprio
+# arquivo exige de três passadas medidas em sequência uma da outra, onde `PassAgreeTolPct`
+# confessa ±25%. E as duas leituras ainda estão separadas por duas outras janelas (a perna
+# de sobrecarga e a de pausa), num degrau onde o runner entrega 66,49 ms de período com
+# o laço colado em 1,00 núcleo. O 0,70 não é número novo: é o mesmo desconto de ruído de
+# máquina que `MonotonicFloorPct` já dá a um degrau. Medido em 2026-10-01 no runner (run
+# 36925101247): 123,91 -> 1,40 -> 98,64 ms, 81% do marginal devolvidos e a forma antiga
+# chamou de "não voltou". Nesta máquina, no mesmo dia: 97,46 -> 1,13 -> 95,01 ms, 99% do
+# marginal devolvidos, e aí a forma antiga passou — porque 2,45 ms de desvio cabem nos 15% de
+# 97,46, não porque a régua tenha medido o retorno. Ela verdeava de margem, não de medição.
+const ResumeRecoverFloorPct : float = 0.70
 # RUÍDO EXTERNO: fração da MÁQUINA INTEIRA que trabalho de OUTRO processo come
 # durante uma janela de medição. 25% não é escolha de manual: é o dobro do que o
 # `cpus: 2` do compose admite num host de 12 núcleos (2/12 = 16,7%), então uma
@@ -1647,6 +1663,13 @@ func _proofOverload(top : Dictionary, total : int, level : int) -> void:
 			"com a queima ligada o bracket continua sub-intervalo do período do mesmo índice (drift %d) — a contenção acima não é artefato de séries desalinhadas" % int(overloaded["instrumentDrift"]))
 	rows.pop_back()	# sobrecarga artificial não é nível de capacidade
 
+# A perna de retorno em puro, para poder ser mordida em mesa: `predictedMs` é o custo
+# marginal do degrau (cheio menos nível 1) e `cameBackMs` é o que a reabertura devolveu
+# (restabelecido menos pausa). Denominador morto é FALSO, não vazio: sem marginal não há
+# o que recuperar, e uma régua que verdeia com `predictedMs` 0 verdeia por construção.
+static func resumeRecovers(predictedMs : float, cameBackMs : float) -> bool:
+	return predictedMs > 0.0 and cameBackMs >= predictedMs * ResumeRecoverFloorPct
+
 # (c) ATRIBUIÇÃO: no degrau mais carregado todas as instâncias de farm vão para
 # `PROCESS_MODE_DISABLED` e o passo é remedido. Se o número do nível viesse do boot
 # (e não das instâncias carregando players), pausá-las não mudaria nada — e é
@@ -1675,10 +1698,20 @@ func _proofAttribution(top : Dictionary, first : Dictionary, total : int, level 
 	_setDedicadosPaused(false)
 	await _frames(WarmupFrames)
 	var resumed : Dictionary = await _measure("%dx%d restabelecido" % [level, cap], total, level)
-	CheckTiming(float(resumed["medianMs"]) >= float(top["medianMs"]) - maxf(3.0, float(top["medianMs"]) * 0.15),
-			"e o trabalho volta quando as instâncias voltam (%.2f -> %.2f ms, tolerância de 15%% do degrau cheio %.2f ms)" % [
-				float(paused["medianMs"]), float(resumed["medianMs"]), float(top["medianMs"])])
+	var cameBack : float = float(resumed["medianMs"]) - float(paused["medianMs"])
+	CheckTiming(resumeRecovers(predicted, cameBack),
+			"e o trabalho volta quando as instâncias voltam (%.2f -> %.2f ms, %.2f ms devolvidos de %.2f ms de custo marginal, piso %.0f%%)" % [
+				float(paused["medianMs"]), float(resumed["medianMs"]), cameBack, predicted, ResumeRecoverFloorPct * 100.0])
 	rows.pop_back()
+	# Mesa: o tripleto que derrubou o runner, os estados que esta perna existe para ver, e a
+	# borda do piso. Sem o negativo, "voltou" continua sendo tão inobservável quanto era antes
+	# de a régua ter um predicado próprio — e é ele que prova que a acusação existe.
+	print("-- controles da perna de retorno (mesa) --")
+	Check(resumeRecovers(119.40, 97.24), "controle: o que o runner mediu (123,91 -> 1,40 -> 98,64 ms) voltou: 81% do marginal devolvidos")
+	Check(not resumeRecovers(119.40, 0.0), "controle: nada devolvido (instância destruída em vez de pausada) fica VERMELHO")
+	Check(not resumeRecovers(119.40, 59.70), "controle: devolver metade do marginal fica VERMELHO — o piso do retorno é mais alto que o da pausa")
+	Check(resumeRecovers(119.40, 83.58), "controle: devolver exatamente 70% passa — o piso é inclusivo")
+	Check(not resumeRecovers(0.0, 0.0), "controle: degrau cheio igual ao nível 1 (denominador morto) não verdeja")
 
 # (d) O CENSO MORDE: um player sai da instância A e entra na B (sessão idle desligada
 # antes e reatada depois, para não deixar policy órfã). O censo tem de ver A-1, B+1 e
