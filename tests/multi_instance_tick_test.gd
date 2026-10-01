@@ -129,13 +129,18 @@ const CalibrationBurnUs : int = 4000	# 4 ms por passo, queimados de propósito
 const CalibrationFloorPct : float = 0.60
 const CalibrationCeilPct : float = 1.30
 const OverloadBurnUs : int = 40000		# 40 ms/passo > orçamento: tem de estourar de verdade
-const PeriodToleranceMs : float = 1.0	# folga do throttle, medida em tests/tick_capacity_test.gd
+# Folga do predícado de estouro, em ms. É o MESMO número que o produto declara como
+# `StepBudgetToleranceUs` (`sources/launcher/Launcher.gd:@StepBudgetToleranceUs`), e desde
+# 2026-10-01 compra a mesma coisa nos dois instrumentos: preempção de scheduler e GC dentro
+# do despacho. O sono do throttle saiu da conta porque o predícado deixou de ler o período
+# de parede — o predícado em si é `StepBudgetRecord` (`sources/launcher/Launcher.gd:@StepBudgetRecord`).
+const PeriodToleranceMs : float = 1.0
 # Banda de concordância entre os dois instrumentos do MESMO passo de física (a
-# `Cadence` deste harness e o acumulador do laço de produção, ambos registros dentro
-# do despacho de `_physics_process`): são dois pontos diferentes do mesmo tick, e a
-# diferença entre eles é o trabalho que corre entre um e outro. Seis passos numa
-# janela de 120 é o que cabe dessa diferença mais a borda da janela, sem cobrar
-# exatidão de relógio.
+# `Cadence` deste harness e o acumulador do laço de produção): os dois abrem na
+# fronteira de física e fecham no callback ocioso da mesma iteração, em nós vizinhos
+# da árvore, e a diferença entre eles é o trabalho que corre entre um e outro. Seis
+# passos numa janela de 120 é o que cabe dessa diferença mais a borda da janela, sem
+# cobrar exatidão de relógio.
 const PeriodTailAgreementSteps : int = 6
 const CpuOverPeriodPct : float = 1.10	# CPU do passo nunca pode passar do muro do período
 const AttributionFloorPct : float = 0.50	# a pausa tem de devolver >= 50% do custo marginal previsto
@@ -265,19 +270,42 @@ class Burn extends Node:
 		while Time.get_ticks_usec() - started < us:
 			pass
 
-# Fronteira de TICK. O `_physics_process` de um node comum roda uma vez por passo de
-# física, no MESMO ponto do despacho onde `sources/launcher/Launcher.gd` registra o
-# período que sai por `/metrics` — é por isso que ele é o instrumento da régua de
-# cauda, e não o laço aguardado abaixo. Medido neste harness, degrau a degrau: o
-# contador do produto viajava de 0 a 10 passos acima de orçamento+folga por janela
-# enquanto a série de `await physics_frame` não via NENHUM — a régua de concordância
-# estava lendo a própria cegueira do instrumento.
+# Fronteira de TICK e janela de DESPACHO, no mesmo node. O `_physics_process` de um
+# node comum roda uma vez por passo de física, no MESMO ponto do despacho onde
+# `sources/launcher/Launcher.gd` abre a sua janela, e o `_process` do mesmo node fecha
+# a dela — é o que faz os dois instrumentos contarem o mesmo passo. Medido neste
+# harness, degrau a degrau: o contador do produto viajava de 0 a 10 passos acima de
+# orçamento+folga por janela enquanto a série de `await physics_frame` não via NENHUM —
+# a régua de concordância estava lendo a própria cegueira do instrumento.
+#
+# A janela é `despacho`, não `período`, desde 2026-10-01: o período de parede de um
+# processo com o throttle ligado é orçamento + sono, e um predícado sobre ele denuncia
+# o servidor ocioso (ver o cabeçalho de `sources/launcher/Launcher.gd`). Os `marks`
+# continuam saindo porque a série de período é a testemunha impressa do "30 Hz foi
+# cumprido" — só deixou de ser o que a régua de cauda cobra.
 class Cadence extends Node:
 	var armed : bool = false
 	var marks : Array = []
+	var brackets : Array = []
+	var openUs : int = 0
+	var openPending : bool = false
 	func _physics_process(_delta : float) -> void:
-		if armed:
-			marks.append(Time.get_ticks_usec())
+		if not armed:
+			return
+		var now : int = Time.get_ticks_usec()
+		marks.append(now)
+		# Dois `_physics_process` sem um `_process` entre eles é o catch-up do engine: o
+		# produto registra 0 µs para o passo engolido, e registrar o bracket do vizinho
+		# aqui seria a mesma mentira em espelho.
+		if openPending:
+			brackets.append(0)
+		openUs = now
+		openPending = true
+	func _process(_delta : float) -> void:
+		if not armed or not openPending:
+			return
+		brackets.append(Time.get_ticks_usec() - openUs)
+		openPending = false
 
 func Check(condition : bool, label : String) -> bool:
 	checks += 1
@@ -409,6 +437,57 @@ func _periods(marks : Array) -> Array:
 			out.append(float(now - previous) / 1000.0)
 		previous = now
 	return out
+
+# µs de janela -> ms por passo, sem diferenciar nada: a `Cadence` acima já emite uma
+# observação por passo (e 0 para o passo que o catch-up engoliu, que é o que o produto
+# registra). É por isso que o comprimento desta série tem de bater com o da série de
+# período, e a check logo abaixo confere em vez de presumir.
+func _msFromUs(values : Array) -> Array:
+	var out : Array = []
+	for value in values:
+		out.append(float(int(value)) / 1000.0)
+	return out
+
+# Posição de um node numa lista de irmãos. Puro porque `Node.get_child_index` não é
+# chamado por node em GDScript 4 (é método do PAI), e esta régua precisa da posição dos
+# dois instrumentos na MESMA ordem de despacho que o engine usa.
+func _indexOf(siblings : Array, who : Node) -> int:
+	var index : int = 0
+	for sibling in siblings:
+		if sibling == who:
+			return index
+		index += 1
+	return -1
+
+# Quantas amostras de despacho NÃO cabem na parede entre as duas fronteiras do mesmo
+# passo. Tem de ser zero por construção: o bracket fecha num `_process` da iteração, e
+# o período do mesmo índice vai até o `_physics_process` da iteração SEGUINTE — a janela
+# medida é um sub-intervalo da parede. Um índice maior que o período é a assinatura de
+# que as duas séries não contam o mesmo passo (catch-up, ou um node realocado no meio
+# da medição), e é exatamente a classe de defeito que deixou esta régua ler o próprio
+# instrumento como se fosse o produto.
+static func _bracketEscapes(windows : Array, periods : Array) -> int:
+	var escapes : int = 0
+	var count : int = mini(windows.size(), periods.size())
+	for index in range(count):
+		if float(windows[index]) > float(periods[index]):
+			escapes += 1
+	return escapes
+
+# O desencontro de CENSO entre as duas séries, julgado com a única tolerância que o
+# próprio instrumento tem direito: `periods` é `marks - 1` (a última fronteira ainda não
+# tem sucessora), e o desarmar da janela pode pegar o último `mark` ou antes ou depois do
+# `_process` que o fecha. Então `windows` tem de ser `periods` ou `periods + 1`, e mais
+# que isso é população diferente. A versão anterior cobrava esse excedente legítimo DENTRO
+# de `_bracketEscapes` e de novo por fora (`absi(windows - periods)`), e por isso devolvia
+# `drift 2` num servidor saudável em todos os degraus medidos em 2026-10-01: a régua
+# contava duas vezes o mesmo último bracket.
+static func _alignmentDrift(windows : Array, periods : Array) -> int:
+	var drift : int = _bracketEscapes(windows, periods)
+	var surplus : int = windows.size() - periods.size()
+	if surplus > 1 or surplus < 0:
+		drift += 1
+	return drift
 
 # O corte de página do produto, LIDO do próprio `deploy/alerts.rules.yml` (a regra
 # `PassoForaDoOrcamento`). A régua de cauda deste harness cobra a mesma grandeza com o
@@ -773,10 +852,11 @@ func _setDedicadosPaused(paused : bool) -> int:
 
 # Amostra `SampleFrames` passos de física. Trabalho por passo = soma dos dois
 # monitores que o próprio engine acumula em janela móvel de 1 s (mesma dupla e mesma
-# calibração de `tests/tick_capacity_test.gd`), período = fronteira de TICK (`Cadence`
-# acima), com a fronteira de iteração impressa ao lado. Aqui entram também RSS e ms de
-# CPU por passo, que é o que confronta o total de players com `mem_limit` e `cpus` do
-# compose.
+# calibração de `tests/tick_capacity_test.gd`); o que a régua de cauda cobra é a
+# JANELA DE DESPACHO da `Cadence` acima (a mesma que o produto cronometra), e as três
+# leituras de relógio — despacho, fronteira de tick, fronteira de iteração — saem
+# impressas lado a lado. Aqui entram também RSS e ms de CPU por passo, que é o que
+# confronta o total de players com `mem_limit` e `cpus` do compose.
 func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictionary:
 	var work : Array = []
 	var physSamples : Array = []
@@ -787,14 +867,20 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 	# de parede entre duas fronteiras consecutivas: uma observação por passo, com a
 	# qual um p95/max significa "quantos passos não couberam no tick".
 	#
-	# DUAS FRONTEIRAS, e é a segunda que manda. `stepPeriodsMs` marca a ITERAÇÃO do
-	# engine (o instante em que `physics_frame` é emitido e a corrotina acorda);
-	# `tickPeriodsMs` marca o PASSO de física, no mesmo despacho onde o produto
-	# registra o seu. A primeira é o instrumento que deixou esta régua ler-se a si
-	# mesma: quando o pacing dorme e come o atraso de um passo na iteração seguinte, a
-	# série de iteração fica lisa em 33,6 ms enquanto o passo real passa de 34,3.
+	# DUAS FRONTEIRAS, e a que a régua de cauda cobra é a JANELA DE DESPACHO.
+	# `stepPeriodsMs` marca a ITERAÇÃO do engine (o instante em que `physics_frame` é
+	# emitido e a corrotina acorda); `tickPeriodsMs` marca o PASSO de física, no mesmo
+	# despacho onde o produto abre a sua; `workMs` é a janela física→ociosa fechada no
+	# `_process` do MESMO node que marca a fronteira — a grandeza que o predícado de
+	# estouro do produto lê desde 2026-10-01. A de iteração é o instrumento que deixou
+	# esta régua ler-se a si mesma: quando o pacing dorme e come o atraso de um passo na
+	# iteração seguinte, a série de iteração fica lisa em 33,6 ms. A de período é o que
+	# responde "o tick foi cumprido", e por isso continua impressa — mas cobrá-la por
+	# orçamento era paginar o sono do throttle, e foi assim que um degrau com 9 ms de
+	# trabalho estourou 8,3% dos passos no runner da CI sem nenhum jogador perder passo.
 	var stepPeriodsMs : Array = []
 	var tickPeriodsMs : Array = []
+	var workMs : Array = []
 	var sqlStart : int = int(sql.call("QueryCount"))
 	var mutexStart : Dictionary = sql.call("QueryMutexWaitStats")
 	# Instrumento do PRODUCTO, lido na mesma janela: o acumulado que o próprio
@@ -804,6 +890,8 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 	# Armado colado no retrato do produto: as duas janelas têm de começar no mesmo
 	# instante, senão a concordância abaixo compara contagens de janelas diferentes.
 	cadence.set("marks", [])
+	cadence.set("brackets", [])
+	cadence.set("openPending", false)
 	cadence.set("armed", true)
 	var framesStart : int = int(Engine.get_physics_frames())
 	var wallStart : int = Time.get_ticks_usec()
@@ -831,6 +919,7 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		work.append(phys + idle)
 	cadence.set("armed", false)
 	tickPeriodsMs = _periods(cadence.get("marks"))
+	workMs = _msFromUs(cadence.get("brackets"))
 	var prodAfter : Dictionary = launcher.call("StepBudgetSnapshot")
 	var sqlEnd : int = int(sql.call("QueryCount"))
 	var mutexEnd : Dictionary = sql.call("QueryMutexWaitStats")
@@ -840,18 +929,29 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		cpuUs = 0
 	# Quantos passos NÃO couberam em orçamento+folga na janela inteira, contado antes
 	# de podar o transitório: é a mesma janela que o acumulador do produto viu, e é
-	# com ela que a régua de concordância abaixo fala. A contagem é pela FRONTIERA DE
-	# TICK; a de iteração sai ao lado como testemunha, porque foi ela que escondeu.
+	# com ela que a régua de concordância abaixo fala. A contagem é pela JANELA DE
+	# DESPACHO, o mesmo predícado que o produto aplica; o período de tick e o de
+	# iteração saem ao lado como testemunhas.
 	var tailLimitMs : float = budgetMs + PeriodToleranceMs
 	var stepsOverBudget : int = 0
+	for workSample in workMs:
+		if float(workSample) > tailLimitMs:
+			stepsOverBudget += 1
+	var periodOverBudget : int = 0
 	for stepMs in tickPeriodsMs:
 		if float(stepMs) > tailLimitMs:
-			stepsOverBudget += 1
+			periodOverBudget += 1
 	var iterOverBudget : int = 0
 	for stepMs in stepPeriodsMs:
 		if float(stepMs) > tailLimitMs:
 			iterOverBudget += 1
 	var tickSteps : int = tickPeriodsMs.size()
+	# Alinhamento dos dois instrumentos, conferido antes de podar: o despacho é uma
+	# sub-janela do período do MESMO índice, e o censo das duas séries difere no máximo
+	# pelo último bracket ainda sem sucessora. Se um dia o Cadence for realocado, ou o
+	# engine entregar um despacho sem fronteira pareada, isto quebra aqui — não num teto
+	# de cauda que passaria a cobrar uma população diferente da que o produto conta.
+	var instrumentDrift : int = _alignmentDrift(workMs, tickPeriodsMs)
 	for cut in range(mini(SkipFrames, work.size())):
 		work.pop_front()
 		physSamples.pop_front()
@@ -860,6 +960,8 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 			stepPeriodsMs.pop_front()
 		if not tickPeriodsMs.is_empty():
 			tickPeriodsMs.pop_front()
+		if not workMs.is_empty():
+			workMs.pop_front()
 	var wallMs : float = float(wallEnd - wallStart) / 1000.0
 	# De quanta CPU da máquina esta janela precisou, e de quanta dela não foi deste
 	# processo. As duas juntas são o que decide se o número abaixo é medido ou é o
@@ -903,14 +1005,21 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		"periodP95Ms": _p(0.95, tickPeriodsMs),
 		"periodMaxMs": float(tickPeriodsMs.max()) if not tickPeriodsMs.is_empty() else 0.0,
 		"periodSamples": tickPeriodsMs.size(),
+		"workP95Ms": _p(0.95, workMs),
+		"workMaxMs": float(workMs.max()) if not workMs.is_empty() else 0.0,
+		"workMedianMs": _median(workMs),
 		"iterP95Ms": _p(0.95, stepPeriodsMs),
 		"iterMaxMs": float(stepPeriodsMs.max()) if not stepPeriodsMs.is_empty() else 0.0,
 		"iterOverBudget": iterOverBudget,
+		"periodOverBudget": periodOverBudget,
 		"stepsOverBudget": stepsOverBudget,
 		"periodSteps": tickSteps,
+		"instrumentDrift": instrumentDrift,
+		"workSteps": workMs.size(),
 		"prodSteps": int(prodAfter.get("steps", 0)) - int(prodBefore.get("steps", 0)),
 		"prodOverBudget": int(prodAfter.get("overBudget", 0)) - int(prodBefore.get("overBudget", 0)),
 		"prodLost": int(prodAfter.get("lost", 0)) - int(prodBefore.get("lost", 0)),
+		"prodWorkMaxUs": int(prodAfter.get("workMaxUs", 0)),
 		"periodMs": periodMs,
 		"steps": steps,
 		"wallMs": wallMs,
@@ -943,9 +1052,12 @@ func _measureOnce(label : String, totalPlayers : int, instances : int) -> Dictio
 		int(row["mobs"]), int(row["policies"]), float(row["queriesPerTick"]), float(row["mutexUsPerTick"]),
 		int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)), int(row["samples"]),
 		coresCount, foreignShare, ownShare, float(row["loadavg1"])])
-	print("  . cauda por passo na FRONTIERA DE TICK (%d observações, uma por `_physics_process`): p95 %.2f ms, max %.2f ms | %d/%d passos acima de orçamento+folga (%.2f ms)" % [
-			int(row["periodSamples"]), float(row["periodP95Ms"]), float(row["periodMaxMs"]),
+	print("  . cauda por passo na JANELA DE DESPACHO (%d observações, uma por passo, a mesma grandeza que o predícado do produto lê): mediana %.2f ms, p95 %.2f ms, max %.2f ms | %d/%d passos acima de orçamento+folga (%.2f ms)" % [
+			int(row["workSteps"]), float(row["workMedianMs"]), float(row["workP95Ms"]), float(row["workMaxMs"]),
 			stepsOverBudget, tickSteps, tailLimitMs])
+	print("  . testemunha de PERÍODO na fronteira de tick (%d observações, uma por `_physics_process`): p95 %.2f ms, max %.2f ms | %d/%d acima de %.2f ms — período é orçamento + sono do throttle, e por isso não é mais o que cobra" % [
+			int(row["periodSamples"]), float(row["periodP95Ms"]), float(row["periodMaxMs"]),
+			periodOverBudget, tickSteps, tailLimitMs])
 	print("  . fronteira de ITERAÇÃO (os %d `await physics_frame`): p95 %.2f ms, max %.2f ms | %d acima de %.2f ms — é aqui que o pacing come o atraso do passo" % [
 			awaited, float(row["iterP95Ms"]), float(row["iterMaxMs"]), iterOverBudget, tailLimitMs])
 	print("  . instrumento do produto na MESMA janela (o que sai por /metrics): +%d passos amostrados, +%d acima do orçamento, +%d passos perdidos" % [
@@ -997,7 +1109,7 @@ func _measurePasses(label : String, totalPlayers : int, instances : int) -> Dict
 	for passID in range(MeasurePasses):
 		passes.append(await _measure("%s p%d" % [label, passID + 1], totalPlayers, instances))
 	var keep : Dictionary = passes[passes.size() - 1]
-	for medianaKey in ["medianMs", "physMs", "idleMs", "p95Ms", "maxMs", "periodP95Ms", "periodMaxMs", "iterP95Ms", "iterMaxMs", "iterOverBudget", "stepsOverBudget", "prodOverBudget", "periodMs", "achievedHz", "cpuMsPerStep", "cores", "queriesPerTick", "mutexUsPerTick", "foreignPct"]:
+	for medianaKey in ["medianMs", "physMs", "idleMs", "p95Ms", "maxMs", "periodP95Ms", "periodMaxMs", "workP95Ms", "workMaxMs", "iterP95Ms", "iterMaxMs", "iterOverBudget", "periodOverBudget", "stepsOverBudget", "prodOverBudget", "periodMs", "achievedHz", "cpuMsPerStep", "cores", "queriesPerTick", "mutexUsPerTick", "foreignPct"]:
 		var samples : Array = []
 		for rowPass in passes:
 			samples.append(float(rowPass[medianaKey]))
@@ -1011,6 +1123,13 @@ func _measurePasses(label : String, totalPlayers : int, instances : int) -> Dict
 		for rowPass in passes:
 			worst = maxf(worst, float(rowPass[tailPair[1]]))
 		keep[tailPair[0]] = worst
+	# O deslocamento do instrumento é um inteiro de VERDADE, não uma medida: a mediana
+	# das passadas escondia a passada que quebrou, e é exatamente nela que o Cadence
+	# precisaria ter escorregado do Launcher. Máximo sobre as passadas.
+	var drift : int = 0
+	for rowPass in passes:
+		drift = maxi(drift, int(rowPass["instrumentDrift"]))
+	keep["instrumentDrift"] = drift
 	# A cauda de PERÍODO, porém, é cobrada como TAXA e não como valor absoluto: o corte
 	# que o produto declara para paginar (`deploy/alerts.rules.yml`) é fração de passos
 	# acima do orçamento, e um teto absoluto de orçamento+folga no PIOR passo da janela é
@@ -1194,11 +1313,37 @@ func _run() -> void:
 	cadence = Cadence.new()
 	cadence.name = "MultiInstCadencia"
 	root.add_child(cadence)
+	# POSICÇÃO é instrumento, não estética. Os callbacks de uma iteração rodam na ordem
+	# da árvore: primeiro TODOS os `_physics_process`, depois TODOS os `_process`. Um
+	# Cadence acrescentado no fim da lista abriria a janela no FIM do flush de física —
+	# depois do pump das WorldInstance — e mediria quase zero onde o Launcher, que é
+	# autoload e abre o flush, mediria o passo inteiro. Colá-lo logo depois do Launcher
+	# é o que faz os dois instrumentos cobrirem o mesmo intervalo; a régua de mordida
+	# abaixo confere a vizinhança em vez de presumi-la.
+	var launcherSibling : int = _indexOf(root.get_children(), launcher)
+	if launcherSibling >= 0:
+		root.move_child(cadence, launcherSibling + 1)
 	await _frames(4)
 	Check(bool(calib.is_node_ready()) and calib.get_parent() == root,
 			"calibre ligado na mesma árvore das WorldInstances (us=%d desligado)" % int(calib.get("us")))
 	Check(bool(cadence.is_node_ready()) and cadence.get_parent() == root,
 			"fronteira de tick ligada na mesma árvore das WorldInstances (é o instrumento da régua de cauda)")
+	CheckEq(_indexOf(root.get_children(), cadence), _indexOf(root.get_children(), launcher) + 1,
+			"o Cadence é o vizinho imediato do Launcher: os dois brackets abrem e fecham no mesmo ponto do despacho, senão a concordância compara janelas de tamanhos diferentes")
+	# A régua de alinhamento tem de MORDER, não só acusar: com séries plantadas, o
+	# excedente legítimo (o último bracket ainda sem fronteira sucessora) devolve zero e
+	# as três degenerações que ela existe para ver devolvem acusação. Sem isto, "drift 0
+	# em todo degrau" poderia ser a régua não vendo nada — a mesma classe de falso verde
+	# que o `CONTROLE NEGATIVO DO INSTRUMENTO` de `tests/step_budget_metric_test.gd` fecha
+	# no lado do produto.
+	CheckEq(_alignmentDrift([10.0, 20.0, 5.0], [33.0, 33.0]), 0,
+			"CONTROLE: três brackets contidos na parede para dois períodos devolve drift 0 — o excedente de um, que é o último passo ainda sem sucessora, NÃO é o defeito")
+	CheckEq(_alignmentDrift([40.0, 20.0], [33.0, 33.0]), 1,
+			"CONTROLE: um bracket de 40 ms cabendo num período de 33 ms é acusado (drift 1) — é o índice desalinhado, não a mediana, que entrega")
+	CheckEq(_alignmentDrift([10.0, 10.0, 10.0, 10.0], [33.0, 33.0]), 1,
+			"CONTROLE: excedente de DOIS brackets sobre os períodos é acusado — as duas séries estão contando populações diferentes")
+	CheckEq(_alignmentDrift([10.0], [33.0, 33.0]), 1,
+			"CONTROLE: a série de despacho MAIS CURTA que a de período é acusada — falta bracket, sobra fronteira")
 	# O corte da régua de cauda é LIDO do fonte que pagina, não digitado aqui: muda o
 	# percentual em `deploy/alerts.rules.yml` e esta escada muda com ele. Não achá-lo é
 	# a régua perdendo o chão, e é check — não fallback para um número órfão.
@@ -1315,27 +1460,33 @@ func _run() -> void:
 			CheckCeiling(float(row["worstMaxMs"]) <= budgetMs,
 					"nível %s: o pior passo de trabalho da janela (%.2f ms na pior passada) cabe no orçamento" % [
 						label, float(row["worstMaxMs"])])
-			# A cauda de PERÍODO cobrada por TAXA, contra o mesmo número que o alerta
+			# A cauda de DESPACHO cobrada por TAXA, contra o mesmo número que o alerta
 			# pagina. Verde aqui diz uma frase só: posto este degrau em produção,
 			# `PassoForaDoOrcamento` não dispararia nele. O valor absoluto do pior passo
 			# deixou de ser régua porque o relógio de um tick carrega o pacing consigo: um
 			# processo ocioso já entregava máximo acima de orçamento+folga sem que nenhum
 			# passo se perdesse, e um teto que fica vermelho por dormir não mede carga. O
-			# que separa degrau é quantos passos passaram.
+			# que separa degrau é quantos passos passaram — e desde 2026-10-01 são os
+			# passos cujo DESPACHO passou, o mesmo predícado que o produto aplica.
+			CheckEq(int(row["instrumentDrift"]), 0,
+					"nível %s: o bracket de despacho ficou dentro da parede do mesmo passo em todas as passadas, e o censo das duas séries difere no máximo pelo último bracket ainda sem sucessora (drift %d) — sem isto a cauda abaixo cobraria uma população diferente da que o período mede" % [
+						label, int(row["instrumentDrift"])])
 			CheckCeiling(float(row["worstOverPct"]) <= alertPagePct,
-					"nível %s: %.1f%% dos passos da pior passada acima de orçamento+folga, contra o corte de %.1f%% que pagina (%d de %d passos; período p95 %.2f ms, max %.2f ms)" % [
+					"nível %s: %.1f%% dos passos da pior passada acima de orçamento+folga, contra o corte de %.1f%% que pagina (%d de %d passos; despacho p95 %.2f ms, max %.2f ms; testemunha de período: %d acima, p95 %.2f ms, max %.2f ms)" % [
 						label, float(row["worstOverPct"]), alertPagePct, int(row["worstStepsOver"]), int(row["worstWindowSteps"]),
+						float(row["workP95Ms"]), float(row["workMaxMs"]), int(row["periodOverBudget"]),
 						float(row["periodP95Ms"]), float(row["periodMaxMs"])])
 			# CONCORDÂNCIA DE INSTRUMENTO: a mesma grandeza, medida por dois caminhos — a
-			# `Cadence` deste harness (fronteira de TICK, um node comum no mesmo despacho)
-			# e o acumulador do LAÇO DE PRODUTO (`sources/launcher/Launcher.gd`), que é o
-			# número que sai por /metrics e que `deploy/alerts.rules.yml` pagina. Seis
-			# passos de margem numa janela de 120, pela borda da janela e pelo ponto de
-			# cada instrumento dentro do despacho; passa disso, a métrica exportada não é
+			# `Cadence` deste harness (o mesmo bracket física→ocioso, no node vizinho ao
+			# do laço) e o acumulador do LAÇO DE PRODUTO (`sources/launcher/Launcher.gd`),
+			# que é o número que sai por /metrics e que `deploy/alerts.rules.yml` pagina.
+			# Seis passos de margem numa janela de 120, pela borda da janela e pelo ponto
+			# de cada instrumento dentro do despacho; passa disso, a métrica exportada não é
 			# o que a escada cobra e o alerta paginaria uma etiqueta. Foi medindo
 			# `await physics_frame` — fronteira de ITERAÇÃO, que o sleep de pacing alisa —
 			# que esta régua ficou verde enquanto o produto contava 16 passos estourados na
-			# mesma janela.
+			# mesma janela; e foi medindo o PERÍODO de tick, que é orçamento+sono, que ela
+			# discordou do produto em 8 passos num degrau que nenhum jogador sentiu.
 			var overDelta : int = int(row["prodOverBudget"]) - int(row["stepsOverBudget"])
 			Check(absi(overDelta) <= PeriodTailAgreementSteps,
 					"nível %s: o contador que o produto exporta viu %d passos acima de orçamento+folga, esta janela viu %d (diff %d, banda %d) — /metrics e escada medem o mesmo passo" % [
@@ -1479,6 +1630,21 @@ func _proofOverload(top : Dictionary, total : int, level : int) -> void:
 	var burnOverPct : float = 100.0 * float(overloaded["stepsOverBudget"]) / maxf(float(overloaded["periodSteps"]), 1.0)
 	Check(burnOverPct > alertPagePct, "a régua de cauda morde: %d ms/passo injetados deixaram %.1f%% dos passos (%d de %d) acima de orçamento+folga, contra o corte de %.1f%% que pagina" % [
 			OverloadBurnUs / 1000, burnOverPct, int(overloaded["stepsOverBudget"]), int(overloaded["periodSteps"]), alertPagePct])
+	# CONTENÇÃO — a perna que diz QUEM viu a queima, não só que alguém contou. Os 40 ms
+	# são queimados no `_physics_process` de um node comum, e um detector de estouro só
+	# vale se a janela que ele cronometra COBRE esse node: se o bracket fechasse antes
+	# do despacho de física, ou se ele só contasse o pump de uma instância, a queima
+	# passaria inteira por fora e a taxa acima seria verde mesmo com o laço cego. Os
+	# dois instrumentos têm de confessar o número sozinho, sem a taxa: este harness na
+	# sua janela, o produto no acumulado que sai por /metrics.
+	CheckCeiling(float(overloaded["workMaxMs"]) >= float(OverloadBurnUs) / 1000.0 * 0.9,
+			"o bracket deste harness contém a queima: pior passo de despacho %.2f ms com %d ms/passo injetados" % [
+				float(overloaded["workMaxMs"]), OverloadBurnUs / 1000])
+	CheckCeiling(int(overloaded["prodWorkMaxUs"]) >= OverloadBurnUs * 9 / 10,
+			"e o do produto também: `shambleta_step_work_seconds_max` chegou a %.2f ms neste processo, o que prova que a janela que /metrics exporta cronometra o despacho inteiro e não uma fração dele" % [
+				float(overloaded["prodWorkMaxUs"]) / 1000.0])
+	CheckEq(int(overloaded["instrumentDrift"]), 0,
+			"com a queima ligada o bracket continua sub-intervalo do período do mesmo índice (drift %d) — a contenção acima não é artefato de séries desalinhadas" % int(overloaded["instrumentDrift"]))
 	rows.pop_back()	# sobrecarga artificial não é nível de capacidade
 
 # (c) ATRIBUIÇÃO: no degrau mais carregado todas as instâncias de farm vão para

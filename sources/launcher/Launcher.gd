@@ -58,12 +58,20 @@ signal dbInitialized
 #
 # Cobertura declarada (a casa trata "indisponível" diferente de zero):
 #   * `period*` é o tempo de PAREDE entre duas fronteiras do laço de física deste
-#     processo. É a grandeza que responde "o tick de 30 Hz foi cumprido": ela vale
-#     sempre, inclusive com zero players e com o pump das instâncias desligado.
-#   * `work*` é o tempo que o pump de idle policies das `WorldInstance` gastou
-#     dentro da mesma janela. NÃO é o passo inteiro: `BaseAgent._physics_process`,
-#     o PhysicsServer2D e a navegação ficam fora dele — é a fração que escala com
-#     player co-residente, que é o número que `deploy/SCALING.md` mede.
+#     processo — orçamento + sono do throttle. É a grandeza que responde "o tick de
+#     30 Hz foi cumprido": vale sempre, inclusive com zero players.
+#   * `work*` é o DESPACHO do passo: `Time.get_ticks_usec()` na fronteira de física e
+#     no primeiro callback ocioso da mesma iteração. Diferente do período, não cresce
+#     com o sono do throttle — é a grandeza que o predícado de estouro lê. Cobre o
+#     despacho inteiro do processo, não o pump das instâncias: `BaseAgent`,
+#     PhysicsServer2D, navegação e o resto do `_ready` de node estão dentro; a
+#     contagem era por instância e veria só uma fração do passo.
+#   * Ponto cego do despacho, declarado: num passo engolido por catch-up (duas
+#     fronteiras de física numa iteração) o callback ocioso nunca corre para ele e ele
+#     registra 0 µs — trabalho NÃO MEDIDO, não trabalho zero. Por isso o contador de
+#     estouro subestima a fração sob catch-up, no máximo pela razão de catch-up (o
+#     segundo flush tem custo de um flush inteiro, não é dividido). O déficit em si é
+#     confessado por `lost`, que lê `Engine.get_physics_frames()` contra a parede.
 #   * Janela: do boot do processo até agora, sem reset. O processo reiniciando os
 #     contadores voltam a zero, que é a semântica de counter do Prometheus.
 
@@ -72,12 +80,18 @@ signal dbInitialized
 # logarítmica: quem olha a cauda quer saber "quantos passos não couberam no tick",
 # e o degrau depois dele é "quanto tempo o jogador ficou sem passo".
 const StepBucketUs : Array[int] = [16667, 33333, 50000, 100000]
-# Folga do predícado de estouro. NÃO é escolha de manual: é o `PeriodToleranceMs`
-# medido em `tests/tick_capacity_test.gd` e usado pelo `multi_instance_tick_test`.
-# Sem ela o próprio throttle do engine conta como estouro — medido no piso do
-# harness, o período de parede de um processo sem nenhum player é 33,61 ms contra
-# um orçamento de 33,33 ms, ou seja: um predícado estrito `>` denunciaria 100% dos
-# passos de um servidor ocioso e o alerta deixaria de significar nada.
+# Folga do predícado de estouro, em µs. O que ela compra mudou de nome em 2026-10-01,
+# quando o predícado passou a ler o DESPACHO (ver `StepBudgetRecord`) e não mais o
+# período: antes, esta constante era o pedágio do throttle — medido, o piso de um
+# processo sem nenhum player entrega 33,61 ms de período contra 33,33 ms de orçamento,
+# então um predícado estrito `>` sobre o período denunciava 100% dos passos de um
+# servidor ocioso e o alerta deixava de significar nada. O sleep não entra mais na
+# janela medida, e o que a folga cobre é o que sobra dentro dela e não é trabalho deste
+# processo: preempção do scheduler e GC. O valor continua 1000 µs porque é a mesma
+# `PeriodToleranceMs` do `tests/multi_instance_tick_test.gd`, cuja folga foi medida no
+# `tests/tick_capacity_test.gd`, e a perna de mesa de `tests/step_budget_metric_test.gd`
+# confere as duas pontas: com o predícado sobre o período, uma sequência ociosa estoura;
+# sobre o despacho, não.
 const StepBudgetToleranceUs : int = 1000
 
 var stepBudget : Dictionary = {}
@@ -95,7 +109,11 @@ static func StepBudgetNew(budgetUs : int) -> Dictionary:
 		"periodSumUs": 0, "periodMaxUs": 0, "periodBuckets": [0, 0, 0, 0],
 		"overBudget": 0,
 		"lost": 0,
-		"pendingWorkUs": 0,
+		# O despacho do passo em curso: aberto na fronteira de física, fechado no primeiro
+		# callback ocioso da MESMA iteração. `braceFrame` vai a -1 quando o passo já foi
+		# fechado, e é isso que impede um `_process` de iteração sem passo de física (o
+		# cliente a 60 Hz) de medir o sleep da iteração anterior como trabalho.
+		"braceOpenUs": 0, "braceFrame": -1, "braceWorkUs": 0,
 		"lastUs": 0, "lastFrame": 0, "startUs": 0, "startFrame": 0,
 		"started": false,
 	}
@@ -106,6 +124,16 @@ static func StepBudgetNew(budgetUs : int) -> Dictionary:
 # acumulado em passos que o engine não entregou (contado por `Engine.get_physics_frames()`
 # contra o tempo de parede), e entra como MÁXIMO: um counter que desce é uma
 # grandeza que ninguém consegue interpretar numa janela `rate()`.
+#
+# O predícado de estouro lê `workUs`, e `workUs` é a janela do DESPACHO — não o período.
+# Medido com sonda isolada nesta máquina: com o processo ocioso o período entre
+# fronteiras é 33,3–33,6 ms enquanto a janela física→ocioso é 1,4–1,8 ms; com 20 ms
+# queimados num node dentro de um `SubViewport` a janela vai a 20,16 ms e o período
+# continua 33,3 ms. Ou seja: o período é orçamento + sono, e cobrar estouro por ele é
+# paginação pela latência de wake do kernel — 8,3% dos passos de um degrau com 9 ms de
+# trabalho estouravam `orçamento + folga` no runner da CI sem que nenhum jogador perdesse
+# um passo. O trabalho do despacho é a grandeza que sobe quando o mundo não cabe, e a
+# mesma em qualquer máquina.
 static func StepBudgetRecord(state : Dictionary, workUs : int, periodUs : int, driftSteps : int) -> void:
 	state["steps"] = int(state["steps"]) + 1
 	state["workSumUs"] = int(state["workSumUs"]) + workUs
@@ -117,13 +145,13 @@ static func StepBudgetRecord(state : Dictionary, workUs : int, periodUs : int, d
 			state["workBuckets"][bucket] = int(state["workBuckets"][bucket]) + 1
 		if periodUs <= StepBucketUs[bucket]:
 			state["periodBuckets"][bucket] = int(state["periodBuckets"][bucket]) + 1
-	if periodUs > int(state["budgetUs"]) + int(state["toleranceUs"]):
+	if workUs > int(state["budgetUs"]) + int(state["toleranceUs"]):
 		state["overBudget"] = int(state["overBudget"]) + 1
 	state["lost"] = maxi(int(state["lost"]), driftSteps)
 
-# Uma fronteira do laço de física. O trabalho acumulado pelas instâncias ENTRE a
-# fronteira anterior e esta é o trabalho do passo que acabou de fechar — por isso o
-# flush vem antes de zerar o acumulador.
+# Uma fronteira do laço de física. O trabalho da janela anterior já está fechado no
+# acumulador quando este corre: é `braceWorkUs`, medido entre a fronteira passada e o
+# primeiro callback ocioso daquela iteração.
 func _physics_process(_delta : float) -> void:
 	var now : int = Time.get_ticks_usec()
 	var frame : int = int(Engine.get_physics_frames())
@@ -133,20 +161,38 @@ func _physics_process(_delta : float) -> void:
 		stepBudget["lastFrame"] = frame
 		stepBudget["startUs"] = now
 		stepBudget["startFrame"] = frame
+		stepBudget["braceOpenUs"] = now
+		stepBudget["braceFrame"] = frame
 		return
 	var periodUs : int = now - int(stepBudget["lastUs"])
 	var budgetUs : int = int(stepBudget["budgetUs"])
 	var expectedSteps : int = int(now - int(stepBudget["startUs"])) / maxi(budgetUs, 1)
 	var deliveredSteps : int = frame - int(stepBudget["startFrame"])
-	StepBudgetRecord(stepBudget, int(stepBudget["pendingWorkUs"]), periodUs, maxi(0, expectedSteps - deliveredSteps))
-	stepBudget["pendingWorkUs"] = 0
+	# `braceFrame < 0` é o atestado de que o passo que está fechando agora foi de fato
+	# fechado por um `_process`. Num passo engolido por catch-up (dois despachos de física
+	# numa iteração) o closer nunca corre para ele, e o que ele registra é 0 µs — trabalho
+	# NÃO MEDIDO, não trabalho emprestado do passo anterior.
+	var braceUs : int = int(stepBudget["braceWorkUs"]) if int(stepBudget["braceFrame"]) < 0 else 0
+	StepBudgetRecord(stepBudget, braceUs, periodUs, maxi(0, expectedSteps - deliveredSteps))
+	stepBudget["braceOpenUs"] = now
+	stepBudget["braceFrame"] = frame
+	stepBudget["braceWorkUs"] = 0
 	stepBudget["lastUs"] = now
 	stepBudget["lastFrame"] = frame
 
-# Cronometrado pela `WorldInstance`: quanto o pump de idle policies gastou neste
-# passo (somado sobre as instâncias do processo).
-func AccumulateStepWork(workUs : int) -> void:
-	stepBudget["pendingWorkUs"] = int(stepBudget["pendingWorkUs"]) + workUs
+# Fecha a janela do despacho. O `_process` do mesmo node roda depois de TODOS os
+# `_physics_process` da iteração, então `agora - braceOpenUs` é o trabalho do passo sem
+# o sono do throttle dentro — que é justamente a grandeza que o predícado de estouro
+# precisa. A hipótese de que o bracket contém o trabalho de um `SubViewport` (é onde
+# mora a `WorldInstance`) foi conferida por sonda isolada nesta máquina em 2026-10-01:
+# 20 ms queimados num node filho de um `SubViewport` apareceram no bracket (20,16 ms,
+# contido em 59 de 59 pares) sem mexer no período (33,3 ms). A régua que confere isto
+# hoje é a perna de contenção de `tests/multi_instance_tick_test.gd`.
+func _process(_delta : float) -> void:
+	if int(stepBudget["braceFrame"]) != int(Engine.get_physics_frames()):
+		return
+	stepBudget["braceFrame"] = -1
+	stepBudget["braceWorkUs"] = Time.get_ticks_usec() - int(stepBudget["braceOpenUs"])
 
 func StepBudgetSnapshot() -> Dictionary:
 	return stepBudget.duplicate(true)

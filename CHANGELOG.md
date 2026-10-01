@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-09-30
+## [Unreleased] - 2026-10-01
 
 ### Added
 - A pointer of evidence can now be an ANCHOR: `arquivo:@símbolo`, judged by the block of the
@@ -834,7 +834,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from that zero rather than presented as a separation that was never measured.
 
 ### Changed
-- The forge fee reads the zone the character farms in (finding #107), and the band it has
+- The step-budget page now reads the DISPATCH, not the wall period (finding #136). The
+  exported predicate was `periodUs > budget + tolerance`, and the period is the wall time
+  between two physics frontiers of the same process — so it is budget PLUS the sleep of the
+  `max_fps` pacer, which the engine takes at the end of every iteration. Measured: an idle
+  server delivers 33.3–33.6 ms of period against a 33.33 ms budget, which no 1 ms slack can
+  cover, because what it was covering is kernel wake latency. So the alert paged for the
+  scheduler. CI run 36841440840 said it in two lines on `nível 5x20` — 100 players, a rung
+  inside the ladder that `deploy/SCALING.md` publishes, not the claimed ceiling:
+  `8.3% dos passos da pior passada acima de orçamento+folga, contra o
+  corte de 5.0% que pagina (10 de 120 passos; período p95 34.37 ms, max 34.46 ms)` — a rung
+  the same log reports at `trabalho 9.13 ms/passo`, where no player lost a step — and
+  `o contador que o produto exporta viu 16 passos acima de orçamento+folga, esta janela viu 8
+  (diff 8, banda 6)`. `workUs` is now the dispatch window: opened at `_physics_process`
+  (`sources/launcher/Launcher.gd:@_physics_process`) and closed by the same node at its next
+  `_process` (`sources/launcher/Launcher.gd:@_process`), which the engine reaches only after
+  every `_physics_process` of the iteration; the predicate is `StepBudgetRecord`
+  (`sources/launcher/Launcher.gd:@StepBudgetRecord`) and the
+  slack stayed at 1000 µs because what it buys changed name, not size — scheduler preemption
+  and GC inside the window. The period is still measured and still exported, because it is
+  what answers "the 30 Hz tick was met"; it only stopped being the numerator, and
+  `deploy/alerts.rules.yml` kept its `expr:` byte for byte, so the page is still the same
+  fraction of the same two counters.
+  The change rests on a probe, not on a reading of the manual. The retired
+  `process_priority` sandwich had left four rungs at `0.00 ms` and the reason was declared
+  inference; the isolated probe (this machine, 2026-10-01) separated the two hypotheses: a
+  window opened in a node's `_physics_process` and closed in that node's `_process`, with the
+  throttle at 30 Hz, returns 1.4–1.8 ms idle and 20.16 ms with 20 ms burned in a node child
+  of a `SubViewport` — contained in 59 of 59 pairs — while the period stays at 33.3 ms. So
+  the window is blind to the pacer's sleep and NOT blind to the `SubViewport` step, which is
+  where the `WorldInstance`s live; the historical zero came from the phase hypothesis (a
+  `_process`→`_process` sandwich measures the gap between two idle phases, which the pacing
+  fills). Node position is instrument, not aesthetics, for the same reason: one iteration
+  runs every `_physics_process` in tree order, then every `_process`, so the harness's
+  `Cadence` is now the Launcher's immediate sibling, and a check reads that adjacency rather
+  than presuming it.
+  Blind spot, declared rather than buried: when the engine recovers delay by running two
+  physics flushes in one iteration, the closer never runs for the swallowed step and it
+  records 0 µs — work NOT measured, not zero work — so `shambleta_step_over_budget_total`
+  understates the catch-up fraction by at most the catch-up ratio, and the deficit itself is
+  confessed by `shambleta_step_lost_total`.
+  Three rulers came with the change, each with planted controls because a ruler that only
+  accuses is not proven to bite. `tests/step_budget_metric_test.gd` carries the control that
+  discriminates the QUANTITY: five steps with a 34 500 µs period and a 9 000 µs dispatch
+  return `overBudget == 0`, while their period buckets still fill — a fix that moved the
+  predicate without changing the quantity would pass every other leg and die there.
+  `tests/multi_instance_tick_test.gd` charges the tail off the dispatch against the cut read
+  from `deploy/alerts.rules.yml`, and adds containment (the 40 ms/passo burn has to show in
+  this harness's own bracket AND in the product's `shambleta_step_work_seconds` max, so the
+  rate cannot be paid by some other counter) plus alignment: the bracket must be a
+  sub-interval of the same index's period, and the census of the two series may differ by at
+  most the one legitimate case — the last bracket with no successor frontier yet — with four
+  planted controls deciding which of the two readings is the defect. The alignment ruler was
+  itself wrong before it was right: it charged that legitimate surplus twice, and read
+  `drift 2` in a healthy process at every rung measured 2026-10-01. The fix split containment
+  from census — a scope correction, not a raised tolerance.
+  Gates the change touches: `multi_instance_tick_test` 213 checks / 0 failures and
+  `step_budget_metric_test` 56 / 0 on this machine, `check_doc_drift.sh` 2193 / 0. Two claims
+  the local run does NOT settle: with a neighbour holding ~85% of the CPU, 28 timing readings
+  were demoted to `[RUIDO]`, so the ladder's per-rung ceilings and the marginal-cost ramp are
+  CI's to confirm, and the two quotes above are CI's evidence, not this machine's.
+
   to land in is measured at both edges. Both gold sinks of
   `sources/economy/ItemForgeService.gd` charged `base × tier²` with no notion of place: a
   tier-9 corruption at zone 27 cost 40 500 gold against a faucet of 3 771 956 gold/h —

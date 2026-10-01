@@ -317,18 +317,18 @@ static func StepBudgetLines(state : Dictionary) -> String:
 	var boundsUs : Array = state.get("bucketUs", [])
 	var body : String = ""
 	body += _StepHistogramLines("shambleta_step_period_seconds",
-		"Período de parede entre duas fronteiras do laço de física deste processo, por passo. É a grandeza que responde \"o tick de 30 Hz foi cumprido\": vale também com o pump das instâncias desligado. Quando o engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê curta — o déficit acumulado é shambleta_step_lost_total, não esta série. Cobertura: do boot deste processo até agora, sem reset (reiniciar zera o counter). Média = _sum/_count; a cauda é o que a régua lê.",
+		"Período de parede entre duas fronteiras do laço de física deste processo, por passo — orçamento MAIS o sono do throttle. É a grandeza que responde \"o tick de 30 Hz foi cumprido\": vale também com o mundo vazio. Quando o engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê curta — o déficit acumulado é shambleta_step_lost_total, não esta série. Não é o que o alerta de estouro lê: medido, um processo ocioso entrega 33,3-33,6 ms de período contra 33,33 ms de orçamento, e cobrar estouro por esta série é paginar a latência de wake do kernel. Cobertura: do boot deste processo até agora, sem reset (reiniciar zera o counter). Média = _sum/_count.",
 		boundsUs, state.get("periodBuckets", []), int(state.get("periodSumUs", 0)), steps, int(state.get("periodMaxUs", 0)))
 	body += _StepHistogramLines("shambleta_step_work_seconds",
-		"Tempo gasto pelo pump de idle policies das WorldInstance dentro de um passo (soma das instâncias do processo, Time.get_ticks_usec() no sítio do tick). NÃO é o passo inteiro: BaseAgent._physics_process, PhysicsServer2D e navegação ficam fora — é a fração que escala com player co-residente. Cobertura: mesmo processo, mesmo boot; sem instância com policy rodando o trabalho é 0 de verdade (o passo ainda é amostrado pela grandeza de período).",
+		"Despacho de um passo: o tempo dentro da janela aberta no `_physics_process` do laço e fechada no primeiro callback ocioso da MESMA iteração, no mesmo instante em que o produto cronometra. Diferente do período, não cresce com o sono do throttle — é a grandeza que o predícado de estouro lê e a que sobe quando o mundo não cabe no tick. Cobre o despacho inteiro do processo (BaseAgent, PhysicsServer2D e navegação inclusos), não o pump das instâncias. Ponto cego confessado: num passo engolido por catch-up o callback ocioso não corre para ele e ele registra 0 µs — trabalho NÃO MEDIDO, não trabalho zero.",
 		boundsUs, state.get("workBuckets", []), int(state.get("workSumUs", 0)), steps, int(state.get("workMaxUs", 0)))
-	body += "# HELP shambleta_step_budget_seconds Orçamento de um passo de física deste processo (1/ServerMaxFPS), o número que as duas réguas abaixo comparam.\n"
+	body += "# HELP shambleta_step_budget_seconds Orçamento de um passo de física deste processo (1/ServerMaxFPS), o número que o predícado de estouro compara contra o despacho (shambleta_step_work_seconds).\n"
 	body += "# TYPE shambleta_step_budget_seconds gauge\n"
 	body += "shambleta_step_budget_seconds %.6f\n" % (float(budgetUs) / 1000000.0)
 	# O par que a regra de alerta lê. Fração, não contagem absoluta: 3 passos de 40 ms
 	# numa janela não é incidente, 5% de TODOS os passos é — e é a cauda, nunca a
 	# média, que decide se o jogador sentiu.
-	body += "# HELP shambleta_step_over_budget_total Passos cujo período de parede passou do orçamento MAIS a folga do throttle (shambleta_step_budget_tolerance_seconds), contados desde o boot. Predícado medido, não escolhido: sem folga o próprio sleep do engine conta como estouro (piso ocioso mede 33,61 ms contra 33,33 ms de orçamento).\n"
+	body += "# HELP shambleta_step_over_budget_total Passos cujo DESPACHO (shambleta_step_work_seconds) passou do orçamento MAIS a folga (shambleta_step_budget_tolerance_seconds), contados desde o boot. O predícado lê o despacho e não o período de parede de propósito: medido, o período de um servidor ocioso é 33,3-33,6 ms contra 33,33 ms de orçamento, então cobrá-lo por período paginaria a latência de wake do kernel — 8,3% dos passos de um degrau com 9 ms de trabalho estouravam no runner da CI sem nenhum jogador perder um passo.\n"
 	body += "# TYPE shambleta_step_over_budget_total counter\n"
 	body += "shambleta_step_over_budget_total %d\n" % int(state.get("overBudget", 0))
 	body += "# HELP shambleta_step_lost_total Atraso acumulado, em passos de física, que este processo deixou de entregar desde o boot (Engine.get_physics_frames() contra o tempo de parede). Diferente de over_budget: aqui o tick não só estourou como não foi recuperado — é o número que confessa \"o mundo anda mais devagar que 30 Hz\".\n"
@@ -337,7 +337,7 @@ static func StepBudgetLines(state : Dictionary) -> String:
 	body += "# HELP shambleta_steps_measured_total Passos de física amostrados por este processo desde o boot; é o denominador da fração de estouro.\n"
 	body += "# TYPE shambleta_steps_measured_total counter\n"
 	body += "shambleta_steps_measured_total %d\n" % steps
-	body += "# HELP shambleta_step_budget_tolerance_seconds Folga do predícado de estouro, em segundos (PeriodToleranceMs medido em tests/tick_capacity_test.gd).\n"
+	body += "# HELP shambleta_step_budget_tolerance_seconds Folga do predícado de estouro, em segundos (PeriodToleranceMs de tests/multi_instance_tick_test.gd, medida em tests/tick_capacity_test.gd). Desde 2026-10-01 ela compra preempção de scheduler e GC dentro do despacho, não o sono do throttle: o predícado passou a ler shambleta_step_work_seconds.\n"
 	body += "# TYPE shambleta_step_budget_tolerance_seconds gauge\n"
 	body += "shambleta_step_budget_tolerance_seconds %.6f\n" % (float(int(state.get("toleranceUs", 0))) / 1000000.0)
 	return body

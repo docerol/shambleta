@@ -130,7 +130,7 @@ zona. Resumo: custo marginal medido **0,206 ms/player/passo**, joelho
 **extrapolado** (reta, não medição) em **~154 players por zona**, período real
 dentro do orçamento de 33,33 ms em todos os níveis medidos até 200. O cap de 20
 por instância (`sources/world/WorldInstance.gd:5`) não é a restrição do processo —
-o total de players somando as instâncias é, e esse tem número medido e fence: **200 players conviventes em 10 instâncias cheias dentro de 33,33 ms/passo**, imposto por `CeilingFencePlayers` (`tests/multi_instance_tick_test.gd:@CeilingFencePlayers`) e cobrado por duas checks (`:1802` e `:1805`).
+o total de players somando as instâncias é, e esse tem número medido e fence: **200 players conviventes em 10 instâncias cheias dentro de 33,33 ms/passo**, imposto por `CeilingFencePlayers` (`tests/multi_instance_tick_test.gd:@CeilingFencePlayers`) e cobrado por duas checks dentro de `_checkProcessFence` (`tests/multi_instance_tick_test.gd:@_checkProcessFence`).
 
 ### 4.3 Reproduzir as medidas (sem docker, a partir da raiz do repo)
 

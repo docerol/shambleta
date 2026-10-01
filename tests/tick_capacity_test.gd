@@ -34,11 +34,17 @@ extends SceneTree
 #     MEDICAO DIRETA, não por gosto: com a escada de carga ligada, os quatro níveis
 #     devolviam `0.00 ms` — observado nesta máquina na rodada de 2026-09-28, log que não
 #     é retido —, ou seja a janela não continha trabalho nenhum dos 200 agentes que
-#     estavam rodando. Por que não
-#     continha é INFERENCIA a partir desse zero — `process_priority` ordena callbacks
-#     dentro da mesma lista de nós, e as `WorldInstance` moram em `SubViewport`s, que
-#     têm o próprio passo — e não medição: a sonda isolada que separaria as duas
-#     hipóteses não foi rodada. O que importa para a régua é o zero medido, e ele
+#     estavam rodando. Por que não continha deixou de ser inferência: a sonda isolada foi
+#     rodada em 2026-10-01 e separou as duas hipóteses. Uma janela aberta no
+#     `_physics_process` de um node e fechada no `_process` do MESMO node, com o throttle a
+#     30 Hz, devolve 1,4-1,8 ms ociosa e 20,16 ms com 20 ms queimados num node filho de um
+#     `SubViewport` — contida em 59 de 59 pares, com o período parado em 33,3 ms. Ou seja:
+#     a janela física→ociosa É cega ao sleep do throttle e NÃO é cega ao passo das
+#     `SubViewport`; o `0.00 ms` histórico vinha da outra hipótese, a de fase (um sanduíche
+#     `_process`→`_process` mede o intervalo entre duas fases ociosas, que o pacing
+#     preenche), e é esta janela que o produto usa hoje como grandeza de estouro, no
+#     predícado de `StepBudgetRecord` (`sources/launcher/Launcher.gd:@StepBudgetRecord`).
+#     O que importa para a régua é o zero medido, e ele
 #     bastou: troca-se o instrumento pelos monitores do engine, que têm semântica
 #     medida e não assumida: 4 ms queimados em `_physics_process` movem
 #     `TIME_PHYSICS_PROCESS` (0,38 -> 4,18 ms) e não movem `TIME_PROCESS`; 4 ms em

@@ -116,11 +116,18 @@ groups:
       # média de 8 ms convive com 5% dos passos a 120 ms, e é esse 5% que o jogador
       # sente como o mundo andando em câmera lenta.
       #
-      # Predícado do numerador (declarado na própria métrica): passo cujo período de
-      # parede passou do orçamento MAIS a folga do throttle. A folga não é cosmética:
-      # sem ela o sleep do próprio engine conta como estouro — piso ocioso mede
-      # 33,61 ms contra 33,33 ms de orçamento, e uma régua estrita `>` denunciaria
-      # 100% dos passos de um servidor vazio, que é o alerta que ninguém desliga.
+      # Predícado do numerador (declarado na própria métrica): passo cujo DESPACHO — a
+      # janela aberta na fronteira de física deste processo e fechada no primeiro callback
+      # ocioso da mesma iteração — passou do orçamento (`shambleta_step_budget_seconds`)
+      # MAIS a folga. A folga comprava o sleep do throttle enquanto
+      # o predícado lia o período de parede; desde 2026-10-01 ela compra preempção de
+      # scheduler e GC dentro do despacho, porque o sleep saiu da janela medida. Motivo,
+      # medido: o período de um servidor OCISO é 33,3-33,6 ms contra 33,33 ms de
+      # orçamento, e o p95 da cauda de um degrau com 9 ms de trabalho cruzava 34,37 ms no
+      # runner da CI — 8,3% dos passos "estourados" sem que nenhum jogador perdesse um
+      # passo. Uma régua que acorda gente por latência de wake do kernel não é régua de
+      # carga. O período continua medido e exportado (é a testemunha do "30 Hz foi
+      # cumprido"), só deixou de ser o numerador.
       #
       # É fração, não contagem absoluta: 3 passos de 40 ms numa janela de 5 min é
       # um GC; 5% de todos os passos é o laço não cabendo no tick. O corte de 5% é
@@ -136,7 +143,7 @@ groups:
           severity: page
         annotations:
           summary: ">= 5% dos passos de física estouraram o orçamento de tick por 10 min"
-          description: "{{ $value }} é a fração de passos acima de orçamento+folga. Compare com `shambleta_step_budget_seconds` (o orçamento deste processo) e com a cauda do período no histograma; se `shambleta_step_lost_total` anda junto, o tick não está apenas estourando — está deixando de ser entregue."
+          description: "{{ $value }} é a fração de passos cujo despacho passou de orçamento+folga. Compare com `shambleta_step_budget_seconds` (o orçamento deste processo) e com a folga em `shambleta_step_budget_tolerance_seconds`; se `shambleta_step_lost_total` anda junto, o tick não está apenas estourando — está deixando de ser entregue."
 
       # `over_budget` diz que o passo foi longo; `lost` diz que o atraso virou
       # crédito não pago: `Engine.get_physics_frames()` andou menos que o tempo de

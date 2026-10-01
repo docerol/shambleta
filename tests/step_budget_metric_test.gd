@@ -127,10 +127,11 @@ func _checkRecorder() -> void:
 	CheckEq(bounds, [16667, 33333, 50000, 100000],
 			"as boundas de bucket são as faixas do orçamento (16,67/33,33/50/100 ms), lidas do fonte")
 	CheckEq(int(launcherScript.get_script_constant_map().get("StepBudgetToleranceUs", -1)), ToleranceUs,
-			"a folga do predícado é a medida do throttle (%d us), não um número digitado aqui" % ToleranceUs)
+			"a folga do predícado é a folga lida do fonte (%d us), não um número digitado aqui" % ToleranceUs)
 
 	# Seis passos sintéticos, escolhidos para morder nas três costuras: um na bounda
 	# exata de bucket, um acima do orçamento mas DENTRO da folga, e um acima da folga.
+	# Cada par é [despacho, período] — e o predícado lê o primeiro.
 	var state : Dictionary = _state(BudgetUs)
 	var samples : Array = [[5000, 5000], [8000, 20000], [30000, 34000], [4000, 34333], [70000, 60000], [130000, 120000]]
 	var sumUs : int = 0
@@ -148,12 +149,11 @@ func _checkRecorder() -> void:
 	CheckEq(state["workBuckets"], [3, 4, 4, 5],
 			"os baldes do trabalho valem %s para a mesma sequência (%s)" % [str(state["workBuckets"]), str(samples)])
 	CheckEq(int(state["overBudget"]), 2,
-			"estouro é 2 de %d: 60.000 e 120.000 µs passam de %d µs; 34.000 e 34.333 NÃO passam (34.333 é o predícado estrito `>`, não `>=`)" % [
+			"estouro é 2 de %d: despachos de 70.000 e 130.000 µs passam de %d µs; 5.000, 8.000, 30.000 e 4.000 NÃO passam (130.000 é o predícado estrito `>`, não `>=`)" % [
 				stepCount, BudgetUs + ToleranceUs])
 
 	# CONTROLE NEGATIVO da cauda. É esta a perna que morde se a correção regredir:
-	# predícado sem folga conta 34.000 (e o servidor ocioso, medindo 33,61 ms de
-	# período no piso, contaria TODOS os passos); predícado sempre-verdadeiro conta
+	# predícado sem folga conta o passo de 34.000 µs; predícado sempre-verdadeiro conta
 	# os cinco; bucket não-cumulativo desmonta a assertiva de cima.
 	var quiet : Dictionary = _state(BudgetUs)
 	for periodUs in [1000, 8000, 16000, 33000, 34333]:
@@ -162,6 +162,23 @@ func _checkRecorder() -> void:
 			"CONTROLE NEGATIVO: uma sequência toda dentro de orçamento+folga devolve overBudget == 0 (com o predícado estrito `>` do orçamento, 34.000 µs já vermelharia esta perna)")
 	CheckEq(quiet["periodBuckets"], [3, 4, 5, 5],
 			"CONTROLE NEGATIVO: os baldes desta sequência são %s — balde não-cumulativo não passa daqui" % str(quiet["periodBuckets"]))
+
+	# O DISCRIMINANTE do instrumento, e a perna que esta mudança existe para ter: cinco
+	# passos de servidor SANO — despacho de 9 ms, período de 34,5 ms porque o throttle
+	# dormiu o resto da janela. Cobrar o período conta 5 de 5 estourados (foi exatamente
+	# isso que vermelhou o degrau 5x20 no runner da CI, com 8,3% dos passos acima do
+	# predícado e nenhum jogador perdendo um passo); cobrar o despacho conta 0. Uma
+	# correção que mexesse no predícado sem trocar a GRANDEZA passa na mesa de cima e
+	# morre aqui.
+	var paced : Dictionary = _state(BudgetUs)
+	for step in range(5):
+		_record(paced, 9000, 34500, 0)
+	CheckEq(int(paced["overBudget"]), 0,
+			"CONTROLE NEGATIVO DO INSTRUMENTO: cinco passos com período de 34,500 µs (acima de orçamento+folga) e despacho de 9.000 µs devolve overBudget == 0 — o predícado lê o despacho, e um processo com o throttle dormindo não pagina")
+	CheckEq(paced["periodBuckets"], [0, 0, 5, 5],
+			"e o período continua SENDO MEDIDO nestes passos (%s): a série não foi jogada fora, só deixou de ser a régua" % str(paced["periodBuckets"]))
+	CheckEq(int(paced["periodMaxUs"]), 34500,
+			"o pior período desta sequência é confessado (%d µs) — troca de predícado não é troca de coleta")
 
 	# Atraso acumulado: `lost` é o PIOR déficit visto, não a soma. Uma correção que
 	# somasse o drift por passo (3+5+2 = 10) quebraria a semântica de counter que o
@@ -297,34 +314,48 @@ func _checkLiveSteps() -> void:
 				idleSteps, WarmupFrames])
 	# O número do piso é impresso, não cobrado: "nenhum passo ocioso estourou" é uma
 	# régua de máquina, e num host com outros agentes correndo o vizinho infla o
-	# período de parede. O predícado de estouro em si é conferido sem máquina nenhuma
-	# na perna 1 (sequência toda dentro de orçamento devolve `overBudget == 0`), que é
-	# onde ele morde se regredir.
+	# despacho (preempção e fila de scheduler caem dentro da janela física→ociosa). O
+	# predícado de estouro em si é conferido sem máquina nenhuma na perna 1 — inclusive
+	# o caso que esta perna não pode provar sozinha: período acima de orçamento+folga
+	# com despacho dentro devolve `overBudget == 0`.
 	Note("passos acima de orçamento+folga na janela de piso (sem queima): %d em %d" % [
 			int(idleBefore["overBudget"]) - int(before["overBudget"]), idleSteps])
+	# A testemunha da TROCA de grandeza, na parede desta máquina: se o acumulador ainda
+	# estivesse medindo o período, `_sum_work/_count` seria igual ao do período e a
+	# fração abaixo daria ~1,0. Medido, o despacho de um processo com o throttle ligado
+	# é uma fração pequena do período — e é impresso, porque o valor absoluto depende do
+	# vizinho.
+	var idleWorkUs : int = int(idleBefore["workSumUs"]) - int(before["workSumUs"])
+	var idlePeriodUs : int = int(idleBefore["periodSumUs"]) - int(before["periodSumUs"])
+	Note("janela de piso: despacho %.2f ms/passo contra período %.2f ms/passo em %d passos (o sono do throttle está FORA da grandeza que o predícado lê)" % [
+			float(idleWorkUs) / 1000.0 / float(maxi(idleSteps, 1)),
+			float(idlePeriodUs) / 1000.0 / float(maxi(idleSteps, 1)), idleSteps])
+	Check(float(idleWorkUs) < float(idlePeriodUs),
+			"a soma do despacho é MENOR que a soma do período na mesma janela de piso (%.1f ms vs %.1f ms) — o instrumento não é o período com outro nome" % [
+				float(idleWorkUs) / 1000.0, float(idlePeriodUs) / 1000.0])
 	burn.set("us", BurnUs)
 	await _frames(BurnSteps + WarmupFrames)
 	var burned : Dictionary = _snapshot()
 	var burnSteps : int = int(burned["steps"]) - int(idleBefore["steps"])
 	var overDelta : int = int(burned["overBudget"]) - int(idleBefore["overBudget"])
-	var maxDeltaUs : int = int(burned["periodMaxUs"])
+	var maxWorkUs : int = int(burned["workMaxUs"])
 	Check(burn.get("steps") >= BurnSteps / 2, "a queima rodou de verdade (%d passos com %d ms/passo)" % [
 			int(burn.get("steps")), BurnUs / 1000])
 	# 0,5 é piso conservador pelo motivo declarado no HELP do exportador: quando o
-	# engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê
-	# curta e não conta como estouro — a fração real medida deste processo no burn é
-	# impressa abaixo. Ruído de vizinho só pode AUMENTAR o período lido, nunca
+	# engine recupera atraso rodando dois passos seguidos, o passo engolido registra 0 µs
+	# de despacho e não conta como estouro — a fração real medida deste processo no burn
+	# é impressa abaixo. Ruído de vizinho só pode AUMENTAR o despacho lido, nunca
 	# diminuir, então um piso desta conta sobrevive à máquina ocupada na direção certa.
 	Check(float(overDelta) >= float(burnSteps) * 0.5,
 			"%d ms/passo queimados levaram %d dos %d passos seguintes acima de orçamento+folga (piso %d) — o detector de estouro exportado enxerga a queima" % [
 				BurnUs / 1000, overDelta, burnSteps, int(float(burnSteps) * 0.5)])
-	Check(maxDeltaUs >= BurnUs * 9 / 10,
-			"e o pior passo amostrado (%.1f ms) reconhece a queima de %d ms" % [
-				float(maxDeltaUs) / 1000.0, BurnUs / 1000])
-	var buckets : Array = burned.get("periodBuckets", [])
+	Check(maxWorkUs >= BurnUs * 9 / 10,
+			"e o pior DESPACHO amostrado (%.1f ms) reconhece a queima de %d ms — a janela física→ociosa contém o `_physics_process` dos outros nodes, que é o que faz dela o passo inteiro" % [
+				float(maxWorkUs) / 1000.0, BurnUs / 1000])
+	var buckets : Array = burned.get("workBuckets", [])
 	Check(buckets.size() == 4 and int(buckets[3]) >= burnSteps / 2,
-			"os baldes se moveram com a queima: le=0.1 acumulou %s passos (era %s)" % [
-				str(buckets[3] if buckets.size() == 4 else -1), str(int(idleBefore.get("periodBuckets", [0, 0, 0, 0])[3]))])
+			"os baldes do despacho se moveram com a queima: le=0.1 acumulou %s passos (era %s)" % [
+				str(buckets[3] if buckets.size() == 4 else -1), str(int(idleBefore.get("workBuckets", [0, 0, 0, 0])[3]))])
 	burn.set("us", 0)
 	root.remove_child(burn)
 	burn.free()

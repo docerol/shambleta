@@ -21,19 +21,25 @@ tick de produção (30 Hz, budget 33.33 ms/passo)").
 Até aqui, "33,33 ms por passo" era régua de harness: nada no processo do server
 media o custo do próprio passo, e `/metrics` só exportava espera de mutex de SQL.
 O orçamento existe agora como instrumento do produto, cronometrado com
-`Time.get_ticks_usec()` em `_physics_process` de `sources/launcher/Launcher.gd`
-(um por processo, sempre ligado) e servido por `sources/system/MetricsServer.gd`:
+`Time.get_ticks_usec()`: a janela abre no `_physics_process` (`sources/launcher/Launcher.gd:@_physics_process`)
+e fecha no `_process` do MESMO node (`sources/launcher/Launcher.gd:@_process`) — um par
+por processo, sempre ligado — e é servido por `sources/system/MetricsServer.gd`:
 
 | série | o que é | janela/coverage confessa |
 |---|---|---|
-| `shambleta_step_period_seconds` (histograma) | parede entre duas fronteiras de física consecutivas, baldes em 16,67/33,33/50/100 ms + `_sum`/`_count`/`_max` | vale mesmo com instância parada; quando o engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê curta — o déficit acumulado é `shambleta_step_lost_total` |
-| `shambleta_step_work_seconds` (histograma) | só a bomba de políticas de ocioso que `sources/world/WorldInstance.gd` faz por passo | **não** é o passo inteiro: é o trabalho que esta base de código cronometra por dentro, declarado no HELP |
-| `shambleta_step_over_budget_total` (counter) | passos com período acima de orçamento + folga | a folga (`shambleta_step_budget_tolerance_seconds`) é o piso do throttle de 30 Hz, não uma margem de boa vontade |
+| `shambleta_step_period_seconds` (histograma) | parede entre duas fronteiras de física consecutivas, baldes em 16,67/33,33/50/100 ms + `_sum`/`_count`/`_max` | vale mesmo com instância parada; quando o engine recupera atraso rodando dois passos seguidos, a fronteira entre eles lê curta — o déficit acumulado é `shambleta_step_lost_total`. **Não é o que o alerta cobra**: período é orçamento + sono do throttle (medido, um processo ocioso entrega 33,3-33,6 ms contra 33,33 ms de orçamento), e cobrá-lo seria paginar a latência de wake do kernel |
+| `shambleta_step_work_seconds` (histograma) | o DESPACHO do passo: a janela fronteira-de-física → primeiro callback ocioso da mesma iteração, no mesmo node que cronometra o período. Cobre o flush de física inteiro do processo — `BaseAgent`, PhysicsServer2D, navegação e a bomba de políticas de ocioso de `sources/world/WorldInstance.gd` inclusos | é a grandeza que o predícado de estouro lê. Ponto cego declarado: num passo engolido por catch-up o callback ocioso não corre para ele e ele registra **0 µs — trabalho não medido**, não trabalho zero; por isso o contador subestima a fração sob catch-up, no máximo pela razão de catch-up |
+| `shambleta_step_over_budget_total` (counter) | passos cujo despacho passou de orçamento + folga | a folga (`shambleta_step_budget_tolerance_seconds`) compra preempção de scheduler e GC dentro do despacho, não uma margem de boa vontade; o sono do throttle saiu da conta quando o predícado trocou de grandeza, em 2026-10-01 |
 | `shambleta_step_lost_total` (counter) | pior déficit entre passos esperados e entregues | `increase()` lê "passos que deixaram de ser entregues", não "tempo perdido" |
 | `shambleta_steps_measured_total` (counter) | denominador de tudo acima | sem passo amostrado o bloco inteiro **não aparece** — ausência não é zero, e quem scrapeia vê ausência |
 
 O predícado de estouro estritamente `> orçamento + folga` tem controle negativo no
-harness da própria perna (`bash scripts/test.sh one step_budget_metric_test 300`), e
+harness da própria perna (`bash scripts/test.sh one step_budget_metric_test 300`) —
+inclusive o controle que discrimina a GRANDEZA: cinco passos com período acima de
+orçamento+folga e despacho dentro devolvem `overBudget == 0`. A contenção do despacho
+também é régua, e não presunção: o bracket não é o período com outro nome, porque contém
+a queima injetada de 40 ms/passo, e isso é cobrado na parede por
+`bash scripts/test.sh one multi_instance_tick_test 900`;
 os nomes citados por `deploy/alerts.rules.yml` (`PassoForaDoOrcamento`,
 `PassoPerdido`, `PassoSemMedida`) são cruzados com o que o servidor emite no mesmo
 predícado — regra apontando para série que ninguém serve vermelha ali, não no
