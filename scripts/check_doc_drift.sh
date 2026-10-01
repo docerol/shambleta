@@ -245,7 +245,7 @@ cited_paths="$(grep -rhoE '`(sources|data|docs|deploy|scripts|companion|tests|pr
 	tr -d '`' | sort -u)"
 for raw in $cited_paths; do
 	path="${raw%/}"
-	# `arquivo.gd:123` e `arquivo.gd:12-13` são ponteiros de evidência: a âncora
+	# `arquivo.gd:NN` e `arquivo.gd:NN-NN` são ponteiros de evidência: a âncora
 	# de linha é verificada por IdleTests.SuiteEvidencePointers, daqui só o caminho.
 	path="${path%%:*}"
 	case "$raw" in
@@ -1191,8 +1191,11 @@ EXTS = (".md", ".gd", ".py", ".sh", ".mjs", ".yml", ".yaml", ".conf", ".html", "
 # hoje seria reescrever historico.
 SKIP_NAMES = {"CHANGELOG.md", "progress.md", "ROADMAP_COMERCIAL.md", "BLIND_JUDGE_PROTOCOL.md"}
 
-# O alvo de um ponteiro: `caminho.ext:NN`, com `Dockerfile` (sem ponto) incluído — a
-# posse de deploy cita `deploy/web/Dockerfile:50` e `Dockerfile:26` o tempo todo.
+# O alvo de um ponteiro: `caminho.ext:NN`. A segunda alternativa existe porque
+# `Dockerfile` não tem ponto: o primeiro ramo exige extensão, e sem ela nem
+# `deploy/server/Dockerfile` seguido de número seria lido. Medido no HEAD varrido, as
+# citações reais vêm todas com caminho (`deploy/server/`, `deploy/web/`,
+# `deploy/companion/`); a forma nua só aparece em `archive/`, que o walk não lê.
 _TGT = (r"((?:[A-Za-z0-9_./-]+\.(?:gd|py|sh|yml|yaml|json|sql|cfg|conf|md|csv|mjs|"
         r"toml|godot|tscn|example|html))|(?:[A-Za-z0-9_./-]*Dockerfile))")
 PTR = re.compile(r"`" + _TGT + r":(\d+)(?:-(\d+))?`")
@@ -2299,6 +2302,92 @@ def herdselftest():
     return biting, total
 
 
+# O REGISTRO de caminhos mortos: `scripts/dead_paths.txt`, uma linha por caminho com
+# `| <motivo>` obrigatório. Ele era a única exceção da seção 24 (caminho de `.md` citado)
+# e passa a ser a única exceção do ponteiro de linha morto. Os dois leitores do MESMO
+# arquivo — o `read_registry` de lá e o `deadset` daqui — têm de aceitar exatamente as
+# mesmas linhas, senão um poupa o que o outro acusa; o tamanho do registro sai nas duas
+# máquinas (`MORTOS` e `CAMINHOS`) e a igualdade é cerca na bash, não prosa.
+DEAD_PATH = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.md$")
+DEAD_MOTIVO_MIN = 12
+
+
+def deadset(text):
+    """O conjunto de caminhos que o registro declara mortos.
+
+    As MESMAS quatro regras do `read_registry` da seção 24: comentário e linha em branco
+    fora, `|` obrigatório, caminho com barra e de `.md`, motivo com doze caracteres ou
+    mais. Copiar a regra é o que permite poupar; o que impede a cópia de virar duas
+    verdades é a cerca do tamanho, e não a boa vontade de quem escreve.
+    """
+    out = set()
+    for raw in text.split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" not in line:
+            continue
+        path, reason = line.split("|", 1)
+        path = path.strip()
+        reason = reason.strip()
+        if not DEAD_PATH.match(path):
+            continue
+        if len(reason) < DEAD_MOTIVO_MIN:
+            continue
+        out.add(path)
+    return out
+
+
+def deadjudge(target, dead):
+    """(acusar, poupado_por_registro) de um `arquivo:NN` cujo alvo não resolveu.
+
+    Puro de propósito: o veredito não depende do corte, nem do arquivo que cita, nem do
+    tamanho da linha — só do caminho como ele foi escrito e do registro. É por isso que
+    ele tem controle plantado, e é por isso que um registro malformado NÃO poupa: a
+    licença de um fantasma tem de ser lida pelos dois juízes como o que ela é — nada.
+    """
+    if target in dead:
+        return False, True
+    return True, False
+
+
+# Cada controle é um modo de esta exceção mentir. Sem a perna negativa a função pode
+# virar "poupa tudo" e o zero de acusações volta a ser a cegueira que a casa caça; sem
+# a positiva, vira máquina de acusar citação registrada. O nono é o buraco que o piso
+# de nível tapava em toda régua pequena: tabela vazia dá `biting == cases` em 0 de 0.
+DEAD_CONTROLES = [
+    ("morto sem registro e acusado", "", "a/b.md", True, False),
+    ("morto registrado e poupado", "a/b.md | motivo comprido o bastante", "a/b.md", False, True),
+    ("entrada sem motivo nao poupa", "a/b.md", "a/b.md", True, False),
+    ("motivo curto nao poupa", "a/b.md | curto", "a/b.md", True, False),
+    ("nome sem barra nao entra no registro", "b.md | motivo comprido o bastante", "b.md", True, False),
+    ("so .md e registrado", "a/b.gd | motivo comprido o bastante", "a/b.gd", True, False),
+    ("comentario do registro nao poupa", "# a/b.md | motivo comprido o bastante", "a/b.md", True, False),
+    ("espaco em volta nao impede a poupanca", "  a/b.md   |   motivo comprido o bastante  ",
+     "a/b.md", False, True),
+    ("prefixo nao poupa caminho vizinho", "a/b.md | motivo comprido o bastante", "x/a/b.md", True, False),
+    ("pipe dentro do motivo nao desloca o caminho", "a/b.md | motivo com | pipe dentro",
+     "a/b.md", False, True),
+    ("dois registros: o segundo poupa o segundo alvo",
+     "a/b.md | motivo comprido o bastante\nc/d.md | outro motivo comprido aqui",
+     "c/d.md", False, True),
+    ("alvo que nao e o do registro continua acusado",
+     "a/b.md | motivo comprido o bastante", "e/f.md", True, False),
+]
+
+
+def deadselftest():
+    biting = 0
+    for nome, texto, alvo, acusar, poupar in DEAD_CONTROLES:
+        got = deadjudge(alvo, deadset(texto))
+        if got == (acusar, poupar):
+            biting += 1
+        else:
+            print("[FAIL] ponteiro morto: self-test cego no controle %s (registro %r, alvo %r -> %r, esperava (%r, %r))"
+                  % (nome, texto, alvo, got, acusar, poupar))
+    return biting, len(DEAD_CONTROLES)
+
+
 def build_index(root):
     # indice basename -> ate tres caminhos, para resolver ponteiro citado por NOME NU.
     # A medicao desta passada: 95 ponteiros fora dos registros datados tem alvo que nao
@@ -2323,7 +2412,71 @@ def build_index(root):
     return idx
 
 
-def scan(root, wide, reg, index):
+def resolve_path(path, root, index, cache, count=None):
+    # caminho citado -> linhas do alvo, ou None. É a decisão que estava dentro de
+    # `scan`, suspensa para fora porque o censo independente do ponteiro morto precisa
+    # dela sem precisar do veredito: o que se duplica é o WALK, nunca a resolução.
+    # Ordem de resolucao -- a mesma do `_PtrResolve` do harness: caminho literal;
+    # caminho que e sufixo unico da arvore (o nome bate e o diretorio esta errado);
+    # nome nu unico na arvore. Os dois ultimos eram justamente o que a classe nao
+    # tinha: o walk so abria arquivo pelo caminho como ele foi escrito, e um ponteiro
+    # por nome nu saia pela porta dos invisiveis sem a linha citada ser conferida.
+    if path not in cache:
+        full = os.path.join(root, path)
+        target = path if os.path.isfile(full) else None
+        if target is None:
+            arr = index.get(os.path.basename(path)) or []
+            suffix = [p for p in arr if p.endswith("/" + path)]
+            if len(suffix) == 1:
+                target = suffix[0]
+            elif "/" not in path and len(arr) == 1:
+                target = arr[0]
+        if target is None:
+            cache[path] = None
+        else:
+            if target != path and count is not None:
+                count[0] += 1
+            cache[path] = open(os.path.join(root, target), encoding="utf-8",
+                               errors="replace").read().split("\n")
+    return cache[path]
+
+
+def deadcensus(root, index):
+    """Quantos `arquivo:NN` tem alvo que não resolve, contado por um walk próprio.
+
+    Existe por um motivo só: o veredito do ponteiro morto nasce dentro do laço que
+    julga a cláusula, e número nascido junto do veredito não sobrevive à sua remoção.
+    Este laço não chama `deadjudge`, não conhece o registro e não julga frase nenhuma —
+    resolve alvo e conta. A igualdade com o censo do veredito é cerca na bash, e é o
+    que impede que "0 acusações" volte a significar "o braço parou de olhar".
+    """
+    cache = {}
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            if rel.startswith("archive/") or fn in SKIP_NAMES:
+                continue
+            if not fn.endswith(EXTS):
+                continue
+            lines = resolve_path(rel, root, index, cache)
+            if lines is None:
+                continue
+            is_doc = fn.endswith(".md") or fn.endswith(".json")
+            for line in lines:
+                if not is_doc and not line.lstrip().startswith(("#", "//")):
+                    continue
+                for m in PTR.finditer(line):
+                    tgt = m.group(1)
+                    if tgt.startswith("res://"):
+                        tgt = tgt[6:]
+                    if resolve_path(tgt, root, index, cache) is None:
+                        seen += 1
+    return seen
+
+
+def scan(root, wide, reg, index, dead):
     cache = {}
     lit_judged = 0
     lit_accused = 0
@@ -2336,6 +2489,15 @@ def scan(root, wide, reg, index):
     cont_accused = 0
     cont_orfas = 0
     line_total = 0
+    # O censo do ponteiro morto: quantos `arquivo:NN` tem alvo que não resolve, quantos
+    # acusam e quantos o registro poupa. Os três saem impressos porque a exceção tem de
+    # ser contada: sem o número dos poupados, "0 acusações" passaria a significar também
+    # "a exceção cresceu", que é exatamente o que o `registry_rot` de lá caça.
+    dead_bad = 0
+    dead_spared = 0
+    # Os `:NN` de continuação cujo alvo herdado não resolve: o censo independente só vê
+    # ponteiro nomeado, então é esta a parcela que a igualdade com ele tem de tirar.
+    dead_cont = 0
     resolvidos = [0]
     # Censo do RECORTE de registro datado: `fora` conta linhas lidas por arquivo, e os dois
     # numeros seguintes separam o que a isencao poupa (linha) do que ela nao poupa (ancora).
@@ -2344,29 +2506,7 @@ def scan(root, wide, reg, index):
     anc_fora = 0
 
     def lines_of(path):
-        # Ordem de resolucao -- a mesma do `_PtrResolve` do harness: caminho literal;
-        # caminho que e sufixo unico da arvore (o nome bate e o diretorio esta errado);
-        # nome nu unico na arvore. Os dois ultimos eram justamente o que a classe nao
-        # tinha: o walk so abria arquivo pelo caminho como ele foi escrito, e um ponteiro
-        # por nome nu saia pela porta dos invisiveis sem a linha citada ser conferida.
-        if path not in cache:
-            full = os.path.join(root, path)
-            target = path if os.path.isfile(full) else None
-            if target is None:
-                arr = index.get(os.path.basename(path)) or []
-                suffix = [p for p in arr if p.endswith("/" + path)]
-                if len(suffix) == 1:
-                    target = suffix[0]
-                elif "/" not in path and len(arr) == 1:
-                    target = arr[0]
-            if target is None:
-                cache[path] = None
-            else:
-                if target != path:
-                    resolvidos[0] += 1
-                cache[path] = open(os.path.join(root, target), encoding="utf-8",
-                                   errors="replace").read().split("\n")
-        return cache[path]
+        return resolve_path(path, root, index, cache, resolvidos)
 
     accused = 0
     judged = 0
@@ -2480,6 +2620,22 @@ def scan(root, wide, reg, index):
                                         m.end() < len(line) and line[m.end()] == "`")
                     tl = lines_of(target)
                     if tl is None:
+                        # A porta dos invisíveis, fechada: até aqui um `arquivo:NN` cujo alvo
+                        # não resolvia saía do walk sem julgamento nenhum, enquanto a ÂNCORA do
+                        # mesmo arquivo morto era acusada (`cita %s e o arquivo não existe`). A
+                        # assimetria custou a passada do worklist: sete ponteiros sem alvo na
+                        # árvore, seis deles prosa que se deixou ler como evidência e um
+                        # registrado como morto. Quem abre a doc cola um número em arquivo que
+                        # não existe, e o veredito da régua era o silêncio.
+                        acusar, poupada = deadjudge(target, dead)
+                        if poupada:
+                            dead_spared += 1
+                        elif acusar:
+                            dead_bad += 1
+                            print("[FAIL] ponteiro morto: %s:%d cita %s e o alvo não resolve — nem caminho literal, nem sufixo único, nem nome único na árvore; se o arquivo saiu do repositório, registre o caminho em scripts/dead_paths.txt com motivo, senão a frase afirma evidência que ninguém pode abrir%s"
+                                  % (rel, n, ponto, herd))
+                        if eh_cont:
+                            dead_cont += 1
                         if WL_ON and not wide and not eh_cont:
                             wl_judge("%s:%d" % (rel, n), target, m.group(2), None, clause)
                         continue
@@ -2566,7 +2722,7 @@ def scan(root, wide, reg, index):
                           % (rel, n, m3.group(1),
                              "nenhuma chamada de gate_sh lida (scripts/test.sh nao encontrado)"
                              if reg is None else "%d chamada(s) de gate_sh em structure_gates()" % len(reg)))
-    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas, len(fora), lin_fora, anc_fora
+    return judged, accused, lit_judged, lit_accused, reg_judged, reg_accused, anchor_total, anchor_accused, line_total, resolvidos[0], cont_total, cont_judged, cont_accused, cont_orfas, len(fora), lin_fora, anc_fora, dead_bad, dead_spared, dead_cont
 
 
 def main():
@@ -2576,16 +2732,23 @@ def main():
     rbiting, rcases = regselftest()
     abiting, acases = anchorselftest()
     hbiting, hcases = herdselftest()
+    dbiting, dcases = deadselftest()
     cov_n, cov_spared = herdcoverage(root)
     reg = registry(root)
     index = build_index(root)
+    reg_path = os.path.join(root, "scripts/dead_paths.txt")
+    dead_text = (open(reg_path, encoding="utf-8", errors="replace").read()
+                 if os.path.isfile(reg_path) else "")
+    dead = deadset(dead_text)
     (narrow_judged, narrow_bad, lit_judged, lit_bad, reg_judged, reg_bad,
      anchors, anchor_bad, lines, resolvidos, cont_n, cont_jn, cont_an, cont_on,
-     fora_n, fora_lin, fora_anc) = \
-        scan(root, False, reg, index)
+     fora_n, fora_lin, fora_anc, dead_n, dead_sp, dead_c) = \
+        scan(root, False, reg, index, dead)
     (wide_judged, wide_bad, lit_judged_w, lit_bad_w, reg_judged_w, reg_bad_w,
      anchors_w, anchor_bad_w, lines_w, resolvidos_w, cont_w, cont_jw, cont_aw,
-     cont_ow, fora_n_w, fora_lin_w, fora_anc_w) = scan(root, True, reg, index)
+     cont_ow, fora_n_w, fora_lin_w, fora_anc_w, dead_w, dead_spw, dead_cw) = \
+        scan(root, True, reg, index, dead)
+    dead_seen = deadcensus(root, index)
     accused = narrow_bad + wide_bad
     cont_jugados = cont_jn + cont_jw
     cont_acusados = cont_an + cont_aw
@@ -2602,6 +2765,18 @@ def main():
     # Quantos `:NN` existem na arvore nao depende do corte: o corte muda a FORMA do
     # candidato, nao a regex do ponteiro. Divergir e o walk tendo perdido linha.
     cont_cut_drift = cont_n != cont_w
+    # Um alvo que não resolve não resolve nos dois cortes: o corte muda a FORMA do
+    # candidato da cláusula, não a árvore. Divergir aqui é `resolve_path` ou o índice
+    # tendo mudado entre os dois `scan` — ou o registro lendo texto diferente — e aí o
+    # censo de mortos não diz mais nada sobre a árvore.
+    dead_cut_drift = (dead_n, dead_sp, dead_c) != (dead_w, dead_spw, dead_cw)
+    # A cobertura, e não o piso: `deadcensus` refaz o walk sem chamar `deadjudge`, então
+    # os tokens que o veredito viu (menos as continuações, que ele conta à parte porque o
+    # censo só conhece `arquivo:NN`) têm de bater com o que o censo acha. É esta a cerca
+    # que sobrevive à remoção do braço: sem ela, apagar o `if tl is None` devolve
+    # "0 acusados" e o censo do veredito cai a zero junto — nada dentro do veredito pode
+    # denunciar o próprio veredito.
+    dead_cov_drift = (dead_n + dead_sp - dead_c) != dead_seen
     print("identidade de ponteiro: %d nomeados no corte narrow (%d acusacoes), %d no corte wide (%d acusacoes), %d alvos abertos por resolucao de nome, self-test %d/%d controles mordendo"
           % (narrow_judged, narrow_bad, wide_judged, wide_bad, resolvidos, biting, cases))
     print("literal pinado: %d ponteiros com literal único no alvo (%d acusacoes), self-test %d/%d controles mordendo"
@@ -2614,6 +2789,12 @@ def main():
           % (reg_judged, reg_bad, "registro NÃO lido" if reg is None else "registro com %d gates" % len(reg), rbiting, rcases))
     print("âncora de ponteiro: %d `arquivo:@simbolo` no lugar de %d `arquivo:linha` (%d acusações), self-test %d/%d controles mordendo"
           % (anchors, lines, anchor_bad, abiting, acases))
+    # O censo do ponteiro morto sai com os dois números juntos — o que o veredito viu e o
+    # que um walk separado, que não chama `deadjudge`, acha — porque número nascido junto
+    # do veredito não sobrevive à remoção do veredito. A poupados é a exceção, e exceção
+    # sem número impresso é a licença que a seção 24 existe para caçar (`registry_rot`).
+    print("ponteiro morto: %d vistos pelo veredito (%d acusados, %d poupados pelo registro de %d caminho(s), %d deles continuação) e %d vistos pelo censo independente, self-test %d/%d controles mordendo"
+          % (dead_n + dead_sp, dead_n, dead_sp, len(dead), dead_c, dead_seen, dbiting, dcases))
     if reg_cut_drift:
         print("[FAIL] registro: narrow viu %r e wide viu %r — contagem de numeral não depende do corte"
               % ((reg_judged, reg_bad), (reg_judged_w, reg_bad_w)))
@@ -2627,6 +2808,13 @@ def main():
     if cont_cut_drift:
         print("[FAIL] continuação: narrow viu %d `:NN` e wide viu %d — a regex do ponteiro não depende do corte"
               % (cont_n, cont_w))
+    if dead_cut_drift:
+        print("[FAIL] ponteiro morto: narrow acusou %d e poupou %d, wide acusou %d e poupou %d — um alvo que não resolve não resolve nos dois cortes, e divergir aqui é o walk (ou o registro) tendo parado de olhar entre os dois passes"
+              % (dead_n, dead_sp, dead_w, dead_spw))
+    if dead_cov_drift:
+        print("[FAIL] cobertura do ponteiro morto: o veredito viu %d tokens sem alvo (%d acusados + %d poupados − %d continuações, que o censo não conhece) e o censo independente, que não chama `deadjudge`, acha %d no mesmo escopo — diferença de %d é o braço tendo parado de olhar (positivo é o censo vendo morto que ninguém julga, negativo é o veredito contando o que não está na árvore)"
+              % (dead_n + dead_sp - dead_c, dead_n, dead_sp, dead_c, dead_seen,
+                 dead_seen - (dead_n + dead_sp - dead_c)))
     # O censo do RECORTE também não depende do corte: a isenção é de classe, não de forma.
     # Divergir aqui é o `continue` de registro datado tendo subido ou descido no laço entre
     # os dois passes — ou seja, exatamente o momento em que a âncora deixaria de ser cobrada
@@ -2640,12 +2828,16 @@ def main():
     if cut_drift:
         print("[FAIL] literal: narrow viu %r e wide viu %r — a régua não depende do corte, a igualdade é invariant"
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
-    # Maquina: as quatro linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
+    # Maquina: as linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
     print("IDENTIDADE %d %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting, resolvidos))
     print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting, fora_n, fora_lin, fora_anc))
     print("CONT %d %d %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on, cov_n, cov_spared))
+    print("MORTOS %d %d %d %d %d %d %d %d %d" % (dead_n, dead_sp, len(dead), dcases, dbiting,
+                                                 1 if dead_cut_drift else 0,
+                                                 dead_c, dead_seen,
+                                                 1 if dead_cov_drift else 0))
     wl_fail = False
     if WL_ON:
         # A lista sai ordenada por classe porque é por classe que ela é lida: primeiro a
@@ -2669,6 +2861,7 @@ def main():
             or rbiting != rcases or abiting != acases or anchor_bad
             or hbiting != hcases or cont_acusados or cont_cut_drift or fora_cut_drift
             or cont_n != cov_n
+            or dbiting != dcases or dead_n or dead_cut_drift or dead_cov_drift
             or wl_fail
             or reg_bad or reg is None):
         return 1
@@ -2679,11 +2872,12 @@ sys.exit(main())
 PYEOF
 )"
 	ident_code=$?
-	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT) '
+	printf '%s\n' "$ident_out" | grep -vE '^(IDENTIDADE|LITERAL|REGISTRO|ANCORA|CONT|MORTOS) '
 	ident_stats="$(printf '%s\n' "$ident_out" | grep '^IDENTIDADE ' | tail -n 1)"
 	lit_stats="$(printf '%s\n' "$ident_out" | grep '^LITERAL ' | tail -n 1)"
 	anc_stats="$(printf '%s\n' "$ident_out" | grep '^ANCORA ' | tail -n 1)"
 	cont_stats="$(printf '%s\n' "$ident_out" | grep '^CONT ' | tail -n 1)"
+	mortos_stats="$(printf '%s\n' "$ident_out" | grep '^MORTOS ' | tail -n 1)"
 	checks=$((checks + 1))
 	if [ -z "$ident_stats" ]; then
 		fail "a régua de identidade não devolveu a linha \`IDENTIDADE\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
@@ -2998,7 +3192,7 @@ def main():
         print("[FAIL] caminho: registro scripts/dead_paths.txt lista %s, mas o arquivo voltou a existir" % path)
     print("caminhos de doc: %d citados e julgados, %d acusacoes, registro com %d excecoes, self-test %d/%d mordendo"
           % (judged, accused, len(dead), biting, cases))
-    print("CAMINHOS %d %d %d %d" % (judged, accused, cases, biting))
+    print("CAMINHOS %d %d %d %d %d" % (judged, accused, cases, biting, len(dead)))
     if biting != cases or accused or judged < MIN_PATHS:
         return 1
     return 0
@@ -3010,6 +3204,10 @@ PYEOF
 	path_code=$?
 	printf '%s\n' "$path_out" | grep -v '^CAMINHOS '
 	path_stats="$(printf '%s\n' "$path_out" | grep '^CAMINHOS ' | tail -n 1)"
+	# O tamanho do registro aceito pela seção 24 sai para fora do `if`: a seção 30 compara
+	# este número com o que a seção 23 acha lendo o MESMO arquivo por regras próprias, e
+	# `set -u` não perdoa ler variável que o ramo de python ausente nunca atribuiu.
+	path_reg=0
 	checks=$((checks + 1))
 	if [ -z "$path_stats" ]; then
 		fail "a régua de caminho não devolveu a linha \`CAMINHOS\` (código $path_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
@@ -3018,7 +3216,8 @@ PYEOF
 		path_accused=0
 		path_cases=0
 		path_biting=0
-		read -r _lab path_judged path_accused path_cases path_biting <<< "$path_stats"
+		path_reg=0
+		read -r _lab path_judged path_accused path_cases path_biting path_reg <<< "$path_stats"
 		checks=$((checks + path_judged))
 		failures=$((failures + path_accused))
 		if [ "$path_biting" -ne "$path_cases" ]; then
@@ -3389,6 +3588,66 @@ else
 		fi
 		if [ "$cont_a" -eq 0 ] && [ "$cont_biting" -eq "$cont_cases" ] && [ "$cont_cases" -gt 0 ] && [ "$cont_seen" -eq "$cont_cov" ]; then
 			echo "[ok] $cont_seen ponteiros de continuação \`:NN\` lidos de $cont_cov no censo independente (0 sem testemunha), $cont_j julgados pelo arquivo herdado nos dois cortes (órfão é acusação), $cont_spared poupados pelo recorte de registro datado, com os $cont_cases controles do self-test mordendo"
+		fi
+	fi
+	# ---------------------------------------------------------------------------
+	# 30) PONTEIRO MORTO: o `arquivo:NN` cujo alvo não resolve em lugar nenhum.
+	#
+	# A porta dos invisíveis tinha três batentes e só dois fechados. A âncora já acusava
+	# o arquivo que não existe (`cita %s e o arquivo não existe`), o caminho de doc já
+	# acusava o `.md` citado que sumiu (seção 24), e o `arquivo:NN` — a forma mais
+	# copiada em incidente de madrugada — saía do walk por `if tl is None: continue` sem
+	# julgamento nenhum. Medido na passada que abriu este buraco: sete tokens sem alvo na
+	# árvore, seis deles prosa que se deixava ler como evidência. Quem cola `abra
+	# docs/x.md:NN` num arquivo que foi removido não recebe erro; recebe a tela vazia, e a
+	# régua dizia verde.
+	#
+	# A exceção é o registro `scripts/dead_paths.txt`, lido por DUAS réguas: esta, que
+	# poupa o acusado, e a seção 24, que valida o motivo e caça a entrada que voltou a
+	# existir. É por isso que o tamanho do registro sai nas duas linhas de máquina e a
+	# igualdade é cerca na bash: `deadset` daqui reimplementa as quatro regras de
+	# `read_registry` de lá, e cópia que apodrece em silêncio é exatamente a doença que
+	# este gate existe para ver. Divergir entre os dois é ou a regra de parse tendo
+	# mudado de um lado, ou o registro ganhando entrada duplicada.
+	#
+	# Sem piso de nível nos mortos (a lição do #137: piso acusa progresso). O anti-vazio
+	# é a igualdade com `deadcensus`, um walk que não chama `deadjudge`: apagar o braço
+	# inteiro leva os dois números a zero *dentro* do veredito, e é o censo separado que
+	# fica dizendo 7.
+	# ---------------------------------------------------------------------------
+	checks=$((checks + 1))
+	if [ -z "$mortos_stats" ]; then
+		fail "a régua do ponteiro morto não devolveu a linha \`MORTOS\` (código $ident_code, python=$PY) — sem contagem, o que ela viu não pode entrar no total"
+	else
+		dead_a=0
+		dead_sp=0
+		dead_reg=0
+		dead_cases=0
+		dead_biting=0
+		dead_drift=0
+		dead_cont=0
+		dead_seen=0
+		dead_cov=0
+		read -r _lab dead_a dead_sp dead_reg dead_cases dead_biting dead_drift dead_cont dead_seen dead_cov <<< "$mortos_stats"
+		checks=$((checks + dead_a + dead_sp))
+		failures=$((failures + dead_a))
+		if [ "$dead_biting" -ne "$dead_cases" ]; then
+			fail "self-test do ponteiro morto mordeu $dead_biting de $dead_cases controles — com o julgamento cego, poupado e acusado são o mesmo número e o zero de acusações não vale nada"
+		fi
+		if [ "$dead_cases" -eq 0 ]; then
+			fail "a tabela de controles do ponteiro morto está vazia (0 de 0) — \`biting == cases\` é verde vazio sem controle, e o registro sem controle próprio é licença para poupar tudo"
+		fi
+		if [ "$dead_drift" -ne 0 ]; then
+			fail "ponteiro morto divergiu entre os dois cortes — o índice ou o registro mudou no meio do run e nenhum dos dois censos vale"
+		fi
+		if [ "$dead_cov" -ne 0 ]; then
+			fail "cobertura do ponteiro morto: o veredito viu $((dead_a + dead_sp - dead_cont)) tokens sem alvo e o censo independente acha $dead_seen no mesmo escopo — o braço parou de olhar, e é a única forma deste gate ficar verde com ponteiros mortos na árvore"
+		fi
+		if [ "$dead_reg" -ne "$path_reg" ]; then
+			fail "as duas réguas que leem \`scripts/dead_paths.txt\` aceitam números diferentes: a seção 23 conta $dead_reg caminho(s), a seção 24 conta $path_reg — ou as quatro regras de parse divergiram, ou o registro ganhou entrada duplicada, e nos dois casos a exceção passou a valer uma coisa em cada régua"
+		fi
+		if [ "$dead_a" -eq 0 ] && [ "$dead_biting" -eq "$dead_cases" ] && [ "$dead_cases" -gt 0 ] && [ "$dead_drift" -eq 0 ] && [ "$dead_cov" -eq 0 ] && [ "$dead_reg" -eq "$path_reg" ]; then
+			echo "[ok] $((dead_a + dead_sp)) ponteiros de linha sem alvo na árvore, todos julgados ($dead_a acusados, $dead_sp poupados pelo registro de $dead_reg caminho(s), $dead_cont deles continuação) contra $dead_seen no censo independente, com os $dead_cases controles do self-test mordendo"
 		fi
 	fi
 fi

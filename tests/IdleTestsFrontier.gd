@@ -73,7 +73,7 @@ func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
 
 # Índice de basename -> caminhos `res://` (no máximo três por nome), construído uma vez por
 # processo. Ele existe porque a documentação escreve ponteiro das duas formas: medido, dos 122
-# `arquivo:linha` do beta, 40 vêm com caminho e 82 com nome cru (a forma `arquivo.gd:681`). Sem
+# `arquivo:linha` do beta, 40 vêm com caminho e 82 com nome cru (a forma `arquivo.gd:NN`). Sem
 # índice a régua olharia um terço da evidência que diz estar olhando.
 static var _ptrIndex : Dictionary = {}
 
@@ -109,6 +109,40 @@ const EVIDENCIA_FORA : Array[String] = ["CHANGELOG.md", "progress.md", "ROADMAP_
 # mesa abaixo cobra.
 static func _ForaDaEvidencia(path : String) -> bool:
 	return EVIDENCIA_FORA.has(path.get_file())
+
+# O registro de caminhos mortos (`scripts/dead_paths.txt`) é a única licença que um
+# `arquivo:NN` sem alvo tem. Ele é lido por TRÊS réguas — a seção 24 da bash valida o
+# motivo e caça a entrada que voltou a existir, a seção 23 poupa o acusado com ele, e esta
+# faz as duas coisas num juíz que roda sem python. As quatro regras de parse são as mesmas
+# de lá. `_DeadParse` é separada de `_DeadRegistry` justamente para poder ser
+# mordida em mesa: o texto entra como argumento, nenhum arquivo é tocado.
+# Nome sem barra não entra (o `read_registry` de lá recusa, e um basename vivo poderia ser
+# isentado por engano); só `.md` entra (as outras extensões são produto, e produto removido
+# é trabalho, não histórico); motivo abaixo de 12 caracteres não entra (isenção sem frase
+# não é exceção, é buraco).
+const DEAD_MOTIVO_MIN : int = 12
+
+static func _DeadParse(raw : String) -> Dictionary:
+	var out : Dictionary = {}
+	var pathRx : RegEx = RegEx.create_from_string("^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\\.md$")
+	for row in raw.split("\n"):
+		var line : String = String(row).strip_edges()
+		if line == "" or line.begins_with("#"):
+			continue
+		if not line.contains("|"):
+			continue
+		var parts : PackedStringArray = line.split("|", true, 1)
+		var path : String = String(parts[0]).strip_edges()
+		var reason : String = (String(parts[1]) if parts.size() > 1 else "").strip_edges()
+		if pathRx.search(path) == null:
+			continue
+		if reason.length() < DEAD_MOTIVO_MIN:
+			continue
+		out[path] = reason
+	return out
+
+func _DeadRegistry() -> Dictionary:
+	return _DeadParse(_RepoFile("res://scripts/dead_paths.txt"))
 
 # Acusação nascida dentro de registro datado é MEDIDA, não cobrada. É o recorte exato que a
 # régua bash faz com o `SKIP_NAMES` dela — história não é especificação viva, e um portão que
@@ -808,7 +842,7 @@ static func _OwnerPtr(ptrRecs : Array, docLines : PackedStringArray, line : int,
 	# caracteres antes, e a régua passa a acusar menção como se fosse citação. Duas
 	# condições: distância de cláusula e nenhum outro ponteiro entre o nome e ele.
 	# 140 caracteres: um nome e seu ponteiro vivem na mesma cláusula quando escritos
-	# na forma deste repo — ``Foo`` (`arquivo.gd:12-30`) são ~40.
+	# na forma deste repo — ``Foo`` (`arquivo.gd:NN-NN`) são ~40.
 	var clauseWindow : int = 140
 	var best : Array = []
 	var bestDist : int = clauseWindow + 1
@@ -1082,16 +1116,25 @@ func SuiteEvidencePointers() -> void:
 	var identes : Array[String] = []
 	var metricosFora : Array[String] = []
 	var historia : Array[String] = []
-	# O balde da história, junto dos seis que cobram: é a única forma de julgar um registro sem
+	var mortos : Array[String] = []
+	# O balde da história, junto dos sete que cobram: é a única forma de julgar um registro sem
 	# obrigar ninguém a reescrevê-lo. Os mesmos objetos entram nos `CheckEq` de cima pela mão do
 	# `_Acusa`, então não há segunda lista que possa ser esquecida no veredito.
 	var sinks : Dictionary = {
 		"quebrados": quebrados, "derrapados": derrapados, "vazios": vazios,
 		"deslocados": deslocados, "identes": identes, "metricosFora": metricosFora,
-		"historia": historia,
+		"historia": historia, "mortos": mortos,
 	}
 	var metricos : int = 0
 	var conferidos : int = 0
+	# O censo do ponteiro morto visto pelo veredito: quantos `arquivo:NN` tiveram alvo que não
+	# resolve, e quantos deles o registro cobriu. Os dois saem impressos porque a exceção tem de
+	# ser contada — sem o número dos poupados, "0 acusações" passaria a significar também "a
+	# licença cresceu", que é justamente o que `registry_rot` caça na bash.
+	var mortosVistos : int = 0
+	var mortosPoupados : int = 0
+	var mortosCont : int = 0
+	var deadReg : Dictionary = _DeadRegistry()
 	var conferidosCode : int = 0
 	var mdOlhados : int = 0
 	var comMensagem : int = 0
@@ -1161,7 +1204,7 @@ func SuiteEvidencePointers() -> void:
 		for i in docLines.size():
 			var ptrLine : String = String(docLines[i])
 			# Em código só o comentário é prosa de evidência; em JSON toda linha é, porque não
-			# existe marcador de comentário ali. Corpo de função pode conter um shape `x.gd:12`.
+			# existe marcador de comentário ali. Corpo de função pode conter um shape `x.gd:NN`.
 			if not wholeProse and not ptrLine.strip_edges().begins_with("#"):
 				continue
 			var matches : Array[RegExMatch] = ptrRx.search_all(ptrLine)
@@ -1172,12 +1215,23 @@ func SuiteEvidencePointers() -> void:
 				window += String(docLines[w]) + "\n"
 			for m in matches:
 				var cited : String = String(m.get_string(1))
-				var resPath : String = _PtrResolve(cited)
-				if resPath == "":
-					continue
 				# O SÍTIO abre a mensagem: sem `arquivo:linha` de quem cita, a régua devolve
 				# uma acusação verdadeira e não editável — quem corrige teria de caçar a frase.
 				var site : String = "%s:%d" % [String(docPath).trim_prefix("res://"), i + 1]
+				var resPath : String = _PtrResolve(cited)
+				if resPath == "":
+					# A porta dos invisíveis, fechada também aqui. Até esta linha o gémeo era
+					# o juíz mais silencioso dos dois: a régua bash já acusava o arquivo morto
+					# na âncora, o harness não acusava nem numa forma nem noutra. O registro é
+					# a única licença, e o número dos vistos sai impresso mesmo no verde, porque
+					# "0 acusações" e "0 olhados" têm de continuar sendo frases diferentes.
+					mortosVistos += 1
+					if deadReg.has(cited):
+						mortosPoupados += 1
+					else:
+						_Acusa(sinks, String(docPath), "mortos",
+								"%s: `%s` e o alvo não resolve — nem caminho literal, nem sufixo único, nem nome único na árvore; se o arquivo saiu do repositório, registre o caminho em `scripts/dead_paths.txt` com motivo, senão a frase afirma evidência que ninguém pode abrir" % [site, cited])
+					continue
 				if not lineCache.has(resPath):
 					lineCache[resPath] = _RepoFile(resPath).split("\n")
 				var src : PackedStringArray = lineCache[resPath]
@@ -1504,7 +1558,16 @@ func SuiteEvidencePointers() -> void:
 					continue
 				var ctarget : String = _PtrResolve(cfile)
 				if ctarget == "":
-					contos.append("%s: continuação %s herda de `%s`, que não resolve a arquivo na árvore" % [csite, cmatch.get_string(0), cfile])
+					# A licença é do ARQUIVO, não da forma: a bash poupa a continuação cujo
+					# pai está registrado pelo mesmo motivo que poupa o pai. A âncora continua
+					# sem licença em nenhum dos dois juízes — âncora em arquivo removido não tem
+					# bloco a julgar, e registrar um morto para depois ancorar nele é contraditório.
+					mortosVistos += 1
+					mortosCont += 1
+					if deadReg.has(cfile):
+						mortosPoupados += 1
+					else:
+						contos.append("%s: continuação %s herda de `%s`, que não resolve a arquivo na árvore" % [csite, cmatch.get_string(0), cfile])
 					continue
 				if not lineCache.has(ctarget):
 					lineCache[ctarget] = _RepoFile(ctarget).split("\n")
@@ -1586,6 +1649,66 @@ func SuiteEvidencePointers() -> void:
 			"continuação morde na borda em branco: herdada para a linha vazia é acusada (%s)" % _ContStruct(contMesaSrc, 2, 2))
 	Check(_ContStruct(contMesaSrc, 3, 9).contains("arquivo de 3"),
 			"continuação morde no fim do arquivo: herdada além da última linha é acusada (%s)" % _ContStruct(contMesaSrc, 3, 9))
+	# ---------------------------------------------------------------------------
+	# (10) PONTEIRO MORTO: o `arquivo:NN` cujo alvo não resolve em lugar nenhum.
+	#
+	# Os dois juízes tinham o mesmo batente aberto: o veredito abaixo já foi `continue`
+	# silencioso, enquanto a ÂNCORA do mesmo arquivo morto era acusada. Medido na passada
+	# que fechou a porta (bash, seção 30): sete tokens sem alvo na árvore, cinco sites de
+	# prosa que se deixava ler como evidência e um registrado como morto. Os cinco foram
+	# reescritos para a forma metassintática; o sexto fica como a exceção contada.
+	#
+	# O censo que cerca o braço é um walk separado, que resolve alvo e conta — sem ler o
+	# registro e sem passar pelo veredito. Um piso de nível estaria errado aqui pela razão
+	# do #137: converter um ponteiro morto em citação honesta derruba o saldo sem derrubar
+	# o walk. O que se cobre é a DIFERENÇA entre os dois censos, e ela é zero nos dois
+	# sentidos: positivo é o censo vendo morto que ninguém julga, negativo é o veredito
+	# contando o que não está na árvore.
+	# ---------------------------------------------------------------------------
+	var mortosCenso : int = 0
+	for cenPath in sweep:
+		var cenProse : bool = ["md", "json"].has(String(cenPath).get_extension().to_lower())
+		var cenLines : PackedStringArray = _RepoFile(cenPath).split("\n")
+		for k in cenLines.size():
+			var cenLine : String = String(cenLines[k])
+			if not cenProse and not cenLine.strip_edges().begins_with("#"):
+				continue
+			for cp in ptrRx.search_all(cenLine):
+				if _PtrResolve(String(cp.get_string(1))) == "":
+					mortosCenso += 1
+	# As continuações saem do lado do veredito porque o censo acima só conhece `ptrRx`: o
+	# `:NN` herdado não tem arquivo para resolver, e quem o herda é o braço. A conta é
+	# portanto "vistos menos continuações == vistos pelo censo", a mesma igualdade que a
+	# seção 30 da bash cerca em número.
+	CheckEq(mortosVistos - mortosCont, mortosCenso,
+			"cobertura do ponteiro morto: o veredito viu %d ponteiros nomeados sem alvo (%d vistos − %d continuações) e o censo que não lê o registro acha %d no mesmo escopo — diferença de %d (positivo é morto que ninguém julga, negativo é o veredito contando o que não está na árvore). É esta a cerca que sobrevive a apagarem o braço: sem ela, remover o veredito leva os dois números a zero dentro dele" % [
+				mortosVistos - mortosCont, mortosVistos, mortosCont, mortosCenso, mortosCenso - (mortosVistos - mortosCont)])
+	print("  [info] ponteiro morto: %d vistos pelo veredito, %d poupados pelo registro de %d caminho(s), %d deles continuação, %d acusados, %d vistos pelo censo separado — a licença é contada porque exceção sem número impresso é a mesma licença que a seção 24 caça" % [mortosVistos, mortosPoupados, deadReg.size(), mortosCont, mortos.size(), mortosCenso])
+	# O registro mordendo em mesa: as quatro regras são as da bash, e sem os controles uma
+	# `split` distraidamente diferente pouparia tudo (ou nada) em silêncio. Nenhum arquivo é
+	# tocado aqui — `_DeadParse` recebe o texto, e é por isso que ela existe separada.
+	var deadOk : Dictionary = _DeadParse("a/b.md | motivo longo o bastante para valer\n")
+	Check(deadOk.has("a/b.md"), "registro: entrada válida poupa (%s)" % str(deadOk.keys()))
+	Check(_DeadParse("a/b.md sem pipe nenhum aqui\n").is_empty(),
+			"registro: entrada sem motivo não poupa — isenção implícita é buraco, não exceção")
+	Check(_DeadParse("a/b.md | tao curto\n").is_empty(),
+			"registro: motivo curto não poupa (%d caracteres abaixo do piso de %d)" % ["tao curto".length(), DEAD_MOTIVO_MIN])
+	Check(_DeadParse("soNome.md | motivo longo o bastante para valer\n").is_empty(),
+			"registro: nome sem barra não entra — o `read_registry` de lá recusa, e um basename vivo não pode ser isentado por engano")
+	Check(_DeadParse("a/b.gd | motivo longo o bastante para valer\n").is_empty(),
+			"registro: só `.md` entra — produto removido é trabalho, não histórico")
+	Check(_DeadParse("# a/b.md | motivo longo o bastante para valer\n").is_empty(),
+			"registro: comentário não poupa")
+	Check(_DeadParse("  a/b.md  |   motivo longo o bastante para valer  \n").has("a/b.md"),
+			"registro: espaço em volta não impede a licença")
+	var deadPipe : Dictionary = _DeadParse("a/b.md | motivo com | pipe dentro\n")
+	Check(deadPipe.get("a/b.md", "") == "motivo com | pipe dentro",
+			"registro: o primeiro pipe separa, os seguintes são do motivo (veio \"%s\")" % String(deadPipe.get("a/b.md", "")))
+	Check(_DeadParse("a/b.md | motivo longo o bastante\na/c.md | outro motivo longo o bastante\n").size() == 2,
+			"registro: duas entradas, dois caminhos")
+	Check(not deadOk.has("a/c.md"),
+			"registro: a licença é do caminho escrito, não de um vizinho de diretório")
+	CheckEq(mortos.size(), 0, "ponteiro morto: nenhum dos %d `%s` citados cai em arquivo que não existe, e os que existiram estão registrados com motivo (%s)" % [mortosVistos, "arquivo:NN", " | ".join(mortos)])
 	CheckEq(quebrados.size(), 0, "ponteiros: %d referências arquivo:linha conferidas, nenhuma fora do arquivo (%s)" % [conferidos, " | ".join(quebrados)])
 	CheckEq(vazios.size(), 0, "ponteiros: nenhuma das %d referências cai em linha em branco — ponteiro em branco não mostra nada para quem abre no número citado (%s)" % [conferidos, " | ".join(vazios)])
 	CheckEq(derrapados.size(), 0, "ponteiros: %d mensagens de check citadas na prosa batem com a linha indicada (%s)" % [comMensagem, " | ".join(derrapados)])

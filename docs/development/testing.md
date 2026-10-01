@@ -533,8 +533,8 @@ tocam estado de jogo — `SuiteEvidencePointers()`, `SuiteHarnessCitations()` e
 `Launcher` (e portanto do servidor local) acontece mesmo assim, porque a sonda sobe a
 árvore normal. A régua de citação de harness entrou na sonda em 2026-09-28 pelo
 motivo que a sonda existe: o controle de fantasma dela ficou vermelho e ninguém viu
-por 20 min — só o gate completo a roda. Medido em 2026-09-28, nesta máquina:
-**533 checks, 0 failures** em menos de um minuto, contra os ~20 min do gate `idle`,
+por 20 min — só o gate completo a roda. Medido em 2026-10-01, nesta máquina:
+**623 checks, 0 failures** em menos de um minuto, contra os ~20 min do gate `idle`,
 que executa as 93 suítes chamadas por
 `tests/run_idle_tests.gd` <!-- DRIFT idle_suites 93 -->. Este número é o único da
 seção recalculado a cada passada: a régua 22 de `scripts/check_doc_drift.sh` conta os
