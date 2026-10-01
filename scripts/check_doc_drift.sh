@@ -1074,15 +1074,23 @@ REG_MIN=2
 # braço de identidade comia o prefixo bruto da linha enquanto o de literal cortava a
 # oração, e dois juízes da MESMA promessa liam duas promessas. Agora os dois chamam
 # `lit_clause` e os dois perdoam o nome do próprio arquivo; cada isenção entrou no
-# self-test com o espelho que prova que não é manto, e os controles mordem 50/50.
+# self-test com o espelho que prova que não é manto, e os controles mordem 56/56.
 # A passada do órfão baixou o teto em UM, e o número pequeno é a descoberta, não o
 # barulho: o censo de linha nunca foi onde o custo morava. Dos 22 números sem arquivo,
 # nenhum foi devolvido à linha certa — dez viraram âncora, quatro viraram um só
 # ponteiro de enumeração, seis eram esta régua citando a si mesma e dois eram exemplo de
 # sintaxe no harness. O que cai de vinte e dois para zero não é marreta paga, é classe
 # que enfim tem juiz; régua nova se prova em acusação, não em ratchet de linha.
+#
+# Os quatro abaixo dos 490 saíram com o fim do `sources/sql/SQL.gd`: as duas seções de
+# WorkOrder foram para `sources/sql/SQLGrants.gd` (o teto anti-god-node de lá estourou)
+# e o ensaio que as prendia no fim do arquivo ia junto dizendo quais linhas a doc nomeia
+# — quatro ponteiros que existiam para avisar quem edita, não para apontar evidência. O
+# aviso verdadeiro sobrevive no texto novo, sem número. É a primeira vez que esta régua
+# desce por causa de fatiamento de código, e é o que #124 promete: quando o ponteiro
+# deixa de ser o que impede a mudança, ele some sozinho na mudança.
 ANCHOR_MIN=148
-LINE_MAX=490
+LINE_MAX=486
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
 	checks=$((checks + 1))

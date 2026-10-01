@@ -103,9 +103,13 @@ eles apodrecem em dias e o teto real é medido no próprio run por
 `scripts/check_god_nodes.sh`. Ao lado dele, em `sources/sql/`: `SQLCommons.gd`
 (constantes/caminho de DB), `SQLBackups.gd` (worker de backup + rotação do meta
 game), `SQLReadPool.gd` + `SQLReadRules.gd` (conexões só-leitura do WAL fora do
-`queryMutex`, e o decisor puro que decide o que pode ser lito por elas) e
-`SQLSecurity.gd` (contador persistido de tentativas de auth — o que o `SQL.gd`,
-congelado, não podia hospedar). Os dez módulos de domínio que esta página listava
+`queryMutex`, e o decisor puro que decide o que pode ser lito por elas),
+`SQLSecurity.gd` (contador persistido de tentativas de auth) e `SQLGrants.gd`
+(como o ouro e os lotes do settle descem para o banco). O que estas fatias hospeda
+não é capricho: `SQL.gd` tem teto medido no gate de tamanho, e um arquivo no teto
+não recebe regra nova — quem precisa de lugar sai para uma fatia do mesmo padrão
+(`RefCounted`, tudo estático, o store entra como parâmetro para o harness poder
+passar um fake) enquanto a fachada mantém o contrato público. Os dez módulos de domínio que esta página listava
 (`SQLMigration`, `SQLAccount`, `SQLCharacter`, `SQLStats`, `SQLInventory`,
 `SQLEquipment`, `SQLProgress`, `SQLEconomy`, `SQLBan`, `SQLUtils`) foram
 **removidos em 2026-09-24**: zero referências em `sources/` e `tests/`, e eram

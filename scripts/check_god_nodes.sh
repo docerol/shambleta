@@ -71,6 +71,12 @@ RATCHET_SLACK=200
 # (ondas #81–#104, endurecimento server-authoritative) com 34 linhas de guards de
 # admissão/ledger no funil. São leitura de decisão, não crescimento silencioso: o teto
 # vai no valor exato medido.
+# E desceu: 1842 → 1821 em 2026-10-01, primeira queda desta régua por FATIAMENTO e não
+# por apertar folga. As duas últimas seções do arquivo (WorkOrder #88, o delta de ouro,
+# e WorkOrder #109, o lote de drops) saíram para `sources/sql/SQLGrants.gd` no mesmo
+# padrão das outras fatias do diretório — `RefCounted`, estáticas, store por parâmetro —
+# e a fachada ficou com a delegação, que é o contrato que a doc nomeia. O teto volta ao
+# valor exato medido: quem precisar de linha a mais sobe com o motivo escrito aqui.
 # Exceção registrada: `sources/economy/AuctionHouseService.gd` (1258) e
 # `sources/economy/CheckoutService.gd` (923) saíram debaixo do teto duro de 800 porque
 # as ondas #81–#104 acrescentaram os controles de wash do leilão (migration
@@ -81,7 +87,7 @@ RATCHET_SLACK=200
 declare -A RATCHET=(
   ["sources/network/server/Server.gd"]=1971
   ["sources/world/WorldCommands.gd"]=1925
-  ["sources/sql/SQL.gd"]=1842
+  ["sources/sql/SQL.gd"]=1821
   ["sources/economy/AuctionHouseService.gd"]=1258
   ["sources/economy/CheckoutService.gd"]=923
   ["sources/network/client/Client.gd"]=1139

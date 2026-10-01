@@ -1158,7 +1158,7 @@ func UpdateStat(charID : int, stats : ActorStats) -> bool:
 		"karma" = stats.karma
 	}
 	# WorkOrder #88: `gp` saiu deste dicionário — ouro é gravado em RELATIVO por
-	# `FlushGoldDelta` (fim do arquivo); snapshot absoluto apagaria escrita do kernel.
+	# `SQLGrants.FlushGoldDelta`; snapshot absoluto apagaria escrita do kernel.
 	return db.update_rows("stat", "char_id = %d" % charID, data) and FlushGoldDelta(charID, stats)
 
 # Inventory
@@ -1807,106 +1807,15 @@ func Wipe():
 	db.delete_rows("stat", "")
 	db.delete_rows("trait", "")
 
-# ------------------------------------------------------------------ WorkOrder #88
-# Mora no fim do arquivo de propósito: `scripts/test.sh structure` e a régua de
-# ponteiros de evidência (`IdleTests.SuiteEvidencePointers`) amarram a prosa de
-# `deploy/`/`README.md` a linhas nomeadas deste arquivo. São elas:
-# `SQL.gd:1545-1553`, `SQL.gd:1581`, `SQL.gd:1584` e `SQL.gd:1771-1778`. Inserir no meio das
-# seções de cima deslocaria todas elas.
-#
-# O ouro do personagem tem DOIS escritores do mesmo `stat.gp`: o agente carregado
-# (faucet de farm, que vive na memória e só desce para o banco aqui) e o kernel
-# (`_MoveGoldLocked`, que grava no banco direto para loja, forja, guilda, copa,
-# boss, streak, checkout e leilão). Enquanto `UpdateStat` era snapshot ABSOLUTO do
-# agente, o passe de 600 s do `World.BackupPlayers` apagava a segunda origem: o
-# débito do vendor voltava a existir no comprador com o item no bolso (ouro
-# infinito) e o crédito do checkout desaparecia do contemplado. Agora a memória
-# entrega só o DELTA que ganhou desde o último flush — as duas origens compõem em
-# vez de uma apagar a outra.
-#
-# Lastro (`gpFlushed`): posto com o valor do banco na carga do personagem
-# (`PlayerAgent.SetCharacterInfo`) e avançado junto com a memória pelo kernel
-# (`EconomyKernel.ApplyGoldMoves`), porque o que o kernel grava já está no banco.
-# `-1` = agente nunca carregado do banco, e aí não se credita nada às cegas. O
-# piso 0 é o único teto: um lastro errado nunca pode mintar ouro, e quem gasta
-# passa pelo kernel, que recusa carteira negativa.
+# ------------------------------------------------------------------ WorkOrder #88 / #109
+# O corpo das duas seções saiu para `SQLGrants` na fatia do teto anti-god-node deste
+# arquivo; aqui só há delegação, que é o contrato que a prosa de `deploy/` nomeia e o
+# que `UpdateStat` chama. As duas moravam no FIM do arquivo por causa de ponteiro: a
+# régua de evidência amarra prosa a linhas nomeadas daqui, e inserir código no meio
+# deslocava todas. Mover o fim foi a única fatia que não cobrou marreta nenhuma — os
+# ponteiros que a régua lê sobre este arquivo apontam todos para antes desta linha.
 func FlushGoldDelta(charID : int, stats : ActorStats) -> bool:
-	if stats == null or stats.gpFlushed < 0:
-		return true
-	var delta : int = stats.gp - stats.gpFlushed
-	if delta == 0:
-		return true
-	if not ExecuteBindings("UPDATE stat SET gp = MAX(0, gp + ?) WHERE char_id = ?;", [delta, charID]):
-		return false
-	stats.gpFlushed = stats.gp
-	return true
-
-# ------------------------------------------------------------------ WorkOrder #109
-# Mora no fim do arquivo pela mesma razão da seção #88: ponteiros de evidência
-# (`deploy/`, `README.md`, `IdleTests.SuiteEvidencePointers`) amarram prosa a
-# linhas nomeadas deste arquivo, e inserir no meio deslocaria todas.
-#
-# O settle offline concedia drop por drop em `AddItemToCharacter`, que são QUATRO
-# statements por identidade lida: o `select_rows` da pilha, o `update_rows`/
-# `insert_row` dela, o `insert_row` do lote em `item_instance` e o
-# `SELECT last_insert_rowid()` que devolve o uid. Com a distribuição real de
-# drops (#95) um settle de uma hora rola ~40 identidades, ou seja ~160 statements
-# por transação — medido em 2026-09-30 com o mesmo probe de 800 settles, na mesma
-# máquina, contra o worktree de `2fad68b`: p50 479 → 3811 µs (8×) e max 940 µs →
-# 540081 µs, com 10 hitches acima de 50 ms onde o baseline tinha zero. A régua de
-# latência viu; o que ela não via é que o custo era o FORMATO da escrita, não a
-# quantidade de item — os mesmos 32246 lotes saem por dois statements aqui.
-#
-# As duas afirmações abaixo são exatamente o laço antigo, em lote:
-#   - a pilha sobe por `count = count + excluído`, que é o que o read-modify-write
-#     fazia, só sem a janela entre ler e somar;
-#   - cada identidade ganha UM lote em `item_instance` com o mesmo carimbo `bound`
-#     lido da célula (regra #88), o mesmo `reason`, `storage` 0 e sem pai.
-# Lotes não são fundidos: um lote por identidade é o que o ledger e o escrow (#94)
-# exigem. O que some é a ida e volta por identidade.
-#
-# A fatia de 512 identidades por statement é o teto de parâmetros: 9 bindings por
-# linha, e o limite do SQLite para host parameters é 32766. Uma recolha de muitos
-# dias passa por aqui mais de uma vez, em vez de estourar a ligação.
-const GrantBatchSlice : int = 512
+	return SQLGrants.FlushGoldDelta(self, charID, stats)
 
 func AddItemsBatchToCharacter(charID : int, rolls : Dictionary, reason : String = "settle") -> bool:
-	if rolls.is_empty():
-		return true
-	var stampedAt : int = SQLCommons.Timestamp()
-	var ids : Array = rolls.keys()
-	var from : int = 0
-	while from < ids.size():
-		var to : int = mini(from + GrantBatchSlice, ids.size())
-		var stackValues : String = ""
-		var stackParams : Array = []
-		var lotValues : String = ""
-		var lotParams : Array = []
-		for i in range(from, to):
-			var itemID : int = int(ids[i])
-			var count : int = int(rolls[ids[i]])
-			if itemID <= 0 or count <= 0:
-				return false
-			var sep : String = "," if i > from else ""
-			stackValues += "%s(?, ?, ?, 0, '')" % sep
-			stackParams.append(itemID)
-			stackParams.append(charID)
-			stackParams.append(count)
-			var bound : int = 1 if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)) else 0
-			lotValues += "%s(?, ?, ?, 0, ?, '', ?, 0, 0, ?)" % sep
-			lotParams.append(charID)
-			lotParams.append(itemID)
-			lotParams.append(count)
-			lotParams.append(bound)
-			lotParams.append(reason)
-			lotParams.append(stampedAt)
-		if not ExecuteBindings("INSERT INTO item (item_id, char_id, count, storage, customfield) "
-			+ "VALUES " + stackValues
-			+ " ON CONFLICT(char_id, item_id, storage, customfield) DO UPDATE SET count = item.count + excluded.count;",
-			stackParams):
-			return false
-		if not ExecuteBindings("INSERT INTO item_instance (char_id, item_id, count, storage, bound, customfield, reason, parent_uid, creator_account_id, created_at) "
-			+ "VALUES " + lotValues + ";", lotParams):
-			return false
-		from = to
-	return true
+	return SQLGrants.AddItemsBatchToCharacter(self, charID, rolls, reason)

@@ -3,8 +3,9 @@ class_name SQLSecurity
 
 # SOM-IDLE AUTH-P1 (auditoria 2026-09-27, trilha "login hardening): contador de
 # tentativas PERSISTIDO por origem para as rotas de auth que o `SQL.gd` (allowlist
-# anti-god-node, congelado em 1502 linhas) não pode hospedar. Toda regra abaixo é
-# estática e recebe o store (`Launcher.SQL`, ou um fake no harness — mesmo seam do
+# anti-god-node, com o teto valendo por ratchet no gate de tamanho de arquivo) não
+# pode hospedar. Toda regra abaixo é estática e recebe o store (`Launcher.SQL`, ou um
+# fake no harness — mesmo seam do
 # `EmailService.resetStore`) como parâmetro: nenhum contador mora em memória de
 # processo, porque lockout que morre no restart é oracle de brute-force (o
 # atacante só espera o deploy).
