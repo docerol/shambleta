@@ -190,7 +190,7 @@ resultado do harness e regravá-la neste arquivo é o número que mente no commi
   mesma `queryMutex`. Espera dela é medida, não suposta: o ponto único de lock é
   `_LockQueryMutex()` (`sources/sql/SQL.gd:@_LockQueryMutex`), que cronometra cada seção com
   `Time.get_ticks_usec()`. Os contadores e a cauda >1/>10/>100 ms são declarados
-  por `mutexWaits` (`sources/sql/SQL.gd:1545-1553`) e acumulados dentro da
+  por `mutexWaits` (`sources/sql/SQL.gd:@mutexWaits`) e acumulados dentro da
   seção crítica por `mutexWaitMicroseconds`
   (`sources/sql/SQL.gd:1565-1574`); a leitura é `SQL.QueryMutexWaitSeconds()`
   (`sources/sql/SQL.gd:@QueryMutexWaitSeconds`, forma counter Prometheus) e

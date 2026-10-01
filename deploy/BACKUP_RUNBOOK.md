@@ -79,7 +79,7 @@ não é volume), não disco cheio — confira o §3.2 antes de culpar o `df`.
 
 ## 4. Restauração (janela de manutenção)
 
-Migrations são **forward-only** (`ApplyMigrations()`, `sources/sql/SQL.gd:113-168`) e
+Migrations são **forward-only** — `ApplyMigrations` em `sources/sql/SQL.gd:@ApplyMigrations` — e
 a auditoria de 2026-09-27 registra que as primeiras (`005_reset_positions_and_inventory.sql`,
 `006_reset_progress_veteran_legacy.sql`) são data-reset — restaurar um backup mais
 velho que a última migration aplicada **não** devolve o estado esperado se houver

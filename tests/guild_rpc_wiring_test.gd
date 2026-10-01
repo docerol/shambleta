@@ -369,7 +369,7 @@ func _suitePureClient() -> void:
 		return
 	Callable(panel, "SetLocalIDs").call(0, 0)
 	# B re-entra PELO SERVIDOR antes das pernas do painel. Não é enfeite: com um único
-	# membro, o `LeaveGuild` do produto DISSOLVE a guilda (`GuildService.gd:124`) e as
+	# membro, o `LeaveGuild` do produto DISSOLVE a guilda (`GuildService.gd:@LeaveGuild`) e as
 	# quatro pernas seguintes estariam medindo um cadáver — reentrar numa guilda apagada
 	# dá `false` pelo motivo errado.
 	_openSession(acctB, charB, authPeer)

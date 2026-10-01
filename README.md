@@ -69,7 +69,7 @@ and `F11` fullscreen — the four game-state-only ones are gated on the same lin
 they are read. `F12` is the exception: it is a raw key, not an action, because the
 `ui_f10` action it used to call never existed (`_input()` in `sources/gui/Gui.gd:@_input` explains
 why it moved off `F10`). None of these keys exist on web or mobile, so every window
-is also reachable by tap: the on-screen `Menu` indicator (`_on_button_pressed()` in `MenuIndicator.gd:63`)
+is also reachable by tap: the on-screen `Menu` handler `_on_button_pressed` (`MenuIndicator.gd:@_on_button_pressed`)
 opens the 17 `WindowButton` icons declared in `presets/gui/Game.tscn` (Stat,
 Inventory, Skill, Minimap, Chat, Emote, Social, Settings, ZoneMap, Formation, AFK,
 Chests, Shop, Leaderboard, SeasonPass, Cosmetics, Boss), and the idle HUD that `F12`

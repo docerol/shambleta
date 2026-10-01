@@ -264,9 +264,9 @@ de 430 para 410 px devolve `RESULT: 282 checks, 2 failures` e exit code 2, enqua
 estado medido de hoje passa em 282 checks.
 
 **O que fica aberto, com dono e número.** (a) O fator 0,30 só se fecha no espaço de
-design — base/stretch em `project.godot`, não neste documento e não na chrome; com
-`MobileDefault` = 1,2 (`sources/gui/GuiUiScale.gd:17`) o alvo físico continua 14,6 CSS
-px, e a régua imprime isso como `[aberto]` em vez de fingir verde. (b) As 8 janelas
+design — base/stretch em `project.godot`, não neste documento e não na chrome; com o
+`MobileDefault` (`sources/gui/GuiUiScale.gd:@MobileDefault`) em 1,2 o alvo físico
+continua 14,6 CSS px, e a régua imprime isso como `[aberto]` em vez de fingir verde. (b) As 8 janelas
 acima têm corpo em `sources/gui/*.gd`/`presets/gui/*.tscn` fora do escopo desta
 mudança; o teto nomeado delas é o que barra, e a meta 390×844 continua declarada —
 mesma política da seção de ratchet de peso acima: quando o teto real está acima da

@@ -901,7 +901,7 @@ static func _CodeAndDataProseAll() -> Array[String]:
 # A mensagem de um check é o ÚLTIMO literal de linha. `Check(src.contains("SetupTwoFactor"), "…")`
 # tem um identificador no meio e o rótulo no fim, e foi isso que mordeu quando a janela da regra (3)
 # abriu: com ±2 linha, dois nomes de método viraram "mensagem de check" (`SetupTwoFactor`, achado em
-# `IdleTests.gd:5485`, e `GetGuildForAccount`, em `GuildService.gd:68`) sem que nenhuma citação
+# `IdleTests.gd:5485`, e `GetGuildForAccount` em `GuildService.gd:@GetGuildForAccount`) sem que nenhuma citação
 # verdadeira tivesse sido ganha. Recortar pelo rótulo é o que permite a janela maior: ela passa a
 # alcançar a citação que a frase separa do ponteiro, e o corte devolve o sinal que a janela sozinha
 # não tem.
@@ -1826,7 +1826,7 @@ func SuiteEvidencePointers() -> void:
 	# nos dois lados da divisão. Não é afrouxamento gratuito — cada âncora do numerador
 	# é uma citação que o braço (8) acusa se o símbolo não resolver, não declarar ou
 	# declarar duas vezes (o `anchorias` acima é um CheckEq em zero), e o denominador
-	# cresce junto. Folga medida: 169/556 = 30%, contra os 22% de antes do outro corpo.
+	# cresce junto. Folga medida hoje: 185/591 = 31% (52 identidades de linha + 133 âncoras).
 	Check((comIdentidade + ancJulgadas) * 5 >= conferidos + ancJulgadas,
 			"citação nomeada: %d+%d de %d+%d (linha julgada por símbolo, âncoras vistas) é pelo menos um quinto do que a família olha — abaixo disso a mordida medida é do tamanho do que a prosa deixou dizer" % [comIdentidade, ancJulgadas, conferidos, ancJulgadas])
 	# O braço (d) nasceu nesta rodada, então o piso é o MEDIDO com margem, não o desejado: a

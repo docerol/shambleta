@@ -904,9 +904,9 @@ func _suiteEscrowLineage() -> void:
 	# comprador).size() == 2` logo depois desta liquidação — e isso é insatisfazível
 	# por construção, não por defeito do produto: anunciar consome o lote de origem e
 	# `ConsumeItemLotsRaw` (`SQL.gd:@ConsumeItemLotsRaw`) APAGA a linha quando leva a
-	# inteireza — o `DeleteRowsRaw` é o ramo do `take >= have` (`SQL.gd:847-851`), sendo que o lote de
+	# inteireza — o `DeleteRowsRaw` é o ramo do `take >= have` (`SQL.gd:@DeleteRowsRaw`), sendo que o lote de
 	# origem aqui tinha exatamente 1 unidade. `LotHistory` só anexa um salto quando
-	# `GetItemLot` acha a linha (`SQL.gd:441-443`) e para no pai apagado; o uid
+	# `GetItemLot` acha a linha (`SQL.gd:@GetItemLot`) e para no pai apagado; o uid
 	# original sobrevive no `parent_uid` do comprador (a linha acima) e em
 	# `ah_escrow_lot` até a liquidação, que é o que a invariante da migração 063
 	# declara. O número 2, portanto, não tinha mordida nenhuma: o código pré-#94

@@ -234,7 +234,7 @@ reset de senha não envia e-mail.
 
 | Tarefa | Como |
 |---|---|
-| Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLCommons.gd:43` + `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
+| Backup | Automático: diário local em `/data/.../sql-backups/DAILY/` (o nome do diretório é a chave do enum `BackupFrequency` em `sources/sql/SQLCommons.gd:@BackupFrequency`, portanto MAIÚSCULO — `sources/sql/SQLBackups.gd:12`; `ls .../daily` devolve vazio mesmo com backups) + offsite em `SHAMBLETA_OFFSITE_BACKUPS` (default `/data-backups`) com **restore probe** embutido. |
 | Reconciliação | Timer **próprio**, desacoplado do backup: `MetaJobIntervalSec` = 24 h (`sources/sql/SQLCommons.gd:@MetaJobIntervalSec`), disparado pela própria `Run()` (`sources/sql/SQLBackups.gd:@Run`) — o porquê do desacoplamento está no comentário `#28` logo acima do disparo; saiu do guard do backup de propósito (#28), porque disco cheio parava reconcile, copas, temporada, referral e tickets junto. Divergências aparecem no `/metrics` do companion → `reconcile.divergences`. |
 | Wipe de progresso (pré-beta) | migration `014_reset_progress_idle` ou reset do volume `game-data` antes dos convites. |
 | Logs do server | Logs do container `game` (Util.PrintLog vai ao stdout). |

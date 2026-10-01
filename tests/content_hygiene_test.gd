@@ -422,7 +422,7 @@ func _suiteBossLadder(worldNode : Node):
 # `.tmx` tem de ser o do artefato carregado, campo a campo — id, contagem,
 # respawn_delay, posição e offset, estes dois recalculados como o import os
 # calcula: `pos + extents` e `extents` (`tiled_map_reader.gd:627-628`), e
-# `set_default_obj_params` dando 0 a width/height ausentes (`tiled_map_reader.gd:928`). Divergência == o
+# `set_default_obj_params` dando 0 a width/height ausentes (`tiled_map_reader.gd:@set_default_obj_params`). Divergência == o
 # CI vai reescrever este mapa. Conserta-se o `.tmx` (fonte), nunca o artefato —
 # e nunca se afrouxa a régua. Mordida medida: revertido só o `.tmx` de ship-hold
 # para o de HEAD, 2 falhas nomeando 'Ship Hold' e os 3 grupos que o CI apagaria;

@@ -115,7 +115,7 @@ no arquivo e não existe no container.
 
 | serviço | cpus | mem_reservation | mem_limit | por quê |
 |---|---|---|---|---|
-| `game` | 2 | 640 M | 1536 M | loop único a `ServerMaxFPS` = 30 FPS, ~1 core (`sources/launcher/LauncherCommons.gd:19`); o 2º core é para o boot (migrations + mundo) caber no `start_period: 40s`. Teto a ~3× o piso medido, porque SIGKILL aqui custa o §7.1 de `archive/AUDITORIA_2026-09-27.md` (até 600 s de ouro só em memória) — o teto protege o **host**, não a performance. |
+| `game` | 2 | 640 M | 1536 M | loop único (`ServerMaxFPS` em `sources/launcher/LauncherCommons.gd:@ServerMaxFPS` = 30 FPS), ~1 core; o 2º core é para o boot (migrations + mundo) caber no `start_period: 40s`. Teto a ~3× o piso medido, porque SIGKILL aqui custa o §7.1 de `archive/AUDITORIA_2026-09-27.md` (até 600 s de ouro só em memória) — o teto protege o **host**, não a performance. |
 | `companion` | 0.5 | 64 M | 256 M | 31 MiB medido ocioso; stateless entre requests (cada request abre a própria conexão, `companion/server.py:1070-1074`); OOM não perde dinheiro — o provedor re-tenta o webhook e a idempotência do grant decide. |
 | `web` | — | 64 M | — | **sem teto**: nginx servindo o primeiro load de ~35 MiB (`deploy/WEB_SLIM.md:69`) não foi medido nesta máquina; teto sem medida é causa de indisponibilidade. |
 | `cloudflared` | — | 32 M | — | binário de terceiro, idem. |

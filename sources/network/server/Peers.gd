@@ -301,7 +301,7 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		#  - falso positivo: re-login de conta antiga (dia-zero há mais de um dia) tem 1
 		#    dia-distinto, a heurística emitia e `IsD1Return` não.
 		# Agora não há pré-filtro nem predicado local: `RecordFunnel` é o único caminho e
-		# o gate `IsD1Return` dentro dele (`TelemetryService.gd:97`) é a autoridade única
+		# o gate `IsD1Return` dentro dele (`TelemetryService.gd:@IsD1Return`) é a autoridade única
 		# dos dois lados — emissor e métrica não têm como divergir. A consulta removida
 		# era SELECT puro, sem efeito colateral a realocar, e o guard `Launcher.SQL != null`
 		# caiu junto porque `IsD1Return` já fecha em false sem banco
