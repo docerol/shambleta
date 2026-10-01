@@ -284,7 +284,7 @@ func _suiteAppleScope():
 # medida por `SuiteIdleLootPipeline` (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`).
 # Daí três medidas:
 #   (a) nenhuma zona carrega taxa própria escondida: `FarmZoneData.gd:180` dá a
-#       todas o `DefaultDropRatePPM`, e nada em `_make` (`FarmZoneData.gd:260-272`)
+#       todas o `DefaultDropRatePPM`, e nada em `_make` (`FarmZoneData.gd:@_make`)
 #       o sobrescreve, então conteúdo
 #       de faixa não tem alavanca sobre contagem;
 #   (b) o roll devolve identidade, nunca quantidade — um item por roll;

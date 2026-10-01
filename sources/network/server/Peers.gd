@@ -305,7 +305,7 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 		# dos dois lados — emissor e métrica não têm como divergir. A consulta removida
 		# era SELECT puro, sem efeito colateral a realocar, e o guard `Launcher.SQL != null`
 		# caiu junto porque `IsD1Return` já fecha em false sem banco
-		# (`TelemetryService.gd:295`). Prova: `tests/d1_return_metric_test.gd`, que dirige
+		# (`TelemetryService.gd:@IsD1Return`). Prova: `tests/d1_return_metric_test.gd`, que dirige
 		# este emissor real e confere o veredito contra `IsD1Return` na mesma base, para
 		# além da suíte B de `tests/ops_fix_test.gd`.
 		if Launcher.Telemetry.has_method("RecordFunnel"):

@@ -743,7 +743,7 @@ func _suitePriceBand() -> void:
 		return
 	_clearItem(_itemWash)
 	# Rótulo de mesa é CHAVE DE E-MAIL: `_makeChar` monta `mdx<tag>_<label>` e
-	# `SQL.AddAccount` recusa duplicata (`SQL.gd:204` `if email.is_empty() or
+	# `SQL.AddAccount` recusa duplicata (`SQL.gd:@AddAccount` `if email.is_empty() or
 	# HasEmail(email): return false`). `b_*` já pertence a `_suiteBuyOrders`
 	# (linhas 425-427); reusar aqui devolvia 0, "fixtures da banda criadas"
 	# morria no `_check` e a suíte inteira (#93.1 e #93.3) não rodava um só

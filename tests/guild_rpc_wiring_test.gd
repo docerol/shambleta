@@ -391,7 +391,7 @@ func _suitePureClient() -> void:
 	CheckEq(_memberRow(guildID, acctB), 1, "cliente puro: JoinGuildByID re-entra B na guild")
 	Check(int(eco.call("GetGuildForAccount", acctB)) == guildID, "e o service confirma a filiação no banco")
 	# Depósito e saque na pessoa do LÍDER: `WithdrawFromVault` exige `leader|officer`
-	# (`GuildService.gd:196`), e um member comum sacando aqui mediria a exceção de rank,
+	# (`GuildService.gd:@WithdrawFromVault`), e um member comum sacando aqui mediria a exceção de rank,
 	# não a perna de escrita que este bloco promete.
 	_openSession(acctA, charA, authPeer)
 	suites.call("_SetInventory", sql, charA, apple, 40)

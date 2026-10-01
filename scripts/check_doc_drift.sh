@@ -1095,11 +1095,17 @@ REG_MIN=2
 # estas doze custaram de verdade não foi o número, foi a cláusula: seis foram recusadas por
 # `prosa` até a frase levar o nome para o MESMO segmento de vírgula do ponteiro, que é a
 # régua dizendo que âncora citada longe do que ela nomeia não é evidência de nada.
-ANCHOR_MIN=160
-LINE_MAX=474
+# A segunda colheita foi medida com a CLÁUSULA DA RÉGUA, não com o clipe bruto da linha, e
+# a diferença é o achado: o clipe bruto apontava dezenove "nomes fora do segmento" que,
+# julgados por `lit_clause` (com o puxamento da linha de cima, quando a oração morreu na
+# quebra), não eram nada disso — o nome não estava na oração. Dos que sobraram, seis já
+# nomeavam o bloco e esperavam. Custaram zero prosa: `:NN` virou `:@simbolo`, e o que a
+# frase dizia continua sendo o que o bloco contém.
+ANCHOR_MIN=166
+LINE_MAX=468
 # O piso do RECORTE, medido nesta árvore em 2026-10-01: quinze âncoras moram dentro dos
 # registros datados. É prova de posição, não de censo: com o atalho de `SKIP_NAMES` subido
-# para cima do laço de âncora, o total cai de 148 para 133 e o `ANCHOR_MIN` acima acusa —
+# para cima do laço de âncora, o total cai de 166 para 151 e o `ANCHOR_MIN` acima acusa —
 # mas acusa "faltam âncoras", sem dizer qual recorte parou de ser lido. Contada no local da
 # cobrança, a mesma mutação zera ESTE número, e aí a frase passa a nomear a classe.
 ANCHOR_FORA_MIN=15

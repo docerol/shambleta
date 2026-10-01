@@ -1814,7 +1814,17 @@ func SuiteEvidencePointers() -> void:
 	# proporção (22%) é a que sobreviveu ao aperto: 111/445 era 25%. Por isso o piso passa a
 	# ser dois checks — o absoluto, que não deixa a varredura emudecer, e a fração (1 em 5),
 	# que não deixa um piso absoluto velho virar falha só porque a doc encolheu.
-	Check(comIdentidade >= 50,
+	# Quarta recalibração, e ela foi MEDIDA por esta migração, não escolhida: seis ponteiros
+	# de linha viraram âncora e `comIdentidade` caiu de 54 para 48, o que derrubou o piso de 50
+	# exatamente quando `ancJulgadas` subia de 133 para 139. A soma dos dois é 187 nos dois
+	# estados: converter não tira cobertura, tira a cobertura de uma classe e a põe na outra,
+	# julgada pelo braço (8) desta mesma suíte. Piso assinado só na classe, portanto, é piso que
+	# acusa progresso — e piso que acusa progresso é o que faz alguém não migrar mais nada.
+	# O piso da SOMA é o que não pode ser enganado pela migração; o da classe fica em 40, que é
+	# abaixo do que uma rodada move, e continua lá só para a régua de identidade não emudecer.
+	Check(comIdentidade + ancJulgadas >= 180,
+			"citação nomeada: %d+`%d` = %d (linha julgada por símbolo + âncora julgada pelo bloco) — abaixo de 180 a família inteira perdeu olhares, e converter linha em âncora NÃO baixa este número (%s)" % [comIdentidade, ancJulgadas, comIdentidade + ancJulgadas, "medido 187 = 48+139, e era 187 = 54+133 antes das seis trocas"])
+	Check(comIdentidade >= 40,
 			"ponteiros: %d de %d referências tiveram um símbolo nomeado julgado pela régua de identidade — sem isso, \"0 acusações\" pode significar só que a doc não nomeou nada" % [comIdentidade, conferidos])
 	# Terceira recalibração, 2026-09-30, e ela é de ESCOPO, não de número: a fração de
 	# um quinto foi escrita quando todo ponteiro nomeado era `arquivo:linha`, e a fatia 3
@@ -1826,7 +1836,7 @@ func SuiteEvidencePointers() -> void:
 	# nos dois lados da divisão. Não é afrouxamento gratuito — cada âncora do numerador
 	# é uma citação que o braço (8) acusa se o símbolo não resolver, não declarar ou
 	# declarar duas vezes (o `anchorias` acima é um CheckEq em zero), e o denominador
-	# cresce junto. Folga medida hoje: 185/591 = 31% (52 identidades de linha + 133 âncoras).
+	# cresce junto. Folga medida hoje: 187/591 = 32% (48 identidades de linha + 139 âncoras).
 	Check((comIdentidade + ancJulgadas) * 5 >= conferidos + ancJulgadas,
 			"citação nomeada: %d+%d de %d+%d (linha julgada por símbolo, âncoras vistas) é pelo menos um quinto do que a família olha — abaixo disso a mordida medida é do tamanho do que a prosa deixou dizer" % [comIdentidade, ancJulgadas, conferidos, ancJulgadas])
 	# O braço (d) nasceu nesta rodada, então o piso é o MEDIDO com margem, não o desejado: a

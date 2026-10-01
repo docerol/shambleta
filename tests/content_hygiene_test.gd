@@ -541,7 +541,7 @@ func _multisetDiff(from : Array, against : Array) -> Array:
 	return out
 
 # O nome com que o import batiza o artefato é `map_name`: nasce vazio
-# (`tiled_map_reader.gd:80`) e aqui só é atribuído pela property name do
+# (`tiled_map_reader.gd:@map_name`) e aqui só é atribuído pela property name do
 # mapa (`tiled_map_reader.gd:1430-1431`). O import não conhece o nome do
 # arquivo — o `fallback` abaixo é guarda deste harness, e um mapa sem a
 # property chega com o nome vazio, que não casa com nenhum .tmx e é contado
