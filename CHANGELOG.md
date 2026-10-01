@@ -865,6 +865,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from that zero rather than presented as a separation that was never measured.
 
 ### Changed
+- The series ruler's floor was a level, and it charged the #124 migration for migrating (#150).
+  The number moved in the very commit that did the work: CI run 36904965051, the push of #147,
+  came back with two failures and one of them was
+  `ponteiros: 1 pares (série, intervalo) julgados pela régua de série — abaixo disso ela está
+  muda e o "0 fora" não é prova`. The push before it (36903072011) printed no series failure at
+  all, and the run before that finished green. The cause is not rot — it is success. #147 replaced
+  seven line ranges in the `/metrics` family list of `deploy/ROLLBACK.md` with one anchor, and
+  those seven lines were the class: replicating the census this slice introduces over the tree at
+  `72bdf95^` gives 21 (pointer × series) pairs in the two deploy docs, against 2 in the twin's
+  whole scope today. A floor that falls when the corpus gets cheaper is the same defect #137
+  registered for the continuation class, and the remedy is the same one — coverage, not level. Two
+  numbers now bound the arm instead of one being wished for: `metricosDitos`, incremented when
+  `_OwnerPtr` says a named series belongs to the pointer being judged — before the verdict opines,
+  so a verdict gone mad cannot starve it — and `serieCenso`, an independent pass over the same
+  sweep with the same scope filter that multiplies pointers by series per line and never opens a
+  target. They are not asserted equal, and the reason is in the tree: today's spared pair is
+  `shambleta_grant_queue_pending`, 148 characters from the only pointer on its line against the
+  house's 140-character clause window, and three `continue`s upstream — target that does not
+  resolve, edge past the file, edge in blank — take pairs off the walk without taking them off the
+  corpus. So the census is a ceiling by construction, not a twin: `serieCenso >= metricosDitos`
+  accuses a walk that counts a pair the line does not present, and `serieCenso == 0 or
+  metricosDitos >= 1` is what "not mute" actually means now — while the tree has a pair, the arm
+  has to recognize one. Both bites are proven by mutating the ruler and running the full idle gate
+  on each mutation, one failure per run and no other check moving: forcing the ownership test to
+  skip prints `a régua de série não está muda: 2 pares no escopo e nenhum reconhecido pelo walk`,
+  and telling the census to ignore prose (`stProse = false`) prints `cobertura da régua de série:
+  o censo acha 0 pares no mesmo escopo e o walk disse ter reconhecido 1`. The harness reads the
+  file it judges, so each mutated tree was restored byte-exact by checksum before the next run.
+  The three controls that derive the verdict from `sources/system/MetricsServer.gd` itself stay as
+  they were: they are what proves `dentro` is an opinion rather than a default, by innocently
+  ruling the interval containing the emission and accusing the one that stops a line short.
+  Gates: `== RESULT: 3303 checks, 0 failures ==` for the twin (3302 with the floor: one check out,
+  two in), and the bash ruler does not move — `== DOC DRIFT: 2175 checks, 0 failures ==`, 239
+  anchors over 406 line pointers. The idle job of #149's push (36911478669) had this floor as its
+  only accusation, so with it gone nothing is left standing between the last three pushes and a
+  green runner.
 - The one pointer CI's twin judge accused became an anchor, and the ceiling fell with it (#124
   slice #149). The idle job came back with a single failure, quoted verbatim from the runner:
   ``tests/map_load_test.gd:108: Launcher.gd → 205-205 não declara nem usa `Action``, declarado em

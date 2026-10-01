@@ -1158,6 +1158,11 @@ func SuiteEvidencePointers() -> void:
 		"historia": historia, "mortos": mortos, "listas": listas,
 	}
 	var metricos : int = 0
+	# Pares (série, intervalo) que o walk IDENTIFICOU, antes de o veredito opinar: é o número
+	# que sobrevive a um veredito que enlouqueça e ao #124 converter faixa em âncora, porque
+	# não depende de o alvo emitir a série nem de o intervalo caber. É o par do censo abaixo,
+	# e os dois juntos substituem o piso de nível que esta régua tinha.
+	var metricosDitos : int = 0
 	var conferidos : int = 0
 	# O censo do ponteiro morto visto pelo veredito: quantos `arquivo:NN` tiveram alvo que não
 	# resolve, e quantos deles o registro cobriu. Os dois saem impressos porque a exceção tem de
@@ -1347,6 +1352,7 @@ func SuiteEvidencePointers() -> void:
 					var ownSerie : Array = _OwnerPtr(ptrRecs, docLines, i, metMatch.get_start())
 					if ownSerie.is_empty() or int(ownSerie[1]) != int(m.get_start()):
 						continue
+					metricosDitos += 1
 					var serie : String = String(metMatch.get_string(1))
 					var verdictSerie : String = _SeriesSpanVerdict(src, serie, from, to)
 					if verdictSerie == "fora":
@@ -2154,8 +2160,39 @@ func SuiteEvidencePointers() -> void:
 	# julgado é check, não enfeite.
 	CheckEq(metricosFora.size(), 0,
 			"ponteiros: toda série nomeada na cláusula aparece no intervalo do arquivo que a emite (%s)" % " | ".join(metricosFora))
-	Check(metricos >= 3,
-			"ponteiros: %d pares (série, intervalo) julgados pela régua de série — abaixo disso ela está muda e o \"0 fora\" não é prova" % metricos)
+	# O piso desta régua era de NÍVEL — "pares julgados >= 3" — e ele acusou progresso. A
+	# fatia #147 trocou as sete linhas de família do `/metrics` em `deploy/ROLLBACK.md` por uma
+	# âncora só, e eram exatamente elas que sustentavam o número: replicando esta conta de censo
+	# sobre a árvore de antes da conversão, a classe tinha 21 pares na doc de deploy e 20 com
+	# opinião; hoje tem 2 e 1. Nenhum braço parou de olhar — o chão media a sorte do corpus, não
+	# a rota. É a mesma doença que o #137 registrou para a continuação, e o remédio é o mesmo:
+	# um censo independente, que não resolve alvo, não abre intervalo e não opinia, cercado pelo
+	# que o veredito disse ter visto. A igualdade não é cobrada de propósito: `_OwnerPtr` descarta
+	# série sem ponteiro dono — a poupada de hoje é `shambleta_grant_queue_pending`, a 148
+	# caracteres do único ponteiro da linha contra a janela de 140 da casa —, e os `continue`s
+	# anteriores, alvo morto, borda fora do arquivo, borda em branco, tiram pares do walk sem
+	# tirar da árvore. Censo é teto provável, não gémeo.
+	var serieCenso : int = 0
+	for stPath in sweep:
+		var stProse : bool = ["md", "json"].has(String(stPath).get_extension().to_lower())
+		var stLines : PackedStringArray = _RepoFile(stPath).split("\n")
+		for st in stLines.size():
+			var stLine : String = String(stLines[st])
+			if not stProse and not stLine.strip_edges().begins_with("#"):
+				continue
+			var stPtrs : Array[RegExMatch] = ptrRx.search_all(stLine)
+			if stPtrs.is_empty():
+				continue
+			serieCenso += stPtrs.size() * metRx.search_all(stLine).size()
+	print("  [info] régua de série: o censo que não opinia vê %d pares (ponteiro × série) no escopo, o walk reconheceu %d como seus e o veredito julgou %d" % [serieCenso, metricosDitos, metricos])
+	Check(serieCenso >= metricosDitos,
+			"cobertura da régua de série: o censo acha %d pares no mesmo escopo e o walk disse ter reconhecido %d — acima do censo o braço está somando par que a linha não apresenta (janela em vez de linha, ou série alheia puxada pelo ponteiro da vizinha)" % [serieCenso, metricosDitos])
+	# A trava anti-mudez, que é o que o piso de nível fingia garantir: enquanto a árvore tiver
+	# par (série, intervalo) fora de faixa convertida, o walk tem que reconhecer pelo menos um.
+	# Apagar o laço, ou quebrar o `_OwnerPtr` que dá casa a ele, leva o segundo número a zero
+	# com o primeiro ainda em dois — e é aí que "0 fora" voltaria a significar "0 olhares".
+	Check(serieCenso == 0 or metricosDitos >= 1,
+			"a régua de série não está muda: %d pares no escopo e nenhum reconhecido pelo walk — ou o laço parou de rodar, ou a casa que amarra a série ao seu ponteiro passou a devolver nada" % serieCenso)
 	# Controle derivado do arquivo, não de número copiado: acha a linha onde a série é
 	# emitida, inocenta o intervalo que a contém e acusa o que termina uma linha antes.
 	# Sem isto, a regra (7) pode estar sempre dizendo "dentro" — e é exatamente o que
