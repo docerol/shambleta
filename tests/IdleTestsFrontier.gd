@@ -1303,12 +1303,15 @@ func SuiteEvidencePointers() -> void:
 	# passada do órfão, porque um daqueles nove era uma PORTA escrita em forma de continuação: no
 	# runbook de escala o Alertmanager tinha o número de porta colado a dois-pontos dentro de
 	# backticks, sem arquivo, logo depois de um ponteiro de linha. Este braço herdou a porta para
-	# o arquivo do vizinho e a acusou de cair além da última linha. A bash não podia acusá-la: o
-	# `verdict` de lá não tem predicado de fim de arquivo — a fatia de faixa é cortada pelo
-	# comprimento do arquivo e o check de branco é condicionado a a borda estar dentro dele, então
-	# número depois da última linha fatia vazio e devolve "nada a acusar". A porta voltou a ser
-	# porta na prosa, o censo desceu um, e o piso desce com ele aqui e em `CONT_MIN` na bash, com
-	# os dois números medidos e ditos.
+	# o arquivo do vizinho e a acusou de cair além da última linha. A bash não podia acusá-la
+	# naquele momento: o `verdict` de lá não tinha predicado de fim de arquivo — a fatia de
+	# faixa era cortada pelo comprimento do arquivo e o check de branco era condicionado a a
+	# borda estar dentro dele, então número depois da última linha fatiava vazio e devolvia
+	# "nada a acusar". A porta voltou a ser porta na prosa, o censo desceu um, e o piso desce
+	# com ele aqui e em `CONT_MIN` na bash, com os dois números medidos e ditos. O predicado
+	# foi escrito na passada seguinte (motivo `alem` no `verdict` de lá, com quatro controles
+	# novos), e a auditoria que ele permitia fez junto: zero ponteiros nomeados da árvore caía
+	# além do fim do alvo. Os dois juízes voltam a ler a mesma classe.
 	Check(contLidas >= 8,
 			"continuação: %d números sem arquivo na varredura — abaixo de 8 o braço está verde por não olhar (%s)" % [contLidas, "8 é o medido fora dos quatro registros datados"])
 	# A herança mordendo em mesa, nos modos que a árvore limpa não mostra: sem o control negativo

@@ -964,21 +964,26 @@ RESOL_MIN=87
 # `cont_accused`, que é somado às falhas do portão — órfão novo é vermelho na hora, e foi
 # assim que os 22 saíram, não por edição a olho. Este piso guarda só o walk mudo: 0
 # lidos com 8 na árvore é braço parado, e o que prova que o braço lê é o self-test
-# mordendo os 10 controles (dois deles exatamente o órfão e o off-by-one de grupo).
+# mordendo os 12 controles (dois deles exatamente o órfão e o off-by-one de grupo).
 #
 # O 9 virou 8 na passada do gémeo (`tests/IdleTestsFrontier.gd`, braço (9)), e o que
 # desceu é doença, não régua: um daqueles nove não era ponteiro nenhum, era a PORTA do
 # Alertmanager escrita em forma de continuação — dois-pontos colado no número, dentro de
 # backticks, logo depois de um ponteiro de linha do compose. O braço novo do harness
 # herdou a porta para o arquivo do vizinho e a acusou de cair além da última linha; ESTA
-# régua leu o mesmo token e não podia acusá-lo, porque o `verdict` daqui não tem predicado
-# de fim de arquivo: a fatia de faixa é cortada pelo comprimento do arquivo
-# (`min(len(target_lines), ...)`) e o check de branco é condicionado a a borda estar
-# dentro dele (`1 <= edge <= len(...)`), então número além da última linha fatia vazio e
-# devolve "nada a acusar". A porta voltou a ser porta na prosa e o censo desceu um. O
-# buraco do fim de arquivo fica REGISTRADO e não consertado de passagem: fechá-lo é
-# auditar quantos `arquivo:NN` nomeados da árvore já caem além do fim, que é a próxima
-# passada, não esta.
+# régua leu o mesmo token e não podia acusá-lo, porque o `verdict` daqui não tinha
+# predicado de fim de arquivo: a fatia de faixa era cortada pelo comprimento do arquivo
+# (`min(len(target_lines), ...)`) e o check de branco era condicionado a a borda estar
+# dentro dele (`1 <= edge <= len(...)`), então número além da última linha fatiava vazio e
+# devolvia "nada a acusar". A porta voltou a ser porta na prosa e o censo desceu um.
+#
+# O buraco foi fechado na passada seguinte, que é este `verdict` com o predicado `alem`.
+# A auditoria que fecharia a dívida saiu junto: com o predicado ligado, ZERO dos 264
+# ponteiros nomeados da árvore caía além do fim do alvo, e os oito de continuação
+# também não — ou seja, o dano conhecido era o token da porta, e o que restou é o risco,
+# que é o que um predicado cobra. Os quatro controles novos (três na régua de identidade
+# e um no adaptador da continuação) nomeiam zero coisas do alvo de propósito, porque só
+# assim eles provam o predicado em vez de passarem pela porta da régua de nome.
 CONT_MIN=8
 # Piso da régua de literal: o censo medido no run de 2026-09-28 é 54 ponteiros
 # pinados. É pouco porque a régua só julga o literal que mora UMA vez no arquivo-alvo
@@ -1474,6 +1479,17 @@ def verdict(clause, ptr, target_lines, wide, stem=None):
     """
     a, b = int(ptr.group(2)), ptr.group(3)
     last = int(b) if b else a
+    # Fim de arquivo: um número além da última linha não é borda de nada, é a citação de
+    # um texto que não existe. Este predicado NÃO existia aqui desde que a régua existe,
+    # e é por isso que o mesmo token passava verde deste lado e vermelho do outro: a
+    # fatia é cortada por `min(len(target_lines), ...)`, então além-do-fim fatia vazio, e
+    # o check de branco é condicionado a `1 <= edge <= len(...)`, então nem olha. O
+    # vazio não promete nome nenhum, e sem nome a oração sai pela porta do "é só prosa".
+    # O gémeo GDScript (`_ContStruct`, braço (9) de `SuiteEvidencePointers`) tem o
+    # predicado desde a origem e foi ele que achou o primeiro caso.
+    for edge in (a, last):
+        if edge > len(target_lines):
+            return False, [], [edge], "alem"
     # A borda do intervalo e o que quem abre o arquivo le. A regua de nome julga o
     # span como um texto so, e um texto com borda em branco ainda contem o simbolo —
     # foi assim que a linha 53 de `ROADMAP_COMERCIAL.md`, citando o intervalo 503-509
@@ -1769,6 +1785,16 @@ CONTROLES = [
      "roda em `Beta`-`gate` (`x.gd:3-5`)", True, True, ALVO2),
     ("branco: ponteiro que nao nomeia nada cai na mesma regua da linha vazia",
      "ver `x.gd:2` para o numero", False, False, ALVO2),
+    # Além do fim do arquivo: os três abaixo nomeiam ZERO coisas do alvo de propósito.
+    # Nomeando algo, a régua de identidade já acusaria pela porta do "o nome mora em
+    # outra linha" e o controle passaria sem provar o predicado novo — é o mesmo
+    # raciocínio do controle de branco acima, que também abre mão de nome.
+    ("alem: a última linha do alvo é uma linha de verdade",
+     "ver `x.gd:9` para o numero", True, True, ALVO2),
+    ("alem: além da última linha não há o que abrir, e isso é acusação",
+     "ver `x.gd:10` para o numero", False, False, ALVO2),
+    ("alem: é a segunda borda da faixa que cai fora",
+     "ver `x.gd:8-10` para o numero", False, False, ALVO2),
     # Nome de arquivo sem caminho: a forma que o `IDENT` nao ve e que a régua de
     # literal nao pinha porque o nome multiplicado mora mais de uma vez no alvo.
     ("arquivo: nome citado na linha onde ele mora e aprovado",
@@ -1917,6 +1943,12 @@ HERD_ADAPTADOR = [
      "(`x.gd:4`), o `GATE_RUN` mora na `:2`", True),
     ("adaptador: o mesmo número apontando para outra linha é acusado",
      "(`x.gd:4`), o `GATE_RUN` mora na `:5`", False),
+    # O caminho da continuação tem de chegar ao predicado de fim de arquivo pelo MESMO
+    # `verdict` do ponteiro nomeado, senão a classe nova fica com uma régua própria que
+    # só vale para a metade da árvore. `porta` não existe em ALVO5, que tem oito linhas:
+    # sem o predicado, a oração sai pela porta de "não nomeia nada" e passa verde.
+    ("adaptador: número herdado além da última linha do alvo é acusado",
+     "(`x.gd:4`), a porta está na `:9`", False),
 ]
 
 
@@ -2144,7 +2176,10 @@ def scan(root, wide, reg, index):
                         cont_accused += 1
                     else:
                         accused += 1
-                    if motivo == "branco":
+                    if motivo == "alem":
+                        print("[FAIL] fim de arquivo: %s:%d aponta %s e o alvo tem %s linhas — quem abre no número citado não chega lá%s"
+                              % (rel, n, ponto, len(tl), herd))
+                    elif motivo == "branco":
                         print("[FAIL] branco: %s:%d aponta %s e a linha %s está em branco — quem abre no número citado não vê nada%s"
                               % (rel, n, ponto, where[0], herd))
                     elif motivo == "faixa":
