@@ -184,7 +184,8 @@ func CohortSummary() -> Dictionary:
 #  - `d1_strict`: da view 045 — login no dia calendario UTC exato +1 do dia-zero
 #    da conta. E a regua que o ROADMAP_COMERCIAL promete.
 #  - `d1_emitted`: quantos eventos `d1_return` o login gravou naquele dia.
-#  O emissor de `Peers.gd:291-297` decidia por "exatamente um dia-distinto de
+#  O emissor de `FinalizeLogin` (`Peers.gd:@FinalizeLogin`) decidia por
+#  "exatamente um dia-distinto de
 #  login antes deste", que liga em qualquer re-login depois do flush inclusive no
 #  MESMO dia calendario; `IsD1Return()` decidia pela regua da view. Duas fontes
 #  do mesmo KPI, sem nada amarrando uma na outra. Agora ha UMA: `RecordFunnel`

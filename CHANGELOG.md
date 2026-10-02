@@ -235,6 +235,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- One comment described the login emitter three times over, and the bare-name copy was the only one
+  that could be anchored today (`#124`). `sources/economy/TelemetryService.gd` argues that `d1_return`
+  used to have two disagreeing predicates: the view's, and the emitter's `COUNT(DISTINCT
+  date(created_at,'unixepoch')) == 1` heuristic that lived inside `FinalizeLogin` in
+  `sources/network/server/Peers.gd`. The prose named that block by its line range in four places — one
+  bare `Peers.gd` citation and three full-path ones. The bare one is a name already resolved once, so it
+  became a bare-name anchor on `FinalizeLogin` (declared once, spanning 269–331, with the cited range
+  291–297 and the `created_at` literal sealed inside that block) and the name-resolution floor held at
+  87. The three full-path citations stayed honest line pointers on purpose: each one currently feeds
+  the literal-resolution walk, whose raw-count floor now sits exactly at that walk's population, so
+  converting a fourth would trip a guard that is measuring a shrinking byproduct rather than blindness.
+  Turning that floor into a coverage check is its own discovery (#159), mirroring how #137 and #149
+  retired the continuation and series level-floors. Measured on this tree: anchors 338 → 339, line
+  pointers 346 → 345, literal walk 40 (piso 40), `0 acusações`. Gate: `== DOC DRIFT: 2089 checks, 0
+  failures ==`. The `FinalizeLogin` body is read by the GDScript twin in CI, so that axis is verified
+  there rather than paid for twice locally.
 - One comment listed seven dialogs by line number, and seven line numbers is seven things the tree
   can slide out from under the sentence that trusts them (`#124`). `sources/actor/agent/NpcCommons.gd`
   explains that quest gold and EXP now live in the `.tres` data and the dialog scripts keep only a
