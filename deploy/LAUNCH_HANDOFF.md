@@ -330,9 +330,9 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   — não o genérico "try again later". O lado server disso está coberto por
   `companion/test_security.py` (C1–C5); o que só existe navegando é a mensagem.
 - **Nome da conta e 2FA no navegador (defeito de membro inexistente, corrigido em 2026-09-25):**
-  três chamadas de 2FA em `sources/gui/Settings.gd:654` passavam `Launcher.Peer.peerID` e duas telas
-  de compra liam `Launcher.nPanel.nameText` / `.savedToken` (`sources/gui/Shop.gd:173`,
-  `sources/gui/Checkout.gd:252`). `Launcher` não tem `Peer` nem `nPanel` — GDScript **compila**
+  as três chamadas de 2FA em `set_two_factor_state` (`sources/gui/Settings.gd:@set_two_factor_state`) passavam `Launcher.Peer.peerID` e duas telas
+  de compra liam `Launcher.nPanel.nameText` / `.savedToken` — `_rebuild_catalog_buttons` (`sources/gui/Shop.gd:@_rebuild_catalog_buttons`) e
+  `_get_username` (`sources/gui/Checkout.gd:@_get_username`). `Launcher` não tem `Peer` nem `nPanel` — GDScript **compila**
   acesso a propriedade inexistente de um autoload, porque o autoload é visto como `Node` e a busca
   pelo membro é em runtime: o erro nasce no clique do jogador, e nenhum gate desta máquina clica.
   Hoje a identidade é omitida (o destino de uma chamada de conta é a authority, e o sender vem do

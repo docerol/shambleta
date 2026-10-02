@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The three 2FA/buy pointers in `deploy/LAUNCH_HANDOFF.md` are now anchors, after an audit of every
+  cited line in the source (`#158`, `#124`). The launch note described the member-of-nonexistent bug
+  it had fixed: three 2FA calls in `Settings.gd` and two buy screens in `Shop.gd` and `Checkout.gd`
+  reading `Launcher` members that do not exist. Each citation was a bare line number, and a launch
+  note that rots is worse than none. Checked line-by-line before converting — the cited 2FA line sits
+  inside the two-factor state handler, the cited shop line inside the catalog-rebuild routine, the
+  cited checkout line inside the username resolver, each declared once with its block covering the
+  line — so each became an anchor naming its real handler, clause rewritten to name the symbol so the
+  ruler judges it against the declaration rather than trusting a number. Measured on this tree:
+  anchors 363 to 366, line pointers 323 to 320, `0 acusações`. Gate:
+  `== DOC DRIFT: 2035 checks, 0 failures ==`.
 - A pointer pair was lying, and the anchor form is what caught it (`#124`). The push-delivery
   fission note in `sources/web/WebPushDelivery.gd` said the client-to-server subscription RPC
   "landed on 2026-09-27" and cited `Network.gd:543` and `Server.gd:1111` as the two sides. Auditing
