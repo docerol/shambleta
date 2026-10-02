@@ -554,8 +554,8 @@ gate_sh() {
 	record_gate "$verdict" "$(basename "$script")"
 }
 
-# Pré-checagem de parse. Um harness que não compila é morte lenta: `run_idle_tests.gd:76`
-# faz `load()` de `IdleTests.gd` e chama `.new()` — se o arquivo não parseia, o
+# Pré-checagem de parse. Um harness que não compila é morte lenta: `_run_tests` (`run_idle_tests.gd:@_run_tests`)
+# faz `load()` de `IdleTestsFrontier.gd` e chama `.new()` — se o arquivo não parseia, o
 # load devolve um GDScript inválido, `.new()` falha, nenhuma suíte roda, a linha
 # de marcador nunca aparece e o gate só descobre isso no timeout de 1200 s. Três
 # execuções do portão foram perdidas exatamente assim (um `CheckEq` recebeu String

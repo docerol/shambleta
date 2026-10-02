@@ -235,6 +235,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The last anchorable comment pointer in `#156`'s test.sh was rotted and its sentence named the wrong
+  file — and anchoring it is what exposed the second lie (`#156`). `scripts/test.sh` justified its parse
+  pre-check with "`run_idle_tests.gd:76` faz `load()` de `IdleTests.gd` e chama `.new()`", but line 76 is
+  a comment (`# A FOLHA da hierarquia de suítes`); the load and the instantiation are `load("res://tests/
+  IdleTestsFrontier.gd")` and `suitesScript.new()` at lines 81-82, inside `_run_tests`
+  (`run_idle_tests.gd:@_run_tests`). The identity ruler had never bitten the old pointer for the
+  standing reason — the clause named `.new()` and `load()`, method calls that are not column-zero
+  declarations, so there was no symbol to test the line against. Naming `_run_tests` to make it anchorable
+  then forced the file question: the pre-check does not load the kernel `IdleTests.gd`, it loads the
+  frontier `IdleTestsFrontier.gd`, and the kernel is parsed only transitively as that class's parent. The
+  anchor carries the correction the pointer had hidden. Measured on this working tree: the conversion
+  alone is 313 anchors against 363 line pointers, `== DOC DRIFT: 2116 checks, 0 failures ==`, with the
+  literal ruler still `0 acusações` because `load()` (three times in the span) and `IdleTestsFrontier.gd`
+  (code plus comment) are both non-unique and so exempt — the naming requirement checks the real target
+  without pinning a literal that would force a false match. This entry eats one `arquivo:@símbolo` citation
+  charged inside the register, lifting the committed tree to 314 anchors against 363 line pointers and
+  `== DOC DRIFT: 2117 checks, 0 failures ==` (a clean clone prints one less, the #157 build-artifact
+  pointer). The sibling pointer the same
+  file cites, `ci_gate_log.sh:42`, is NOT converted: `ci_gate_log.sh` declares no column-zero shell
+  function, so there is no symbol to name and a `@` would resolve to nothing — it stays an honest line
+  pointer, the same disposition as the `.conf` and header-comment pointers the campaign has been leaving.
+  With this, the three files `#156` names are done: IdleTests.gd and OfflineSettle.gd in the two prior
+  slices, and the one anchorable comment in test.sh here.
 - The two pointers the previous slice deliberately left as "a truth call, not a pointer swap", and this
   slice makes that call on both (`#156`). They had been framed as false-about-their-symbol, and the fix
   was to find the sentence's actual witness rather than mint a lie with a name on it. The i18n pair swore
