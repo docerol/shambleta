@@ -73,7 +73,7 @@ func _initialize():
 	# propósito: se o próprio drain travar, o veredito continua legível no log e o
 	# gate acusa a saída que não bate, em vez de perder o run inteiro.
 	print("== RESULT: %d checks, %d failures ==" % [checks.size(), failures])
-	# O drain vem antes do quit pelo mesmo motivo de `balance_test.gd:22-23`: num
+	# O drain vem antes do quit pelo mesmo motivo de `_initialize` (`balance_test.gd:@_initialize`): num
 	# `-s` o `_initialize` roda com os autoloads pela metade, o `quit(0)` só é
 	# atendido no fim do boot, e o Launcher._exit_tree pega preloads pendentes no
 	# meio — SIGSEGV com o veredito já impresso (medido: exit 134 com

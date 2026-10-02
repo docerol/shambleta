@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Two harness headers explained a dependency by pointing at a bare filename and a line number the tree
+  can move without warning (`#124`). `tests/test_e2e_implementation.gd` justifies draining preloads
+  before `quit` by the same reason `balance_test.gd` runs `_initialize` with half-loaded autoloads;
+  `tests/marketplace_depth_test.gd` names the UPDATE branch of `ConsumeItemLotsRaw` as the reason a
+  source row survives a partial consume with `count = 1`. Both cited a bare `file.gd:NN` whose clause
+  carried no unique pinned literal, so each became a bare-name anchor on the function that owns that
+  line — `_initialize` (declared once, block covers the cited range) and `ConsumeItemLotsRaw` (block
+  encloses the UPDATE branch the prose names). Bare-to-bare keeps them in the name-resolution walk, so
+  the floor held at 87 and the literal walk stayed flat at 40. Measured on this tree: anchors 341 → 343,
+  line pointers 343 → 341, `0 acusações`. Gate: `== DOC DRIFT: 2081 checks, 0 failures ==`. Both target
+  bodies are read by the GDScript twin in CI.
 - One duplicated citation was paying the pointer cost twice, and both copies were bare names the
   name-resolution walk already owned (`#124`). `sources/economy/AuctionHouseService.gd` and
   `sources/economy/EconomyKernel.gd` each explain that the daily reconcile — `ReconcileDaily`, declared

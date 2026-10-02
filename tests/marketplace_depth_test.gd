@@ -924,7 +924,8 @@ func _suiteEscrowLineage() -> void:
 	# declara. O número 2, portanto, não tinha mordida nenhuma: o código pré-#94
 	# também devolvia 1. A cadeia é medida no cenário em que ELA PODE existir —
 	# origem com DUAS unidades, anúncio de UMA: o consumo cai no ramo de UPDATE
-	# (`SQL.gd:850`), a linha de origem fica viva com `count = 1`, e a liquidação dá
+	# (`ConsumeItemLotsRaw` em `SQL.gd:@ConsumeItemLotsRaw`), a linha de origem fica
+	# viva com `count = 1`, e a liquidação dá
 	# ao comprador um pai que ainda está na tabela. Cortar o endowment de 2 unidades
 	# ou anunciar as 2 deixa esta régua VERMELHA de novo — é a diferença que está
 	# sendo medida.
