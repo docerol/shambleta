@@ -207,8 +207,19 @@ static func RecordLogin(charID : int, accountID : int, stat : ActorStats = null)
 			# transação — sem linha de ledger não tem grant (§7.3).
 			if economy != null and not economy.LedgerAppend(charID, accountID, "gold", reward, gp + reward, LedgerReason):
 				return false
+			# WorkOrder #163: o ramo online. O banco já tem este reward (escrito
+			# absoluto logo acima), então o espelho de memória precisa avançar o
+			# LASTRO junto, do mesmo jeito que `EconomyKernel.ApplyGoldMoves` faz —
+			# senão o passe de 600 s do `World.BackupPlayers` vê `delta = reward` e
+			# re-credita o streak, e dessa segunda escrita não há linha de ledger
+			# nenhuma (a disciplina do §7.3 só amarra a primeira). Avanço pelo delta
+			# QUE ACONTECEU, não pelo nominal: `AddGP` não move nada em agente morto
+			# e um lastro maior que a memória debitaria ouro no flush.
 			if stat != null:
+				var gpBefore : int = stat.gp
 				stat.AddGP(reward, false)
+				if stat.gpFlushed >= 0:
+					stat.gpFlushed += stat.gp - gpBefore
 		result["ok"] = true
 		result["streak"] = newStreak
 		result["best"] = newBest

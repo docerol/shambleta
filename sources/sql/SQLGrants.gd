@@ -23,6 +23,9 @@ class_name SQLGrants
 # Lastro (`gpFlushed`): posto com o valor do banco na carga do personagem
 # (`PlayerAgent.SetCharacterInfo`) e avançado junto com a memória pelo kernel
 # (`EconomyKernel.ApplyGoldMoves`), porque o que o kernel grava já está no banco.
+# Quem escreve o banco por fora do funil e MESMO espelha no agente tem de fazer o
+# mesmo avance — é o que o ramo online de `StreakService.RecordLogin` faz desde o
+# WorkOrder #163; espelho sem lastro é o granto entrando de novo no próximo passe.
 # `-1` = agente nunca carregado do banco, e aí não se credita nada às cegas. O
 # piso 0 é o único teto: um lastro errado nunca pode mintar ouro, e quem gasta
 # passa pelo kernel, que recusa carteira negativa.

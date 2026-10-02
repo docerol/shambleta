@@ -235,6 +235,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The daily login streak paid its gold twice for anybody who was online when it granted. The
+  server-side funnel writes the wallet into `stat.gp` absolutely inside the transaction and then
+  mirrors the same amount into the loaded agent with `AddGP` — and a memory mirror whose lastro
+  does not move with it is a second credit waiting to happen: `FlushGoldDelta` writes the bank as
+  `gp - gpFlushed`, so the 600 s backup re-applied the reward that was already in the row, and
+  unlike the first write this one has no ledger line at all (§7.3 attests the grant, not the
+  re-credit). `ApplyGoldMoves` had been doing this correctly all along, which is how the branch
+  stayed invisible: the streak is the only other kernel writer that also touches the agent, and it
+  did not. It now advances the lastro by the delta memory ACTUALLY moved rather than by the nominal
+  reward, because `AddGP` returns without doing anything on a dead actor and a lastro ahead of
+  memory would debit gold on the flush. No harness had ever exercised the online branch — every
+  `RecordLogin` call in `balance_test` omits `stat`, so the mirror never ran and the double credit
+  had no witness. Suite E of the core-loop harness spawns a real agent, records the login, and
+  asserts bank == memory == lastro == one rung with the ledger agreeing and the flush moving
+  nothing; then it plants the exact stale-lastro state the bug left and shows the flush re-crediting
+  that same rung (100 → 200) and breaking the gp↔ledger invariant, so the ruler above it is pinned
+  to the lastro and not to luck. The bite is proven in the tree: with the lastro advance deleted the
+  harness prints `== CORE LOOP CYCLE: 71 checks, 4 failures ==`, exits 1, and names the two
+  accusations it lost — `o lastro avancou junto com a memoria` (got 0, want 100) and
+  `e nao re-credita: a carteira continua num degrau` (got 200, want 100). Gates:
+  `== CORE LOOP CYCLE: 71 checks, 0 failures ==`, `== RESULT: 1919 checks, 0 failures ==` and
+  `== WRITE FUNNEL GATE: 9 checks, 0 failures ==`.
 - The craft-wiring harness said its comment-stripper was "the same helper as" a line in the webpush
   subscription test — `webpush_subscription_test.gd:169` — and reading the target showed line 169 is
   exactly `func _codeOnly`, so the number named the helper and the line became the symbol anchor (`#124`).

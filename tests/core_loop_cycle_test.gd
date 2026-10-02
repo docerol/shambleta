@@ -37,7 +37,16 @@ extends SceneTree
 #   (b) dreno novo não declarado (fixture escreve `{"gp" = gp - X}` sem espelho
 #       gold) -> o predicado do censo acusa;
 #   (c) curva alterada sem editar a frase (fixture `const Growth = 1.30`, prosa
-#       ainda diz `1.22^L`) -> a régua de prose acusa.
+#       ainda diz `1.22^L`) -> a régua de prose acusa;
+#   (d) lastro de snapshot devolvido ao estado que o WorkOrder #163 descrevia
+#       (memória com o granto do streak, `gpFlushed` parado antes dele) -> o passe
+#       do flush volta a creditar o mesmo degrau e o banco != ledger acusa.
+#
+# A suíte E (WorkOrder #163, rodada 4 dos juízes cegos) é a única que exercita o
+# ramo ONLINE do streak: o `RecordLogin` escreve o ouro no banco e espelha na
+# memória do agente recém-carregado, e o snapshot de 600 s escreve o banco em
+# RELATIVO. Sem o lastro avançar junto, o granto entra duas vezes — e a segunda
+# sem linha de ledger. Nenhum outro harness chamava `RecordLogin` com `stat`.
 #
 # Igual aos outros harness `-s`: compila ANTES dos class_name do projeto, então
 # nada de identificador de projeto em tempo de parse — as classes entram por
@@ -61,6 +70,7 @@ var _worldAgent : GDScript = null
 var _farmZone : GDScript = null
 var _idlePolicy : GDScript = null
 var _spawnScript : GDScript = null
+var _streak : GDScript = null
 
 var spawnedAgent = null
 
@@ -124,6 +134,7 @@ func _run() -> void:
 	_farmZone = load("res://sources/idle/FarmZoneData.gd")
 	_idlePolicy = load("res://sources/idle/IdlePolicyService.gd")
 	_spawnScript = load("res://addons/tiled_importer/SpawnObject.gd")
+	_streak = load("res://sources/idle/StreakService.gd")
 	# o mapa do farm zone só existe depois de DB.isInitialized; sem isso,
 	# GetMap(mapID) devolve null e o spawn aborta silencioso.
 	var dbWaited : int = 0
@@ -136,6 +147,7 @@ func _run() -> void:
 	_suiteCensus()
 	_suiteProse()
 	_suiteControls()
+	await _suiteStreakOnline()
 	_finish()
 
 # ------------------------------------------------------------------ helpers de estado
@@ -522,6 +534,67 @@ func _spawnLiveAgent(charID : int, nick : String):
 		return null
 	agent.SetCharacterInfo(_sql.GetCharacterInfo(charID), charID)
 	return agent
+
+# ------------------------------------------------------------------ E. streak no ramo ONLINE
+
+# WorkOrder #163 (rodada 4 dos juízes cegos): o `RecordLogin` tem dois ramos, e
+# nenhum harness exercitava o segundo — o balance_test chama sem `stat`, então o
+# espelho de memória nunca rodava. O banco é escrito ABSOLUTO dentro da transação
+# e a memória recebe o mesmo valor por `AddGP`; o snapshot de 600 s escreve o
+# `stat.gp` do banco em RELATIVO (`gp - gpFlushed`), então um lastro que não avançou
+# junto re-aplica o granto que já está lá. A régua abaixo é o par de invariantes
+# que fecha isso: (1) depois do login, banco, memória e lastro têm o MESMO ouro,
+# e o passe do flush não move nada; (2) o controle plantado devolve o lastro ao
+# estado exato que o bug deixava e o flush volta a creditar — prova de que a
+# mordida é do lastro, não da sorte do valor.
+
+func _suiteStreakOnline() -> void:
+	print("[suite E] streak online: granto no banco nao pode ser re-credita pelo snapshot")
+	if not _check(_streak != null, "StreakService carregado"):
+		return
+	var c : Dictionary = _mkCharacter("cycle_streak")
+	if not _check(not c.is_empty(), "personagem criado para o leg do streak online"):
+		return
+	var accountID : int = int(c["accountID"])
+	var charID : int = int(c["charID"])
+	_streak.sqlOverride = _sql
+	_streak.economyOverride = _eco
+	var reward : int = int(_streak.LadderReward(1))
+	_checkEq(reward, 100, "degrau 1 da escada paga ouro > 0 (sem granto o ramo online e inalcancavel)")
+	_checkEq(_charGold(charID), 0, "carteira 0 antes do login")
+
+	var agent = await _spawnLiveAgent(charID, "CycleStreak")
+	if not _check(agent != null, "agente vivo spawnado — o ramo online existe so com stat"):
+		return
+	spawnedAgent = agent
+	var stat = agent.stat
+	if not _check(stat != null, "stat do agente carregado"):
+		return
+	_checkEq(int(stat.gpFlushed), int(stat.gp), "na carga da personagem o lastro == memoria")
+	_check(bool(_sql.FlushGoldDelta(charID, stat)), "flush sem delta nao escreve e devolve true")
+	_checkEq(_charGold(charID), 0, "flush sem delta deixa a carteira em 0")
+
+	var res : Dictionary = _streak.RecordLogin(charID, accountID, stat)
+	if not _check(bool(res.get("ok", false)), "RecordLogin do primeiro dia ok (reason=%s)" % str(res.get("reason", "?"))):
+		return
+	_checkEq(int(res.get("reward", -1)), reward, "o login concedeu o degrau 1")
+	_checkEq(_charGold(charID), reward, "o banco tem UM degrau (nem zero, nem dois)")
+	_checkEq(int(stat.gp), reward, "a memoria espelha o degrau — AddGP rodou de fato, o ramo nao foi curtado")
+	_checkEq(int(stat.gpFlushed), int(stat.gp), "o lastro avancou junto com a memoria (WorkOrder #163)")
+	_check(_gpMatchesLedger(charID), "banco == ultimo balance_after: o granto tem a linha de ledger dele")
+	_check(bool(_sql.FlushGoldDelta(charID, stat)), "o passe de snapshot do login roda")
+	_checkEq(_charGold(charID), reward, "e nao re-credita: a carteira continua num degrau")
+
+	# --- controle plantado (doutrina da casa): o lastro no estado EXATO do bug.
+	stat.gpFlushed = int(stat.gp) - reward
+	_check(bool(_sql.FlushGoldDelta(charID, stat)), "controle (d): com lastro velho o flush roda (devolve true)")
+	_checkEq(_charGold(charID), reward * 2, "controle (d): lastro velho faz o snapshot CREDITAR O DEGRAU DE NOVO (%d -> %d)" % [reward, reward * 2])
+	_check(not _gpMatchesLedger(charID), "controle (d): a segunda escrita nao tem ledger — a invariante gp<->ledger acusa o gold em dobro")
+	_checkEq(int(stat.gpFlushed), int(stat.gp), "controle (d): depois do re-credito o lastro se recompoe (o dano e de uma vez so)")
+
+	var dup : Dictionary = _streak.RecordLogin(charID, accountID, stat)
+	_checkEq(int(dup.get("reward", -1)), 0, "reentrada no mesmo ShopDay nao concede nada (idempotencia por dia)")
+	_checkEq(_charGold(charID), reward * 2, "e o banco nao anda no mesmo dia — o que sobrou e so o re-credito plantado")
 
 # ------------------------------------------------------------------ util de parse
 
