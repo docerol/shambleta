@@ -12,8 +12,8 @@ class_name SkillTrainer
 # qualquer NPC que um dia ensine (e para o harness), e o ramo de diálogo do NPC tem
 # de ficar legível. `SkillOrigins` diz O QUE existe; aqui mora a DECISÃO de quem
 # recebe. Nada neste arquivo toca rede nova: a entrega é `NpcCommons.TeachSkill`, a
-# mesma função que o passo de ação do próprio `NpcScript` invocava
-# (`sources/actor/agent/NpcScript.gd:353`), mais a gravação em `SQL.SetSkill` — sem
+# mesma função que o passo de ação do próprio `NpcScript` invocava — o
+# `TeachSkill` dele (`sources/actor/agent/NpcScript.gd:@TeachSkill`), mais a gravação em `SQL.SetSkill` — sem
 # ela a lição morria no relog (medido: só `Server.CreateCharacter` gravava skill).
 
 # As lições que a classe PODE receber neste nível, na ordem do marco de nível.

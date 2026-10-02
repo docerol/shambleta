@@ -235,6 +235,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A code comment cited the exact line that declares a function, so the anchor points at the declaration —
+  but two functions share the bare name, and the naming rule forced the sentence to say which one
+  (`#124`). `sources/skill/SkillTrainer.gd` said the skill delivery is `NpcCommons.TeachSkill`, the same
+  function the NPC's own action step used to invoke, citing `NpcScript.gd:353`. Read the target: line 353
+  is exactly `func TeachSkill`, the declaration itself. Anchoring the NpcScript symbol says the same thing
+  at the declaration and survives a line shift the number cannot — but the clause already carried
+  `NpcCommons.TeachSkill`, a different function with the same bare name in a different file, and an anchor
+  does not name itself, so the sentence had to name the NpcScript `TeachSkill` on the very line it cites.
+  That is the naming rule earning its keep: it refuses a pointer whose symbol the reader cannot pin, which
+  is exactly the two-`TeachSkill` trap the sentence was about to walk into. A full-path line pointer
+  becoming a full-path anchor is RESOL-neutral. Measured on this tree: anchors 378 to 379, line pointers
+  312 to 311, name-resolution coverage held at its floor of 87, `0 acusações`. Gate:
+  `== DOC DRIFT: 2019 checks, 0 failures ==`.
 - The rollback doc named a value and cited the line that declares it, so the pointer became the anchor
   of its own declaration (`#124`). `deploy/ROLLBACK.md` said the migration flag delivers
   `schema_blocked` and cited `sources/network/server/Admission.gd:55`; read the target — line 55 is
