@@ -235,6 +235,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The rollback doc named a value and cited the line that declares it, so the pointer became the anchor
+  of its own declaration (`#124`). `deploy/ROLLBACK.md` said the migration flag delivers
+  `schema_blocked` and cited `sources/network/server/Admission.gd:55`; read the target — line 55 is
+  exactly `const ReasonSchema : String = "schema_blocked"`, the declaration itself. Two of the three
+  pointers in that sentence were already anchors — `_ValidateAuth` (`Server.gd:@_ValidateAuth`)
+  and `MigrationBlocked` (`SQL.gd:@MigrationBlocked`);
+  the third pointed at a const's own line, so it now anchors that const — the anchor names what the
+  line pointed at, at the declaration, and survives a line shift the number cannot. The sentence's
+  fourth citation is a test range, `admission_gate_test.gd:691-796`, and stays a line pointer: the
+  anchor form has no range, and collapsing it into the enclosing suite would drop the exact lines the
+  note stakes its claim on. A clause had to name `ReasonSchema` for the judge, not just the value it
+  prints. Measured on this tree: anchors 375 to 376, line pointers 313 to 312, name-resolution
+  coverage held at its floor of 87 (a full-path line pointer becoming a full-path anchor is
+  RESOL-neutral), the independent census and the walk agree at 102, `0 acusações`. Gate:
+  `== DOC DRIFT: 2019 checks, 0 failures ==`.
 - The web-push evidence block was audited end to end; one pointer converted to an anchor, two stayed
   line pointers, and the reason they stayed is a real boundary of the anchor form rather than an
   unconverted case (`#124`). The note explains that `CanOfferToPlayer` is, and stays, the equality

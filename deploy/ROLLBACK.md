@@ -310,7 +310,7 @@ Isso dá ao operador três coisas que a frase "o número está certo" nunca deu:
    desta alavanca o probe media só o processo de pé, e um boot parado num patch ficava
    verde: o cliente autenticava e morria na primeira RPC que tocasse a tabela ausente.
    Hoje a mesma flag fecha a porta de entrada antes do teto de conexões — o motivo é
-   `schema_blocked` (`sources/network/server/Admission.gd:55`), entregue à porta por
+   `schema_blocked` (`ReasonSchema` em `sources/network/server/Admission.gd:@ReasonSchema`), entregue à porta por
    `_ValidateAuth()` (`sources/network/server/Server.gd:@_ValidateAuth`), que lê
    `MigrationBlocked()` (`sources/sql/SQL.gd:@MigrationBlocked`). Os dois lados do flag, a precedência
    sobre o teto e essa fiação viva são medidos em S5 (`tests/admission_gate_test.gd:691-796`),
