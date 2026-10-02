@@ -77,7 +77,7 @@ func _fileText(path : String) -> String:
 
 # ------------------------------------------------------------------ réguas de fonte
 # Linha de comentário não é chamada: caem as linhas cujo texto começa com `#`
-# (mesmo helper de `tests/webpush_subscription_test.gd:169`, pela mesma razão).
+# (mesmo helper `_codeOnly` de `tests/webpush_subscription_test.gd:@_codeOnly`, pela mesma razão).
 func _codeOnly(text : String) -> String:
 	var kept : String = ""
 	for rawLine in text.split("\n"):

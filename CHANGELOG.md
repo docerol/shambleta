@@ -235,6 +235,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The craft-wiring harness said its comment-stripper was "the same helper as" a line in the webpush
+  subscription test — `webpush_subscription_test.gd:169` — and reading the target showed line 169 is
+  exactly `func _codeOnly`, so the number named the helper and the line became the symbol anchor (`#124`).
+  Bare-to-full stays bare-to-full, so the name-resolution census fell one more on BOTH arms (95 each) and
+  the floor held at 87. This one earned its keep differently from the last two: the sentence never said
+  the word it meant — it said "mesmo helper", a noun, and a line pointer lets that slide. An anchor does
+  not. To convert it I had to spell out `_codeOnly` right beside the citation, so the sentence now names
+  the function it claims is shared instead of pointing a reader at a number and hoping they look. The
+  naming rule did not move words around here; it made the claim say what it was actually claiming.
 - A fraud-harness comment cited `EconomyKernel.gd:156` for the claim that the kernel's gold mover is the
   one path writing `stat.gp` with the ledger line that attests it, and reading the target showed line 156
   is exactly `func MoveGold` — the declaration, so the number already named the function and the fragile
