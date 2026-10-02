@@ -235,6 +235,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A pointer pair was lying, and the anchor form is what caught it (`#124`). The push-delivery
+  fission note in `sources/web/WebPushDelivery.gd` said the client-to-server subscription RPC
+  "landed on 2026-09-27" and cited `Network.gd:543` and `Server.gd:1111` as the two sides. Auditing
+  the cited lines in the source: line 543 is now `SetReferralCode` and line 1111 sits inside
+  `PurchaseVIP` — neither has anything to do with push. The `RegisterPushSubscription` handler the
+  note actually means lives at a different line in each file (the code moved under the dated note).
+  So the line pointers resolved cleanly but named the wrong function: exactly the class of drift the
+  campaign kills. Both were re-pointed to the real handler — each `RegisterPushSubscription` is
+  declared once and its block is the RPC itself — and the clause rewritten to name the symbol on
+  each side. Because an anchor token cuts its own clause, one naming backtick covering a joined pair
+  is not enough: each anchor needs its own, so the second side stayed a `prosa` rejection until
+  named in place. Measured on this tree: anchors 361 to 363, line pointers 325 to 323, `0 acusações`.
+  Gate: `== DOC DRIFT: 2041 checks, 0 failures ==`.
 - One sentence, written twice, cited two line numbers; both became anchors, and the second was a
   mis-citation the anchor forced into the open (`#124`). The comment explaining why `currentMapID`
   tracks only a standing map lives in both `sources/map/Map.gd` and `tests/map_load_test.gd`. It

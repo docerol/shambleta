@@ -82,7 +82,7 @@ class_name WebPushDelivery
 #                                  `RegisterPushSubscription`. Sem ele a
 #                                  subscription que o navegador criou nunca chega
 #                                  à linha que o servidor escreve. Landou em
-#                                  2026-09-27 (`Network.gd:543`/`Server.gd:1111`),
+#                                  2026-09-27 no `RegisterPushSubscription` do cliente (`Network.gd:@RegisterPushSubscription`) e no `RegisterPushSubscription` do servidor (`Server.gd:@RegisterPushSubscription`),
 #                                  e aqui a sonda responde true — o que fecha o
 #                                  gate hoje é a peça 4, não esta.
 #
