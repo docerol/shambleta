@@ -990,16 +990,17 @@ RESOL_MIN=87
 # que ele acusava: ele não distinguia "o braço parou" de "um ponteiro foi consertado".
 # Descrito na 25b, com o substituto (censo de COBERTURA, diferença e não nível) e com
 # a anti-vacuidade do `cont_cases > 0`, que era o único buraco real que o nível tapava.
-# Piso da régua de literal: o censo medido no run de 2026-10-01 é 59 ponteiros
-# pinados (54 no run de 2026-09-28; não decomponho os cinco que se somaram — nenhuma
-# régua desta fatia mediu a classe de literal, e número que sobe sem medição não entra
-# aqui como entendimento). É pouco porque a régua só julga o literal que mora UMA vez no
-# arquivo-alvo — duas ocorrências não pinham nada e o caso devolve "não julgado" — e a maioria das
-# citações deste repo nomeia um identificador (cobrado pela régua de identidade acima)
-# em vez de prometer um trecho de código. O piso é queda-para-baixo, não meta: um walk
-# que passa a enxergar menos é o walk quebrado, e foi um zero assim que esta régua foi
-# escrita para pegar.
-LIT_MIN=40
+# Piso da régua de literal: NÃO existe mais, e é a mesma classe que o #137 arrancou da
+# continuação, medida aqui com número. O censo de 2026-10-01 era 59 ponteiros pinados, e
+# o piso de 40 segurava queda, não verdade: converter um `arquivo:NN` em `arquivo:@sim`
+# — que é exatamente o #124 — tira o ponteiro do `ANYCITE`, e o saldo caía um por
+# conversão honesta até esbarrar no 40 e gritar "um walk quebrado devolve zero
+# acusações" sobre um walk que lia tudo. Descrito na 23, com o substituto: um censo de
+# COBERTURA (`litcoverage`, walk próprio que não chama `litverdict`), cobrado por
+# DIFERENÇA e não por nível, com a anti-vacuidade do `lcov_cases > 0` no self-test do
+# censo. Os dois números caem juntos a cada conversão, então a diferença não se mexe; um
+# `continue` subindo por cima do braço de literal mexe, e é acusado no tamanho exato do
+# que sumiu.
 # Piso da régua de registro: 3 prosas afirmando a contagem (README, o job de CI e o
 # runbook de operacao) no censo medido nesta passada. O piso e de queda-para-baixo: o
 # que ele caça não é a prosa nova, é a prosa que suma ou o walk que parou de ler os
@@ -2401,6 +2402,99 @@ def litselftest():
     return biting, total
 
 
+# ---------------------------------------------------------------------------
+# Cobertura do LITERAL (#159): o número que cerca o braço de literal não pode nascer
+# dentro do braço. `deadcensus` é o molde exato — um walk próprio que refaz o escopo da
+# régua e resolve alvo com `resolve_path`, mas NÃO chama `litverdict`: o que se duplica
+# é o WALK (o `os.walk`, o laço de `ANYCITE`, o corte de cláusula), nunca a resolução.
+# A igualdade `lit_n == lit_cov` é a cerca que sobrevive à remoção do braço: apagar o
+# `lit_judged += 1` derruba um número e não o outro, e é aí que "0 acusações" voltaria a
+# significar "o walk parou". Este laço lê o MESMO `ANYCITE` que o bloco de literal de
+# `scan()` lê (não o `PTR` com backtick, e não tira `res://`), refaz o `seg`/`|`/`bt`
+# linha a linha, e decide pela regra de token REESCRITA abaixo (`lit_cov_judged`), não
+# pelo veredito — porque um predcado compartilhado com o réu não é testemunha.
+# ---------------------------------------------------------------------------
+def lit_cov_judged(clause, joined, stem):
+    """Este ponteiro tem literal único na cláusula? A MESMA regra de `litverdict`,
+    reescrita: token de backtick != stem, len>=8, sem `*`/`?`, não ele-mesmo-citação,
+    que ocorra EXATAMENTE uma vez no alvo. Só a parte "julgado" — sem span, sem ok."""
+    for tok in BACKTICK.findall(clause):
+        lit = tok.strip()
+        if lit == stem:
+            continue
+        if len(lit) < 8 or "*" in lit or "?" in lit or ANYCITE.search(lit):
+            continue
+        if joined.count(lit) == 1:
+            return True
+    return False
+
+
+def litcoverage(root, index):
+    """Quantos `arquivo:NN` o corpus promete literal único, contado sem `litverdict`."""
+    cache = {}
+    cobravamos = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            if rel.startswith("archive/") or fn in SKIP_NAMES:
+                continue
+            if not fn.endswith(EXTS):
+                continue
+            src = resolve_path(rel, root, index, cache)
+            if src is None:
+                continue
+            is_doc = fn.endswith(".md")
+            is_json = fn.endswith(".json")
+            for n, line in enumerate(src, 1):
+                if not is_doc and not is_json and not line.lstrip().startswith(("#", "//")):
+                    continue
+                lit_prev_end = 0
+                lit_k = 0
+                for m2 in ANYCITE.finditer(line):
+                    lit_k += 1
+                    seg = line[lit_prev_end:m2.start()]
+                    lit_prev_end = m2.end()
+                    if "|" in seg:
+                        seg = seg.rsplit("|", 1)[-1]
+                    tl2 = resolve_path(m2.group(1), root, index, cache)
+                    if tl2 is None:
+                        continue
+                    stem2 = os.path.splitext(os.path.basename(m2.group(1)))[0]
+                    bt = seg.endswith("`") and m2.end() < len(line) and line[m2.end()] == "`"
+                    clause = lit_clause(src[n - 2] if n > 1 else None, seg, lit_k == 1, bt)
+                    if lit_cov_judged(clause, "\n".join(tl2), stem2):
+                        cobravamos += 1
+    return cobravamos
+
+
+def litcovselftest():
+    """O censo tem de concordar com o veredito em CADA controle de literal, sem chamar
+    `litverdict`: se o `lit_cov_judged` divergir do `judged` que a mesa já assinou, a
+    igualdade na árvore deixa de significar nada (é o `gate()`/`Beta()` do #137 no lado
+    do literal). O dotted `gate.run()` (controle já escrito) morde aqui: três ocorrências
+    não pinham, o censo devolve False e o veredito também."""
+    biting = 0
+    total = 0
+    joined2 = "\n".join(ALVO2)
+    for label, text, esp_j, _esp_ok in LIT_CONTROLES:
+        total += 1
+        head, brk, cur = text.rpartition("\n")
+        ptr_text = cur if brk else text
+        m = ANYCITE.search(ptr_text)
+        seg = ptr_text[:m.start()]
+        clause = lit_clause(head + "\n" if brk else None, seg, True,
+                            seg.endswith("`") and ptr_text[m.end():m.end() + 1] == "`")
+        stem = os.path.splitext(os.path.basename(m.group(1)))[0]
+        visto = lit_cov_judged(clause, joined2, stem)
+        if visto == esp_j:
+            biting += 1
+        else:
+            print("[FAIL] cobertura do literal: censo viu judged=%s no controle %s, o veredito assina %s"
+                  % (visto, label, esp_j))
+    return biting, total
+
+
 def selftest():
     biting = 0
     total = 0
@@ -3322,6 +3416,7 @@ def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "."
     biting, cases = selftest()
     lbiting, lcases = litselftest()
+    lcov_biting, lcov_cases = litcovselftest()
     rbiting, rcases = regselftest()
     abiting, acases = anchorselftest()
     hbiting, hcases = herdselftest()
@@ -3348,6 +3443,7 @@ def main():
      lista_nw, lista_itw, lista_fw, lista_mtw, listaspw, lista_badw) = \
         scan(root, True, reg, index, dead)
     dead_seen = deadcensus(root, index)
+    lit_cov = litcoverage(root, index)
     lista_tok_c, lista_it_c, lista_fora_c = listacensus(root, index)
     accused = narrow_bad + wide_bad
     cont_jugados = cont_jn + cont_jw
@@ -3381,6 +3477,8 @@ def main():
           % (narrow_judged, narrow_bad, wide_judged, wide_bad, resolvidos, biting, cases))
     print("literal pinado: %d ponteiros com literal único no alvo (%d acusacoes), self-test %d/%d controles mordendo"
           % (lit_judged, lit_bad, lbiting, lcases))
+    print("cobertura do literal: o censo independente acha %d promessas de literal no escopo lido e o walk leu %d — converter em âncora derruba os dois juntos, um braço parado derruba só o walk"
+          % (lit_cov, lit_judged))
     print("continuação de ponteiro: %d `:NN` no corte narrow (%d acusações), %d no corte wide (%d acusações), %d sem antecedente na linha, self-test %d/%d controles mordendo"
           % (cont_n, cont_an, cont_w, cont_aw, cont_on, hbiting, hcases))
     print("cobertura da continuação: o censo independente acha %d tokens no escopo lido, o walk leu %d, e %d ficaram poupados pelo recorte de registro datado"
@@ -3430,7 +3528,7 @@ def main():
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
     # Maquina: as linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
     print("IDENTIDADE %d %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting, resolvidos))
-    print("LITERAL %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting))
+    print("LITERAL %d %d %d %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting, lit_cov, lcov_cases, lcov_biting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting, fora_n, fora_lin, fora_anc))
     print("CONT %d %d %d %d %d %d %d %d" % (cont_jugados, cont_acusados, hcases, hbiting, cont_n, cont_on, cov_n, cov_spared))
@@ -3585,17 +3683,31 @@ PYEOF
 		lit_accused=0
 		lit_cases=0
 		lit_biting=0
-		read -r _lab lit_n lit_accused lit_cases lit_biting <<< "$lit_stats"
+		lit_cov=0
+		lcov_cases=0
+		lcov_biting=0
+		read -r _lab lit_n lit_accused lit_cases lit_biting lit_cov lcov_cases lcov_biting <<< "$lit_stats"
 		checks=$((checks + lit_n))
 		failures=$((failures + lit_accused))
 		if [ "$lit_biting" -ne "$lit_cases" ]; then
 			fail "self-test do literal mordeu $lit_biting de $lit_cases controles — com a régua cega, o zero de acusações não vale nada"
 		fi
-		if [ "$lit_n" -lt "$LIT_MIN" ]; then
-			fail "literal julgou pouco (n=$lit_n com piso $LIT_MIN) — um walk quebrado também devolve zero acusações"
+		# A cobertura, e não o piso (a lição do #137, agora no literal): `litcoverage` refaz
+		# o walk sem chamar `litverdict`, e tem de bater com o que o braço de literal viu.
+		# Anti-vacuidade escrita, não coberta por um número à mão: a tabela de controles do
+		# censo precisa morder, e o censo precisa ver o que o walk vê. Apagar o braço
+		# derruba só o walk; converter em âncora derruba os dois juntos e a igualdade fica.
+		if [ "$lcov_cases" -eq 0 ]; then
+			fail "a tabela de controles da cobertura do literal está vazia (0 de 0) — \`biting == cases\` é verde vazio, e era o piso de nível que tapava este buraco"
 		fi
-		if [ "$lit_accused" -eq 0 ] && [ "$lit_biting" -eq "$lit_cases" ] && [ "$lit_n" -ge "$LIT_MIN" ]; then
-			echo "[ok] $lit_n ponteiros conferidos pelo literal que a frase promete, com os $lit_cases controles do self-test mordendo"
+		if [ "$lcov_biting" -ne "$lcov_cases" ]; then
+			fail "self-test da cobertura do literal mordeu $lcov_biting de $lcov_cases controles — o censo não concorda com o veredito nos controles, e a igualdade na árvore passa a não significar nada"
+		fi
+		if [ "$lit_n" -ne "$lit_cov" ]; then
+			fail "cobertura do literal: o censo independente acha $lit_cov promessas no escopo lido e o walk leu $lit_n — sumiram $((lit_cov - lit_n)), e é exatamente o que o piso de nível deixava passar enquanto o saldo ficasse acima de 40"
+		fi
+		if [ "$lit_accused" -eq 0 ] && [ "$lit_biting" -eq "$lit_cases" ] && [ "$lcov_biting" -eq "$lcov_cases" ] && [ "$lcov_cases" -gt 0 ] && [ "$lit_n" -eq "$lit_cov" ]; then
+			echo "[ok] $lit_n ponteiros conferidos pelo literal que a frase promete, de $lit_cov no censo independente, com os $lit_cases+$lcov_cases controles do self-test mordendo"
 		fi
 	fi
 fi
