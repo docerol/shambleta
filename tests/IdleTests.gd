@@ -2365,7 +2365,7 @@ func SuiteBossLadder(sql : SQLService, economy : EconomyService) -> void:
 	Check(not bool(IdlePolicyService.StartBossFight(agent, 0).get("started", true)), "live: no farm session → no arena")
 	# Zera antes de topping. A régua esperava "2 + 1 = 3", que só valia enquanto
 	# nenhuma outra fonte tivesse concedido key antes do ladder — e existem três:
-	# o drop de chave do farm online (0,2%/kill em `Formula.gd:229`), o settle
+	# o drop de chave do farm online (0,2%/kill por `KeyDropPPM` (`BossService.gd:@KeyDropPPM`)), o settle
 	# offline e o bônus de fronteira. Somar kills na conta (a suíte da esteira de
 	# item faz isso) transforma saldo-fixo em loteria.
 	var seedKeys : int = sql.GetCharacterBossKeys(charID)

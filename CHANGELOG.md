@@ -235,6 +235,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The "0,2%/kill" the last deferred truth-call chased was never in Formula at all, and naming the symbol that
+  actually defines it is what moved the citation onto the right line (`#156`). The mechanical-trio slice had
+  listed `Formula.gd:229` under what it would NOT swap, reasoning that anchoring the rate onto `ApplyXp` would
+  drop a claim about a number onto a function that only rolls it — and it was right: line 229 is where the
+  online farm grants the key, and no such percentage lives in Formula.gd. What that slice deferred was the
+  other half, and it has a clean home: the rate is `KeyDropPPM` (`BossService.gd:@KeyDropPPM`), the 2000-ppm
+  constant whose own comment spells out the percentage, the same number the online roll consumes. So the
+  sentence at `tests/IdleTests.gd:2368` now names where the value is defined instead of pointing at a grant in
+  another file. This is the last of the three pointers that slice left as truth calls rather than swaps:
+  `Server.gd:490` became the real footprint gate two slices back, `Shop.gd:265` became the checkout-window
+  creator in the prior one, and Formula's rate resolves here — leaving on `#156`'s files only the genuinely
+  non-anchorable pair, `nginx.conf:174/205` (no declaration model for `.conf`) and `ci_gate_log.sh:42` (no
+  column-zero function for a `@` to resolve to). Measured on this tree the conversion alone prints 326 anchors
+  against 357 line pointers and `== DOC DRIFT: 2114 checks, 0 failures ==`, identity dropping 146 → 145 named
+  while name-resolution holds at the 87 floor (the bare `BossService.gd` anchor resolves by name exactly as the
+  bare `Formula.gd` pointer it retired did). This entry's one `arquivo:@símbolo` citation is charged inside the
+  register: it lifts the census to 327 anchors against 357 line pointers, yet the aggregate holds at the same
+  2114 the code conversion reached — the citation is counted as an anchor but added no new check on this tree
+  (a clean clone prints one less, the #157 build-artifact pointer).
 - A pointer the mechanical-trio slice filed as having "no single owning declaration" did have one, and only
   reading the sentence instead of arguing from its rotted line could surface it (`#156`). That slice had put
   `Shop.gd:265` under what it deliberately would NOT convert — "straddles `ShowDailyShop` and a checkout
