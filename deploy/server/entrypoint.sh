@@ -2,11 +2,11 @@
 # Entrypoint do game server: transforma SIGTERM em DRENAGEM DE VERDADE.
 #
 # O problema que este arquivo resolve: o compose promete 75 s de
-# `stop_grace_period` porque o drain do servidor existe — mas o drain é o canary
-# (`sources/world/ShutdownCanary.gd:28-42`), que só dispara quando alguém TOCA no
+# `stop_grace_period` porque o drain do servidor existe — mas o drain é o canary, a
+# função `CheckCanary` (`sources/world/ShutdownCanary.gd:@CheckCanary`), que só dispara quando alguém TOCA no
 # arquivo `user://canary`, à mão. O processo do jogo não trata SIGTERM (grep em
 # `sources/`: nenhum handler no caminho do server; `NOTIFICATION_WM_CLOSE_REQUEST`
-# só aparece em `sources/gui/Gui.gd:409`, que é client). Consequência medida antes
+# só aparece na função `_notification` (`sources/gui/Gui.gd:@_notification`), que é client). Consequência medida antes
 # desta mudança: `docker compose stop` mandava SIGTERM, o binário saía com 143 sem
 # teardown, e até `BackupPlayersSec` = 600 s de ouro que só existia em memória iam
 # junto (`sources/sql/SQLCommons.gd:@BackupPlayersSec`), com `-wal` órfão.

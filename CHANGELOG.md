@@ -235,6 +235,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Two pointers in the entrypoint's problem statement became anchors, and each taught the anchor form a
+  different limit (`#124`). `deploy/server/entrypoint.sh` said the SIGTERM drain is really the canary —
+  cited as `ShutdownCanary.gd:28-42` — and that the window-close notification is handled only client-side,
+  cited as `Gui.gd:409`. Read both targets. Line 409 is exactly `func _notification`, the declaration, and
+  the constant it names sits inside the function one line later, so the symbol is what the sentence means
+  better than the bare line was. The 28-42 citation was a range — the anchor form has no range — but the
+  span opens `func CheckCanary` at 28 and closes exactly that function, the next declaration starting at
+  43; a range that was one whole function is the one case where collapsing it into the function loses
+  nothing, and says the same thing stably. A range straddling two functions would not qualify and stays a
+  line pointer. Each anchor still had to name its symbol on its own line — `CheckCanary`, `_notification`
+  — because an anchor does not name itself. Both were full-path citations, so the conversion is
+  RESOL-neutral. Measured on this tree: anchors 379 to 381, line pointers 311 to 309, name-resolution
+  coverage held at its floor of 87, `0 acusações`. Gate: `== DOC DRIFT: 2014 checks, 0 failures ==`.
 - A code comment cited the exact line that declares a function, so the anchor points at the declaration —
   but two functions share the bare name, and the naming rule forced the sentence to say which one
   (`#124`). `sources/skill/SkillTrainer.gd` said the skill delivery is `NpcCommons.TeachSkill`, the same
