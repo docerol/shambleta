@@ -235,6 +235,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Two runbooks cited the same log line, the line had moved out from under them, and only the
+  block-naming anchor keeps a moving target honest while the claim stays true (`#124`).
+  `deploy/COOLIFY.md` and `deploy/TLS.md` both explain that a proxy-TLS bind logs under the group
+  `Server`, not `TLS`, so a `grep '[TLS]'` on the log reads as "proxy mode did not engage" when it
+  did. Each pointed at `sources/network/server/Server.gd:1764` for the `Util.PrintLog("Server", ...)`
+  call and at `sources/util/Util.gd:5-6` for the `[msec][Grupo]` prefix. The second was one step from
+  an anchor: line 5 is `static func PrintLog` — a single column-zero declaration — and its body holds
+  the `[%d.%03d][%s]` format, so naming `PrintLog` in `Util.gd` pins a fact true of that block. The
+  first was a lie of position, not of substance: line 1764 is `func UnequipItem`, and the TLS line now
+  lives at 1929, inside `func _enter_tree()` — the call really is `Util.PrintLog("Server", ...)`, the
+  address was just stale, which is exactly the drift the anchor grammar exists to survive. So neither
+  sentence swapped into a false anchor: both now name the block that contains the fact — the call site
+  on `Server.gd`'s `_enter_tree`, the format on `Util.gd`'s `PrintLog` — with each clause forced to
+  spell its own symbol so the ruler checks it against the target rather than trusting a number.
+  Measured on this tree: anchors 327 → 331, line pointers 357 → 353, identity-named pointers
+  145 → 141, and the name-resolution floor unchanged at 87, because a full-path anchor resolves by
+  literal and never enters that count. Gate: `== DOC DRIFT: 2105 checks, 0 failures ==` with
+  `331 âncoras ... sobre 353 ponteiros de linha (teto 393), 0 acusações`.
 - The DOC DRIFT gate reported a different total depending on whether the machine had ever run an export, and the
   leak was one branch trusting `os.path.isfile` over the index (`#157`). `resolve_path` resolves a cited path three
   ways — literal path, unique suffix, unique bare name — and the literal way was the offender: the resolution index

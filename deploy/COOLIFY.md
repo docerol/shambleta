@@ -34,10 +34,11 @@ plain na porta 6108 (`static var WebSocketPort` em `sources/network/NetworkCommo
 No ambiente do compose, defina:
 - `SHAMBLETA_PROXY_TLS=1`
 
-O server loga (o grupo é `Server`, porque a linha sai de `Util.PrintLog("Server", ...)`
-em `sources/network/server/Server.gd:1764` — o formato `[msec][Grupo]` é de
-`sources/util/Util.gd:5-6`; um `grep '\[TLS\]'` no log volta vazio e você conclui
-que o modo proxy não pegou, quando pegou):
+O server loga (o grupo é `Server`, porque a linha é um `Util.PrintLog("Server", ...)`
+chamado dentro do `func _enter_tree()` de `sources/network/server/Server.gd:@_enter_tree`
+— o formato `[msec][Grupo]` vem do corpo de `PrintLog` (`sources/util/Util.gd:@PrintLog`);
+um `grep '\[TLS\]'` no log volta vazio e você conclui que o modo proxy não pegou,
+quando pegou):
 ```
 [Server] TLS terminated upstream (reverse proxy) — binding plain WebSocket
 ```

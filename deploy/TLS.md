@@ -20,10 +20,10 @@ environment:
   SHAMBLETA_PROXY_TLS: "1"
 ```
 
-The server will log (group `Server`, not `TLS` — the line is emitted by
-`Util.PrintLog("Server", ...)` at `sources/network/server/Server.gd:1764` and the
-`[msec][Grupo]` prefix comes from `sources/util/Util.gd:5-6`; `grep '\[TLS\]'` returns
-nothing and reads as "proxy mode did not engage" when it did):
+The server will log (group `Server`, not `TLS` — the line is a `Util.PrintLog("Server", ...)`
+called inside `func _enter_tree()` at `sources/network/server/Server.gd:@_enter_tree`, and the
+`[msec][Grupo]` prefix comes from the body of `PrintLog` (`sources/util/Util.gd:@PrintLog`); a
+`grep '\[TLS\]'` returns nothing and reads as "proxy mode did not engage" when it did):
 
 ```
 [Server] TLS terminated upstream (reverse proxy) — binding plain WebSocket
