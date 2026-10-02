@@ -235,6 +235,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- `docs/development/testing.md` was selling `telemetry_census_test` as proof that "the table is
+  pruned by a declared window", and no ruler reads a row's prose — only its name. The harness has no
+  `DELETE` in it, and the census of deletes across `sources/` before writing this line found exactly
+  one statement touching `telemetry_event`: the account-erasure path. Nearly every reader is
+  `created_at >= <window>`, so the rows below those windows are dead weight no query answers from and
+  the table grows forever while the doc said it was bounded — with one real dependency a horizon has
+  to settle first, the legacy fallback in `IsD1Return` that takes `MIN(created_at)` for accounts with
+  no `created_timestamp`. The claim is gone and the row now says what the harness actually derives —
+  written
+  kinds have readers, kinds handed to a validating emitter are accepted by it, the `/metrics` summary
+  reads the live table, orphans are measured from the directory — plus an explicit "what this ruler
+  does NOT prove: pruning", which is left as a named work order rather than quietly deleted from the
+  sentence. A false claim removed without naming the hole it covered is how the next reader re-buys it.
 - The daily login streak paid its gold twice for anybody who was online when it granted. The
   server-side funnel writes the wallet into `stat.gp` absolutely inside the transaction and then
   mirrors the same amount into the loaded agent with `AddGP` — and a memory mirror whose lastro
