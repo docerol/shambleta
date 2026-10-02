@@ -278,6 +278,7 @@ func MetricsBody() -> String:
 	# `tests/telemetry_census_test.gd` amarra os três lados (escritos × declarados ×
 	# servidos) e planta um kind sem consumidor para provar que a régua morde.
 	body += _telemetryKindSection()
+	body += _telemetryBufferSection()
 	metricsCache = body
 	metricsCacheAt = now
 	return body
@@ -377,6 +378,16 @@ func _telemetryKindSection() -> String:
 	if tele == null:
 		return ""
 	return tele.KindCoverageGaugeLines(FunnelWindowDays)
+
+# Queda do buffer de telemetria. Diferente das duas seções acima, não depende de
+# banco: o número vive na memória do processo, e é justamente o scrape de um
+# servidor sem SQL pronto que precisa dizer quantos eventos o cap já comeu.
+# `tests/telemetry_census_test.gd` amarra o anexo e o número.
+func _telemetryBufferSection() -> String:
+	var tele : TelemetryService = _telemetry()
+	if tele == null:
+		return ""
+	return tele.BufferGaugeLines()
 
 # O estado da agenda declarativa de live ops (sources/ops/LiveOpsCalendar.gd).
 # Leitura pura de arquivo com cache de 60 s, sem banco: sempre responde, e o

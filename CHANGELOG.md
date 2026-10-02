@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-01
 
 ### Added
+- The telemetry buffer now confesses what it throws away (#165). `TelemetryService.Record` has always
+  dropped the oldest event once `BufferCap` fills, and the file's own header called that drop-oldest:
+  under load the funnel under-reported and nothing in the process said how many events died in the
+  cut, so "fewer purchases" and "no traffic" were the same sentence on the dashboard. `_dropped` counts
+  every cut since boot, `BufferGaugeLines()` serves it as `shambleta_telemetry_buffer_dropped_total`
+  (monotonic, so the difference between scrapes is the drop) next to `shambleta_telemetry_buffer_events`,
+  and `MetricsServer` attaches the section to `/metrics` — with no SQL guard, because the scrape that
+  matters is the one from a server whose database is not ready yet. `tests/telemetry_census_test.gd`
+  pushes three events past the cap read from the fonte and asserts the DELTA (never the absolute, since
+  other blocks touch the same buffer), that the buffer stops exactly at the declared ceiling, that the
+  gauge publishes the counter's total, and that `Flush()` hands the database exactly the `BufferCap`
+  survivors: the three that died were eaten, not stored.
 - `telemetry_event` got a horizon, because the census written to count kinds found a table nobody was
   ever going to delete (#164). Migration `016_telemetry` created it and the only `DELETE` that ever
   touched it is the LGPD erasure by account: the analytical body grows with no ceiling and no owner,

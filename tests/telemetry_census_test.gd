@@ -34,6 +34,9 @@ extends SceneTree
 #   4. o leitor é servido: `MetricsServer.MetricsBody()` anexa o censo e
 #      `KindCoverageGaugeLines` emite uma linha por kind declarado, e o SUMÁRIO lê
 #      a tabela de verdade (uma linha gravada por `flag_change` aparece contada);
+#   4b. a queda do buffer é confessada: `Record` corta o mais velho ao encher o cap,
+#      o corte sai contado no `/metrics` (WorkOrder #165), e o flush devolve só os
+#      sobreviventes;
 #   5. CONTROLES PLANTADOS no mesmo predicado: corpus sintético com kind escrito
 #      sem leitor (exige acusação nomeada) e com leitor (exige zero).
 #
@@ -1036,6 +1039,40 @@ func _runTests():
 	var bodyChunk : String = metricsSrc.substr(0, metricsSrc.find("metricsCache = body"))
 	Check(bodyChunk.contains("_telemetryKindSection()"), "MetricsBody() chama a seção do censo (sem o anexo o leitor seria código morto)")
 	Check(metricsSrc.contains("func _telemetryKindSection()") and metricsSrc.contains("KindCoverageGaugeLines("), "a seção anexa chama o censo de verdade (`_telemetryKindSection` → `KindCoverageGaugeLines`)")
+
+	# ---------------------------------------- 4b. a queda do buffer é confessada (Analytics)
+	# O que a poda (#164) não fechou: `Record` derruba o evento mais velho quando o
+	# buffer lota, e o corte não tinha número — "o funil sub-notificou sob carga" era
+	# indistinguível de "não houve tráfego". A régua empurra o serviço REAL três
+	# eventos além do cap lido do fonte e confere o DELTA, nunca o absoluto (outros
+	# blocos deste harness já mexeram no buffer). A mordida é estrutural: sem o
+	# incremento no produto o delta sai zero contra três pedidos, e o flush devolve
+	# os cap sobreviventes — os três que morreram não foram gravados, foram comidos.
+	var cap : int = int((tele.get_script().call("get_script_constant_map") as Dictionary).get("BufferCap", 0))
+	if Check(cap > 0, "o cap do buffer é lido do fonte, não transcrito (`BufferCap` = %d)" % cap):
+		var bufSql : Node = launcher.get("SQL")
+		var bufUser : String = "buf_drop_%d" % int(Time.get_unix_time_from_system())
+		var bufID : int = 0
+		if Check(bool(bufSql.call("AddAccount", bufUser, "buffixture", bufUser + "@buf.test.local"))
+				and int(bufSql.call("GetAccountID", bufUser)) > 0,
+				"fixture: conta para drenar o buffer sem sujar o próximo harness"):
+			bufID = int(bufSql.call("GetAccountID", bufUser))
+		if bufID > 0:
+			var droppedBefore : int = int(tele.call("DroppedEvents"))
+			var bufferedBefore : int = int(tele.call("BufferedCount"))
+			for _pushed in cap + 3 - bufferedBefore:
+				tele.call("Record", "settle", bufID, 0, 1, "{}")
+			CheckEq(int(tele.call("BufferedCount")), cap, "o buffer lota e para no cap, nunca acima do teto declarado")
+			CheckEq(int(tele.call("DroppedEvents")) - droppedBefore, 3, "três quedas, três contadas: o corte do cap tem número")
+			var bufGauges : String = String(tele.call("BufferGaugeLines"))
+			Check(bufGauges.contains("shambleta_telemetry_buffer_dropped_total %d\n" % int(tele.call("DroppedEvents"))), "o gauge publica o total do contador (sem a linha servida o número é código morto)")
+			Check(bufGauges.contains("shambleta_telemetry_buffer_events %d\n" % cap), "e publica o lado que ainda espera, no cap")
+			Check(bufGauges.contains("# TYPE shambleta_telemetry_buffer_dropped_total counter"), "e declara o tipo certo: monotônico é counter, não gauge")
+			Check(metricsSrc.contains("func _telemetryBufferSection()") and bodyChunk.contains("_telemetryBufferSection()"), "MetricsBody() anexa a seção do buffer (`_telemetryBufferSection` → `BufferGaugeLines`)")
+			CheckEq(int(tele.call("Flush")), cap, "o banco recebe exatamente os cap sobreviventes: os três que morreram no corte não foram gravados")
+			_x(bufSql, "DELETE FROM telemetry_event WHERE account_id = ?;", [bufID])
+			_x(bufSql, "DELETE FROM account WHERE account_id = ?;", [bufID])
+			CheckEq(_n(bufSql, "SELECT COUNT(*) AS n FROM telemetry_event WHERE account_id = ?;", [bufID]), 0, "fixture limpa: a tempestade não deixa corpo para o próximo harness")
 
 	# ------------------------------------------------- 5. controles plantados
 	var ghost : String = "ghost_kind_no_reader"

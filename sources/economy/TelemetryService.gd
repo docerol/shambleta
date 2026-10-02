@@ -39,6 +39,11 @@ const FUNNEL_KINDS : Array[String] = ["onboarding_done", "first_boss", "first_ch
 
 var _buffer : Array[Dictionary] = []
 var _accum : float = 0.0
+# A queda tem que ter número. `Record` corta o evento mais velho quando o buffer
+# lota, e antes disso o corte existia só na memória: sob carga o funil
+# sub-notificava e nada no processo confessava quantos eventos morreram ali — o
+# dashboard via "menos purchases" e não tinha como separar "caiu" de "não aconteceu".
+var _dropped : int = 0
 
 func _post_launch():
 	isInitialized = true
@@ -56,9 +61,12 @@ func _process(delta : float) -> void:
 		Flush()
 
 # kind: login | settle | levelup. value: xp (settle), níveis (levelup), 1 (login).
+# A queda por cap é CONTADA: sem número, "o funil sub-notificou sob carga" e
+# "o funil não tem tráfego" são o mesmo texto no dashboard (`BufferGaugeLines`).
 func Record(kind : String, accountID : int = 0, charID : int = 0, value : int = 0, meta : String = "{}", fingerprint : Dictionary = {}) -> void:
 	if _buffer.size() >= BufferCap:
 		_buffer.pop_front()
+		_dropped += 1
 	var event : Dictionary = {
 		"created_at" = SQLCommons.Timestamp(),
 		"account_id" = accountID, "char_id" = charID,
@@ -70,6 +78,11 @@ func Record(kind : String, accountID : int = 0, charID : int = 0, value : int = 
 
 func BufferedCount() -> int:
 	return _buffer.size()
+
+# Eventos derrubados pelo cap desde o boot. Monotônico: quem página compara
+# deltas, não o valor absoluto (o processo reinicia e a série volta a zero).
+func DroppedEvents() -> int:
+	return _dropped
 
 # ROADMAP_COMERCIAL S1: helper do funil — best-effort, valida o kind para
 # evitar typo que quebra o dashboard. Retorna false se kind inválido.
@@ -422,6 +435,19 @@ func KindCoverageGaugeLines(windowDays : int = 7) -> String:
 	body += "# HELP shambleta_telemetry_declared_kinds quantos kinds o leitor declara (o denominador do censo; cai abaixo do total do fonte = kind sem consumidor).\n"
 	body += "# TYPE shambleta_telemetry_declared_kinds gauge\n"
 	body += "shambleta_telemetry_declared_kinds %d\n" % OperationalKinds.size()
+	return body
+
+# O corte de `Record` servido como número. Vale o mesmo motivo do anexo acima:
+# métrica que o `/metrics` não publica é código morto, e o ops segue sem como
+# separar "veio menos evento" de "o evento chegou e foi descartado no cap".
+func BufferGaugeLines() -> String:
+	var body : String = ""
+	body += "# HELP shambleta_telemetry_buffer_events eventos aguardando flush neste processo; o cap é `BufferCap`.\n"
+	body += "# TYPE shambleta_telemetry_buffer_events gauge\n"
+	body += "shambleta_telemetry_buffer_events %d\n" % _buffer.size()
+	body += "# HELP shambleta_telemetry_buffer_dropped_total eventos mais velhos derrubados pelo cap desde o boot (monotônico; a diferença entre scrapes é a queda).\n"
+	body += "# TYPE shambleta_telemetry_buffer_dropped_total counter\n"
+	body += "shambleta_telemetry_buffer_dropped_total %d\n" % _dropped
 	return body
 
 # Texto Prometheus do funil diário. Quem anexa isto ao /metrics é
