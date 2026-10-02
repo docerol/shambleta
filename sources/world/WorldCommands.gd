@@ -1853,7 +1853,7 @@ func CommandQuery(caller : PlayerAgent, targetName : String) -> bool:
 # e não por gosto: `Server.gd` não tem folga nenhuma no teto do gate anti-god-node (o
 # número que vale é o que `scripts/check_god_nodes.sh` imprime no run), e levantar
 # ratchet para caber feature é exatamente o que a régua da casa proíbe — então a escrita
-# acontece aqui, no funil que `Chat.gd:170` já usa
+# acontece aqui, no funil que `OnNewTextSubmitted` (`Chat.gd:@OnNewTextSubmitted`) já usa
 # (`Network.TriggerCommand` → `Server.TriggerCommand` → `CommandManager.Handle`). Estes
 # handlers são finos de propósito: resolve o nick, delega, responde. Toda a política
 # (simetria da amizade, tetos, auto-relacionamento, o corte de entrega no chat) mora em

@@ -235,6 +235,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The same symbol was cited by line number in two files, and only one of the two was free to convert — the
+  asymmetry is the point (`#124`). `sources/world/WorldCommands.gd` and `sources/social/SocialGraph.gd`
+  both reach for the chat-input handler by writing a bare `Chat.gd` name plus a moving line number, pointing
+  at `OnNewTextSubmitted` (declared once at column zero, block encloses the cited line). The WorldCommands
+  clause ("no funil que ... já usa") carries no backtick before the citation, so its backward continuation
+  pulls nothing shaped — a naming backtick on `OnNewTextSubmitted` makes it a bare-name anchor with no new
+  literal duty, so the literal walk stays flat. The SocialGraph clause is the mirror image: it sits one line
+  under "disparados por `Network.TriggerCommand`", and the continuation walks the literal walk through the
+  dotted token to `TriggerCommand`, which appears exactly once in `Chat.gd` — so that pointer is one of the
+  forty the floor protects, and converting it dropped the walk to 39 and tripped `literal julgou pouco`.
+  Measured here: WorldCommands converts (anchors 346 → 347, line pointers 338 → 337, literal held at 40,
+  floor 87, `0 acusações`); the SocialGraph sibling is left as an honest line pointer, and the empirical
+  per-conversion ruler run is what caught it. Gate: `== DOC DRIFT: 2073 checks, 0 failures ==`. The target
+  body is read by the GDScript twin in CI.
 - A comment on the offline drop roll justified moving the roll from spawn-time to death-time by pointing at
   a bare filename and a line number the tree can move without warning (`#124`).
   `sources/actor/agent/variants/MonsterAgent.gd` cites the live key-drop as the model for the per-cell roll;
