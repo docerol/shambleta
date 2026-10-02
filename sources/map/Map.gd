@@ -162,7 +162,8 @@ func AddChild(child : Node2D):
 		push_error("Current fringe layer not found, could not add a new child")
 		return
 	# SOM-IDLE (auditoria 2026-09-28): o mesmo `0c5cb56` deixou esta linha ABAIXO do
-	# `return`, e `Character.gd:113` — o único chamador — vinha pedindo uma inserção que
+	# `return`, e `AddCharacter` (`Character.gd:@AddCharacter`) — o único chamador —
+	# vinha pedindo uma inserção que
 	# nunca acontecia: a prévia de personagem montava a entidade sem nunca pendurá-la na
 	# franja, então o jogador via um boneco invisível na própria tela de personagem.
 	currentFringe.add_child.call_deferred(child)

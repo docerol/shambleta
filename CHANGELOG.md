@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A comment on the map-emplace regression explained that the only caller kept asking for an insertion that
+  never happened by pointing at a bare filename and a line number the tree can move without warning (`#124`).
+  `sources/map/Map.gd` names that caller, and it is `AddCharacter` in `Character.gd` (declared once at
+  column zero, block encloses the line that hangs the entity on the map). The citation sat on a comment line
+  already opening with a `return` backtick, so continuation never reached the previous line — and `return` is
+  too short to be a candidate — which meant the clause pinned no unique literal. Naming `AddCharacter` on the
+  anchor's own line turns it into a bare-name anchor with no literal duty; the name is a candidate but it is
+  the anchored function, so it lives in its own block. Bare-to-bare keeps the target open for name resolution:
+  literal held flat at 40, floor 87, identity counts one fewer named pointer (124 → 123). Measured here:
+  anchors 348 → 349, line pointers 336 → 335, `0 acusações`. Gate: `== DOC DRIFT: 2069 checks, 0 failures ==`.
+  The target body is read by the GDScript twin in CI.
 - A comment explaining why an idle-mode shortcut was rewired off the engine action list justified the new
   key by pointing at a bare filename and a line number the tree can move without warning (`#124`).
   `sources/gui/Gui.gd` says the bindings panel lists its own categories, not the engine's action list, "the
