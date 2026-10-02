@@ -173,7 +173,7 @@ Antes de 2026-09-24 o companion era o
 `python3` direto e o `test.sh all` local não o rodava nenhum — hoje os dois chamam
 `./scripts/test.sh companion`. `test_e2e_implementation.gd` estava
 no repositório sem job nenhum até 2026-09-24 — é a tabela chamador→método entre
-arquivos que teria pego `Gui.gd:286` (`_show_char_menu`) chamando `Settings.get_sessionfirstlogin`,
+arquivos que teria pego `_show_char_menu` (`Gui.gd:@_show_char_menu`) chamando `Settings.get_sessionfirstlogin`,
 um método que nunca existiu em nenhuma revisão (a chamada abortava o primeiro
 login e o tour de onboarding não abria para ninguém). `test_backup_restore.gd`
 saiu do mesmo jeito: ele terminava em `quit(0)` sem contagem, então o job

@@ -235,6 +235,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A cross-file caller table in the testing doc cited `Gui.gd:286` as the location of the character-menu
+  opener, and reading the target showed line 286 is exactly `func _show_char_menu` — the declaration
+  itself, so the number already meant "this function" and the fragile line became the stable symbol
+  anchor (`#124`). Bare name to bare name, so the name-resolution census moved 98→97 on BOTH arms at
+  once (the line left the `arquivo:NN` count and joined the `arquivo:@simbolo` one, anchors 382→383) and
+  the floor held at 87. `docs/` is not one of the four dated registers, so the judge charges this anchor:
+  the clause had to NAME the symbol, and the reorder that reads better — "`_show_char_menu` (`Gui.gd:@...`)"
+  instead of "`Gui.gd:286` (`_show_char_menu`)" — is what put the naming on the anchor's own line. The rest of
+  this pass was spent NOT converting: six worklist candidates were read against source and kept as line
+  pointers because the symbol would be vaguer than the line — a class name (`WebPushService`, not indexed), a
+  local `var drops` inside a big function, a bare-name continuation the prose itself flags as wrong-directory,
+  a `:40-59` range spanning the buffer field and its flusher, and three precise statements (`return
+  ExecuteBindings`, `TradeLine(result)`, `Telemetry.Record("flag_change"...)`) each sitting mid-function where
+  only the line says which call. Anchoring those would have traded a stable symbol for a lost claim.
 - The COOLIFY backup row cited the line that opens a function, so the pointer became that function's
   anchor, and the naming rule made the sentence say which symbol it meant (`#124`). The deploy doc
   explained that the local backup directory name is UPPERCASE because it is the enum key
