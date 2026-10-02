@@ -2392,8 +2392,8 @@ func SuiteBossLadder(sql : SQLService, economy : EconomyService) -> void:
 	Check(bool(win.get("win", false)), "sim: overpowered char beats boss")
 	Check(int(win.get("chests", -1)) >= 1, "sim: victory grants chest(s)")
 	CheckEq(sql.GetCharacterBossesBeaten(charID), 1, "sim: victory advances ladder")
-	# Vencer uma fronteira NOVA tem 30% de devolver a chave (`frontier_bonus`,
-	# `BossProgressionService.gd:283`, com `randf()`). A régua comparava o saldo com
+	# Vencer uma fronteira NOVA tem 30% de devolver a chave (`frontier_bonus` em
+	# `SettleBossResult` (`BossProgressionService.gd:@SettleBossResult`), com `randf()`). A régua comparava o saldo com
 	# 1 fixo, então o gate `idle` era moeda ao ar: 1 de cada ~3 rodadas vermelhas
 	# sem nenhum defeito no produto. O que é determinístico é a DESPESA — uma chave
 	# por challenge, nunca menos, e no máximo o reembolso da fronteira.
@@ -4715,7 +4715,7 @@ func SuiteFraud(sql : SQLService) -> void:
 	# banda declarada em `_knob_ranges`), então restaurar `= 60` no fim carimbaria
 	# o valor do catálogo com um literal e a próxima suíte da corrida rodaria com o
 # cooldown do harness, não com o do jogo. Porque o trade de
-# `IdleTests.gd:4661` já consumiu um slot do dia, o laço deriva de `capWas - 1`.
+# `SuiteMoneyFunnel` (`IdleTests.gd:@SuiteMoneyFunnel`) já consumiu um slot do dia, o laço deriva de `capWas - 1`.
 	var cooldownWas : int = EconomyService.TradeCooldownSec
 	var capWas : int = EconomyService.TradeDailyCap
 	Check(capWas >= 1, "o teto diário lido do catálogo é contável (cap=%d)" % capWas)
@@ -6065,7 +6065,7 @@ func SuiteOpsA2(sql : SQLService) -> void:
 					gateNames.append(base)
 			gateNames.sort()
 		# A régua era "três gates de script vivem em scripts/" e mediu 4 quando
-		# `check_secrets.sh` entrou no runner (`scripts/test.sh:721`). O tamanho nunca foi o
+		# `check_secrets.sh` entrou no `structure_gates` (`scripts/test.sh:@structure_gates`). O tamanho nunca foi o
 		# contrato — era só o sintoma móvel de um conjunto que precisa ser conhecido e
 		# prestado contas, e é isso que continua cobrado nas duas pontas: (a) cada
 		# `check_*.sh` no disco é chamado pelo runner, que é o laço `orphanGates` logo

@@ -235,6 +235,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Three more harness comment pointers had rotted at the line level while remaining true at the function
+  level, and a fourth class was confirmed not to be swappable at all (`#156`). Each of these clauses had
+  escaped the identity ruler for the standing reason — it names a method call or a bare file, not a
+  column-zero declaration, so there was nothing to check the line against — and adopting the anchor forced
+  the name, opening each target: `BossProgressionService.gd:283` sits in `SettleBossResult`
+  (`BossProgressionService.gd:@SettleBossResult`) on the exact `randf() < FRONTIER_KEY_CHANCE` →
+  `GrantBossKey(…, "frontier_bonus")` roll the comment describes; `IdleTests.gd:4661` was NOT the trade it
+  claims — that line is `SuiteMoneyFunnel`'s `DELETE FROM telemetry_event` cleanup, and the trade that
+  consumed the daily slot lives earlier in the same `SuiteMoneyFunnel`
+  (`IdleTests.gd:@SuiteMoneyFunnel`), which the function-level anchor reaches honestly where the bare line
+  number pointed at the wrong statement; and `scripts/test.sh:721` is precisely the
+  `gate_sh … check_secrets.sh` call the prose credits for "measuring 4", inside `structure_gates`
+  (`scripts/test.sh:@structure_gates`). Measured on this working tree, the three conversions alone are 317
+  anchors against 360 line pointers and `== DOC DRIFT: 2111 checks, 0 failures ==`, identity `0 acusacoes`
+  and literal `0 acusações` — the naming checked each real span, and the literals it could pin
+  (`frontier_bonus`, `check_secrets.sh`) are present in the target, not evaded. What this slice does NOT
+  convert is a different problem, listed to stop pretending it is mechanical: `Formula.gd:229` is the key
+  drop *event* inside `ApplyXp`, but the "0,2%/kill" rate the same sentence cites is defined in
+  `RollsKeyDrop`, so anchoring to `ApplyXp` would move a claim about a rate onto a symbol that only rolls
+  it — a truth call, not a swap; `Shop.gd:265` straddles `ShowDailyShop` and a checkout branch with no
+  single owning declaration; `Server.gd:490` names a "gate de pegada de 60 s" but line 490 is inside
+  `DeleteCharacter`, a login/peer check — the pointer is rotted onto the wrong function and the real gate
+  is elsewhere. And two are simply not anchorable: `nginx.conf:174/205` (no declaration model for `.conf`)
+  and `ci_gate_log.sh:42` (the file declares no column-zero function, so `@` resolves to nothing) — both
+  stay honest line pointers, the disposition the campaign has been reserving for exactly these. With this
+  the mechanically-anchorable comment pointers in `#156`'s three files are exhausted; this entry eats three
+  charged `arquivo:@símbolo` citations inside the register — its positional line references are spared from
+  the census, which is why the pointer count holds at 360 while the anchors climb to 320 — lifting the
+  committed tree to `== DOC DRIFT: 2114 checks, 0 failures ==` (a clean clone prints one less, the #157
+  build-artifact pointer).
 - The last anchorable comment pointer in `#156`'s test.sh was rotted and its sentence named the wrong
   file — and anchoring it is what exposed the second lie (`#156`). `scripts/test.sh` justified its parse
   pre-check with "`run_idle_tests.gd:76` faz `load()` de `IdleTests.gd` e chama `.new()`", but line 76 is
