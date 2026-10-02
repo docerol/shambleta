@@ -235,6 +235,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The two pointers the previous slice deliberately left as "a truth call, not a pointer swap", and this
+  slice makes that call on both (`#156`). They had been framed as false-about-their-symbol, and the fix
+  was to find the sentence's actual witness rather than mint a lie with a name on it. The i18n pair swore
+  the two sole call sites of `"Attack"` were "`sources/actor/ActorCommons.gd:171`,
+  `sources/cell/CellCommons.gd:95`"; the first was honest (line 171 is inside `STATE_NAMES`
+  (`sources/actor/ActorCommons.gd:@STATE_NAMES`), which does hold `"Attack"`), but the second was the lie
+  the last commit named — line 95 of CellCommons does not touch the string, while the cell's real use is
+  the `Modifier.Attack: return "Attack"` at line 110, inside `GetModifierDisplayName`
+  (`sources/cell/CellCommons.gd:@GetModifierDisplayName`). Anchoring to that function moves the citation
+  onto the return that actually emits the label, so the sentence now names where CellCommons uses
+  `"Attack"` instead of pointing at a line that does not. The FarmZoneData case was the same shape read
+  the other way: the comment "comentário de GetDropForRoll, `FarmZoneData.gd:401`" names `GetDropForRoll`
+  but line 401 lies inside `GetDropPool`, and the "com os 200 rolls … 28 dos 57 itens ficavam
+  inalçáveis" remark is at lines 527-529, inside `GetDropForRoll`
+  (`sources/idle/FarmZoneData.gd:@GetDropForRoll`) — so the named symbol and its own pointer disagreed,
+  and re-anchoring to the named symbol is what made them agree. Measured on this working tree, which has
+  `build/`: the three conversions alone print 309 anchors against 364 line pointers and `== DOC DRIFT:
+  2115 checks, 0 failures ==` — three line pointers died (the pair plus FarmZoneData), each worth one
+  read, while the literal ruler stays `0 acusações` because `"Attack"` is unique inside both spans and so
+  the naming requirement that now forces the check is satisfied by the real target, not evaded. This
+  entry then carries three of its own `arquivo:@símbolo` citations, charged inside the dated register
+  exactly as #148 requires, which lifts the committed tree to 312 anchors against 364 line pointers and
+  `== DOC DRIFT: 2118 checks, 0 failures ==` — the three reads this slice paid off are re-added by the
+  three anchors its own entry eats; a clean clone prints one less, 2117, the #157 build-artifact pointer
+  neither added nor removed here. The full idle suite is left to CI under "run locally only the gate a
+  change touches" — a comment-only anchor edit cannot move any of its 3313 checks, and both census
+  ratchets (ANCHOR_MIN 253, LINE_MAX 393) sit far from 312/364.
 - Two harness pointers had drifted off their own sentences, and the naming requirement this slice
   obeys is what moved them back (`#156`). A comment in the kernel `tests/IdleTests.gd` swore that when
   `Monitoring` lost `SetPlayer`, "`Map.gd:125` continuou chamando na chegada do jogador local ao

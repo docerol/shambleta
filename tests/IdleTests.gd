@@ -1515,7 +1515,7 @@ func SuiteGuiPanels() -> void:
 	# sweep de cima continua verde (a chave sobrevive, só não se sabe com qual texto). Medido
 	# em 2026-09-25: `"Attack"` tinha "Ataque" e "Atacar" no csv e o `.translation` resolvia
 	# "Atacar" para os dois únicos call sites da string, que são rótulo de estatística
-	# (`sources/actor/ActorCommons.gd:171`, `sources/cell/CellCommons.gd:95`).
+	# (`STATE_NAMES` (`sources/actor/ActorCommons.gd:@STATE_NAMES`), `GetModifierDisplayName` (`sources/cell/CellCommons.gd:@GetModifierDisplayName`)).
 	var csvKeys : Dictionary = {}
 	var csvDups : String = ""
 	var csvLines : PackedStringArray = _RepoFile("res://data/i18n/ui.csv").split("\n")
@@ -2797,7 +2797,7 @@ func SuiteCraftDrops(sql : SQLService, charID : int, accountID : int) -> void:
 	# 1000, não 200: a banda do sword é 60 de um total ~5700 (e cresce quando a
 	# faixa ganha matéria-prima), então 200 amostras davam ~2 hits esperados — um
 	# 0/200 determinístico é azar de amostragem, não item inalcançável (o próprio
-	# comentário de GetDropForRoll, FarmZoneData.gd:401, diz que 200 rolls deixam
+	# comentário de `GetDropForRoll` (`sources/idle/FarmZoneData.gd:@GetDropForRoll`) diz que 200 rolls deixam
 	# itens do lattice inalcançáveis). 1000 amostras cobrem a banda com folga.
 	var swordCount : int = 0
 	var appleCount : int = 0
