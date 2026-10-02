@@ -430,7 +430,8 @@ func _input(event : InputEvent):
 	# `is_action_pressed` de ação inexistente devolve false para sempre, então este
 	# atalho — o ÚNICO chamador de ToggleIdleMode — nunca disparou em nenhuma build.
 	# Vira tecla crua: o painel de bindings lista categorias próprias, não a
-	# lista de ações do motor, como `InputBindings.gd:133` já faz com ESC. Sai do
+	# lista de ações do motor, como o `_input` (`InputBindings.gd:@_input`) já faz
+	# com ESC. Sai do
 	# F10: essa tecla já é o `ui_settings`, que o painel anuncia como "Settings".
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F12:
 		ToggleIdleMode()

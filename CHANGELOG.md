@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A comment explaining why an idle-mode shortcut was rewired off the engine action list justified the new
+  key by pointing at a bare filename and a line number the tree can move without warning (`#124`).
+  `sources/gui/Gui.gd` says the bindings panel lists its own categories, not the engine's action list, "the
+  way the ESC case already does it" — and that ESC case is the `KEY_ESCAPE` handler inside `InputBindings`'s
+  `_input` (declared once at column zero, block encloses the escape branch). The pointer sat on a comment
+  line with no backtick before it and a plain-text previous line, so the backward continuation pulled no
+  shaped token: a naming backtick on `_input` — short enough to stay under the candidate length — turns it
+  into a bare-name anchor that adds no literal duty, so the literal walk stayed flat at 40 and the name
+  floor held at 87; the identity walk counts one fewer named pointer (125 → 124) because the citation is now
+  an anchor. Measured on this tree: anchors 347 → 348, line pointers 337 → 336, `0 acusações`. Gate:
+  `== DOC DRIFT: 2071 checks, 0 failures ==`. The target body is read by the GDScript twin in CI.
 - The same symbol was cited by line number in two files, and only one of the two was free to convert — the
   asymmetry is the point (`#124`). `sources/world/WorldCommands.gd` and `sources/social/SocialGraph.gd`
   both reach for the chat-input handler by writing a bare `Chat.gd` name plus a moving line number, pointing
