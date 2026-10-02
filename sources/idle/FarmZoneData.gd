@@ -136,7 +136,8 @@ const MaterialDropSharePPM : int = 60000
 const DefaultDropItemHash : int = 215387671		# Apple
 
 # PPM de KILLS: drops esperados por milhão de kills, a MESMA unidade de
-# `BossService.KeyDropPPM` (rolada em `BossService.gd:152`), o que é o motivo de
+# `BossService.KeyDropPPM` (rolada em `RollsKeyDrop` (`BossService.gd:@RollsKeyDrop`)),
+# o que é o motivo de
 # `OfflineSettle` tratar os dois faucets pelo mesmo eixo. 700000 não é escolha de
 # gabinete: é a probabilidade por kill que a mesa viva derruba — a suíte `SuiteIdleLootPipeline`
 # (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`) mediu os mobs da zona 1 e a soma das

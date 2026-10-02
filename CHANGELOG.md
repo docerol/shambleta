@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A comment declaring a farm zone's PPM unit justified the unit by borrowing a live boss constant, pointing
+  at a bare filename and a line number the tree can move without warning (`#124`). `sources/idle/FarmZoneData.gd`
+  says its "drops per million kills" uses the same unit as the boss key-drop, and the cited line is the
+  comparison `return rng < float(KeyDropPPM)/1000000.0` inside `RollsKeyDrop` (declared once at column zero,
+  block encloses the roll). This is the mirror of the SocialGraph collision that taught the lit rule: the clause
+  opens with the dotted token `BossService.KeyDropPPM`, and the literal walk does reach a dotted token's trailing
+  identifier — but `KeyDropPPM` appears TWICE in `BossService.gd` (the const and the use), so it is not unique,
+  pins nothing, and the pointer is lit-neutral. Naming `RollsKeyDrop` on the anchor's own line makes it a
+  bare-name anchor with no literal duty. Measured here: anchors 350 → 351, line pointers 334 → 333, literal held
+  flat at 40, floor 87, `0 acusações`. Gate: `== DOC DRIFT: 2065 checks, 0 failures ==`. The target body is read
+  by the GDScript twin in CI.
 - A comment on the client's mode-restore explained that the browser boots client-only by pointing at a bare
   filename and a line number the tree can move without warning (`#124`). `sources/network/client/Client.gd`
   reaches for the launcher's mode switch, and the cited line is the `Launcher.Reset(false, false)` call inside
