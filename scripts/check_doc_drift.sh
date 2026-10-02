@@ -940,7 +940,18 @@ fi
 # foram corrigidas na mesma passada; o que ficou de fora é coberto pela convenção de
 # nome ANTES do número, que é o formato em que toda a varredura abaixo acontece.
 # ---------------------------------------------------------------------------
-IDENT_MIN=120
+# (Antes `IDENT_MIN=120` — piso cru de ponteiros julgados.) O nível acusava progresso,
+# não walk parado: converter um `arquivo:NN` em âncora — que é exatamente o #124 — tira
+# um do saldo do `scan` sem tirar honestidade nenhuma da árvore, e o piso gritava sobre
+# um walk que lia tudo. É a quarta vez que esta lição volta (continuação #137, nível de
+# série #149, literal #159); a identidade era a última régua cravada num número escrito
+# à mão. A cerca agora é COBERTURA: `identcoverage(root, index)` refaz o MESMO walk do
+# `scan` (filtros, `archive/`, `EXTS`, `SKIP_NAMES`, cerca de comentário) e conta os
+# `arquivo:NN` cujo alvo resolve, SEM chamar `verdict`. A igualdade `narrow_judged ==
+# id_cov` é o que sobrevive à conversão (o PTR some dos dois juntos) e denuncia o braço
+# parado (só o `judged` do `scan` cai). Um walk quebrado devolve zero acusações E zero
+# julgados, e zero != censo é falha daqui — o piso antigo deixaria passar um walk que
+# lesse só 120 e perdesse o resto.
 # Piso da RESOLUÇÃO de nome, e ela existe porque a resolução É uma régua nova: aberto
 # o índice por base de nome, o bash passou a ler os 87 ponteiros que citam o arquivo
 # sem caminho, e eles devolveram 37 acusações que nenhum portão barato imprimia. Antes
@@ -2925,6 +2936,47 @@ def deadcensus(root, index):
     return seen
 
 
+def identcoverage(root, index):
+    """Quantos `arquivo:NN` têm alvo que RESOLVE, contado por um walk próprio.
+
+    É o complemento exato do `deadcensus` e substitui o piso cru `IDENT_MIN`, pela
+    razão do #159 que ele repete: o piso era um número escrito à mão, e converter um
+    `arquivo:NN` em âncora — o próprio #124 — tira um do saldo do walk sem tirar nada
+    da honestidade da árvore, então a régua de continuação (#137), a do nível de série
+    (#149) e a do literal (#159) já tinham trocado piso por cobertura; a identidade era
+    a última ainda cravada num nível. Com o censo, um ponteiro virado âncora cai dos
+    dois juntos (nem o `scan` nem este laço o leem mais) e a igualdade sobrevive; um
+    walk que parou de olhar derruba só o `judged` do `scan`, e é acusado no tamanho
+    exato do que sumiu. Não chama `verdict`, não abre intervalo, não conhece o registro
+    de caminhos mortos — resolve alvo e conta, no MESMO escopo do `scan`: os filtros de
+    `os.walk`, `archive/`, `EXTS`, `SKIP_NAMES` e a cerca de comentário em código.
+    """
+    cache = {}
+    cobravamos = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in KEEP and (not d.startswith(".") or d == ".github")]
+        for fn in sorted(filenames):
+            rel = os.path.relpath(os.path.join(dirpath, fn), root).replace(os.sep, "/")
+            if rel.startswith("archive/") or fn in SKIP_NAMES:
+                continue
+            if not fn.endswith(EXTS):
+                continue
+            lines = resolve_path(rel, root, index, cache)
+            if lines is None:
+                continue
+            is_doc = fn.endswith(".md") or fn.endswith(".json")
+            for line in lines:
+                if not is_doc and not line.lstrip().startswith(("#", "//")):
+                    continue
+                for m in PTR.finditer(line):
+                    tgt = m.group(1)
+                    if tgt.startswith("res://"):
+                        tgt = tgt[6:]
+                    if resolve_path(tgt, root, index, cache) is not None:
+                        cobravamos += 1
+    return cobravamos
+
+
 def listacensus(root, index):
     """Quantos ponteiros com virgula o corpus tem, contado por um walk proprio.
 
@@ -3444,6 +3496,7 @@ def main():
         scan(root, True, reg, index, dead)
     dead_seen = deadcensus(root, index)
     lit_cov = litcoverage(root, index)
+    id_cov = identcoverage(root, index)
     lista_tok_c, lista_it_c, lista_fora_c = listacensus(root, index)
     accused = narrow_bad + wide_bad
     cont_jugados = cont_jn + cont_jw
@@ -3475,6 +3528,8 @@ def main():
     dead_cov_drift = (dead_n + dead_sp - dead_c) != dead_seen
     print("identidade de ponteiro: %d nomeados no corte narrow (%d acusacoes), %d no corte wide (%d acusacoes), %d alvos abertos por resolucao de nome, self-test %d/%d controles mordendo"
           % (narrow_judged, narrow_bad, wide_judged, wide_bad, resolvidos, biting, cases))
+    print("cobertura da identidade: o censo independente acha %d `arquivo:NN` que resolvem no escopo lido e o walk julgou %d — converter em âncora derruba os dois juntos, um braço parado derruba só o walk"
+          % (id_cov, narrow_judged))
     print("literal pinado: %d ponteiros com literal único no alvo (%d acusacoes), self-test %d/%d controles mordendo"
           % (lit_judged, lit_bad, lbiting, lcases))
     print("cobertura do literal: o censo independente acha %d promessas de literal no escopo lido e o walk leu %d — converter em âncora derruba os dois juntos, um braço parado derruba só o walk"
@@ -3527,7 +3582,7 @@ def main():
         print("[FAIL] literal: narrow viu %r e wide viu %r — a régua não depende do corte, a igualdade é invariant"
               % ((lit_judged, lit_bad), (lit_judged_w, lit_bad_w)))
     # Maquina: as linhas abaixo sao o que a secao bash soma em `checks` e `failures`.
-    print("IDENTIDADE %d %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting, resolvidos))
+    print("IDENTIDADE %d %d %d %d %d %d %d" % (narrow_judged, wide_judged, accused, cases, biting, resolvidos, id_cov))
     print("LITERAL %d %d %d %d %d %d %d" % (lit_judged, lit_bad, lcases, lbiting, lit_cov, lcov_cases, lcov_biting))
     print("REGISTRO %d %d %d %d" % (reg_judged, reg_bad, rcases, rbiting))
     print("ANCORA %d %d %d %d %d %d %d %d" % (anchors, anchor_bad, lines, acases, abiting, fora_n, fora_lin, fora_anc))
@@ -3640,20 +3695,27 @@ PYEOF
 		ident_cases=0
 		ident_biting=0
 		ident_resol=0
-		read -r _lab ident_narrow ident_wide ident_accused ident_cases ident_biting ident_resol <<< "$ident_stats"
+		ident_cov=0
+		read -r _lab ident_narrow ident_wide ident_accused ident_cases ident_biting ident_resol ident_cov <<< "$ident_stats"
 		checks=$((checks + ident_narrow + ident_wide))
 		failures=$((failures + ident_accused))
 		if [ "$ident_biting" -ne "$ident_cases" ]; then
 			fail "self-test da identidade mordeu $ident_biting de $ident_cases controles — com a régua cega, o zero de acusações não vale nada"
 		fi
-		if [ "$ident_narrow" -lt "$IDENT_MIN" ] || [ "$ident_wide" -lt "$ident_narrow" ]; then
-			fail "identidade julgou pouco (narrow=$ident_narrow com piso $IDENT_MIN, wide=$ident_wide) — um walk quebrado também devolve zero acusações"
+		if [ "$ident_cov" -le 0 ]; then
+			fail "cobertura da identidade: o censo independente devolveu $ident_cov alvos que resolvem — zero é cerca vazia, e um censo quebrado não prova que o walk leu"
+		fi
+		if [ "$ident_narrow" -ne "$ident_cov" ]; then
+			fail "cobertura da identidade: o walk julgou $ident_narrow \`arquivo:NN\` e o censo independente acha $ident_cov no mesmo escopo — sumiram $((ident_cov - ident_narrow)) do walk (converter em âncora derruba os dois juntos; cair só o walk é braço parado)"
+		fi
+		if [ "$ident_wide" -lt "$ident_narrow" ]; then
+			fail "corte da identidade: wide julgou $ident_wide contra narrow $ident_narrow — o corte não muda a população de ponteiros, divergir é o walk tendo perdido linha entre os passes"
 		fi
 		if [ "$ident_resol" -lt "$RESOL_MIN" ]; then
 			fail "resolução de nome abriu $ident_resol alvos contra o piso $RESOL_MIN — o walk que para de resolver devolve zero acusações sem ler a classe que o #116 escondeu"
 		fi
-		if [ "$ident_accused" -eq 0 ] && [ "$ident_biting" -eq "$ident_cases" ] && [ "$ident_narrow" -ge "$IDENT_MIN" ] && [ "$ident_wide" -ge "$ident_narrow" ] && [ "$ident_resol" -ge "$RESOL_MIN" ]; then
-			echo "[ok] $((${ident_narrow} + ${ident_wide})) ponteiros nomeados conferidos linha a linha nos dois cortes (borda em branco acusada), $ident_resol alvos abertos por nome, com os ${ident_cases} controles do self-test mordendo"
+		if [ "$ident_accused" -eq 0 ] && [ "$ident_biting" -eq "$ident_cases" ] && [ "$ident_narrow" -eq "$ident_cov" ] && [ "$ident_cov" -gt 0 ] && [ "$ident_wide" -ge "$ident_narrow" ] && [ "$ident_resol" -ge "$RESOL_MIN" ]; then
+			echo "[ok] $((${ident_narrow} + ${ident_wide})) ponteiros nomeados conferidos linha a linha nos dois cortes (borda em branco acusada), $ident_cov alvos conferidos pelo censo independente, $ident_resol abertos por nome, com os ${ident_cases} controles do self-test mordendo"
 		fi
 	fi
 	# ---------------------------------------------------------------------------

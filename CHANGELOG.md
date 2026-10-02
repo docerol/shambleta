@@ -235,6 +235,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The identity ruler's floor was a hand-written number, and it accused the very conversion the
+  campaign drives (`#160`). `scripts/check_doc_drift.sh` judged `arquivo:NN` line pointers with the
+  `verdict` of section 23, then required the walk to have judged at least a written `IDENT_MIN` of
+  them. Converting one line pointer into an anchor — the whole point of #124 — removes it from the
+  population the walk judges, so the count legitimately falls and the floor read a shrinking byproduct
+  as blindness. This is the same lesson for the fourth time: #137 retired the continuation level, #149
+  the series level, #159 the literal count, and this retires the identity population level. The guard
+  is now coverage. `identcoverage` re-walks the same scope as the scan — the directory filters, the
+  archive skip, the extension set, the dated-register skip and the code-comment gate — and counts the
+  line pointers whose target resolves, WITHOUT calling `verdict`. The bound is the equality between
+  what the walk judged and what the census found: a converted pointer drops both together (progress
+  survives) and a walk that stopped looking drops only the walk (caught at the exact size of what
+  vanished). Proven both ways here: with the walk intact the census and the walk agree at 120; with the
+  walk's judged-increment temporarily forced to zero the gate prints `sumiram 120 do walk` and fails,
+  then the edit is reverted. No floor was lowered to go green and no anchor was minted. The name
+  resolution floor is untouched. Measured on this tree: identity 120 judged against 120 in the census,
+  resolution floor 87, `0 acusações`. Gate: `== DOC DRIFT: 2062 checks, 0 failures ==`. The pointer
+  body is still read by the GDScript twin in CI.
 - The comment that says where a farm zone's drop count comes from was still pointing at a line
   (`#124`). `sources/idle/FarmZoneData.gd` reads its drops-per-kill figure from `dropRatePPM` at a
   numbered line inside `OfflineSettle.gd` — that line is the `var dropExpected` ppm-of-kills formula,
