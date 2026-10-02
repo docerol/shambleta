@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A comment on the manual-click path explained that two other code paths kept checking the same cell by
+  pointing at a bare filename and two line numbers the tree can move without warning (`#124`).
+  `sources/actor/entity/Entity.gd` names the idle tick and the inventory-space gate as the two halves that
+  stayed honest while the click path dropped its `usable` guard. Both clauses carried no unique pinned
+  literal, so each pointer became a bare-name anchor on the function that owns that line — `_tickPotion`
+  (declared once, its block encloses the `usable` check) and `HasSpace` (declared once, block covers the
+  line the prose names) — with a naming backtick on each anchor so the clause does not pull `usable` from
+  the previous line. Bare-to-bare keeps them in the name-resolution walk, so the floor held at 87 and the
+  literal walk stayed flat at 40. Measured on this tree: anchors 343 → 345, line pointers 341 → 339,
+  `0 acusações`. Gate: `== DOC DRIFT: 2077 checks, 0 failures ==`. Both target bodies are read by the
+  GDScript twin in CI.
 - Two harness headers explained a dependency by pointing at a bare filename and a line number the tree
   can move without warning (`#124`). `tests/test_e2e_implementation.gd` justifies draining preloads
   before `quit` by the same reason `balance_test.gd` runs `_initialize` with half-loaded autoloads;
