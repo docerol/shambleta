@@ -235,6 +235,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The COOLIFY backup row cited the line that opens a function, so the pointer became that function's
+  anchor, and the naming rule made the sentence say which symbol it meant (`#124`). The deploy doc
+  explained that the local backup directory name is UPPERCASE because it is the enum key
+  `BackupFrequency`, and cited `SQLBackups.gd:12` as where that name gets built. Read the target: line 12
+  is exactly `func CreateDailyBackup`, the declaration, so the pointer already meant "this function" and
+  the number was just the brittle spelling of it. Anchoring the function keeps the claim — this is what
+  reads the enum key and forms the path — and survives a line shift the number cannot. The clause named
+  `BackupFrequency` (the enum it reads) but not `CreateDailyBackup` (the function that builds), so the
+  sentence had to say the builder's name next to its own anchor; two different symbols, and an anchor does
+  not name itself. The sibling in the next row of the same table, the reconcile timer pointing at the
+  importer's `Run`, was already an anchor. A full-path citation becoming a full-path anchor is
+  RESOL-neutral. Measured on this tree: anchors 381 to 382, line pointers 309 to 308, name-resolution
+  coverage held at its floor of 87, `0 acusações`. Gate: `== DOC DRIFT: 2011 checks, 0 failures ==`.
 - Two pointers in the entrypoint's problem statement became anchors, and each taught the anchor form a
   different limit (`#124`). `deploy/server/entrypoint.sh` said the SIGTERM drain is really the canary —
   cited as `ShutdownCanary.gd:28-42` — and that the window-close notification is handled only client-side,
