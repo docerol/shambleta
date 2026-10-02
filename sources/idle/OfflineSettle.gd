@@ -375,7 +375,7 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	# de 8h o floor() já paga 2 por coleta cheia; o piso de 1 baú continua para
 	# janelas curtas abaixo do cap (coleta de 20 minutos não entrega nada — só
 	# ≥1h vale 1 baú). O teto diário por personagem fecha a outra ponta: com
-	# gate de pegada de 60 s em Server.gd:490, uma coleta por minuto pagaria
+	# gate de pegada de 60 s em `OpenChest` (`sources/network/server/Server.gd:@OpenChest`), uma coleta por minuto pagaria
 	# 1 baú por minuto.
 	var chestWanted : int = mini(floori(h / float(ChestHoursPerChest)), MaxChests)
 	if chestWanted == 0 and h >= 1.0:

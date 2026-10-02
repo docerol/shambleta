@@ -235,6 +235,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A chest-cap comment cited a 60 s footprint gate three hundred lines away from the gate it meant, and
+  only the naming requirement could find where it actually lived (`#156`). `sources/idle/OfflineSettle.gd`
+  asserted "gate de pegada de 60 s em `Server.gd:490`", but line 490 is `DeleteCharacter` — a login/peer
+  check with no footprint logic in it. The gate the sentence meant is real, just elsewhere:
+  `Peers.Footprint(peerID, "open_chest", NetworkCommons.FootprintGateMs)` at line 1087, inside `OpenChest`
+  (`sources/network/server/Server.gd:@OpenChest`), and the 60 s ceiling is `FootprintGateMs` = 60000
+  (`sources/network/NetworkCommons.gd:@FootprintGateMs`). The pointer had rotted onto a completely
+  different function, and it escaped the identity ruler for the campaign's standing reason — the clause
+  named only a bare `Server.gd:490`, not a column-zero declaration, so there was nothing to check the line
+  against and a citation sitting in the wrong function stayed invisible by construction. Forcing the
+  symbol `OpenChest` is what made the sentence open its target and led the search to the real gate. This
+  one behaves differently from the previous slice on the aggregate: that pointer had never been read
+  line-by-line (it named no declaration), so retiring it trades one walk-read for one anchor-read — the
+  census moves to 321 anchors against 359 line pointers while `== DOC DRIFT: 2114 checks, 0 failures ==`
+  holds unmoved, the total only falling when a dead pointer was ALSO costing the identity or literal
+  sections a read. The entry's two `arquivo:@símbolo` citations are charged inside the register, lifting the
+  committed tree to 323 anchors against 359 pointers and `== DOC DRIFT: 2116 checks, 0 failures ==` (clean
+  clone −1, the #157 build-artifact pointer).
 - Three more harness comment pointers had rotted at the line level while remaining true at the function
   level, and a fourth class was confirmed not to be swappable at all (`#156`). Each of these clauses had
   escaped the identity ruler for the standing reason — it names a method call or a bare file, not a
