@@ -64,9 +64,9 @@ func LoadMapNode(mapID : int):
 	if currentMapNode == null:
 		push_error("Map instance could not be created")
 		return
-	# `currentMapID` só acompanha o mapa que de pé está: `Minimap.gd:13` trata
+	# `currentMapID` só acompanha o mapa que de pé está: `Warped` (`Minimap.gd:@Warped`) trata
 	# `DB.UnknownHash` como "sem mapa", e gravar um id para um mapa inexistente faria
-	# `EmplaceMapNode` sair cedo sobre o `not force` de :35 em toda tentativa seguinte.
+	# `EmplaceMapNode` (`Map.gd:@EmplaceMapNode`) sair cedo sobre o `not force` em toda tentativa seguinte.
 	currentMapID = mapID
 	RefreshTileMap()
 	Launcher.add_child(currentMapNode)

@@ -13,8 +13,8 @@ extends SceneTree
 #
 # A régua vem nos dois sentidos: um mapa real tem que acender todos os elos, e um id sem
 # camada tem que falhar limpo — sem sinal de sucesso, sem gravar `currentMapID` (o
-# sentinela `DB.UnknownHash` é o que `Minimap.gd:13` lê como "sem mapa", e um id gravado
-# para um mapa inexistente faria `EmplaceMapNode` sair cedo no `not force` de :35 em toda
+# sentinela `DB.UnknownHash` é o que `Warped` (`Minimap.gd:@Warped`) lê como "sem mapa", e um id gravado
+# para um mapa inexistente faria `EmplaceMapNode` (`Map.gd:@EmplaceMapNode`) sair cedo no `not force` em toda
 # tentativa seguinte). Sem a metade negativa, "1 emissão" pode ser um sinal que dispara
 # para qualquer coisa.
 #

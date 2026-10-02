@@ -235,6 +235,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- One sentence, written twice, cited two line numbers; both became anchors, and the second was a
+  mis-citation the anchor forced into the open (`#124`). The comment explaining why `currentMapID`
+  tracks only a standing map lives in both `sources/map/Map.gd` and `tests/map_load_test.gd`. It
+  pointed at the minimap line that reads `DB.UnknownHash` as "no map", then at "the `not force`
+  early-return of `EmplaceMapNode`, line 35". The first pointer was anchorable: `Warped` is declared
+  once and its block covers the cited line, so it became an anchor naming `Warped`. The second was
+  the finding. A bare `:35` with no file of its own resolves by inheriting the file of the last real
+  pointer on the run — which here was `Minimap.gd`, so `:35` silently meant `Minimap.gd:35`, a
+  `return` inside `Moved`, not the `not force` guard of `EmplaceMapNode` that lives in `Map.gd`.
+  Worse, the number sat far enough from its witness that the continuation ruler never linked it as a
+  continuation at all (the census stayed 3 before and after), so no judge was ever going to accuse
+  it. Giving it a real anchor — `EmplaceMapNode` in `Map.gd`, declared once, block covering the
+  early-return — both fixes the target and makes it judged. Measured on this tree: anchors 357 to
+  361, line pointers 327 to 325, continuation 3 == census 3, `0 acusações`. Gate:
+  `== DOC DRIFT: 2045 checks, 0 failures ==`.
 - The heartbeat TTL comment in `sources/network/server/Presence.gd` cited the checkpoint-stall
   source by line (`#124`). It warned that one late heartbeat must not drop a player, and pointed at
   the `wal_autocheckpoint` value to say where the stall could come from. The line number was the
