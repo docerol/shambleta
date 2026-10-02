@@ -235,6 +235,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The push-RPC pointers in the web-push module were resolving but lying, and the anchor form is what
+  finally caught it (`#124`). The client module documented that "peça 6" had landed the two push
+  RPCs, citing `Network.gd:543,549` for the client wrappers and `Server.gd:1111,1118` for the server
+  handlers. All four are valid lines in the right files, so no cheap ruler flagged them — but none is
+  a push RPC: line 543 is the referral-code setter and 549 sits in the same block; both server lines
+  sit inside the VIP purchase. The real register and unregister handlers had moved out from under the
+  dated note. The description was honest, the numbers were not. Each side became an anchor naming its
+  real handler — the CONNECT-channel wrappers on the client, the handlers that read the account from
+  the peer table on the server — and the landed-date sentence in the submit method anchored the same
+  handler by its now-correct name. This is the class the line-number form hides: a pointer that
+  resolves to a real but wrong line passes every gate that only checks that the line exists. Measured
+  on this tree: anchors 369 to 374, line pointers 317 to 314, comma-lists 8 to 6 (the two stale pairs
+  gone), name-resolution coverage held at its floor of 87. Gate:
+  `== DOC DRIFT: 2024 checks, 0 failures ==`.
 - The offline-drops pointers in the same launch note were audited next, and the audit split them
   rather than converting all three (`#158`, `#124`). The note about the malformed network report
   cited three lines: the offline-cap rule, the panel method that reads the drops field, and the idle

@@ -80,10 +80,12 @@ static func _Bridge():
 # O que ainda segura o toggle (medido nesta máquina em 2026-09-27): a peça 4 —
 # `BrowserCanSubscribe()` depende do service worker registrado num browser de
 # verdade, e nenhum harness headless registra worker. A peça 6 landou no mesmo
-# dia: os dois RPCs estão em `sources/network/Network.gd:543,549` (wrappers no
-# canal CONNECT) e `sources/network/server/Server.gd:1111,1118` (handlers com a
+# dia: os dois RPCs do client, `RegisterPushSubscription` (`sources/network/Network.gd:@RegisterPushSubscription`)
+# e `UnregisterPushSubscription` (`sources/network/Network.gd:@UnregisterPushSubscription`), são wrappers no
+# canal CONNECT; os do servidor, `RegisterPushSubscription` (`sources/network/server/Server.gd:@RegisterPushSubscription`)
+# e `UnregisterPushSubscription` (`sources/network/server/Server.gd:@UnregisterPushSubscription`), handlers com a
 # conta vinda de `Peers.GetAccount`, nunca do payload — o detalhe completo está no
-# cabeçalho de `sources/web/WebPushSubscription.gd`), e
+# cabeçalho de `sources/web/WebPushSubscription.gd`, e
 # `tests/web_delivery_test.gd` não acredita no comentário: executa a sonda contra
 # o autoload `Network` do processo. As peças 2 e 3 tinham um terceiro motivo,
 # que não era falta de código e sim de caminho: `GET /push/vapid` não chegava a um
@@ -364,7 +366,7 @@ static func Unsubscribe() -> Dictionary:
 # Entrega a subscription criada pelo navegador ao servidor de jogo — é lá que a
 # linha `push_subscription` nasce, com a conta da SESSÃO (nunca a que o client
 # mandar: ver o cabeçalho de `WebPushSubscription.gd`). O RPC landed em
-# `Network.gd:543` em 2026-09-27, então hoje isto devolve `submitted`; os motivos
+# `RegisterPushSubscription` (`Network.gd:@RegisterPushSubscription`) em 2026-09-27, então hoje isto devolve `submitted`; os motivos
 # `no_network_node`/`rpc_not_landed` continuam sendo o que a sonda responde se a
 # fiação apodrecer — e é uma sonda de `has_method` no nó real, não opinião.
 static func SubmitSubscription() -> Dictionary:
