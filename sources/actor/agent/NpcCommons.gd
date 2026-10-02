@@ -195,9 +195,11 @@ static func SetQuest(caller : BaseAgent, questID : int, state : int):
 # e a regra do valor morava no corpo do diálogo em vez de morar no dado da quest.
 # Sete já migraram para o dado (o censo e o ratchet por nome são a suíte 8 de
 # tests/quest_reward_test.gd; os diálogos hoje só têm no lugar do pagamento o
-# comentário que diz para onde o número foi — `Nina.gd:144`, `Frost.gd:54`,
-# `Mauro.gd:47`, `Nathan.gd:89`, `ThiefsChest.gd:30`, `Eridu.gd:85`,
-# `Riskim.gd:123`). Continua à mão o que um número por quest não declara: em Ryan.gd
+# comentário que diz para onde o número foi — `OnCroissantTurnIn` (`Nina.gd:@OnCroissantTurnIn`),
+# `QuestRewards` (`Frost.gd:@QuestRewards`) e `OnDeliverWater` (`Mauro.gd:@OnDeliverWater`),
+# mais `OnDeliverWater` (`Nathan.gd:@OnDeliverWater`), `OnTryOpen` (`ThiefsChest.gd:@OnTryOpen`),
+# `OnGathering` (`Eridu.gd:@OnGathering`) e `OnReward` (`Riskim.gd:@OnReward`)). Continua à mão
+# o que um número por quest não declara: em Ryan.gd
 # o ramo `OnNickosAlive` soma 1000 (`Ryan.gd:@OnNickosAlive`). O `OnNickosDead` soma
 # 2000 (`Ryan.gd:@OnNickosDead`); ficam os estados intermediários de
 # `PeterGlobal.gd`, `Ekinu.gd` e `Kael.gd`. Todo ganho de dinheiro do resto do

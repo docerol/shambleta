@@ -235,6 +235,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- One comment listed seven dialogs by line number, and seven line numbers is seven things the tree
+  can slide out from under the sentence that trusts them (`#124`). `sources/actor/agent/NpcCommons.gd`
+  explains that quest gold and EXP now live in the `.tres` data and the dialog scripts keep only a
+  comment saying where the number went, then cited `Nina.gd:144`, `Frost.gd:54`, `Mauro.gd:47`,
+  `Nathan.gd:89`, `ThiefsChest.gd:30`, `Eridu.gd:85` and `Riskim.gd:123`. Every one of those lines is
+  the migration comment sitting inside a named reward handler — `OnCroissantTurnIn`, `QuestRewards`,
+  `OnDeliverWater` (in two different scripts, which is why the file still has to be said),
+  `OnTryOpen`, `OnGathering`, `OnReward` — each declared once at column zero. So each pointer became an
+  anchor on its own handler, the clause now forced to spell the symbol so the ruler opens the target and
+  checks the block rather than trusting an integer. All seven resolve by bare name exactly as the seven
+  pointers did, so the name-resolution floor held at 87 while the positional citations fell. Measured on
+  this tree: anchors 331 → 338, line pointers 353 → 346, identity-named pointers 141 → 134,
+  `0 acusações`. Gate: `== DOC DRIFT: 2091 checks, 0 failures ==`. The seven handler bodies are read by
+  the GDScript twin in CI, so that axis is verified there rather than paid for twice locally.
 - Two runbooks cited the same log line, the line had moved out from under them, and only the
   block-naming anchor keeps a moving target honest while the claim stays true (`#124`).
   `deploy/COOLIFY.md` and `deploy/TLS.md` both explain that a proxy-TLS bind logs under the group
