@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-01
 
 ### Added
+- `telemetry_event` got a horizon, because the census written to count kinds found a table nobody was
+  ever going to delete (#164). Migration `016_telemetry` created it and the only `DELETE` that ever
+  touched it is the LGPD erasure by account: the analytical body grows with no ceiling and no owner,
+  read back whole inside the process that holds the writer. `SQLRetention.PruneTelemetry` is the
+  second pruning this module owns — same 6 h trigger as the ledger (`SQLCommons.LedgerRetentionIntervalSec`)
+  and the same `RetentionEnabled()` button, so the one environment variable that already stops
+  ledger compaction stops both, and neither can be re-enabled behind the other's back. The sweep is
+  by `created_at` and NOT by id, and that is
+  the deliberate opposite of migration 056: the ledger walks from a durable frontier
+  (`ledger_compaction_cover`) so id order is proportional work, while telemetry has no frontier — one
+  live row below a dead one (a clock that ran fast and was NTP-corrected) would starve an id-ordered
+  window forever, deleting zero with the job green. `idx_telemetry_created_at` (migration
+  065) pays one index entry per event, and the plan is certified from the production TEXT:
+  `_pruneStatements` reads the two literals out of `SQLRetention.gd` and `EXPLAIN`s them, so trading
+  the index for a `SCAN` in the product turns this red instead of proceeding quietly. Before anything
+  dies, `BackfillCohortDay` freezes the cohort day of accounts whose ONLY evidence of birth is a
+  login about to be pruned, because `TelemetryService.IsD1Return` and the `cohort_retention` view
+  fall back to that row and would otherwise start measuring "first login inside the window" — another
+  metric, and one that does not confess. The same fallthrough was a live money bug:
+  `CheckoutService.GetStarterOfferState` reads `created <= 0` as "account created now", so every
+  legacy account without a stamp was permanently eligible for the starter offer; with the true day
+  frozen in, it expires like everyone else's. The horizon is not a transcription of someone else's
+  window: the ruler derives each reader's bound positionally, from the CALL that carries it —
+  `MaskRanges` blanks comments and string interiors, so a `created_at < ?` quoted in prose is not a
+  reader and an `IN (` inside a SQL literal is not a call — and it resolves the bindings array
+  through variable initializers and same-file SQL builders, demanding 2× slack over the largest
+  window it can resolve in seconds (today 7 days, so 90 is 12×). Eight planted corpora keep the
+  ruler's bite, and the pruning is measured on the booted database rather than argued: a 400-day
+  window hoisted into `var cutoffs` is still resolved AND
+  still accused, a bindings variable that confesses no time is accused, prose next to a real orphan
+  reader accuses exactly one (not two, not zero), a bound with neither a call nor a table on its own
+  line is accused, and on the live bank horizon 0, the ops button, the batch cap and the row hiding
+  behind a live blocker each say what they did — `no_horizon` and `disabled` included, over the same
+  fixture the pruning otherwise clears. What this does NOT do: `VACUUM`. The `DELETE` returns
+  pages to the freelist and the file keeps its size — the pruning stops the growth, it does not
+  shrink what `016` through `064` already wrote.
+
 - The prose of a dated register is now read by a ruler, because a commit of this project ate a
   sentence and nothing noticed (#148). The damage is in this file and it is mine: while fixing
   an anchor clause for #136, the commit deleted the OPENING line of the #107 entry, and the

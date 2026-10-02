@@ -1,0 +1,23 @@
+-- 065 — WorkOrder #164: índice de tempo para o horizonte de `telemetry_event`.
+--
+-- A migration 016 criou a tabela e nunca lhe deram fim: até este ciclo o único
+-- `DELETE` que a tocava era a erasure LGPD por conta. `SQLRetention.PruneTelemetry`
+-- é a poda que faltava, e ela é definida por TEMPO (`created_at < corte`), não por
+-- id. O índice `(kind, created_at)` de 016 não serve: `kind` não é restringido pela
+-- poda, então o planner não o usa nem para filtrar nem para ordenar, e sem índice de
+-- tempo cada passada varre o corpus vivo inteiro — 90 dias de telemetria, relidos a
+-- cada gatilho de 6 h dentro do processo que segura o writer.
+--
+-- É o oposto deliberado da decisão de 056, que recusou índice por `created_at` ao
+-- ledger. Lá a varredura andava pela PK a partir de uma fronteira durável
+-- (`ledger_compaction_cover.MAX(ledger_id)`), então o trabalho era proporcional ao
+-- corpo novo e o índice seria custo puro. Aqui não existe fronteira: a fila é o
+-- próprio tempo, e uma linha viva abaixo de uma morta (inserção com timestamp
+-- anterior, ou relógio que adiantou e foi corrigido) pararia uma varredura por PK
+-- para sempre. O preço pago é uma entrada de índice por evento escrito.
+--
+-- `tests/telemetry_census_test.gd` confere as duas metades desta justificativa no
+-- banco: o plano da poda procura por `idx_telemetry_created_at` em vez de introduzir
+-- um TEMP B-TREE para ordenar, e a linha que a poda alcança atrás de um bloqueador
+-- vivo morre — que é exatamente o caso que a varredura por id não resolve.
+CREATE INDEX IF NOT EXISTS idx_telemetry_created_at ON telemetry_event(created_at);

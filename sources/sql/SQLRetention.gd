@@ -21,6 +21,10 @@ class_name SQLRetention
 # fechada e espelhada no predicado SQL pelo mesmo teste que amarra a trigger
 # (tests/scale_test.gd), porque podar proveniência de dinheiro seria pior que o
 # problema de arquivo que isto resolve.
+#
+# Desde a WorkOrder #164 este módulo é também o único caminho que poda
+# `telemetry_event` (`PruneTelemetry`), pelo mesmo gatilho de 6 h e sob o mesmo
+# `RetentionEnabled()`: duas podas, uma política, um botão.
 
 const DaySec : int = 86400
 # Nada mais novo que isto é candidato. O teto precisa ficar ACIMA do maior lookback
@@ -41,6 +45,23 @@ const StatusDone : String			= "done"
 # dia em que ela existir não reabra o problema de arquivo.
 const BulkExact : PackedStringArray		= ["offline_settle", "settle"]
 const BulkPrefixes : PackedStringArray	= ["kill_z", "offline_settle:", "settle:"]
+
+# WorkOrder #164 — horizonte da telemetria de produto (`telemetry_event`).
+#
+# A migration 016 criou a tabela e ninguém nunca lhe deu fim: até aqui o único
+# `DELETE` em `sources/` que a toca é a erasure LGPD por conta, e o censo de kinds
+# (`tests/telemetry_census_test.gd`) encontrou a tabela crescendo sem horizonte ao
+# mesmo tempo que achava os leitores. Isto é o mesmo §12 do ledger aplicado ao
+# corpo analítico, com corte por tempo em vez de corte por cover.
+#
+# O número NÃO é transcrição de janela alheia: nenhuma das listas abaixo. A maior
+# janela que um leitor de telemetria pede é derivada do fonte pelo harness, que
+# exige folga de pelo menos 2× sobre ela (hoje a maior resolúvel é 7 dias —
+# `FraudeReview.FingerprintWindowSec`, `MetricsServer.FunnelWindowDays` e o
+# `7 * DAY` do companion). 90 dias é folga de 12× e o MESMO teto do ledger, o que
+# faz das duas podas uma política só para quem opera o botão.
+const TelemetryHorizonSec : int			= 90 * DaySec
+const TelemetryBatchRows : int			= 5000
 
 # Root = o reason até o primeiro ':' (o resto é id de objeto, não classe contábil).
 static func ReasonRoot(reason : String) -> String:
@@ -298,11 +319,130 @@ static func RetentionEnabled() -> bool:
 	var flag : String = OS.get_environment(SQLCommons.LedgerRetentionEnv).strip_edges().to_lower()
 	return flag != "0" and flag != "off" and flag != "false"
 
+# ------------------------------------------------------------------ telemetria (WorkOrder #164)
+
+# Corte alinhado ao dia, igual ao do ledger: a fronteira não treme entre rodadas do
+# mesmo dia, então "esta linha morreu" não depende do instante em que o worker
+# acordou — é o que permite ao harness afirmar a sobrevivente pelo dia, não pelo relógio.
+static func TelemetryCutoffAt(now : int, horizonSec : int = TelemetryHorizonSec) -> int:
+	return DayStart(now - horizonSec)
+
+# Antes de deixar qualquer linha morrer, o dia-zero do cohort que só existia NELA é
+# congelado na conta. `TelemetryService.IsD1Return` e a view `cohort_retention`
+# (migration 045) preferem `account.created_timestamp`, mas caem para
+# `MIN(telemetry_event.created_at)` dos logins quando a coluna é 0 — que é o caso de
+# toda conta anterior à coluna. Sem este passe, a poda destrói a única evidência do
+# dia-zero dessas contas e a métrica de retenção passa a medir "o primeiro login
+# dentro da janela", que é outra coisa e não confessa.
+#
+# Congelar é também o que fecha uma porta aberta: `CheckoutService.GetStarterOfferState`
+# lê `created <= 0` como "conta criada agora", então uma conta legada sem carimbo era
+# permanentemente elegível à oferta de estreia. Com o dia-zero verdadeiro no lugar, a
+# oferta expira como expira para todo mundo.
+static func BackfillCohortDay(sql : Object, cutoffAt : int) -> int:
+	var frozen : Array = [-1]
+	var committed : bool = sql.Transaction(func() -> bool:
+		frozen[0] = 0
+		var todo : Array[Dictionary] = sql.ExecNoLockQuery(
+			"SELECT COUNT(*) AS n FROM account WHERE created_timestamp = 0 AND account_id > 0"
+			+ " AND EXISTS (SELECT 1 FROM telemetry_event t"
+			+ " WHERE t.account_id = account.account_id AND t.kind = 'login' AND t.created_at < ?);",
+			[cutoffAt])
+		var n : int = int(todo[0]["n"]) if not todo.is_empty() else 0
+		if n > 0:
+			if not sql.ExecNoLock(
+					"UPDATE account SET created_timestamp = (SELECT MIN(t.created_at) FROM telemetry_event t"
+					+ " WHERE t.account_id = account.account_id AND t.kind = 'login')"
+					+ " WHERE created_timestamp = 0 AND account_id > 0"
+					+ " AND EXISTS (SELECT 1 FROM telemetry_event t"
+					+ " WHERE t.account_id = account.account_id AND t.kind = 'login' AND t.created_at < ?);",
+					[cutoffAt]):
+				return false
+		frozen[0] = n
+		return true)
+	return frozen[0] if committed else -1
+
+# A fila é o tempo, então a varredura é por tempo: `idx_telemetry_created_at`
+# (migration 065) dá o filtro e a ordem, e a janela para em `batchRows` linhas MORTAS
+# — não em `batchRows` linhas quaisquer.
+#
+# É onde este passe diverge do 056 de propósito. Lá a fronteira durável
+# (`ledger_compaction_cover`) torna o trabalho proporcional ao corpo novo e varrer
+# pela PK é o certo. Aqui não há fronteira: se a janela fosse `ORDER BY id`, uma linha
+# viva abaixo de uma morta — inserção com timestamp anterior, relógio que adiantou e
+# foi corrigido — sentaria na frente de tudo e a poda derrubaria zero em toda rodada
+# seguinte, para sempre, com o job verde. O custo trocado é uma entrada de índice por
+# evento, e `tests/telemetry_census_test.gd` mede os três lados: o plano (busca pelo
+# índice da 065, sem TEMP B-TREE para ordenar), a linha que morre atrás do bloqueador
+# vivo, e o texto das duas statement abaixo.
+#
+# As duas consultas são literais separados e NÃO montados a partir de uma variável:
+# é assim que cada uma é legível sozinha pelo censo de leitores (`DELETE … WHERE`
+# precisa confessar o `created_at < ?` na própria peça, senão vira erasure LGPD). O
+# preço é a duplicação, e quem a vigia é a régua — contar um conjunto e apagar outro
+# faria `rows_deleted` mentir com a poda funcionando.
+static func DeleteTelemetryChunk(sql : Object, cutoffAt : int, batchRows : int) -> int:
+	var deleted : Array = [-1]
+	var committed : bool = sql.Transaction(func() -> bool:
+		deleted[0] = 0
+		var pick : Array[Dictionary] = sql.ExecNoLockQuery(
+			"SELECT COUNT(*) AS n FROM telemetry_event WHERE id IN (SELECT id FROM telemetry_event WHERE created_at < ? ORDER BY created_at LIMIT ?);",
+			[cutoffAt, batchRows])
+		var n : int = int(pick[0]["n"]) if not pick.is_empty() else 0
+		if n == 0:
+			return true
+		if not sql.ExecNoLock(
+				"DELETE FROM telemetry_event WHERE id IN (SELECT id FROM telemetry_event WHERE created_at < ? ORDER BY created_at LIMIT ?);",
+				[cutoffAt, batchRows]):
+			return false
+		deleted[0] = n
+		return true)
+	return deleted[0] if committed else -1
+
+# Rodada completa da telemetria: congela o dia-zero órfão, depois derruba o corpo
+# velho em janelas limitadas até a fila esvaziar. Devolve `-1` em `rows_deleted` só
+# por `ok = false`: poda que falha é confessa, não silêncio.
+static func PruneTelemetry(sql : Object, now : int = 0, horizonSec : int = TelemetryHorizonSec, batchRows : int = TelemetryBatchRows, maxPasses : int = 0) -> Dictionary:
+	var out : Dictionary = {"cutoff_at": 0, "backfilled": 0, "rows_deleted": 0, "passes": 0, "ok": false, "skipped": ""}
+	if sql == null:
+		out["skipped"] = "no_sql"
+		return out
+	if horizonSec <= 0 or batchRows <= 0:
+		out["skipped"] = "no_horizon"
+		return out
+	var stamp : int = SQLCommons.Timestamp() if now <= 0 else now
+	var cutoff : int = TelemetryCutoffAt(stamp, horizonSec)
+	out["cutoff_at"] = cutoff
+	var frozen : int = BackfillCohortDay(sql, cutoff)
+	if frozen < 0:
+		out["ok"] = false
+		out["skipped"] = "backfill_failed"
+		return out
+	out["backfilled"] = frozen
+	var passes : int = maxPasses if maxPasses > 0 else SQLCommons.LedgerRetentionMaxRounds
+	var total : int = 0
+	for _pass in passes:
+		var deleted : int = DeleteTelemetryChunk(sql, cutoff, mini(batchRows, TelemetryBatchRows))
+		if deleted < 0:
+			out["rows_deleted"] = total
+			out["skipped"] = "chunk_failed"
+			return out
+		out["passes"] = int(out["passes"]) + 1
+		total += deleted
+		if deleted == 0:
+			break
+	out["rows_deleted"] = total
+	# O DELETE devolve páginas ao freelist; o arquivo não encolhe sozinho e este passe
+	# NÃO faz VACUUM (é escrita no caminho do writer). O que a poda garante é que a
+	# tabela para de crescer em vez de crescer para sempre.
+	out["ok"] = true
+	return out
+
 # Entrada do worker de backup (`SQLBackups.Run`). Vários passes de BatchRows por
 # gatilho, com teto: encurta a fila depois de um feriado sem deixar um único
 # disparo dominar o writer por tempo ilimitado.
 static func RunRetentionJob(sql : Object, now : int = 0, maxRounds : int = 0) -> Dictionary:
-	var out : Dictionary = {"rounds": 0, "rows_read": 0, "rows_dropped": 0, "resumed": 0, "ok": true, "skipped": ""}
+	var out : Dictionary = {"rounds": 0, "rows_read": 0, "rows_dropped": 0, "resumed": 0, "ok": true, "skipped": "", "telemetry": {}}
 	if sql == null:
 		out["ok"] = false
 		out["skipped"] = "no_sql"
@@ -310,6 +450,13 @@ static func RunRetentionJob(sql : Object, now : int = 0, maxRounds : int = 0) ->
 	if not RetentionEnabled():
 		out["skipped"] = "disabled"
 		return out
+	# A telemetria vai uma vez por disparo, não uma vez por rodada: a fila dela é o
+	# próprio tempo (cada passada já é limitada por `TelemetryBatchRows`) e o passe
+	# inteiro fica sob o MESMO botão de desligar acima — desligar a poda de ledger
+	# desliga as duas, que é o que o runbook jura.
+	out["telemetry"] = PruneTelemetry(sql, now)
+	if not bool((out["telemetry"] as Dictionary).get("ok", false)):
+		out["ok"] = false
 	var rounds : int = mini(maxRounds if maxRounds > 0 else SQLCommons.LedgerRetentionMaxRounds, 200)
 	for _round in rounds:
 		var result : Dictionary = CompactLedger(sql, now, HorizonSec, BatchRows)

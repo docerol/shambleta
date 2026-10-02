@@ -154,12 +154,15 @@ func Run():
 				and Launcher.SQL != null and Launcher.SQL.isInitialized:
 			lastLedgerRetentionTimestamp = timestamp
 			var retention : Dictionary = SQLRetention.RunRetentionJob(Launcher.SQL)
+			var tele : Dictionary = retention.get("telemetry", {}) as Dictionary
 			if int(retention.get("rows_dropped", 0)) > 0 or int(retention.get("resumed", 0)) > 0 \
+					or int(tele.get("rows_deleted", 0)) > 0 or int(tele.get("backfilled", 0)) > 0 \
 					or not bool(retention.get("ok", false)):
-				Util.PrintLog("SQL", "Ledger retention: rounds %d, lidas %d, dropadas %d, retomadas %d, ok %s" % [
+				Util.PrintLog("SQL", "Retention: ledger rounds %d, lidas %d, dropadas %d, retomadas %d; telemetria apagadas %d, dias-zero congelados %d, cutoff %d; ok %s" % [
 					int(retention.get("rounds", 0)), int(retention.get("rows_read", 0)),
 					int(retention.get("rows_dropped", 0)), int(retention.get("resumed", 0)),
-					str(retention.get("ok", false))])
+					int(tele.get("rows_deleted", 0)), int(tele.get("backfilled", 0)),
+					int(tele.get("cutoff_at", 0)), str(retention.get("ok", false))])
 
 		if timestamp - lastDailyBackupTimestamp >= SQLCommons.DailyBackupIntervalSec:
 			var backupFilePath: String = CreateDailyBackup()
