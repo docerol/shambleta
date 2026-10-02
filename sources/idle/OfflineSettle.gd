@@ -286,7 +286,7 @@ static func DropSeedBase(charID : int, zoneID : int, anchorTs : int) -> int:
 	return (charID * 1000003) + (zoneID * 4099) + (anchorTs * 31)
 
 # Liquida `dropCount` drops com UMA rolagem por drop (`GetDropForRoll` responde
-# identidade: um item por roll, nunca quantidade — FarmZoneData.gd:513). O
+# identidade: um item por roll, nunca quantidade — `GetDropForRoll` (`sources/idle/FarmZoneData.gd:@GetDropForRoll`)). O
 # retorno é o multiset hash -> contagem; a soma das contagens é exatamente
 # `dropCount`, então este eixo não cria item nem ouro novos, só redistribui.
 # Pura e exposta para a régua de distribuição (tests/balance_test.gd) poder

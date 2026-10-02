@@ -272,7 +272,7 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	var eff : float = 0.8
 	var expectedXp : int = roundi(float(zone5.xpPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor * nb)
 	# P1-3 (AUDITORIA_2026-09-27): o boost de newbie é de XP, não de ouro. A régua é
-	# a regra online — `Formula.gd:212` multiplica `zoneXp` e nunca o gold. O
+	# a regra online — `ApplyXp` (`sources/actor/stat/Formula.gd:@ApplyXp`) multiplica `zoneXp` e nunca o gold. O
 	# offline carregava o ×5 nos dois eixos, i.e. sair do jogo pagava 5× o ouro de
 	# quem ficava acordado, exatamente na coorte mais sensível ao faucet. O golden
 	# trava os dois lados; sem o check abaixo a trava de gold passaria trivialmente
@@ -956,7 +956,7 @@ func _MemberAccesses(prefix : String, body : String) -> Array:
 # SOM-IDLE R1: superfície pública dos autoloads. Perder uma função de autoload não
 # quebra o parse de quem chama — quebra em runtime, no caminho de um jogador. Foi
 # exatamente assim que Monitoring perdeu SetPlayer: f781f71 esvaziou o arquivo por
-# causa de um erro de indentação e Map.gd:125 continuou chamando na chegada do
+# causa de um erro de indentação e `SpawnEntity` (`sources/map/Map.gd:@SpawnEntity`) continuou chamando na chegada do
 # jogador local ao mapa. O runner headless é server-only e nunca passa por ali,
 # então esta varredura é a única prova que existe sem client real aberto.
 func SuiteAutoloadSurface() -> void:
@@ -1619,7 +1619,7 @@ func _RuntimeBuiltGuiPanels() -> Dictionary:
 			# `sources/gui/` não tem `_ready` nem ciclo de vida de cena: construí-lo no
 			# scene ou em runtime é a mesma coisa, então não há nada para "montar numa
 			# suíte de painéis". Foi o que estourou a régua em 2026-09-27:
-			# `GuildPanel.gd:74` faz `GuildWithdrawGate.new()` — aritmética de janela
+			# `_withdrawGate` (`sources/gui/GuildPanel.gd:@_withdrawGate`) faz `GuildWithdrawGate.new()` — aritmética de janela
 			# portada para fora do painel na split dos helpers de guild — e o censo, que até
 			# ali só tinha encontrado nós, passou a medir um contador sem UI. Registrar esse
 			# arquivo na lista seria exigir um `_ready` que ele não tem; a outra alternativa,

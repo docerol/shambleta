@@ -235,6 +235,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Two harness pointers had drifted off their own sentences, and the naming requirement this slice
+  obeys is what moved them back (`#156`). A comment in the kernel `tests/IdleTests.gd` swore that when
+  `Monitoring` lost `SetPlayer`, "`Map.gd:125` continuou chamando na chegada do jogador local ao
+  mapa" — but line 125 is `entity.stat.race = entry.race`, and the call that kept firing,
+  `Monitoring.SetPlayer(entry.nick)`, is eight lines later inside `SpawnEntity`
+  (`sources/map/Map.gd:@SpawnEntity`). A sibling comment said "`GuildPanel.gd:74` faz
+  `GuildWithdrawGate.new()`" while line 74 is `var _overrideAccount : int = 0`; the construction is on
+  line 79 — `var _withdrawGate : GuildWithdrawGate = GuildWithdrawGate.new()` — so it is the field
+  `_withdrawGate` (`sources/gui/GuildPanel.gd:@_withdrawGate`), not line 74, that does the thing.
+  Neither had been accused by any ruler, for the reason this slice keeps re-meeting: a line pointer is
+  read against the declaration its clause names, and a clause naming only a `.new()` call and a bare
+  `Map.gd` names no declaration, so the identity and literal sections had nothing to test and a body
+  that relocated under a later edit left its line number stranded in silence. Adopting the anchor is
+  what forces the sentence to say the symbol, and saying the symbol is what made these two open their
+  target. Two honest conversions ride with them — the newbie-boost rule `Formula.gd:212` is `ApplyXp`
+  (`sources/actor/stat/Formula.gd:@ApplyXp`), and "um item por roll, nunca quantidade"
+  `FarmZoneData.gd:513` sits inside `GetDropForRoll` (`sources/idle/FarmZoneData.gd:@GetDropForRoll`) —
+  and the slice stops at four because the pointers it left are a different problem than the ones it
+  killed: `FarmZoneData.gd:401` names `GetDropForRoll` while line 401 lies in `GetDropPool`, and the
+  i18n pair calls `sources/cell/CellCommons.gd:95` a use of the `"Attack"` string that CellCommons does
+  not contain — those sentences are false about their own symbol, so re-anchoring them would mint a lie
+  with a name on it; they need a truth call, not a pointer swap, and stay line pointers for a
+  follow-up. Measured on this working tree, which has `build/`: the four conversions alone print 302
+  anchors against 367 line pointers and `== DOC DRIFT: 2115 checks, 0 failures ==` — four line pointers
+  died, each worth one read, so the total drops 2119 → 2115 while the anchors rise 298 → 302. This entry
+  then carries four of its own `arquivo:@símbolo` citations, charged inside the dated register exactly as
+  #148 requires, which lifts the committed tree back to 306 anchors against 367 line pointers and
+  `== DOC DRIFT: 2119 checks, 0 failures ==`: the four reads the slice paid off are re-added by the four
+  anchors this entry eats, so a dated register that documents a measurement also pays for it. A clean
+  clone prints one less, 2118 — the #157 build-artifact pointer, neither added nor removed here. The run
+  carries `0 acusações` and self-test 29/29. The GDScript twin read the same committed tree: 278 âncoras
+  vistas pela varredura, four above the 274 the code slice printed before this entry existed and eight
+  above the 270 of the debugging.md slice, `0 acusadas`; its recorte charges 45 âncoras de história
+  inside the register — the 41 the code slice left plus these four — against 241 spared line pointers,
+  and closes the same `== RESULT: 3313 checks, 0 failures ==`, the census up four and the aggregate
+  unmoved (#152 standing), no red gates, no flakes and teardown 1869 of a 2401 ceiling.
 - A line pointer that names no declaration had rotted onto the wrong function, and no ruler could see it
   because the range only ever had to be non-blank (`#156`). `docs/development/debugging.md` swore that
   `DrainPendingPreloads` "é chamado no último hook de árvore ainda viva do autoload —
