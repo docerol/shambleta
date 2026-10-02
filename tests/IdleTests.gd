@@ -1143,7 +1143,7 @@ func SuiteGuiPanels() -> void:
 			Check(legacyText.length() > markedText.length() and legacyText.contains("lifetime"),
 				"placar sem marco zero confessa na tela que o número é da vida (%s)" % legacyText)
 	# Checkout: a segunda porta do dinheiro. A janela não está no scene — o Shop a cria
-	# em runtime (`Shop.gd:265`: `new()` + `add_child` no GUI), então o exame faz o mesmo
+	# em runtime por `_show_web_checkout` (`Shop.gd:@_show_web_checkout`): `new()` + `add_child` no GUI, então o exame faz o mesmo
 	# e por isso é obrigado a chamar `_show_payment_url` em vez de `_open_payment_url`:
 	# atravessar o `_launch_payment_url` num harness chama `OS.shell_open` de verdade e
 	# abre um navegador na máquina de quem roda a suíte. Que a metade visual não navega é

@@ -235,6 +235,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A pointer the mechanical-trio slice filed as having "no single owning declaration" did have one, and only
+  reading the sentence instead of arguing from its rotted line could surface it (`#156`). That slice had put
+  `Shop.gd:265` under what it deliberately would NOT convert — "straddles `ShowDailyShop` and a checkout
+  branch with no single owning declaration" — because line 265 is a daily-offer button built inside
+  `ShowDailyShop`, while the checkout window the harness builds is created elsewhere. But the verdict was
+  argued from the line, not the claim. The sentence says the Shop creates the window at runtime with `new()`
+  + `add_child` in the GUI, and that claim has exactly one owner: `_show_web_checkout` (`Shop.gd:@_show_web_checkout`),
+  which sets the GUI's checkout window to a freshly constructed dialog and then adds it as a child. Naming it
+  dissolves the "straddles" — the two things that looked straddled were
+  the rotted line's own function and a checkout branch the sentence never pointed at. This one falls on the
+  aggregate where the OpenChest slice held flat: `Shop.gd:265` was an identity-named target, so the identity
+  section was opening it line by line, and retiring it costs both that read and the walk read while the
+  anchor adds back only one — measured here the conversion alone is 324 anchors against 358 line pointers and
+  `== DOC DRIFT: 2114 checks, 0 failures ==`, identity dropping 147 → 146 named while name-resolution holds at
+  the 87 floor (a full-path `sources/gui/Shop.gd` anchor would have moved that counter to 86 and the #116 walk
+  guard would have bitten, so the bare filename anchor is kept resolving by name). This entry
+  eats one charged `arquivo:@símbolo` citation inside the register, lifting the committed tree to 325 anchors
+  against 358 line pointers and `== DOC DRIFT: 2115 checks, 0 failures ==` (a clean clone prints one less, the
+  #157 build-artifact pointer). With it the two `#156` pointers the mechanical-trio slice left precisely
+  because it had not followed the sentence to its witness are both resolved — `Server.gd:490` in the prior
+  slice, `Shop.gd:265` here — and what genuinely remains on those three files are the ones it named as not
+  mechanically swappable: the Formula key-drop line, where the "0,2%/kill" rate lives in `RollsKeyDrop` and not
+  `ApplyXp`, so a claim about a rate must not ride onto the symbol that only rolls it, and the two
+  non-anchorable `nginx.conf:174/205` (no declaration model for `.conf`) and `ci_gate_log.sh:42` (no
+  column-zero function for a `@` to resolve to).
 - A chest-cap comment cited a 60 s footprint gate three hundred lines away from the gate it meant, and
   only the naming requirement could find where it actually lived (`#156`). `sources/idle/OfflineSettle.gd`
   asserted "gate de pegada de 60 s em `Server.gd:490`", but line 490 is `DeleteCharacter` — a login/peer
