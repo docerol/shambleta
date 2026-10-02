@@ -235,6 +235,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The conversion the identity floor had blocked is now landed (`#124`). The header of
+  `sources/social/SocialGraph.gd` cited a line in `sources/gui/Chat.gd` by number to show how the
+  social verbs reach the command route. That line moves whenever anything above it in the chat
+  handler changes, so the citation was the exact marra-cost the campaign kills. The pointer is now
+  an anchor: the clause names the chat handler that owns the cited statement, and the ruler judges
+  it against the block of that declaration. Verified honest here — the handler is declared exactly
+  once and its block truly covers the cited statement — and the naming backtick was added so the
+  clause names its own symbol rather than relying on the anchor token. Measured on this tree:
+  anchors 352 to 353, line pointers 332 to 331, identity judged 120 to 119 with the independent
+  census at 119, `0 acusações`. Gate: `== DOC DRIFT: 2059 checks, 0 failures ==`.
 - The identity ruler's floor was a hand-written number, and it accused the very conversion the
   campaign drives (`#160`). `scripts/check_doc_drift.sh` judged `arquivo:NN` line pointers with the
   `verdict` of section 23, then required the walk to have judged at least a written `IDENT_MIN` of

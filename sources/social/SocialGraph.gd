@@ -13,7 +13,7 @@ class_name SocialGraph
 # é quem mede e publica os números desta rodada). A conta fechou assim: os verbos
 # entram pela ROTA DE COMANDO (`/friend`, `/unfriend`, `/ignore`, `/unignore`,
 # `/social` em `WorldCommands.gd`, disparados por `Network.TriggerCommand` como
-# `Chat.gd:170` já faz), a política vive inteira neste arquivo (fora do ratchet) e a
+# `OnNewTextSubmitted` (`Chat.gd:@OnNewTextSubmitted`) já faz), a política vive inteira neste arquivo (fora do ratchet) e a
 # cobrança no hot path é UMA chamada em `Network.ChatPlayer` — o único ponto por onde
 # toda linha de jogador sai para uma sessão (local, global, guild e os dois ecos de
 # whisper passam por ele; medido em `tests/social_graph_test.gd`).
