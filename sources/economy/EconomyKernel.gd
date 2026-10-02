@@ -504,7 +504,8 @@ func _MoveStackUIDs(charFrom : int, charTo : int, itemID : int, count : int) -> 
 # com `ConsumeItemLotsRaw` (corrupção, cubo, desmanche, insumo do craft) tem que
 # decrescer o AGREGADO aqui, senão `item.count` continua contando o que não existe
 # mais: a tela mostra item fantasma e o reconcile diário
-# (`TournamentArenaService.gd:398`) grava divergência de pilha permanente, que o
+# (`ReconcileDaily` em `TournamentArenaService.gd:@ReconcileDaily`) grava divergência
+# de pilha permanente, que o
 # job reporta e não conserta. Lote sem linha agregada não é falha deste chamamento
 # (o consumo já validou o lote): é órfão pré-existente, devolvido como consumido
 # para a transação seguir, e a varredura de órfãos é quem nomeia o problema.

@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- One duplicated citation was paying the pointer cost twice, and both copies were bare names the
+  name-resolution walk already owned (`#124`). `sources/economy/AuctionHouseService.gd` and
+  `sources/economy/EconomyKernel.gd` each explain that the daily reconcile — `ReconcileDaily`, declared
+  once at column zero and spanning the block that checks `item.count == SUM(item_instance.count)` — is
+  what turns a stack the caller decremented without touching the aggregate into a permanent divergence.
+  Both wrote it as `TournamentArenaService.gd` at line 398. That line sits inside the `ReconcileDaily`
+  block, and neither clause carried a unique pinned literal, so anchoring both moved them out of the
+  line-pointer pool and into the anchor walk without touching the literal walk's count or the 87
+  name-resolution floor. Measured on this tree: anchors 339 → 341, line pointers 345 → 343, literal walk
+  flat at 40, `0 acusações`. Gate: `== DOC DRIFT: ... 0 failures ==`. The `ReconcileDaily` body is read
+  by the GDScript twin in CI.
 - One comment described the login emitter three times over, and the bare-name copy was the only one
   that could be anchored today (`#124`). `sources/economy/TelemetryService.gd` argues that `d1_return`
   used to have two disagreeing predicates: the view's, and the emitter's `COUNT(DISTINCT

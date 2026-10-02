@@ -220,8 +220,8 @@ func _RestoreEscrowLocked(sql : SQLService, listing : Dictionary, charID : int, 
 		return out
 	# Pilha agregada: a invariante `item.count == SUM(item_instance.count)` por
 	# (char, item, storage) é conferida pelo reconcile diário
-	# (`TournamentArenaService.gd:398`) — devolver lote sem mexer no agregado
-	# grava divergência de pilha permanente.
+	# (`ReconcileDaily` em `TournamentArenaService.gd:@ReconcileDaily`) — devolver
+	# lote sem mexer no agregado grava divergência de pilha permanente.
 	var agg : Array = sql.db.select_rows("item", "item_id = %d AND char_id = %d AND storage = 0" % [itemID, charID], ["count"])
 	if agg.is_empty():
 		if not sql.db.insert_row("item", {"item_id" = itemID, "char_id" = charID, "count" = total, "storage" = 0, "customfield" = ""}):
