@@ -235,6 +235,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The offline-drops pointers in the same launch note were audited next, and the audit split them
+  rather than converting all three (`#158`, `#124`). The note about the malformed network report
+  cited three lines: the offline-cap rule, the panel method that reads the drops field, and the idle
+  module that declares it. The cap and the panel became anchors — the cap is a module-level constant
+  the ruler indexes by name, the panel method is declared once with its block covering the cited
+  read. The declarant did not, for two reasons the ruler states out loud. Its field is a member of a
+  class, and the anchor ruler indexes function and constant names but not class names: the class
+  anchor came back "a name nobody declares", and the worklist's fallback named a module constant
+  fifteen lines above the class body, so taking it would have minted a false anchor. And the belief
+  this pass carried in — that the cited line had drifted off the drops field — was itself wrong: the
+  field sits exactly on the cited line, so the pointer was never stale and stayed an honest line
+  pointer. Both citations were kept addressing their file by bare name, because the name-resolution
+  walk fires precisely on a pointer that cites a file without a path, and full-pathing them would
+  have dropped that coverage below its floor of 87 — lowering a floor to turn the ruler green is not
+  what a conversion is for. Measured on this tree: anchors 366 to 369, line pointers 320 to 317,
+  `0 acusações`. Gate: `== DOC DRIFT: 2028 checks, 0 failures ==`.
 - The three 2FA/buy pointers in `deploy/LAUNCH_HANDOFF.md` are now anchors, after an audit of every
   cited line in the source (`#158`, `#124`). The launch note described the member-of-nonexistent bug
   it had fixed: three 2FA calls in `Settings.gd` and two buy screens in `Shop.gd` and `Checkout.gd`

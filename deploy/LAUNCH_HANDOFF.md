@@ -607,7 +607,7 @@ Compra apenas na versão web (o sandbox do companion responde 403 no nativo).` c
 
 **Leitura desta transcrição em 2026-09-27: os números de teto acima já valem só para o dia da sonda.**
 Ela registra o que a tela mostrava em 2026-09-25, quando o piso F2P era 1h. A regra mudou no mesmo dia
-para **8h** (`sources/idle/OfflineSettle.gd:22` — `BaseCapHours = 8.0`, com o porquê escrito logo
+para **8h** (`BaseCapHours` = 8.0, `sources/idle/OfflineSettle.gd:@BaseCapHours`, com o porquê escrito logo
 acima), e o letreiro da loja passou a ser gerado do código em vez de ser texto chumbado: a suíte
 `SuiteStorefrontHonesty`, em `tests/IdleTestsFrontier.gd` — citada por nome e não por número, porque
 o span daquele arquivo anda a cada rodada de correção e um número que anda é anti-evidência —, falha se qualquer hora de offline aparecer
@@ -616,11 +616,11 @@ literal nos letreiros que `Shop.gd` monta em `ShowState`, e assim `VIP: inactive
 porque ela é evidência datada; o que ela não pode é virar especificação lida fora da data.
 
 **Um detalhe que a sonda achou, e que não é bug do produto.** Na primeira rodada passei
-`"drops": []` no `NetClient.LastAFKReport` e o `ShowReport` morreu na linha que lê
-`drops`: `var drops : Dictionary` (`sources/gui/AfkReport.gd:57`) — o `SCRIPT ERROR` fala
+`"drops": []` no `NetClient.LastAFKReport` e o `ShowReport` (`sources/gui/AfkReport.gd:@ShowReport`) morreu
+na linha que lê `drops`: `var drops : Dictionary` — o `SCRIPT ERROR` fala
 de 'Array' em 'Dictionary', e o render abortou no meio (`Baús: 0` e hint vazio). É bug da
 sonda: o declarante escreve `var drops : Dictionary[int, int]` (`OfflineSettle.gd:58`) e o
-painel lê o mesmo campo como `Dictionary` (`AfkReport.gd:57`), então o caminho servidor-cliente de hoje nunca entrega `Array`. Vale registrar
+painel `ShowReport` lê o mesmo campo como `Dictionary` (`AfkReport.gd:@ShowReport`), então o caminho servidor-cliente de hoje nunca entrega `Array`. Vale registrar
 mesmo assim porque é uma fronteira: um payload malformado vindo da rede não degrada a janela, ele
 interrompe o método. Corrigido o fixture para `{9001: 2}`, o render completo saiu como acima.
 
