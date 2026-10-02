@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A fraud-harness comment cited `EconomyKernel.gd:156` for the claim that the kernel's gold mover is the
+  one path writing `stat.gp` with the ledger line that attests it, and reading the target showed line 156
+  is exactly `func MoveGold` — the declaration, so the number already named the function and the fragile
+  line became the stable symbol anchor (`#124`). Bare name to bare name: the name-resolution census fell
+  one more on BOTH arms at once (96 on each) and the floor held at 87. This one is the case the naming rule
+  bit, and honestly so: the symbol's own name sat two comment lines above the citation, and the judge would
+  not count that as naming — the first pass failed with "nada na cláusula nomeia `MoveGold`" even though the
+  anchor on the sentence above (`@BuyListing`) passed with its name one line up. The difference is what the
+  clause-cut reached. The fix was to move the citation next to its name — "`MoveGold` (`EconomyKernel.gd:@...`)"
+  on one line — the same reorder that makes the sentence read as a claim, not a guess. The anchor now sits
+  where the word it stands for sits.
 - A cross-file caller table in the testing doc cited `Gui.gd:286` as the location of the character-menu
   opener, and reading the target showed line 286 is exactly `func _show_char_menu` — the declaration
   itself, so the number already meant "this function" and the fragile line became the stable symbol

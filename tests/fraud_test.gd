@@ -666,9 +666,9 @@ func _suiteAHWashPair() -> void:
 # Personagem da mesa de leilão: nível 5 (para os sinais de velocity de outras
 # suítes não casarem por acaso) e OURO no bolso. O ouro é o que falta entre o
 # anúncio existir e a venda liquidar — `BuyListing` lê `_CharGoldRaw` antes de
-# abrir a transação (`AuctionHouseService.gd:@BuyListing`) e o `MoveGold` do kernel é o
-# único caminho que grava `stat.gp` com a linha de ledger que o atesta
-# (`EconomyKernel.gd:156`). Sem endowment o ciclo A<->B nunca acontece e o
+# abrir a transação (`AuctionHouseService.gd:@BuyListing`) e o `MoveGold` (`EconomyKernel.gd:@MoveGold`)
+# do kernel é o único caminho que grava `stat.gp` com a linha de ledger que o atesta.
+# Sem endowment o ciclo A<->B nunca acontece e o
 # detector não tem o que ver: é a régua que fica cega, não o produto.
 func _ahChar(accountID : int, nick : String, gold : int) -> int:
 	_charWithLevel(accountID, nick, 5)
