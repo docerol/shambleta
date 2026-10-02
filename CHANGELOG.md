@@ -235,6 +235,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A comment on the offline drop roll justified moving the roll from spawn-time to death-time by pointing at
+  a bare filename and a line number the tree can move without warning (`#124`).
+  `sources/actor/agent/variants/MonsterAgent.gd` cites the live key-drop as the model for the per-cell roll;
+  the cited line is `BossService.RollsKeyDrop` inside `ApplyXp`, declared once at column zero with a block
+  that encloses that call. The clause carried no unique pinned literal (the only other token, `randf()`,
+  is parenthesised so it is never a candidate), so a naming backtick on `ApplyXp` both satisfies the anchor
+  and suppresses the continuation pull that had been reading the previous line — `ApplyXp` is short enough
+  to stay below the candidate length, so it adds no new literal duty. Bare-to-bare keeps the target open for
+  name resolution, so the floor held at 87 and the literal walk stayed flat at 40; the identity walk counts
+  one fewer named pointer (127 → 126) because this citation is now an anchor. Measured on this tree: anchors
+  345 → 346, line pointers 339 → 338, `0 acusações`. Gate: `== DOC DRIFT: 2075 checks, 0 failures ==`. The
+  target body is read by the GDScript twin in CI.
 - A comment on the manual-click path explained that two other code paths kept checking the same cell by
   pointing at a bare filename and two line numbers the tree can move without warning (`#124`).
   `sources/actor/entity/Entity.gd` names the idle tick and the inventory-space gate as the two halves that

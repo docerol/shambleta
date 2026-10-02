@@ -21,8 +21,9 @@ func Killed():
 # `EntityData._drops` é mesa de PROBABILIDADE por unidade — Salt Slime → Apple
 # 0.7 (70% de uma maçã por kill), Sand Snake → pele 0.05, chave de boss 1.0
 # (sempre). O roll acontece NA MORTE, um `randf()` por célula por kill — como o
-# drop de chave ao vivo (`Formula.gd:226`). No desenho antigo a mesa era rolada no
-# `AIAgent.SetData` e o resultado ficava guardado no inventário do mob, varrido
+# drop de chave ao vivo, dentro de `ApplyXp` (`Formula.gd:@ApplyXp`). No desenho
+# antigo a mesa era rolada no `AIAgent.SetData` e o resultado ficava guardado no
+# inventário do mob, varrido
 # para o chão aqui; medido hoje A/B contra `HEAD` no mesmo harness, os dois
 # caminhos dão a mesma taxa (8 drops em 12 kills lá, 7 aqui, esperado 8.4), então
 # isto NÃO conserta um mob que não derrubava nada — move o roll para o evento que
