@@ -1238,6 +1238,12 @@ import sys
 
 MIN_CHECKS = 120
 KEEP = {".git", ".godot", ".test-home", "__pycache__", "node_modules", ".venv", "graphify-out"}
+# Diretórios de artefato gerado: só existem onde alguém rodou o export, nunca na árvore
+# commitada. Ficam fora do índice de resolução E do ramo literal de `resolve_path` (#157):
+# aceitar um alvo por `os.path.isfile` deixaria o gate ler a linha citada numa máquina que
+# buildou e não ler noutra — o total do DOC DRIFT mudaria com a árvore, e número que
+# depende de quem rodou o build não é régua.
+ARTIFACT = ("build", "dist")
 EXTS = (".md", ".gd", ".py", ".sh", ".mjs", ".yml", ".yaml", ".conf", ".html", ".json")
 # Registros datados: prose de quando o numero era outro. Cobrar deles a verdade de
 # hoje seria reescrever historico.
@@ -2745,7 +2751,7 @@ def build_index(root):
     idx = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames
-                       if d not in KEEP and d not in ("build", "dist")
+                       if d not in KEEP and d not in ARTIFACT
                        and (not d.startswith(".") or d == ".github")]
         for fn in filenames:
             bucket = idx.setdefault(fn, [])
@@ -2765,7 +2771,14 @@ def resolve_path(path, root, index, cache, count=None):
     # por nome nu saia pela porta dos invisiveis sem a linha citada ser conferida.
     if path not in cache:
         full = os.path.join(root, path)
-        target = path if os.path.isfile(full) else None
+        # O ramo literal tem de concordar com o índice abaixo: um caminho que
+        # atravessa um diretório de artefato (`build/`, `dist/`) é lido só onde alguém
+        # rodou o export, e aceitar `os.path.isfile` aqui faria a mesma citação puxar a
+        # linha do alvo numa máquina e não noutra (#157). Segura o artefato, cai no
+        # índice (que já o mantém fora) e resolve a None nos dois lugares.
+        dirs = path.split("/")[:-1]
+        literal_ok = os.path.isfile(full) and not any(seg in ARTIFACT for seg in dirs)
+        target = path if literal_ok else None
         if target is None:
             arr = index.get(os.path.basename(path)) or []
             suffix = [p for p in arr if p.endswith("/" + path)]

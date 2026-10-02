@@ -235,6 +235,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The DOC DRIFT gate reported a different total depending on whether the machine had ever run an export, and the
+  leak was one branch trusting `os.path.isfile` over the index (`#157`). `resolve_path` resolves a cited path three
+  ways — literal path, unique suffix, unique bare name — and the literal way was the offender: the resolution index
+  already keeps `build/` and `dist/` out (a generated copy is not evidence, and indexing it would flip a true
+  citation into "ambiguous" the moment anyone ran `scripts/export_web.sh`), but `os.path.isfile` on the committed
+  tree happily returns true for `build/Web/index.html`. So the citation in `deploy/WEB_SLIM.md:78` of
+  `build/Web/index.html:149` — a splash-image byte count the doc really measured, that line does hold the
+  `<img id="status-splash">` — had its target read here and skipped in a clean clone, the single check the
+  aggregate carried only locally. Measured by hiding `build/` and re-running: the total fell 2114 → 2113 while no
+  census number moved (327 anchors, 357 line pointers, identity 145, the 87 name-resolution floor). The fix is
+  scope, not metric: the literal branch now refuses any path that traverses an artifact segment, exactly as the
+  index already does, so the citation resolves to nothing on both trees and the total reads 2113 exported or not.
+  Godot's twin never carried the bug — `DirAccess` honors the tracked `build/.gdignore`, so the harness already
+  treated the artifact as absent; it was the raw-`os.walk` bash ruler that had quietly diverged from its own twin.
 - The "0,2%/kill" the last deferred truth-call chased was never in Formula at all, and naming the symbol that
   actually defines it is what moved the citation onto the right line (`#156`). The mechanical-trio slice had
   listed `Formula.gd:229` under what it would NOT swap, reasoning that anchoring the rate onto `ApplyXp` would
