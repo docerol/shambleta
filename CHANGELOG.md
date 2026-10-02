@@ -235,6 +235,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Three line pointers in `sources/economy/TelemetryService.gd` became anchors, and the fourth
+  confessed it is not anchorable (`#124`). The D1-return comment cited the login emitter by line
+  twice, and the censo comment cited the `flag_change` writer by line. Each target was checked in
+  the source, not assumed: the login emitter (`FinalizeLogin`) is declared once and its block
+  covers the cited lines, and `flag_change` is emitted inside `CommandFlags`, whose block runs to
+  the end of that file, so the cited line is honestly inside it. The clause was rewritten to name
+  each symbol (the ruler rejects an anchor whose own clause does not name it), so the conversion is
+  evidence, not decoration. The fourth pointer is left as a live line pointer on purpose: it cited
+  `SQLSecurity.gd` 67 through 72 for "the six `sec_*` events", and the ruler's model offered
+  `WindowRetentionSec` — but that constant sits at line 65 and is about table retention, not the
+  events, and the six events are six separate module-level constants with no single enclosing
+  symbol. Minting that anchor would have named the wrong thing, so it stays a line pointer.
+  Measured on this tree: anchors 353 to 356, line pointers 331 to 328, identity judged 119 to 116
+  with the independent census at 116, `0 acusações`. Gate: `== DOC DRIFT: 2051 checks, 0 failures ==`.
 - The conversion the identity floor had blocked is now landed (`#124`). The header of
   `sources/social/SocialGraph.gd` cited a line in `sources/gui/Chat.gd` by number to show how the
   social verbs reach the command route. That line moves whenever anything above it in the chat

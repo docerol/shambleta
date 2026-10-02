@@ -76,7 +76,7 @@ func BufferedCount() -> int:
 #
 # P1-ANALYTICS (juiz 2026-09-27, Analytics 8/10): `d1_return` só entra com o
 # predicado congelado da migration 045 confirmado AQUI. O emissor de login
-# (`sources/network/server/Peers.gd:291-297`) decide por "a conta tem exatamente
+# `FinalizeLogin` (`sources/network/server/Peers.gd:@FinalizeLogin`) decide por "a conta tem exatamente
 # um dia-distinto de login no banco antes deste" — leitura mais larga que a
 # régua: pega re-login em qualquer dia depois do flush, inclusive no MESMO dia
 # calendário; e mais estreita em outro ponto: conta criada ontem que loga HOJE
@@ -280,7 +280,7 @@ func FunnelDaily(days : int = 7) -> Array[Dictionary]:
 # SQLite agregar a base inteira. O login é caminho quente; a expressão abaixo bate
 # no `idx_telemetry_account_kind_time` (migration 042) para o fallback e no PK de
 # `account` para o caso normal. O `date(created_at,'unixepoch')` do emissor
-# (`sources/network/server/Peers.gd:291-297`) não casava com índice nenhum.
+# `FinalizeLogin` (`sources/network/server/Peers.gd:@FinalizeLogin`) não casava com índice nenhum.
 #
 # Consequência prática, medida em `tests/ops_fix_test.gd` (suíte B): re-login no
 # terceiro dia, re-login no MESMO dia e retorno de conta com dia-zero quebrado não
@@ -357,8 +357,8 @@ func FunnelWindowAccounts(sinceSec : int) -> Dictionary:
 #
 # Esta lista É o lado leitor do censo: todo kind que um writer do fonte anuncia tem
 # que estar aqui, senão o censo acusa. Ela não é um ornamento — os kinds nomeados
-# abaixo eram exatamente os que o fonte já escrevia e NINGUÉM lia: `flag_change`
-# (`sources/ops/OpsCommands.gd:104`), `fraud_metrics`
+# abaixo eram exatamente os que o fonte já escrevia e NINGUÉM lia: o kind `flag_change`,
+# escrito em `CommandFlags` (`sources/ops/OpsCommands.gd:@CommandFlags`), `fraud_metrics`
 # (`sources/economy/FraudeReview.gd`), os seis `sec_*`
 # (`sources/sql/SQLSecurity.gd:67-72`, escritos por `Server.gd` e lidos só por um
 # `CountSecurityEvents` (`sources/sql/SQLSecurity.gd:@CountSecurityEvents`) sem nenhum chamador) e os quatro eventos de marketplace/passe
