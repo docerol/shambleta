@@ -235,6 +235,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The web-push evidence block was audited end to end; one pointer converted to an anchor, two stayed
+  line pointers, and the reason they stayed is a real boundary of the anchor form rather than an
+  unconverted case (`#124`). The note explains that `CanOfferToPlayer` is, and stays, the equality
+  with `CanDeliver` — and the source proves it: the function's whole body is one line returning
+  `CanDeliver`, so the pointer that cited that line now anchors the function that IS that equality,
+  declared once with a block that covers the line. Its sibling in the same sentence cited a single
+  assertion inside the test suite's catch-all runner. Anchoring it would name the whole runner — a
+  strictly coarser claim than the one line a reader can go read — so the line pointer is the honest
+  choice there. The third, in the block below, is a line range; the anchor form has no range, and
+  collapsing it into the enclosing suite would drop the exact lines the note stakes its claim on.
+  #124 trades brittle line numbers for stable symbols only where the symbol says the same thing the
+  line did; where the symbol is vaguer than the line, the line wins, and that is a scope call, not a
+  floor to lift. Measured on this tree: anchors 374 to 375, line pointers 314 to 313,
+  name-resolution coverage held at its floor of 87, `0 acusações`. Gate:
+  `== DOC DRIFT: 2022 checks, 0 failures ==`.
 - The push-RPC pointers in the web-push module were resolving but lying, and the anchor form is what
   finally caught it (`#124`). The client module documented that "peça 6" had landed the two push
   RPCs, citing `Network.gd:543,549` for the client wrappers and `Server.gd:1111,1118` for the server
