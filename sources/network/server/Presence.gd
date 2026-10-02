@@ -43,7 +43,8 @@ const ServerIDEnv : String				= "SHAMBLETA_SERVER_ID"
 
 const DefaultHeartbeatSec : int			= 60
 # Três batidas perdidas antes de declarar morto: uma única batida atrasada por um
-# stall de checkpoint (`wal_autocheckpoint` em `sources/sql/SQL.gd:1748`) não pode
+# stall de checkpoint (`wal_autocheckpoint`, ajustado em `_post_launch`
+# (`sources/sql/SQL.gd:@_post_launch`)) não pode
 # tirar alguém da lista de online.
 const TtlHeartbeats : int				= 3
 # Cadência da varredura de vencidos, independentemente do heartbeat: um processo que

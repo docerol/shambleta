@@ -235,6 +235,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The heartbeat TTL comment in `sources/network/server/Presence.gd` cited the checkpoint-stall
+  source by line (`#124`). It warned that one late heartbeat must not drop a player, and pointed at
+  the `wal_autocheckpoint` value to say where the stall could come from. The line number was the
+  fragile part: that `PRAGMA` lives in one function, and the number drifts the moment anything above
+  it is edited. Confirmed in the source before converting — the cited line is the
+  `wal_autocheckpoint=4000` query, which sits inside the post-launch setup function (declared once,
+  its block covering the line) — and the clause was rewritten to name that function so the anchor is
+  judged against its declaration, not assumed. Measured on this tree: anchors 356 to 357, line
+  pointers 328 to 327, `0 acusações`. Gate: `== DOC DRIFT: 2048 checks, 0 failures ==`.
 - Three line pointers in `sources/economy/TelemetryService.gd` became anchors, and the fourth
   confessed it is not anchorable (`#124`). The D1-return comment cited the login emitter by line
   twice, and the censo comment cited the `flag_change` writer by line. Each target was checked in
