@@ -235,6 +235,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The comment that says where a farm zone's drop count comes from was still pointing at a line
+  (`#124`). `sources/idle/FarmZoneData.gd` reads its drops-per-kill figure from `dropRatePPM` at a
+  numbered line inside `OfflineSettle.gd` — that line is the `var dropExpected` ppm-of-kills formula,
+  inside `_ApplyFormula` (declared once at column zero, block encloses the formula). This pointer was
+  lit-bearing: its clause promised the literal `dropRatePPM`, and the old raw literal floor accused the
+  conversion because a line-pointer to anchor step drops the walk count, which the floor read as
+  regression. #159 replaced that floor with the independent coverage census, so the step is now honest
+  progress. Naming `_ApplyFormula` on the anchor's own line, the naming backtick suppresses the backward
+  continuation that used to pull `dropRatePPM` into the clause, and the anchor block still covers the
+  formula. Measured here: anchors 351 to 352, line pointers 333 to 332, literal 40 to 39 with the census
+  at 39 (walk and census drop together, exactly what #159 authorizes), floor 87, `0 acusações`.
+  Gate: `== DOC DRIFT: 2062 checks, 0 failures ==`.
 - A comment declaring a farm zone's PPM unit justified the unit by borrowing a live boss constant, pointing
   at a bare filename and a line number the tree can move without warning (`#124`). `sources/idle/FarmZoneData.gd`
   says its "drops per million kills" uses the same unit as the boss key-drop, and the cited line is the

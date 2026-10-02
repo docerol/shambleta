@@ -513,7 +513,8 @@ static func GetDropForRoll(zoneID : int, roll : int) -> int:
 		# tests/drop_band_content_test.gd trava o ramo como inalcançável para zona
 		# válida. Importante para a curva: o roll responde IDENTIDADE, um item por
 		# roll, nunca quantidade. A contagem de drop por kill vem de `dropRatePPM`
-		# (`OfflineSettle.gd:356`, ppm de KILLS × kills equivalentes) e, no farm
+		# (lido em `_ApplyFormula` (`OfflineSettle.gd:@_ApplyFormula`), ppm de KILLS ×
+		# kills equivalentes) e, no farm
 		# vivo, da soma das tabelas `_drops` do mob — nenhuma das duas lê a pool. Por
 		# isso encher faixa não move o 0,7 drop/kill medido (`SuiteIdleLootPipeline`
 		# amarra os dois em tests/IdleTestsFrontier.gd).
