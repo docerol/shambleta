@@ -235,6 +235,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A comment on the client's mode-restore explained that the browser boots client-only by pointing at a bare
+  filename and a line number the tree can move without warning (`#124`). `sources/network/client/Client.gd`
+  reaches for the launcher's mode switch, and the cited line is the `Launcher.Reset(false, false)` call inside
+  `Mode` (declared once at column zero, block encloses the reset). The citation sat on a comment line with no
+  backtick before it and a plain-text previous line, so the backward continuation pulled nothing shaped —
+  note the shape-bearing token in that paragraph lives on the line BELOW the citation, which is out of reach of
+  a clause that only ever walks upward. Naming `Mode` on the anchor's own line is safe because `Mode` is far
+  too short to be a candidate. Bare-to-bare keeps the target open for name resolution: literal held flat at 40,
+  floor 87, identity counts one fewer named pointer (123 → 122). Measured here: anchors 349 → 350, line
+  pointers 335 → 334, `0 acusações`. Gate: `== DOC DRIFT: 2067 checks, 0 failures ==`. The target body is read
+  by the GDScript twin in CI.
 - A comment on the map-emplace regression explained that the only caller kept asking for an insertion that
   never happened by pointing at a bare filename and a line number the tree can move without warning (`#124`).
   `sources/map/Map.gd` names that caller, and it is `AddCharacter` in `Character.gd` (declared once at

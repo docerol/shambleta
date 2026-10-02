@@ -863,7 +863,7 @@ func DisconnectServer():
 		Util.PrintLog("Client", "WebSocket dropped, continuing on WebRTC")
 		return
 	# Volta para o modo com que o processo nasceu, não para um hardcoded
-	# client+server: no browser o boot é client-only (`Launcher.gd:207`) e "ligar o
+	# client+server: no browser o boot é client-only (o `Mode` de `Launcher.gd:@Mode`) e "ligar o
 	# servidor" aqui tentava bind TCP em 127.0.0.1:9400 (`ERR_CANT_CREATE`, medido
 	# 2026-09-25), criava World/SQL/Email/Economy/Telemetry que ninguém pediu
 	# e re-entrava `DB.Init` — tudo no caminho de uma ação normal do jogador (a
