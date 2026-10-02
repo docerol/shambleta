@@ -42,16 +42,17 @@ Leituras e honestidade:
 
 - `grant_queue_pending > 0` crescendo é compra paga sem crédito — é o alerta que
   importa, não o `up`, que é `IsServing()` (`sources/system/MetricsServer.gd:@IsServing`).
-- `/webhooks/payments` por GET devolve **404** do companion (companion vivo, proxy
-  OK — medido: `{"error": "not_found"}`, `companion/server.py:1448`). **502/504** é
-  outra coisa: o nginx não alcança o upstream (companion morto ou `resolver` sem
-  resposta). Distinguir os dois é o inteiro propósito desta linha.
+- `/webhooks/payments` por GET devolve **404** do companion (companion vivo, proxy OK
+  — medido `{"error": "not_found"}`): o `Handler` (`companion/server.py:@Handler`) é
+  quem responde a rota que não conhece. **502/504** é outra coisa: o nginx não alcança
+  o upstream (companion morto ou `resolver` sem resposta). Distinguir os dois é o
+  inteiro propósito desta linha.
 - O healthcheck do `web` (`deploy/docker-compose.yml`, bloco `web:`) confere que o
   shell do jogo é o shell do jogo (`index.js` no corpo de `/index.html`) — ele
   **não** prova nada sobre o companion nem sobre o `game`, de propósito: o `web`
   não pode ficar unhealthy por causa de outro serviço quando o próprio nginx está
-  servindo (mesmo raciocínio do `companion:` com `condition: service_started`,
-  `deploy/docker-compose.yml:95-96`).
+  servindo; o `services.web.depends_on.companion` (`deploy/docker-compose.yml:@services.web.depends_on.companion`)
+  pede `condition: service_started` em vez de saúde — mesmo raciocínio.
 - `cloudflared` não tem healthcheck: a imagem não traz shell nem wget, e um probe
   que falha por falta de ferramenta é ruído. O túnel se mede pela origem pública
   (`curl -sI https://<dominio>/index.html`; 530 = origem inalcançável). **[NÃO
@@ -91,8 +92,12 @@ docker compose exec game touch /data/.local/share/Shambleta/canary   # = user://
 docker compose logs -f game      # "Server restarting in 30 seconds." → "15" → saída
 ```
 
-O que acontece depois do toque (`sources/world/ShutdownCanary.gd:28-59`): recusa
-novas conexões, avisa em 30 s e 15 s, derruba os peers que restam e chama
+O que acontece depois do toque são três funções, e a linha que as resumia numa só
+começa em `CheckCanary()` (`sources/world/ShutdownCanary.gd:@CheckCanary`), que recusa
+novas conexões, passa por `ShutdownStep()` (`sources/world/ShutdownCanary.gd:@ShutdownStep`),
+que avisa com as duas frases de `shutdownMessages` (`sources/world/ShutdownCanary.gd:@shutdownMessages`)
+a 30 s e 15 s, e termina em `OnShutdownStep()` (`sources/world/ShutdownCanary.gd:@OnShutdownStep`),
+que derruba os peers que restam e chama
 `Launcher.Quit()` → `Reset(false,false)` → `SQL.Destroy()` → `backups.Stop()`
 (join de até `BackupCheckIntervalSec` = 2 s) + `db.close_db()`
 (`SQL.Destroy()` em `sources/sql/SQL.gd:@Destroy`, `Stop()` em `sources/sql/SQLBackups.gd:@Stop`).
@@ -116,7 +121,7 @@ no arquivo e não existe no container.
 | serviço | cpus | mem_reservation | mem_limit | por quê |
 |---|---|---|---|---|
 | `game` | 2 | 640 M | 1536 M | loop único (`ServerMaxFPS` em `sources/launcher/LauncherCommons.gd:@ServerMaxFPS` = 30 FPS), ~1 core; o 2º core é para o boot (migrations + mundo) caber no `start_period: 40s`. Teto a ~3× o piso medido, porque SIGKILL aqui custa o §7.1 de `archive/AUDITORIA_2026-09-27.md` (até 600 s de ouro só em memória) — o teto protege o **host**, não a performance. |
-| `companion` | 0.5 | 64 M | 256 M | 31 MiB medido ocioso; stateless entre requests (cada request abre a própria conexão, `companion/server.py:1070-1074`); OOM não perde dinheiro — o provedor re-tenta o webhook e a idempotência do grant decide. |
+| `companion` | 0.5 | 64 M | 256 M | 31 MiB medido ocioso; stateless entre requests — o `Store` (`companion/server.py:@Store`) abre a própria conexão por request; OOM não perde dinheiro — o provedor re-tenta o webhook e a idempotência do grant decide. |
 | `web` | — | 64 M | — | **sem teto**: nginx servindo o primeiro load de ~35 MiB (`deploy/WEB_SLIM.md:69`) não foi medido nesta máquina; teto sem medida é causa de indisponibilidade. |
 | `cloudflared` | — | 32 M | — | binário de terceiro, idem. |
 
@@ -129,7 +134,8 @@ O parágrafo acima responde "quanto de RAM/CPU o container pede". A pergunta
 zona. Resumo: custo marginal medido **0,206 ms/player/passo**, joelho
 **extrapolado** (reta, não medição) em **~154 players por zona**, período real
 dentro do orçamento de 33,33 ms em todos os níveis medidos até 200. O cap de 20
-por instância (`sources/world/WorldInstance.gd:5`) não é a restrição do processo —
+por instância (`MAX_PLAYERS_PER_INSTANCE` em `sources/world/WorldInstance.gd:@MAX_PLAYERS_PER_INSTANCE`)
+não é a restrição do processo —
 o total de players somando as instâncias é, e esse tem número medido e fence: **200 players conviventes em 10 instâncias cheias dentro de 33,33 ms/passo**, imposto por `CeilingFencePlayers` (`tests/multi_instance_tick_test.gd:@CeilingFencePlayers`) e cobrado por duas checks dentro de `_checkProcessFence` (`tests/multi_instance_tick_test.gd:@_checkProcessFence`).
 
 ### 4.3 Reproduzir as medidas (sem docker, a partir da raiz do repo)
@@ -182,11 +188,11 @@ O gate lê os quatro `depends_on` + as portas dos probes contra o código:
 
 ## 6. Pendências em arquivo de outro dono (nada disso foi editado aqui)
 
-| arquivo:linha | o que muda | por quê |
+| arquivo e alvo | o que muda | por quê |
 |---|---|---|
 | `deploy/web/Dockerfile:50` | remover o `HEALTHCHECK ... wget -qO- http://127.0.0.1/` | o compose agora define o probe honesto; a linha na imagem é um check que não consegue falhar (`try_files ... /index.html`, `deploy/web/nginx.conf:306`) e só sobrevive para confundir quem lê a imagem. |
 | `main()` — `companion/server.py:@main` | instalar handler de `SIGTERM` antes do `serve_forever()`, com join das threads | hoje `docker stop` mata no meio de um webhook (medido: exit 143). O provedor re-tenta, mas a janela entre verificar a assinatura e gravar o grant é exatamente onde o dinheiro vive. |
-| `sources/sql/SQLBackups.gd:92` | `lastDailyBackupTimestamp = 0` (como `lastMetaJobTimestamp = 0` já faz em `sources/sql/SQLBackups.gd:102`, na mesma `Run()`) | redeploy diário zera o relógio do backup diário; ver `deploy/BACKUP_RUNBOOK.md` §2. |
+| `Run()` (`sources/sql/SQLBackups.gd:@Run`) | `lastDailyBackupTimestamp` nasce de `SQLCommons.Timestamp()` na abertura do bloco e tem de nascer em `0`, como `lastMetaJobTimestamp` já nasce no mesmo bloco | redeploy diário zera o relógio do backup diário; ver `deploy/BACKUP_RUNBOOK.md` §2. |
 
 
 **Não é mais pendência (2026-09-28, conferido no arquivo, não na memória):** a
@@ -200,8 +206,8 @@ que dizia o contrário sobreviveu ao trabalho feito, que é exatamente o defeito
 operador re-inventar uma métrica que já está sendo raspada.
 
 **Não é mais pendência (e a linha que dizia que era estava errada):** o job de CI
-que invoca `scripts/check_compose.sh` já existe e já bloqueia. `code-health`
-(`.github/workflows/godot-ci.yml:128-140`) roda `bash scripts/test.sh structure`, e
+que invoca `scripts/check_compose.sh` já existe e já bloqueia: o job `jobs.code-health`
+(`.github/workflows/godot-ci.yml:@jobs.code-health`) roda `bash scripts/test.sh structure`, e
 `structure_gates()` (`scripts/test.sh:@structure_gates`) chama os 11 gates de estrutura —
 `check_god_nodes.sh`, `check_doc_drift.sh`, `check_compose.sh`, `check_secrets.sh`,
 `check_ci.sh`, `check_dead_code.sh`, `check_untracked.sh`, `check_gate_log.sh` e

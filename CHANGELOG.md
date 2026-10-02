@@ -235,6 +235,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Eight positional pointers in `deploy/OPS_RUNBOOK.md` became ten anchors, and the clause that now has
+  to name its declaration turned up a range that had been billing three functions as one (`#153`). The
+  canary paragraph says what happens after the `touch` and cited `sources/world/ShutdownCanary.gd:28-59`
+  as a single thing. That range is three declarations: `CheckCanary()`
+  (`sources/world/ShutdownCanary.gd:@CheckCanary`) refuses new connections, `ShutdownStep()`
+  (`sources/world/ShutdownCanary.gd:@ShutdownStep`) broadcasts the warning, `OnShutdownStep()`
+  (`sources/world/ShutdownCanary.gd:@OnShutdownStep`) drops the peers that remain — and the two messages
+  the same sentence promises, "a 30 s e 15 s", are not inside the cited range at all: they are the const
+  `shutdownMessages` (`sources/world/ShutdownCanary.gd:@shutdownMessages`), which the range never covered.
+  Nothing had noticed, because an unnamed pointer has exactly one duty, which is not to be blank. Each of
+  the ten citations was opened before being written: the 404 row lands on the `Handler`
+  (`companion/server.py:@Handler`) whose GET fallthrough answers `{"error": "not_found"}`, the compose row
+  on `services.web.depends_on.companion` (`deploy/docker-compose.yml:@services.web.depends_on.companion`)
+  which does ask `condition: service_started`, the cadence row on `Run()` (`sources/sql/SQLBackups.gd:@Run`)
+  where `lastDailyBackupTimestamp` is still born from `SQLCommons.Timestamp()` while its neighbour
+  `lastMetaJobTimestamp` is born in `0`, and the CI row on `jobs.code-health`
+  (`.github/workflows/godot-ci.yml:@jobs.code-health`), which runs `bash scripts/test.sh structure`. What
+  the conversion gives up is stated rather than buried, and in two places it is a hole in the ruler and not
+  a shortage of will: `deploy/alerts.rules.yml:102` stays a line pointer because the YAML model addresses a
+  target by KEY PATH while a Prometheus rule is addressed by the VALUE of its `alert:` inside
+  `groups[].rules[]`, so no key path can name it (filed as #155); and the `Handler` above, with the `Store`
+  (`companion/server.py:@Store`) of the stateless row, anchors a whole CLASS because `DECL_PY` is
+  column-zero — `do_GET` at `companion/server.py:1412` and `connect` are not declarations to this ruler, so
+  a sentence about one branch of one method is now judged against a two-thousand-line block (filed as #154).
+  Measured in a clean worktree at `43e9624` — no `build/`, so no tree the CI does not also have — the
+  untouched base prints 273 anchors against 382 line pointers and `== DOC DRIFT: 2127 checks, 0
+  failures ==`, and that same tree with only this runbook replaced prints 283 against 374 and `2112
+  checks`, `0 acusações`, self-test 29/29. Applying the six edits one at a time to it moves the total by
+  -5, +4, -2, -3, -7 and -2, and in one tree those marginals are additive: they sum to the joint -15
+  (2127 → 2112) to the check, and one of them is positive. Each hunk is measured on its own rather than
+  collapsed into a formula because a pointer `arquivo:linha` is also read line by line by the identity
+  and literal sections whenever the sentence names a declaration — the mechanism #152 wrote down — while
+  an anchor is billed once, so paying the ratchet down lowers the bill; the run that proves they add is
+  this one. The entry above quoted `2128`, and it did not lie: `deploy/WEB_SLIM.md:78` cites
+  `build/Web/index.html` at line 149, a generated file no fresh clone has, and planting that one ignored
+  file into the clean worktree moves the same commit from 2127 to 2128 and this conversion from 2112 to
+  2113; reverting only `CHANGELOG.md` to `91fa546` prints 268 / 382 / 2122 in the clean tree and 2123
+  planted, so #152's real marginal is five anchors and five checks in either tree, and its closing `2128`
+  is the number its own built desk printed. #152 was reading a desk that had built; the CI reads a tree
+  that has not, and the two totals differ by exactly the one pointer whose target is a build artifact.
+  So this entry's numbers name their tree: this working tree, which has `build/`, prints
+  `== DOC DRIFT: 2122 checks, 0 failures ==` and a clean clone of the same content prints `2121`, and
+  that gap is filed as #157 rather than smoothed over, because a dated register that quotes a check
+  total is quoting a measurement of one machine. The census is not affected — 292 anchors against 374
+  line pointers in both trees — only the literal section, which judges a pointer when the target exists
+  and says nothing when it does not. The GDScript twin could not be run narrower than the whole
+  idle gate: `bash scripts/test.sh one IdleTestsFrontier` dies at compile with
+  `Identifier not found: Launcher` before printing a single check, which is #130 standing and is why a doc
+  change pays for a full gate. Its pass on the runbook-only tree printed 255 anchors, ten above the
+  245 that `43e9624` printed — the runbook's ten, the same delta the bash census shows — with 0 acusadas,
+  and closed `== RESULT: 3313 checks, 0 failures ==`, `== GATES VERMELHOS: none ==`, `== FLAKES: none ==`,
+  teardown 1869 of a 2401 ceiling. The 3313 did not move with ten more anchors, which is the #152 finding
+  standing: the census is a line the walk prints, not a check per anchor. This entry is then nine more
+  anchors and no charged pointer, so the pass that closes the gate reprints 264 with 0 acusadas and the
+  same `== RESULT: 3313 checks, 0 failures ==`, and the bash ruler on this tree prints 292 anchors against
+  374 line pointers with `== DOC DRIFT: 2122 checks, 0 failures ==`.
 - Eleven line pointers in `deploy/BACKUP_RUNBOOK.md` died, and the clause that now has to name its
   symbol turned up three that had never pointed where the sentence said (`#152`). The mechanism that
   hid them is narrow and worth writing down: a line pointer IS read line by line, but only when the
