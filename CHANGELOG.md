@@ -235,6 +235,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- A line pointer that names no declaration had rotted onto the wrong function, and no ruler could see it
+  because the range only ever had to be non-blank (`#156`). `docs/development/debugging.md` swore that
+  `DrainPendingPreloads` "é chamado no último hook de árvore ainda viva do autoload —
+  `sources/launcher/Launcher.gd:254-258`". Those five lines are `Reset()` freeing `Debug` and renaming
+  `Action`; there is no drain call in them. The call is `DB.DrainPendingPreloads()`, one function later,
+  inside `_exit_tree` (`sources/launcher/Launcher.gd:@_exit_tree`), a hook whose own comment says "Last
+  hook that still runs on a live tree" — the sentence described `_exit_tree` while its pointer sat in
+  `Reset`. The identity and literal rulers bite a pointer only through the declaration its clause names;
+  a clause that names nothing hands them nothing to check, so the fifty-line drift between the code that
+  moved and the numbers that did not was invisible by construction. That is the argument for #124 killing
+  the pointer class rather than re-auditing it: a symbol name survives a reflow that relocates a body, a
+  line number does not. The two remaining pointers in the same file were honest and converted without
+  finding a lie — `FSM.gd:41-47` is exactly `EnterState` (`sources/launcher/FSM.gd:@EnterState`) and
+  `Network.gd:1190-1194` is exactly `_init` (`sources/network/Network.gd:@_init`) — and one was kept a line
+  pointer on purpose: `sources/web/WebPush.gd:11-20` cites a module-header comment, not a declaration, so
+  the anchor format has no symbol to name it and converting would trade a precise text reference for a
+  whole-file span, the same declared cost #153 paid for `alerts.rules.yml`. Measured on this working tree,
+  which has `build/`: 298 anchors against 371 line pointers, `0 acusações`, self-test 29/29 — three of the
+  six anchors this slice added over the runbook slice are the entry's own three citations and the other
+  three are the converted pointers, which also took three `arquivo:linha` off the ledger (374 → 371). The
+  three killed pointers had each been read line by line by the identity section, so paying them off lowers
+  the bill: the run prints `== DOC DRIFT: 2119 checks, 0 failures ==` here and `2118` in a clean clone of
+  the same content, the one apart that #157 records for the build-artifact pointer. The GDScript twin read
+  the same tree and charged the three converted symbols plus the three this entry cites: 270 âncoras vistas
+  pela varredura, 0 acusadas, and the same `== RESULT: 3313 checks, 0 failures ==` — the census moved +6
+  while the aggregate did not budge, which is #152's finding standing: the census is a line the walk prints,
+  not a check per anchor.
 - Eight positional pointers in `deploy/OPS_RUNBOOK.md` became ten anchors, and the clause that now has
   to name its declaration turned up a range that had been billing three functions as one (`#153`). The
   canary paragraph says what happens after the `touch` and cited `sources/world/ShutdownCanary.gd:28-59`
