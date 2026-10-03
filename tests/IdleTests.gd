@@ -7600,6 +7600,16 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 	WorldAgent.RemoveAgent(agent)
 
 
+# Conta as linhas de UMA tabela penduradas num id, ou -1 se a leitura não veio.
+# -1 nunca vira 0: ausência de leitura não absolve a erasure — é a mesma régua que
+# o censo do portão de benchmarks aprendeu a gritar.
+func _lgpdRows(sql : SQLService, tabela : String, coluna : String, alvo : int) -> int:
+	var rows : Array = sql.QueryBindings("SELECT COUNT(*) AS c FROM %s WHERE %s = ?;" % [tabela, coluna], [alvo])
+	if rows.is_empty():
+		return -1
+	return int(rows[0].get("c", -1))
+
+
 func SuiteLGPD(sql : SQLService):
 	print("[suite] lgpd consent + right-to-erasure")
 	var pw : String = "TestPass123"
@@ -7663,6 +7673,37 @@ func SuiteLGPD(sql : SQLService):
 	var ledgerBefore : int = int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE account_id = ?;", [accountID])[0]["c"])
 	CheckEq(ledgerBefore, 1, "lgpd: one ledger row seeded")
 
+	# #169: até aqui a erasure só provava que personagem e wallet sumiram e que o
+	# ledger ficou — as dez tabelas que penduram no personagem não eram nem contadas,
+	# porque `EraseAccount` tinha uma lista própria de DELETEs e ela bastava. A lista
+	# agora mora no schema (066, e o retrato de escrow na 067), então o direito ao
+	# esquecimento passa a ser cobrado tabela por tabela. Planta uma linha em cada
+	# uma das sete que o `trg_character_new` não mintava e exige conta 1 nas onze
+	# antes da erasure: sem o plantio, o 0 depois seria o vazio lendo o vazio.
+	var cascadeItemInstance : bool = sql.ExecuteBindings("INSERT INTO item_instance (char_id, item_id, count, storage, bound, customfield, reason, parent_uid, created_at, creator_account_id) VALUES (?, 909201, 1, 1, 0, 'lgpd', 'lgpd', 0, 1, ?);", [charID, accountID])
+	var lotUID : int = sql.LastInsertRowIDRaw()
+	var cascadeItem : bool = sql.ExecuteBindings("INSERT INTO item (item_id, char_id, count, storage, customfield) VALUES (909202, ?, 1, 1, 'lgpd');", [charID])
+	var cascadeSkill : bool = sql.ExecuteBindings("INSERT INTO skill (char_id, skill_id, level) VALUES (?, 909203, 1);", [charID])
+	var cascadeQuest : bool = sql.ExecuteBindings("INSERT INTO quest (char_id, quest_id, state) VALUES (?, 909204, 1);", [charID])
+	var cascadeBestiary : bool = sql.ExecuteBindings("INSERT INTO bestiary (char_id, mob_id, killed_count) VALUES (?, 909205, 1);", [charID])
+	var cascadeChest : bool = sql.ExecuteBindings("INSERT INTO chest_instance (char_id, chest_hash, origin, item_state, created_at) VALUES (?, 909206, 'lgpd', 'closed', 1);", [charID])
+	var cascadeListing : bool = sql.ExecuteBindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, escrow_uids, creator_account_id, status, created_at) VALUES (?, ?, 100001, 1, 1, '', ?, 'open', 1);", [charID, accountID, accountID])
+	var cascadeListingID : int = sql.LastInsertRowIDRaw()
+	var cascadeLot : bool = sql.ExecuteBindings("INSERT INTO ah_escrow_lot (listing_id, uid, item_id, count, bound, customfield, parent_uid, creator_account_id, reason, lot_created_at) VALUES (?, ?, 100001, 1, 0, '', 0, ?, 'lgpd', 1);", [cascadeListingID, lotUID, accountID])
+	Check(cascadeItemInstance and cascadeItem and cascadeSkill and cascadeQuest and cascadeBestiary and cascadeChest and cascadeListing and cascadeLot,
+		"lgpd-cascade: as sete linhas plantadas entraram (instance=%s item=%s skill=%s quest=%s bestiary=%s chest=%s anúncio=%s lote=%s); plantio que não entra não sustenta veredito nenhum" % [str(cascadeItemInstance), str(cascadeItem), str(cascadeSkill), str(cascadeQuest), str(cascadeBestiary), str(cascadeChest), str(cascadeListing), str(cascadeLot)])
+	Check(lotUID > 0 and cascadeListingID > 0, "lgpd-cascade: o plantio tem rowid próprio (instance=%d, anúncio=%d) para o retrato casar com ele" % [lotUID, cascadeListingID])
+	# As quatro primeiras linhas o `trg_character_new` minte; as sete de baixo foram
+	# plantadas acima. `auction_listing` é por `seller_char`, não por `char_id`.
+	var cascade : Array[Array] = [
+		["stat", "char_id"], ["trait", "char_id"], ["attribute", "char_id"], ["equipment", "char_id"],
+		["item", "char_id"], ["item_instance", "char_id"], ["skill", "char_id"], ["quest", "char_id"],
+		["bestiary", "char_id"], ["chest_instance", "char_id"], ["auction_listing", "seller_char"],
+	]
+	for seeded in cascade:
+		CheckEq(_lgpdRows(sql, String(seeded[0]), String(seeded[1]), charID), 1, "lgpd-cascade: %s tem exatamente uma linha no personagem antes da erasure" % seeded[0])
+	CheckEq(_lgpdRows(sql, "ah_escrow_lot", "listing_id", cascadeListingID), 1, "lgpd-cascade: o retrato do escrow do anúncio plantado existe antes da erasure")
+
 	# (b) direito ao esquecimento — anonimiza conta, apaga pessoais, preserva financeiro
 	Check(sql.EraseAccount(accountID), "lgpd: erase returns true")
 	var erow : Array = sql.QueryBindings("SELECT username, email, status, consent_ip, consent_age_version, password_salt FROM account WHERE account_id = ?;", [accountID])
@@ -7690,6 +7731,11 @@ func SuiteLGPD(sql : SQLService):
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM character WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: characters purged")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM wallet WHERE account_id = ?;", [accountID])[0]["c"]), 0, "lgpd: wallet purged")
 	CheckEq(int(sql.QueryBindings("SELECT COUNT(*) AS c FROM ledger_transaction WHERE account_id = ?;", [accountID])[0]["c"]), ledgerBefore, "lgpd: LEDGER preserved (fiscal retention)")
+	for purged in cascade:
+		CheckEq(_lgpdRows(sql, String(purged[0]), String(purged[1]), charID), 0,
+			"lgpd-cascade: %s sobreviveu à erasure — quem apaga a ficha é o `trg_character_delete` da migration 066, e se a filha sobrou é a cascata que não levou a tabela, não um DELETE que falta no método" % purged[0])
+	CheckEq(_lgpdRows(sql, "ah_escrow_lot", "listing_id", cascadeListingID), 0,
+		"lgpd-cascade: o retrato do escrow sobreviveu ao anúncio apagado pela cascata — é a 067 disparada DENTRO da 066, o caminho que nenhum DELETE do método cobria")
 	Check(sql.ValidateAuthPassword(acct, pw) == null, "lgpd: old login refused after erase")
 	Check(not sql.EraseAccount(accountID), "lgpd: erase is idempotent (already deleted)")
 

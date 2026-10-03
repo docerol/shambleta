@@ -131,8 +131,8 @@ services:
     # (duas batidas de `checkInternalSec` = 5 s, sources/world/ShutdownCanary.gd:@checkInternalSec)
     # + 30 s e 15 s dos avisos (sources/world/ShutdownCanary.gd:10-13) + até 2 s do join do worker
     # (`BackupCheckIntervalSec`, sources/sql/SQLCommons.gd:@BackupCheckIntervalSec lido em
-    # sources/sql/SQLBackups.gd:187) + folga de fsync no `db.close_db()`
-    # (sources/sql/SQL.gd:1785) = 57 s de pior caso, com 18 s de folga.
+    # sources/sql/SQLBackups.gd:187) + folga de fsync no `db.close_db()` de
+    # `Destroy` (sources/sql/SQL.gd:@Destroy) = 57 s de pior caso, com 18 s de folga.
     # QUEM aciona o drain mudou em 2026-09-28: o `ENTRYPOINT` da imagem
     # (deploy/server/Dockerfile, deploy/server/entrypoint.sh) intercepta SIGTERM e
     # toca o canary — `docker compose stop`, `down` e o redeploy do Coolify agora

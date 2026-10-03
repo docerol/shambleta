@@ -361,6 +361,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   came back accused twice — an explanation of a rule is a citation, and is charged as one.
 
 ### Removed
+- The hand-written copy of the per-character purge list inside `SQL.EraseAccount`
+  (`sources/sql/SQL.gd:@EraseAccount`) (#169). The LGPD route ran ten `DELETE`s over
+  `item`, `item_instance`, `stat`, `attribute`, `skill`, `quest`, `equipment`,
+  `bestiary`, `chest_instance` and `auction_listing` before dropping the `character`
+  rows, and since migration 066 every one of those ten is already the job of
+  `trg_character_delete` — the list lived in a method and in the schema, which is the
+  same split #167 closed from the other side. The copy was not even faithful: it never
+  had `trait`, a table the trigger has deleted since the bootstrap template. Measured
+  on a copy of the gate's own database (24 characters, 1200 `item`, 600 `item_instance`,
+  48 listings with 48 escrow lots, `recursive_triggers` 0, engine 3.53.4): the ten
+  `DELETE`s and the trigger alone return the same zero residue across the eleven tables,
+  and the wall clock (9/11/9 ms with the list, 9/7/7 ms without, three alternating
+  rounds) decides nothing — the reason to cut it is that it is a second copy of the
+  truth, not that it is slow. What stayed is `DELETE FROM auction_listing WHERE
+  seller_account = ?`: counted over the databases in this tree that still hold
+  listings, 20 of 2205 rows have a `seller_char` that is no live character (7 in
+  `.test-home/fraud_test/`, 13 in `.test-home/marketplace_depth_test/`, with 066
+  applied) and ZERO have a live character of another account, so no cascade-by-sheet
+  reaches them and the account is the only owner left that can answer for them. After
+  the cut no method in `sources/` carries a copy of the char-keyed list: `RemoveCharacter`
+  was already a single `DELETE FROM character`, and the census now charges both.
+  The right-to-erasure ruler was the precondition, not the cleanup: `SuiteLGPD` plants
+  one row in each of the seven tables `trg_character_new` does not mint and demands
+  exactly one across all eleven before the erase and zero after, plus the escrow
+  portrait of the planted listing — 26 checks, because a `0` read from an empty table
+  proves nothing. `== RESULT: 3339 checks, 0 failures ==`. Counterfactual measured the
+  same day with the migration out of the directory and the sandbox rebuilt from the
+  template: exactly the six legs predicted go red (item, item_instance, skill, quest,
+  bestiary, chest_instance), while the four the template already carries stay green and
+  so do the listing and its lot, reached by the route's own account-side `DELETE`
+  (7 failures in total — the seventh is the boot's patch-contiguity ruler noticing
+  index 65 is not 066, which is the same experiment confessing it is not
+  single-variable). That run also stamps the sandbox by index, so the skipped patch is
+  never re-applied: the idle database was deleted afterwards rather than trusted.
+  Cutting the list moved two lines out of `SQL.gd`, and two `arquivo:linha` pointers
+  that were pointing *at* those lines went stale on the spot — `sources/world/World.gd`
+  promising `SQLBackups.new()` and `deploy/docker-compose.yml` promising
+  `db.close_db()`. Both are anchors now (`:@_post_launch`, `:@Destroy`), which is the
+  house answer when a cut breaks a pointer: the sentence names the symbol, so the next
+  cut cannot orphan it. `== DOC DRIFT: 2027 checks, 0 failures ==`.
 - Eight dead forwarders out of `sources/economy/EconomyService.gd`
   (`CraftBudgetCap`, `CraftRarityForUsage`, `CraftSubmitFee`, `CraftNormName`,
   `CraftEditDistance`, `_FlagOpen`, `_FlagTradeBursts`, `_FlagLevelVelocity`): zero

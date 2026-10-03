@@ -14,7 +14,7 @@ func _process(delta : float) -> void:
 		# §12 (AUDITORIA_2026-09-27): presença durável no MESMO acumulador de 1 s — o
 		# heartbeat e a poda dele são uma statement cada e só disparam na própria
 		# cadência, então o tick não acrescenta trabalho por frame. Não mora no worker
-		# de backup: `SQLBackups.new()` (`sources/sql/SQL.gd:1750`) não roda sob debug
+		# de backup: o `SQLBackups.new()` de `_post_launch` (`sources/sql/SQL.gd:@_post_launch`) não roda sob debug
 		# nem na build web, e presença tem que viver enquanto o mundo roda.
 		Presence.Tick(Launcher.SQL, _autoIdleAccum, int(Time.get_unix_time_from_system()))
 		_autoIdleAccum = 0.0

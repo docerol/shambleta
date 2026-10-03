@@ -15,12 +15,24 @@
 -- (`Server.DeleteCharacter`), e o `trg_account_delete` apaga personagens aos montes
 -- na erasure.
 --
--- A rota LGPD (`SQL.EraseAccount`) sempre soube a lista completa: são os dez
--- DELETEs por personagem que ela executa antes de derrubar as linhas de
+-- A rota LGPD (`SQL.EraseAccount`) sempre soube a lista completa: eram os dez
+-- DELETEs por personagem que ela executava antes de derrubar as linhas de
 -- `character`. As duas rotas divergiam porque a lista morava num método e a
 -- cascata no outro. Esta migration põe a cascata na lista — e aí
 -- `RemoveCharacter`, `EraseAccount` e a cascata de conta passam a limpar do mesmo
 -- jeito, por construção, sem depender de quem escreveu o DELETE.
+--
+-- 2026-10-02 (WorkOrder #169): a cópia do método foi apagada, então agora a lista
+-- mora SÓ aqui. O que segura a mudança não é a prosa desta migration, é o censo
+-- plantado no `SuiteLGPD`: uma linha em cada uma das onze tabelas antes da
+-- erasure, zero depois, mais o retrato de escrow do anúncio. Contrafactual medido
+-- no mesmo dia, com este arquivo fora do diretório e sandbox recriado do template:
+-- exatamente SEIS pernas vão ao vermelho (item, item_instance, skill, quest,
+-- bestiary, chest_instance) — as quatro que o template já levam ficam verdes, e o
+-- anúncio com seu lote também, porque o DELETE por conta da própria rota os
+-- alcança. Sétima falha do mesmo run, colateral e esperada: a régua de numeração
+-- do boot acusa que o índice 65 não é o 066. É a mordida que diz que a
+-- responsabilidade está no schema, e não no DELETE.
 --
 -- Custo: um DELETE por tabela por personagem apagado, cada um servido por chave
 -- líder em `char_id` — PK de stat/trait/attribute/equipment/skill/quest/bestiary,

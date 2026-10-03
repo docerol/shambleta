@@ -288,32 +288,24 @@ func EraseAccount(accountID : int) -> bool:
 	if statusRows.is_empty() or int(statusRows[0].get("status", NetworkCommons.AccountStatus.ACTIVE)) == NetworkCommons.AccountStatus.DELETED:
 		return false
 
-	var charIDs : Array = GetCharacterIDsForAccount(accountID)
 	var guildIDs : Array = []
 	for row : Dictionary in QueryBindings("SELECT guild_id FROM guild WHERE leader_account = ?;", [accountID]):
 		guildIDs.append(int(row["guild_id"]))
-	# listas de ids (ints) — embutidas com segurança; "0" garante IN (...) válido
-	var charList : String = "0" if charIDs.is_empty() else ",".join(charIDs.map(func(x): return str(int(x))))
+	# `guildList` é lista de ids (ints) embutida com segurança; "0" garante IN (...) válido
 	var guildList : String = "0" if guildIDs.is_empty() else ",".join(guildIDs.map(func(x): return str(int(x))))
 	var anonUser : String = "deleted_%d" % accountID
 	var anonPass : String = Hasher.HashPasswordV1(Hasher.GenerateSalt(24), Hasher.GenerateSalt(16))
 	var now : int = SQLCommons.Timestamp()
 
 	return Transaction(func() -> bool:
-		# 1) dados por personagem (antes de remover as linhas de character)
-		for sql in [
-			"DELETE FROM item WHERE char_id IN (%s);",
-			"DELETE FROM item_instance WHERE char_id IN (%s);",
-			"DELETE FROM stat WHERE char_id IN (%s);",
-			"DELETE FROM attribute WHERE char_id IN (%s);",
-			"DELETE FROM skill WHERE char_id IN (%s);",
-			"DELETE FROM quest WHERE char_id IN (%s);",
-			"DELETE FROM equipment WHERE char_id IN (%s);",
-			"DELETE FROM bestiary WHERE char_id IN (%s);",
-			"DELETE FROM chest_instance WHERE char_id IN (%s);",
-			"DELETE FROM auction_listing WHERE seller_char IN (%s);",
-		]:
-			db.query_with_bindings(sql % charList, [])
+		# 1) dados por personagem. A lista do que pendura num `char_id` não mora mais
+		# aqui: desde a migration 066 é o `trg_character_delete` que a tem, e a 067
+		# fechou o retrato de escrow dentro dela. Medido numa cópia do banco do portão
+		# (24 personagens, 1200 `item`, 600 `item_instance`, 48 anúncios com 48 lotes,
+		# `recursive_triggers` 0, motor 3.53.4): a lista e o trigger sozinho devolvem
+		# resíduo zero nas onze tabelas, e o wall-clock (9/11/9 ms com a lista, 9/7/7 ms
+		# sem, três rodadas alternadas) não decide nada — a lista sai por ser segunda
+		# cópia da verdade, e já era uma cópia errada: nunca teve `trait`.
 		db.query_with_bindings("DELETE FROM character WHERE account_id = ?;", [accountID])
 
 		# 2) dados por conta (auth, telemetria, preferências, wallet, fraude, AH)
@@ -321,6 +313,12 @@ func EraseAccount(accountID : int) -> bool:
 		# apontam para ela. Sobrou a segunda metade, o grafico de outra pessoa passaria a
 		# citar um `deleted_%d` (e, pior, um account_id reciclado) como alvo vivo — é o
 		# DELETE que o índice `idx_social_graph_target` da migration 061 serve.
+		# O `auction_listing` por CONTA não repete o de cima: é a perna que nenhuma
+		# cascata por ficha alcança. Contado nos bancos que ainda têm anúncio nesta
+		# árvore, 20 de 2205 linhas têm `seller_char` que não é personagem vivo (7 em
+		# `.test-home/fraud_test/`, 13 em `.test-home/marketplace_depth_test/`, com a
+		# 066 aplicada) e ZERO têm ficha viva de outra conta — a conta é o único dono
+		# que ainda responde por ele.
 		for accountSql in [
 			"DELETE FROM auth_token WHERE account_id = ?;",
 			"DELETE FROM telemetry_event WHERE account_id = ?;",
