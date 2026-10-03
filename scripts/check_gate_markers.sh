@@ -30,6 +30,16 @@
 #   R6  canário: cada regra come um defeito sintético plantado e poupa o equivalente
 #       limpo, na mesma passada. Zero falha sem canário vivo é a frase "regex
 #       quebrada também acha zero" que scripts/check_secrets.sh:317 registra.
+#   R7  o orçamento de tempo de um harness mora numa tabela só (#138): nenhuma
+#       chamada `gate` escreve número, e o `timeout NNNN` que o workflow põe no
+#       mesmo harness é o número dela. Novecentos escritos à mão mataram
+#       `one run_idle_tests` com veredito verde por dentro.
+#   R8  o default de `gate` é LIDO, não só tabelado: reproduzindo a atribuição de
+#       `timeout` de `gate()` com o 4º argumento ausente, o valor tem de sair o
+#       número da tabela. A forma de uma sentença só (`local a="$3" b="${4:-$(f
+#       "$a")}"`) com `set -u` deixa `timeout` vazio e `timeout "" godot` mata
+#       qualquer harness com exit=125 sem uma linha de veredito — foi o que a
+#       primeira versão de #138 fez, e `one repo_layout_test` acusou.
 #
 # Uso:   bash scripts/check_gate_markers.sh
 # Saída: uma linha por regra ([PASS]/[FAIL]) e, no fim,
@@ -52,6 +62,7 @@ fail() {
 
 TESTSH="scripts/test.sh"
 DEFAULT_MARKER="== RESULT:"
+WF_GLOB=".github/workflows/*.yml .github/workflows/*.yaml"
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
@@ -66,6 +77,14 @@ if [ "$(type -t harness_marker)" != "function" ]; then
 	fail "scripts/test.sh não define harness_marker() (a régua ficou cega)" "a função existe e é extrainível" "extração vazia"
 	echo "== GATE-MARKER: $CHECKS checks, $FAILURES failures =="
 	exit "${FAILURES}"
+fi
+
+# A mesma derivadora para o relógio (#138): R7 confere a tabela que o portão usa
+# no run real, não uma cópia escrita aqui — cópia de régua é a divergência local x
+# CI que este arquivo já denuncia para marcador.
+eval "$(awk '/^harness_timeout\(\)/,/^}/' "$TESTSH")"
+if [ "$(type -t harness_timeout)" != "function" ]; then
+	fail "scripts/test.sh não define harness_timeout() (R7 nasceu cega)" "a função existe e é extrainível" "extração vazia"
 fi
 
 # ------------------------------------------------------------------ derivadores
@@ -200,13 +219,88 @@ verdict_r4() { # <nome> <linha-renderizada> <marcador-cobrado>
 	return 0
 }
 
+# ------------------------------------------------------------------ R7 (orçamento)
+# `gate_timeout_literals <testsh>` — as chamadas `gate` que escrevem um NÚMERO como
+# 4º argumento. Depois de #138 o lugar do número é `harness_timeout`, e o default de
+# `gate` busca a tabela pelo nome: um literal no call site não é estilo diferente, é
+# a segunda fonte de verdade voltando (foram cinco, inclusive a do `one`).
+gate_timeout_literals() {
+	sed -nE 's/^[[:space:]]*gate[[:space:]]+[^[:space:]]+[[:space:]]+"[^"]*"[[:space:]]+([A-Za-z0-9_]+)[[:space:]]+([0-9]+)[[:space:]]*$/\1 \2/p' "$1" 2>/dev/null
+}
+# `ci_timeout_literals <workflow…>` — os `timeout NNNN godot … -s tests/<nome>.gd` que o
+# workflow EXECUTA. Linha de comentário fora antes do match: o workflow tem prosa
+# citando "300s matava o job", e régua lendo comentário é a M1 que este repo já
+# enterrou (scripts/check_ci.sh conta o mesmo motivo).
+ci_timeout_literals() {
+	local f
+	for f in "$@"; do
+		[ -r "$f" ] || continue
+		grep -vE '^[[:space:]]*#' "$f" \
+			| sed -nE 's/.*[^A-Za-z0-9_]timeout[[:space:]]+([0-9]+)[[:space:]]+godot.*-s[[:space:]]+tests\/([A-Za-z0-9_]+)\.gd.*/\2 \1/p'
+	done
+}
+verdict_r7() { # <testsh> <workflow…> — imprime as divergências, 0 se nenhuma
+	local tf="$1" wf
+	local bad="" n t want
+	shift
+	while IFS=' ' read -r n t; do
+		[ -n "$n" ] || continue
+		bad="$bad
+      test.sh escreve $t s no call site de \`gate … $n\` — o número mora em harness_timeout, não aqui"
+	done < <(gate_timeout_literals "$tf")
+	for wf in "$@"; do
+		while IFS=' ' read -r n t; do
+			[ -n "$n" ] || continue
+			want="$(harness_timeout "$n")"
+			[ "$t" = "$want" ] || bad="$bad
+      a CI dá $t s a \`$n\` e a tabela local dá $want — o mesmo harness com dois relógios"
+		done < <(ci_timeout_literals "$wf")
+	done
+	[ -z "$bad" ] || { printf '%s\n' "$bad"; return 1; }
+	return 0
+}
+
+# ------------------------------------------------------------------ R8 (o default lido)
+# `gate_timeout_probe_src <testsh>` extrai as duas linhas que atribuem `timeout`
+# dentro de `gate()` e as devolve como corpo de função — copiar o corpo seria a
+# divergência clássica que esta régua já enterrou. Reproduzir a atribuição, e não o
+# texto dela, é o que distingue R8 de um grep: R7 prova que a tabela é a única
+# fonte, R8 prova que `gate` chega nela quando ninguém passa o 4º argumento.
+gate_timeout_probe_src() {
+	{ printf 'gate_timeout_probe() {\n'
+	  sed -nE '/^[[:space:]]*local log="\$1".*timeout=/p;
+/^[[:space:]]*\[ -n "\$timeout" \][[:space:]]*[|][|][[:space:]]*timeout=/p' "$1"
+	  printf '\tprintf "%%s\\n" "$timeout"\n}\n'
+	}
+}
+verdict_r8() { # <testsh> — imprime o que o default de `gate` não resolve, 0 se nada
+	local tf="$1" want got over
+	eval "$(gate_timeout_probe_src "$tf")"
+	if [ "$(type -t gate_timeout_probe)" != "function" ]; then
+		printf '  nenhuma linha de atribuição de `timeout` foi extraída de %s — a régua nasceu cega\n' "$tf"
+		return 1
+	fi
+	want="$(harness_timeout run_idle_tests)"
+	got="$(gate_timeout_probe x y run_idle_tests 2>/dev/null || true)"
+	over="$(gate_timeout_probe x y run_idle_tests 77 2>/dev/null || true)"
+	if [ "$got" != "$want" ]; then
+		printf '  sem 4º argumento, `gate` computa timeout="%s" para run_idle_tests e a tabela diz %s — `timeout "" godot` mata o harness com exit=125 e nenhuma linha de veredito\n' "$got" "$want"
+		return 1
+	fi
+	if [ "$over" != 77 ]; then
+		printf '  o override pedido em `gate … run_idle_tests 77` foi engolido pela tabela (veio "%s") — não há mais como rodar um harness com orçamento próprio\n' "$over"
+		return 1
+	fi
+	return 0
+}
+
 # ------------------------------------------------------------------ conjunto cobrado
 # Harnesses cobrados = nomeados num `gate` de test.sh + descobertos por nome (mesma
 # regra de harnesses_extra). IdleTests/IdleTestsFrontier são a FONTE das suítes
 # (carregadas por run_idle_tests.gd, sem veredito próprio) e ficam fora com motivo.
 SUITE_SOURCES=" IdleTests IdleTestsFrontier "
 HARNESSES="$(
-	{ sed -nE 's/^[[:space:]]*gate[[:space:]]+[^[:space:]]+[[:space:]]+"[^"]*"[[:space:]]+([A-Za-z0-9_]+)[[:space:]]+[0-9]+[[:space:]]*$/\1/p' "$TESTSH"
+	{ sed -nE 's/^[[:space:]]*gate[[:space:]]+[^[:space:]]+[[:space:]]+"[^"]*"[[:space:]]+([A-Za-z0-9_]+)([[:space:]]+[^[:space:]]+)?[[:space:]]*$/\1/p' "$TESTSH"
 	  ls tests/*_test.gd tests/*_fuzz.gd 2>/dev/null | sed 's|.*/||; s|\.gd$||'; } | sort -u
 )"
 CHARGED=""
@@ -310,6 +404,32 @@ else
 	fail "R5: $TESTSH perdeu a documentação do contrato$missing_r5" "contrato legível junto da função que o aplica" "ausente"
 fi
 
+# ------------------------------------------------------------------ R7
+shopt -s nullglob
+WF_FILES=($WF_GLOB)
+shopt -u nullglob
+if [ "${#WF_FILES[@]}" = 0 ]; then
+	fail "R7: nenhum workflow lido em $WF_GLOB" "a CI presente para conferir o relógio" "zero arquivos — a régua não tem com quem comparar"
+else
+	r7_ci_n="$(ci_timeout_literals "${WF_FILES[@]}" | grep -c ' ' || true)"
+	r7_out="$(verdict_r7 "$TESTSH" "${WF_FILES[@]}" || true)"
+	if [ "$r7_ci_n" = 0 ]; then
+		fail "R7: zero \`timeout NNNN godot … -s tests/<nome>.gd\` lido dos workflows" "a régua achar os orçamentos que a CI executa" "extração cega — verde aqui não diria nada"
+	elif [ -z "$r7_out" ]; then
+		pass "R7: um orçamento só — zero timeout literal em call site de \`gate\` e $r7_ci_n timeout(s) da CI batendo com harness_timeout()"
+	else
+		fail "R7: dois relógios para o mesmo harness (número no call site, ou CI divergente da tabela)" "harness_timeout() como única fonte do tempo de um harness" "$r7_out"
+	fi
+fi
+
+# ------------------------------------------------------------------ R8
+r8_out="$(verdict_r8 "$TESTSH" || true)"
+if [ -z "$r8_out" ]; then
+	pass "R8: gate() sem 4º argumento chega em harness_timeout ($(harness_timeout run_idle_tests) s para run_idle_tests) e ainda obedece ao override"
+else
+	fail "R8: o default de \`gate\` não resolve na tabela (ou engoliu a exceção)" "timeout == harness_timeout <nome>, override == o número pedido" "$r8_out"
+fi
+
 # ------------------------------------------------------------------ R6 canário
 # Cada regra come um defeito plantado e poupa o equivalente limpo. O canário de R1
 # é o único que exerce a DERIVAÇÃO REAL (harness_marker, extraída de test.sh) num
@@ -402,6 +522,109 @@ if verdict_r4 "c" "$rendered_ok" "== RESULT:" >/dev/null && ! verdict_r4 "c" "$r
 	pass "R6/canário: R4 lê a contagem da linha renderizada e reprova linha sem contagem"
 else
 	fail "R6/canário: verdict_r4 não discrimina" "aprove \"N failures\", reprove sem contagem" "régua morta"
+fi
+
+# ------------------------------------------------------------------ canário de R7
+# Os dois formatos do mesmo defeito (#138): o número que volta a ser escrito no
+# call site, e o número que a CI tem e a tabela não. Mutantes são CÓPIAS em $WORK;
+# a árvore real não é tocada. Âncora de `sed` que sumiu é denunciada como canário
+# cego — mutante idêntico ao original aprovaria por inércia.
+wf_idle=""
+for _f in "${WF_FILES[@]}"; do
+	_l="$(ci_timeout_literals "$_f")"
+	if printf '%s\n' "$_l" | grep -q '^run_idle_tests '; then wf_idle="$_f"; fi
+done
+if [ -z "$wf_idle" ]; then
+	fail "R7/canário: nenhum workflow executa \`run_idle_tests\` com timeout lido" "a CI como fonte do mutante" "nenhum arquivo — não há o que plantar"
+else
+	# `verdict_r7 … | grep -q` está fora de propósito: com `pipefail`, o `grep -q`
+	# fecha o pipe, a esquerda morre de SIGPIPE e a tubagem devolve falha MESMO
+	# quando a régua nomeou o defeito. O veredito é capturado em variável.
+	mut_sh="$WORK/testsh.literal"
+	cp "$TESTSH" "$mut_sh"
+	sed -i -E 's/^([[:space:]]*gate[[:space:]]+[^ ]+[[:space:]]+"== RESULT:" run_idle_tests)[[:space:]]*$/\1 900/' "$mut_sh"
+	if cmp -s "$TESTSH" "$mut_sh"; then
+		fail "R7/canário: a mutação do call site não mudou o arquivo (âncora sumiu)" "o sed achar a linha do gate sem número" "cópia idêntica — canário cego"
+	else
+		o="$(verdict_r7 "$mut_sh" "${WF_FILES[@]}" || true)"
+		if printf '%s' "$o" | grep -q "run_idle_tests"; then
+			pass "R7/canário: timeout literal de volta no call site é REPROVADO, e a falha nomeia o harness"
+		else
+			fail "R7/canário: \`gate … run_idle_tests 900\` foi aprovado" "R7 reprovar número escrito no call site" "verde com o defeito plantado"
+		fi
+	fi
+
+	mut_wf="$WORK/ci.timeout"
+	cp "$wf_idle" "$mut_wf"
+	sed -i -E 's/timeout [0-9]+( godot[^&|;]*-s tests\/run_idle_tests\.gd)/timeout 9999\1/' "$mut_wf"
+	if cmp -s "$wf_idle" "$mut_wf"; then
+		fail "R7/canário: a mutação do timeout da CI não mudou o arquivo (âncora sumiu)" "o sed achar o \`timeout NNNN godot … run_idle_tests\`" "cópia idêntica — canário cego"
+	else
+		o="$(verdict_r7 "$TESTSH" "$mut_wf" || true)"
+		if printf '%s' "$o" | grep -q "run_idle_tests"; then
+			pass "R7/canário: CI com 9999 s onde a tabela diz 1200 é REPROVADA pelo nome do harness"
+		else
+			fail "R7/canário: CI divergente da tabela foi aprovada" "R7 reprovar relógios diferentes" "verde com o defeito plantado ($o)"
+		fi
+	fi
+
+	mut_sh_clean="$WORK/testsh.clean"
+	cp "$TESTSH" "$mut_sh_clean"
+	mut_wf_clean="$WORK/ci.clean"
+	cp "$wf_idle" "$mut_wf_clean"
+	if verdict_r7 "$mut_sh_clean" "$mut_wf_clean" >/dev/null 2>&1; then
+		pass "R7/canário: o equivalente limpo (cópia sem mutação) é APROVADO — a régua não come tudo"
+	else
+		fail "R7/canário: a árvore limpa reprovada por número de call site" "verdict_r7 aprovar a cópia idêntica à fonte" "falsa acusação"
+	fi
+fi
+
+# ------------------------------------------------------------------ canário de R8
+# O defeito aqui não é o número no call site — é a ATRIBUIÇÃO não chegar na tabela.
+# O mutante volta no tempo para a primeira versão de #138: `timeout` e `script` na
+# mesma `local`, com `set -u` lendo `script` antes de ter valor. É o shape exato que
+# `one repo_layout_test` acusou com `variável não associada` + exit=125 e zero linha
+# de veredito, e nenhum grep de literal o veria.
+mut_probe="$WORK/testsh.oneline"
+cp "$TESTSH" "$mut_probe"
+sed -i -E \
+	-e 's@^[[:space:]]*local log="\$1"(.*)timeout="\$\{4:-\}"[[:space:]]*$@local log="$1"\1timeout="${4:-$(harness_timeout "$script")}"@' \
+	-e '/^[[:space:]]*\[ -n "\$timeout" \][[:space:]]*[|][|][[:space:]]*timeout=/d' "$mut_probe"
+if cmp -s "$TESTSH" "$mut_probe"; then
+	fail "R8/canário: a mutação para uma sentença só não mudou o arquivo (âncora sumiu)" "o sed achar a linha \`local log=… timeout=\${4:-}\`" "cópia idêntica — canário cego"
+else
+	o="$(verdict_r8 "$mut_probe" || true)"
+	case "$o" in
+		*run_idle_tests*)
+			pass "R8/canário: \`timeout\` e \`script\` na mesma \`local\` é REPROVADO (default vazio sob set -u)" ;;
+		*)
+			fail "R8/canário: o mutante de uma sentença foi aprovado" "R8 reprovar o default que não chega na tabela" "verde com o defeito plantado ($o)"
+		esac
+fi
+
+# O outro lado da moeda: a tabela não pode virar ditadura. Apagar a exceção é o
+# defeito que o `one [timeout]` do contrato esconde — o gate continua verde e
+# ninguém consegue mais dar orçamento próprio a um harness.
+mut_noexc="$WORK/testsh.noexception"
+cp "$TESTSH" "$mut_noexc"
+sed -i -E 's@^([[:space:]]*local log="\$1".*)timeout="\$\{4:-\}"([[:space:]]*)$@\1timeout=""\2@' "$mut_noexc"
+if cmp -s "$TESTSH" "$mut_noexc"; then
+	fail "R8/canário: a mutação que engole o 4º argumento não mudou o arquivo (âncora sumiu)" "o sed achar \`timeout=\"${4:-}\"\`" "cópia idêntica — canário cego"
+else
+	o="$(verdict_r8 "$mut_noexc" || true)"
+	case "$o" in
+		*override*)
+			pass "R8/canário: \`gate\` que ignora o timeout pedido é REPROVADO pela override" ;;
+		*)
+			fail "R8/canário: o gate sem exceção foi aprovado" "R8 reprovar override engolido pela tabela" "verde com o defeito plantado ($o)"
+		esac
+fi
+
+o="$(verdict_r8 "$TESTSH" || true)"
+if [ -z "$o" ]; then
+	pass "R8/canário: a cópia limpa do gate passa — a régua não come tudo"
+else
+	fail "R8/canário: a árvore limpa reprovada" "verdict_r8 aprovar o gate de hoje" "falsa acusação ($o)"
 fi
 
 echo "== GATE-MARKER: $CHECKS checks, $FAILURES failures =="

@@ -450,6 +450,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The gate's clock was written by hand in five places, and the fifth one lied. `gate` carried a
+  default of 900 s that nobody had measured, `one` inherited it, and the named paths each typed
+  their own number again (`run_idle_tests` 1200, `run_rpc_identity_test` 180, the three others
+  120), while the workflow typed 1200 a sixth time. Measured on this tree on 2026-10-03, with the
+  1,2 MB `testing.db` the previous run left in the same sandbox (only an interrupted boot is
+  reaped, so a harness does inherit itself): `bash scripts/test.sh one run_idle_tests` died at
+  exactly 900 s of wall clock — `godot exit=124`, last engine stamp `[745.176]`, no `== RESULT:`
+  line in the log, `GATE VERMELHO: run_idle_tests`. The same harness measured end to end on this
+  tree finished in 947 s of wall (05:54:30 → 06:10:17) and printed its verdict at engine stamp
+  `946.686` inside the budget: `== RESULT: 3389 checks, … ==`, the same count the 04:58 control
+  had answered. So the hand-typed 900 was about 47 s short of a run that was always going to
+  finish, and the 1200 the workflow had been typing all along is the number that fits, with ~250 s
+  of margin.
+  A timeout is not a check: the gate reported a red product for a green one, and the retry logic
+  deliberately does not re-run a timeout, so nothing softened the lie. Now `harness_timeout`
+  (`scripts/test.sh:@harness_timeout`) is the only source, `gate`
+  (`scripts/test.sh:@gate`) reads it by harness name, every call site dropped its literal, and
+  `one` keeps the optional override it already advertised. The default for a name the table does
+  not know is 300 — the ceiling CI already enforces on every discovered harness through
+  `gates_extra` (`scripts/test.sh:@gates_extra`), where the job is green — so nothing was
+  loosened; `one` on an unlisted harness got *stricter* (900 → 300), which is why the override
+  stayed documented in `docs/development/testing.md`. Durability is R7, whose verdict the ruler
+  computes in `verdict_r7` (`scripts/check_gate_markers.sh:@verdict_r7`): zero numeric timeout may
+  reappear in a `gate` call, and the `timeout NNNN` the workflow writes for the same harness must
+  equal the table. Its
+  three canaries plant the relapse in copies (`gate … run_idle_tests 900`, CI at 9999 s against a
+  1200 s table, and the untouched pair) and each failure has to name the harness, because a ruler
+  that reads zero timeouts from the workflow would also read zero disagreements.
+- The fix itself then killed every harness for a different reason, and only the gate that reads
+  the change caught it: the first version of `gate` asked for the table in the same `local` that
+  defined `script` — `local script="$3" timeout="${4:-$(harness_timeout "$script")}"` — and under
+  `set -u` the command substitution reads `script` before it has a value, dies inside `$( )` and
+  leaves `timeout` empty. `bash scripts/test.sh one repo_layout_test` answered
+  `variável não associada`, `timeout: intervalo inválido de tempo ""`, `godot exit=125` and no
+  verdict line: a budget table that resolves to nothing is worse than no table, and no grep for a
+  literal would have seen it. The assignment is now two sentences, and R8 is the function
+  `verdict_r8` (`scripts/check_gate_markers.sh:@verdict_r8`), which reproduces the two extracted
+  lines as a probe
+  function — the same extraction-not-copying idiom as `harness_marker` — requiring that with the
+  4th argument absent `gate` computes the table's number for `run_idle_tests` and that the
+  override still wins when one is asked for. Its three canaries plant the one-sentence form
+  (denounced: empty default), a `timeout=""` that swallows the override (denounced) and the clean
+  copy (spared).
 - The weakest cure in the game was the second most expensive one, and it bought less health than
   the cheapest. Crossing the two declared tables — unit `cost` of `VENDOR_CATALOG`
   (`sources/economy/EconomyCatalog.gd:@VENDOR_CATALOG`) against each cell's `Modifier.Health` —

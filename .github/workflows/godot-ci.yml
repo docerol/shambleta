@@ -263,7 +263,10 @@ jobs:
           # aqui porque ele muda a cada commit e o comentário apodrece (estava em
           # 2017 quando a régua medida era outra). Com sims reais (onboarding, boss
           # ladder, probe realtime 300s), 300s matava o job no meio (timeout, não
-          # falha). 1200s dá margem em runners lentos.
+          # falha). 1200s dá margem em runners lentos. O mesmo número mora na tabela
+          # harness_timeout de scripts/test.sh, e é ela que o `test.sh` local consulta;
+          # R7 de scripts/check_gate_markers.sh é quem confere os dois lados, porque
+          # relógio copiado é um gate que vira enfeite num deles.
           timeout 1200 godot --headless --path . -s tests/run_idle_tests.gd > /tmp/idle-tests.log 2>&1
           bash scripts/ci_gate_log.sh /tmp/idle-tests.log "== RESULT:" "$?" run_idle_tests
 

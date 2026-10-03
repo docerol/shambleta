@@ -368,7 +368,14 @@ _reap_interrupted_sandbox() {
 }
 
 gate() {
-	local log="$1" marker="$2" script="$3" timeout="${4:-900}"
+	# O 4º argumento é exceção, não regra: quem o escreve está pedindo um timeout
+	# DIFERENTE do medido (é o `[timeout]` do `one`). O default é a tabela
+	# `harness_timeout` abaixo, pelo nome do harness — não um número aqui.
+	# Em duas sentenças, não numa só: `local a="$3" b="${4:-$(f "$a")}"` com
+	# `set -u` lê `a` antes de ter valor, a substituição morre vazia e o
+	# `timeout ""` que sobra mata o run com exit=125 sem nenhuma explicação.
+	local log="$1" marker="$2" script="$3" timeout="${4:-}"
+	[ -n "$timeout" ] || timeout="$(harness_timeout "$script")"
 	local attempt code verdict noise bootPid
 	for attempt in 1 2; do
 		if ! _acquire "$script"; then
@@ -568,7 +575,8 @@ gate_sh() {
 # 1 s é melhor que falhar em 1200 s.
 #
 # Descoberta: os nomes de `EXPLICIT_HARNESSES` acima entram no portão pelo nome
-# (cada um com timeout próprio e marcador já conhecido; os `IdleTests*` são a fonte
+# (o tempo de cada um vem da tabela `harness_timeout` abaixo, e o marcador já é
+# conhecido; os `IdleTests*` são a fonte
 # das suítes, checados no preflight e carregados pelo runner). Todo o resto é
 # harness de fixação e entra por padrão de nome — criar o arquivo compra a execução,
 # sem editar este script nem o workflow. O marcador vem do próprio arquivo (a linha
@@ -586,6 +594,35 @@ harnesses_extra() {
 		esac
 		echo "$n"
 	done
+}
+
+# Orçamento de tempo por harness — a ÚNICA fonte, lida pelo default de `gate()`.
+# #138: o timeout era reescrito à mão em cada chamada e o `one` caía no default de
+# 900 s que a função carregava. Medido em 2026-10-03 nesta árvore, com o
+# `testing.db` de 1,2 MB do run anterior ainda vivo em `.test-home/run_idle_tests/`
+# (o reaper só limpa sandbox de run INTERROMPIDO — ver `_reap_interrupted_sandbox`
+# acima), `bash scripts/test.sh one run_idle_tests` morreu em exatamente 900 s de
+# parede: `godot exit=124`, o engine tinha 745 s de vida, nenhuma linha `== RESULT:`
+# no log e o portão devolveu `GATE VERMELHO: run_idle_tests`. O mesmo run até o fim
+# imprime o veredito com o engine aos 947 s, e 947 + os ~155 s de boot/import que a
+# morte deixou medidos = ~1100 s de parede. 1200 não é preferência: é o número que
+# sobra dessa conta, e é o que `all`, `idle` e a CI já cobravam — cinco números
+# copiados para a mesma pergunta, sem régua nenhuma conferindo os lados.
+#
+# O default 300 é o teto que a CI impõe hoje a todo harness descoberto (o job de
+# idle roda o passo `fixation`, que chama `gates_extra`, e está verde com ele);
+# nenhum harness descoberto tem laço de tempo real comparável ao do agregador — o
+# maior `create_timer` entre eles é 0,8 s. Quem precisa de mais entra na tabela
+# com a medida, ou pede no argumento explícito do `one`.
+harness_timeout() {
+	case " $1 " in
+		" run_idle_tests ") echo 1200 ;;
+		" run_rpc_identity_test ") echo 180 ;;
+		" test_e2e_implementation ") echo 120 ;;
+		" test_backup_restore ") echo 120 ;;
+		" benchmarks ") echo 120 ;;
+		*) echo 300 ;;
+	esac
 }
 
 harness_marker() {
@@ -698,7 +735,7 @@ $errs
 gates_extra() {
 	local script
 	for script in $(harnesses_extra); do
-		gate "/tmp/shambleta-${script}.log" "$(harness_marker "$script")" "$script" 300
+		gate "/tmp/shambleta-${script}.log" "$(harness_marker "$script")" "$script"
 	done
 }
 
@@ -762,11 +799,11 @@ case "${1:-all}" in
     echo "==> Running all tests..."
     preflight_parse
     structure_gates
-    gate /tmp/shambleta-idle.log "== RESULT:" run_idle_tests 1200
-    gate /tmp/shambleta-rpc.log "== RPC IDENTITY:" run_rpc_identity_test 180
-    gate /tmp/shambleta-e2e.log "== RESULT:" test_e2e_implementation 120
-    gate /tmp/shambleta-backup.log "== Backup Restore Probe:" test_backup_restore 120
-    gate /tmp/shambleta-bench.log "== Benchmarks:" benchmarks 120
+    gate /tmp/shambleta-idle.log "== RESULT:" run_idle_tests
+    gate /tmp/shambleta-rpc.log "== RPC IDENTITY:" run_rpc_identity_test
+    gate /tmp/shambleta-e2e.log "== RESULT:" test_e2e_implementation
+    gate /tmp/shambleta-backup.log "== Backup Restore Probe:" test_backup_restore
+    gate /tmp/shambleta-bench.log "== Benchmarks:" benchmarks
     gates_extra
     companion_gates
     ;;
@@ -789,24 +826,24 @@ case "${1:-all}" in
   quick)
     echo "==> Running quick tests (no real-time sims)..."
     preflight_parse
-    gate /tmp/shambleta-idle.log "== RESULT:" run_idle_tests 1200
+    gate /tmp/shambleta-idle.log "== RESULT:" run_idle_tests
     ;;
   idle)
     echo "==> Running idle tests..."
     preflight_parse
-    gate /tmp/shambleta-idle.log "== RESULT:" run_idle_tests 1200
+    gate /tmp/shambleta-idle.log "== RESULT:" run_idle_tests
     ;;
   backup)
     echo "==> Running backup restore probe..."
-    gate /tmp/shambleta-backup.log "== Backup Restore Probe:" test_backup_restore 120
+    gate /tmp/shambleta-backup.log "== Backup Restore Probe:" test_backup_restore
     ;;
   benchmarks)
     echo "==> Running benchmarks..."
-    gate /tmp/shambleta-bench.log "== Benchmarks:" benchmarks 120
+    gate /tmp/shambleta-bench.log "== Benchmarks:" benchmarks
     ;;
   rpc)
     echo "==> Running RPC identity transport test..."
-    gate /tmp/shambleta-rpc.log "== RPC IDENTITY:" run_rpc_identity_test 180
+    gate /tmp/shambleta-rpc.log "== RPC IDENTITY:" run_rpc_identity_test
     ;;
   structure)
     # Os gates de estrutura todos por esta porta: a lista é o corpo de
@@ -830,7 +867,12 @@ case "${1:-all}" in
       echo "GATE VERMELHO: $harness — tests/$harness.gd não existe"
       exit 1
     fi
-    gate "/tmp/shambleta-$harness.log" "$(harness_marker "$harness")" "$harness" "${3:-900}"
+    # O timeout aqui é EXCEÇÃO escrita por quem depura. Sem ela, o orçamento vem da
+    # tabela `harness_timeout` pelo nome — foi o 900 fixo desta linha que matou
+    # `one run_idle_tests` aos 745 s de engine, quando o run completo custa ~1100 s
+    # de parede (ver `harness_timeout` acima). `"${3:-}"` vazio faz `gate` cair no
+    # default, que é a tabela.
+    gate "/tmp/shambleta-$harness.log" "$(harness_marker "$harness")" "$harness" "${3:-}"
     ;;
   diag)
     echo "==> Running diagnostics..."

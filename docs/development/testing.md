@@ -369,6 +369,25 @@ sandboxs de `user://`/cache ficam em `.test-home/<harness>/`, então um harness 
 herda o `testing.db` do outro e o seu `~/.local/share/Shambleta` (o `user://` real
 deste projeto, que usa `use_custom_user_dir`) não é tocado.
 
+O tempo que cada harness tem é uma tabela só — `harness_timeout`
+(`scripts/test.sh:@harness_timeout`) — lida pelo default de `gate()`
+(`scripts/test.sh:@gate`) e conferida contra o `timeout NNNN` que o workflow escreve
+pela régua R7, que é `verdict_r7` (`scripts/check_gate_markers.sh:@verdict_r7`). Antes dela o número
+vivia em cinco lugares e o `one` caía num default de 900 s que ninguém mediu: em
+2026-10-03, com o `testing.db` de 1,2 MB do run anterior ainda vivo no próprio
+sandbox, `one run_idle_tests` morreu aos 900 s de parede (exit=124, engine aos
+745 s, nenhuma linha `== RESULT:` no log) — `GATE VERMELHO` por relógio, sobre um
+run que impresso o veredito dava 3389 checks, 0 failures. O mesmo sandbox é o
+motivo pelo qual o isolamento acima não protege o run de si mesmo: só boot
+interrompido é reapado por `_reap_interrupted_sandbox`
+(`scripts/test.sh:@_reap_interrupted_sandbox`). Ler a tabela não basta, porém: R8 é
+`verdict_r8` (`scripts/check_gate_markers.sh:@verdict_r8`), que reproduz as duas linhas
+que atribuem `timeout` dentro de `gate()` com o 4º argumento ausente e exige o número
+da tabela, porque a forma de uma sentença só — `local script="$3"
+timeout="${4:-$(... "$script")}"` — com `set -u` deixa `timeout` vazio e
+`timeout "" godot` mata qualquer harness com exit=125 sem linha de veredito; foi o que
+a primeira versão desta tabela fez.
+
 Esse isolamento tem um ângulo morto que virou mecanismo: um harness **morto no meio**
 deixa o sandbox sujo — banco e WAL de um teardown que nunca aconteceu — e o próximo
 boot do mesmo harness abre por cima desse estado e morre antes de dar veredito.
