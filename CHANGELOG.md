@@ -8,6 +8,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-01
 
 ### Added
+- Deleting an auction listing now takes the escrow portrait with it (#168). `ah_escrow_lot`
+  (migration 063) writes one row per `(listing, uid)` describing exactly what left the
+  seller's inventory, and only the service knew that row existed: its own
+  `_ClearEscrowSnapshotLocked`
+  (`sources/economy/AuctionHouseService.gd:@_ClearEscrowSnapshotLocked`) deletes the row on
+  settle, on refund and in the reaper, and nothing in the schema owned the listing. Every
+  route that removes an `auction_listing` row outside the service therefore left the portrait
+  pointing at a market that no longer exists. Measured on the `.test-home/run_idle_tests/`
+  sandbox after its own run: 8 rows in `ah_escrow_lot`, ZERO rows in `auction_listing`, and 0
+  of the 8 `uid`s still present in `item_instance`. The same sweep of
+  `.test-home/faucet_census_test/` found 6 lots against 6 live listings — the litter is the
+  trail of deleting an owner, not a cost of the harness. Litter by reading, not by taste:
+  every consumer of the table asks BY LISTING — `_WriteEscrowSnapshotLocked`
+  (`sources/economy/AuctionHouseService.gd:@_WriteEscrowSnapshotLocked`) writes it,
+  `_RestoreEscrowLocked` (`sources/economy/AuctionHouseService.gd:@_RestoreEscrowLocked`)
+  reads it back, `_ClearEscrowSnapshotLocked` deletes it, all three keyed on `listing_id` — so
+  with the listing row gone nobody ever asks for that lot again, neither to return the item
+  nor to audit it, and `listing_id` is a non-reused rowid, so the row cannot match a future
+  listing either. `ah_price_history` stays out on purpose: 5 of its 5 rows in that same copy
+  were orphans by listing, and none of its readers asks by listing — `RecentSoldPrices`
+  (`sources/economy/AuctionHouseService.gd:@RecentSoldPrices`) orders by `item_id`/`sold_at`,
+  `AHPriceAnchor` (`sources/economy/AuctionHousePricing.gd:@AHPriceAnchor`) asks the band by
+  `item_id`, `_CollectAHWashPairs` (`sources/economy/FraudeReview.gd:@_CollectAHWashPairs`)
+  scans the wash window by `sold_at`.
+  A paid price is a record, the same class as the `ledger_transaction` of 066. Migration
+  `067_listing_delete_escrow.sql` puts the DELETE in the schema and sweeps the dead portraits
+  already sitting in every live database, wrapped in the transaction that `ApplyMigration`
+  (`sources/sql/SQL.gd:@ApplyMigration`) opens around a patch that opens none itself. The
+  nesting is what makes one trigger enough, and it was measured
+  instead of assumed: with `recursive_triggers` OFF — the value the product never changes — a
+  DELETE issued inside a trigger body on a DIFFERENT table does fire that table's trigger;
+  the setting only gates a trigger firing itself. Probed on a copy of that same sandbox
+  (engine 3.53.4): `DELETE FROM account` removed the `character` row and
+  `trg_character_delete` ran from inside `trg_account_delete` — stat, trait, attribute and
+  equipment went with it, and `item_instance` survived only because that database predates
+  066. So the listing trigger covers the service's refund, 066's character cascade and the
+  account erasure without any of the three naming the table. Applied verbatim to a copy of
+  the littered idle database, the patch's sweep DELETE takes those 8 dead portraits to 0
+  without touching a live row, because no live row exists.
+- The orphan census now has a second axis, and prints one verdict per axis (#168). An orphan
+  of a listing and an orphan of a character are closed by different cascades (067 and 066),
+  and a
+  count growing inside the other axis's total is exactly how a new defect passes green, so
+  the single summed number is gone: `tests/benchmarks.gd` censuses `listing_id` orphans on
+  both sides of the run, charged by DELTA like `char_id`, and prints the register that
+  survives by design — `ledger_transaction`, `telemetry_event`, `ah_price_history` — as
+  information that is never charged. The planted control gained the three escrow legs: a
+  portrait under a LIVE listing (must not be counted), the live character deleted (the
+  listing leaves by 066 and the lot has to leave with it — this migration's chain, exercised
+  inside the gate), and a lot under a `listing_id` that never existed (must be counted). An
+  `EXPLAIN` leg reads the purge plan against `idx_ah_escrow_lot_listing` with the planted
+  rows on the table, because a plan read over an empty table proves nothing. Counterfactual,
+  same day, this file out of the migrations directory and the sandbox database rebuilt: 4
+  failures instead of 2, and the two extra are the nesting legs — `sobraram item=0,
+  auction_listing=0, ah_escrow_lot=1 depois do DELETE, antes era 0/0/0` and `o órfão
+  arrancado não saiu da contagem (item 0→0, auction_listing 0→0, ah_escrow_lot 0→2)`. Both
+  census verdicts printed `0 na largada, 0 na chegada` on either side of the experiment, and
+  that is information, not mitigation: the auction path this gate walks is the service's,
+  which clears the snapshot in the same transaction, so the axis is guarded by the planted
+  control rather than by the run's own count.
 - Deleting a character now takes what hangs off it (#167). `trg_character_delete` was born in
   the bootstrap template with four DELETEs — stat, trait, attribute, equipment — which are
   exactly the four rows `trg_character_new` mints, and every schema object created after that
