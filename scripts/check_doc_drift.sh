@@ -1810,13 +1810,29 @@ def litverdict(clause, spans, target_lines, stem=None):
 
 # ---------------------------------------------------------------------------
 # ÂNCORA (#124): o modelo de declaração abaixo é o MESMO da régua de span do
-# harness (`_SymbolSpans` em `tests/IdleTestsFrontier.gd`): coluna zero, e o bloco
-# vai da declaração até a linha antes da próxima declaração de coluna zero. Duas
-# réguas lendo duas geografias diferentes do mesmo arquivo é o jeito de um ponteiro
-# ser aprovado por uma e acusado pela outra, e é por isso que o formato é copiado da
-# que já estava certa, não inventado aqui.
+# harness (`_SymbolSpans` em `tests/IdleTestsFrontier.gd`): o bloco vai da
+# declaração até a linha antes da próxima declaração do MESMO nível ou de nível
+# menor. Duas réguas lendo duas geografias diferentes do mesmo arquivo é o jeito
+# de um ponteiro ser aprovado por uma e acusado pela outra, e é por isso que o
+# formato é copiado da que já estava certa, não inventado aqui.
+#
+# Indentação só declara em Python, e só `def`/`class` (#154). Medido na árvore: 47
+# declarações python eram invisíveis para a coluna zero — `Handler` tem 28 métodos,
+# então o bloco de `@Handler` era a classe inteira e a frase ancorada passava por
+# qualquer linha dela, inclusive a de outro método. O índice desses métodos é o
+# caminho `Classe.método`, pelo mesmo motivo da fatia 6 do YAML: `_send` e
+# `__init__` se repetem dentro do MESMO arquivo (duas vezes cada em `server.py`,
+# `__init__` duas vezes em `test_ad_ssv.py`, `_fake` duas vezes em
+# `webhook_fakes.py`), e âncora que não diz de quem é o método não é escolha.
+# Função de módulo continua de nome nu, porque não tem dono para nomear. GDScript e
+# shell ficam na coluna zero de propósito: o censo de `func`/`nome()` indentado em
+# `sources/`, `tests/` e `scripts/` é zero, então esses dois dialetos já eram lidos
+# inteiros e mudar o modelo deles seria inventar geografia. UPPERCASE
+# também não ganha indentação: `X = 1` dentro de um método é atribuição, não
+# declaração, e indexá-la encurtaria o bloco da função que a contém — que é
+# exatamente a divergência que o parágrafo de cima proíbe.
 DECL_GD = re.compile(r"^(?:static func |func |static var |const |class_name |enum |var )([A-Za-z_]\w*)")
-DECL_PY = re.compile(r"^(?:async def |def |class )([A-Za-z_]\w*)")
+DECL_PY = re.compile(r"^(?:[ \t]*)(?:async def |def |class )([A-Za-z_]\w*)")
 DECL_SH = re.compile(r"^([A-Za-z_]\w*)\s*\(\)")
 DECL_UP = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=")
 DECLS = {"gd": (DECL_GD,), "py": (DECL_PY, DECL_UP), "sh": (DECL_SH, DECL_UP)}
@@ -1997,12 +2013,20 @@ def anchor_spans(lines, ext):
         for p in pats:
             m = p.match(t)
             if m:
-                decls.append((m.group(1), i))
+                sangria = t[:len(t) - len(t.lstrip())].expandtabs(4)
+                decls.append((m.group(1), i, len(sangria)))
                 break
-    out = {}
-    for k, (nm, start) in enumerate(decls):
-        finish = decls[k + 1][1] - 1 if k + 1 < len(decls) else len(lines)
-        out.setdefault(nm, []).append([start, max(start, finish)])
+    out, pilha = {}, []
+    for k, (nm, start, nivel) in enumerate(decls):
+        while pilha and pilha[-1][0] >= nivel:
+            pilha.pop()
+        fim = len(lines)
+        for j in range(k + 1, len(decls)):
+            if decls[j][2] <= nivel:
+                fim = decls[j][1] - 1
+                break
+        out.setdefault(".".join([s[1] for s in pilha] + [nm]), []).append([start, max(start, fim)])
+        pilha.append((nivel, nm))
     return out
 
 
@@ -2143,6 +2167,21 @@ ALVO10 = ["config_version=5", "[application]", 'config/name="Shambleta"',
 ALVO11 = ["[preset.0.options]", 'html/head_include="', "<script src=\\\"bridge.js>",
           'crossorigin="anonymous"', "bridge_salt=1", "</script>\"",
           "html/canvas_resize_policy=2"]
+# ALVO12 é o terreno do Python indentado (#154), e cada linha existe para uma
+# decisão da máquina: método declarado dentro de classe é declaração e o índice dele
+# é o caminho (2-3), o bloco do método PARA no irmão (4-5), a classe ainda é bloco por
+# nome nu e abraça os métodos (1 e 6-10), o MESMO nome em classes DIFERENTES são duas
+# chaves (7 e 12) enquanto o MESMO nome na MESMA classe é `duplo` (7 e 9), `RETENTION`
+# indentado não é declaração nenhuma (13) e a função de módulo continua de nome nu
+# (14). Os dois literais que as réguas de `bloco` pescam são `rows_sent` (5), que mora
+# só no método irmão, e `serve_forever` (15), que mora depois da classe — os dois com
+# sublinhado de propósito: o filtro estreito de literal não vê `code` nem `main` como
+# promessa nenhuma, e um controle plantado num token que a régua não lê não morde.
+ALVO12 = ["class Handler:", "    def do_GET(self):", "        self._send(404)",
+          "    def _send(self, code):", "        self.rows_sent = 1", "class Store:",
+          "    def connect(self):", "        self.row = 1", "    def connect(self):",
+          "        pass", "class Audit:", "    def connect(self):", "        RETENTION = 7",
+          "def main():", "    serve_forever()"]
 ANCHOR_CONTROLES = [
     ("âncora honesta: símbolo declarado e nomeado na cláusula",
      "abre a sessão em `Beta` (`x.gd:@Beta`)", True, ""),
@@ -2235,6 +2274,27 @@ ANCHOR_CONTROLES = [
     ("ini: `chave=valor` DENTRO da string não é declaração",
      'o atributo seria `preset.0.options.crossorigin` (`x.cfg:@preset.0.options.crossorigin`)',
      False, "inexistente", ALVO11),
+    # Os oito de 12 são o Python indentado (#154). Sem eles, "354 chaves no índice
+    # python" poderia significar que a tolerância de indentação vazou para a
+    # constante, que o bloco do método engoliu a classe, ou que o nome nu continuou
+    # valendo para método de classe — cada um planta uma dessas três.
+    ("python: método indentado é declaração, e o caminho `Classe.método` ancora",
+     "o GET responde em `Handler.do_GET` (`x.py:@Handler.do_GET`)", True, "", ALVO12),
+    ("python: o nome nu do método não está no índice — a âncora tem de dizer de quem é",
+     "o GET responde em `do_GET` (`x.py:@do_GET`)", False, "inexistente", ALVO12),
+    ("python: o mesmo nome em classes DIFERENTES são duas chaves, não um duplo",
+     "a auditoria abre em `Audit.connect` (`x.py:@Audit.connect`)", True, "", ALVO12),
+    ("python: a mesma classe escrevendo o mesmo nome duas vezes é duplo, não escolha",
+     "a conexão é de `Store.connect` (`x.py:@Store.connect`)", False, "duplo", ALVO12),
+    ("python: o bloco da classe abraça os métodos dela",
+     "o `Handler` trata `do_GET` (`x.py:@Handler`)", True, "", ALVO12),
+    ("python: literal que mora no método IRMÃO não entra no bloco do nomeado",
+     "o `Handler.do_GET` empurra `rows_sent` (`x.py:@Handler.do_GET`)", False, "bloco", ALVO12),
+    ("python: o método não engole a função de módulo que vem depois",
+     "o `Handler.do_GET` desce até `serve_forever` (`x.py:@Handler.do_GET`)", False, "bloco", ALVO12),
+    ("python: UPPERCASE indentado é atribuição de método, não declaração",
+     'a retenção seria `Audit.RETENTION` (`x.py:@Audit.RETENTION`)',
+     False, "inexistente", ALVO12),
 ]
 
 

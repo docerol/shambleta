@@ -239,6 +239,21 @@ que têm de morder, porque um zero sem controles não é verde, é cegueira:
   `BLIND_JUDGE_PROTOCOL.md`): o que é história ali é o número, e reescrever número
   gravado é falsificar diário; mas âncora que hoje aponta para outro lugar mente igual, e
   é por isso que o walk entrou nesses arquivos.
+  Dos três dialetos indexados, dois julgam declaração em coluna zero: GDScript e shell. O
+  terceiro lê a sangria (#154), porque ali a indentação É a estrutura e o censo medido na
+  árvore achou 47 declarações invisíveis para a coluna zero — `Handler` tem 28 métodos, e o
+  bloco da classe era, por nome nu, a classe inteira: a frase ancorada passava por qualquer
+  linha dela, inclusive a de outro método. Métodos entram no índice pelo caminho `Classe.método`,
+  pelo mesmo motivo da fatia de YAML: o MESMO nome repetido dentro do MESMO arquivo não é
+  escolha de âncora, é acusação. Atribuição MAIÚSCULA não ganha sangria em nenhum dialeto:
+  dentro de um método é variável local, e indexá-la encurtaría o bloco de quem a contém. A
+  máquina dos dois juízes é uma só, copiada e não reinventada: a régua de bash vive no heredoc
+  python de `scripts/check_doc_drift.sh` e o gémeo do harness é `_SymbolSpans`
+  (`tests/IdleTestsFrontier.gd:@_SymbolSpans`), com a mesma pilha e a mesma regra de nível. A
+  metade de bash não tem âncora, e isto não é descuido: quem lê o `.sh` é o modelo de shell, e
+  python dentro de heredoc não declara nada para ele — quando a frase apontou `anchor_spans`
+  do `scripts/check_doc_drift.sh`, a própria régua devolveu `inexistente`. Âncora que o modelo
+  não vê é linha disfarçada, então a promessa fica pelo arquivo.
 - **caminho (seção 24)**: um `.md` citado entre backticks tem de existir na árvore. A
   classe nasceu quando os relatórios de auditoria foram para `archive/` e a prosa
   continuou citando a raiz. exceção só com motivo em `scripts/dead_paths.txt`, e caminho

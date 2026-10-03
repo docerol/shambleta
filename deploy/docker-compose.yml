@@ -253,8 +253,8 @@ services:
       # que o banco já está de pé (e na porta do healthcheck real) antes de escutar
       # webhook.
       # (exit 2 conferido nesta máquina: `python3 companion/server.py --db
-      # /tmp/nao-existe.db --port 8940 ...` → "database not found", exit=2 — o
-      # `companion/server.py:2174-2176` que este comentário afirma.)
+      # /tmp/nao-existe.db --port 8940 ...` → "database not found" e exit=2 — a
+      # recusa que `main` imprime antes de escutar (`companion/server.py:@main`))
       game:
         condition: service_healthy
     environment:

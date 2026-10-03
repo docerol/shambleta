@@ -201,7 +201,7 @@ reset de senha não envia e-mail.
    tem porta publicada, então quem responde é o proxy do `web`. Um `POST` em
    `/checkout/intents` sem token deve devolver **JSON** do companion (`401`,
    `{"error": "missing_token"}` — é a string que o companion devolve, não uma
-   frase legível; ver `_resolve_checkout_account` em `companion/server.py:1746`);
+   frase legível; ver `Handler._resolve_checkout_account` (`companion/server.py:@Handler._resolve_checkout_account`);
    se vier o 404 em HTML do nginx, o proxy não está no ar e
    nenhuma compra começa:
    ```bash

@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-01
 
 ### Added
+- An indented `def` in Python is a declaration for the anchor ruler (#154). The model read
+  column zero in all three indexed dialects, and in python column zero is the module, not the
+  file. Measured before writing: 47 declarations in the tree's python were invisible to the
+  ruler, 28 of them methods of `Handler`
+  (`companion/server.py:@Handler`) — so a sentence anchored on the class was satisfied by any
+  line of any of its methods, which is the pointer-with-no-evidence the ruler exists to kill.
+  Methods index by path (`Classe.método`) for the same reason the YAML slice does: the bare
+  method name repeats inside one file, and an anchor that does not say whose method it is
+  picks no block at all. A module-level function keeps its bare name, because it has no owner
+  to name. Uppercase assignment did not gain indentation in any dialect: inside a method that
+  is a local, and indexing it would shorten the block of the function that holds it. GDScript
+  and shell stayed at column zero — their indented census in `sources/`, `tests/` and
+  `scripts/` is zero, so the two already read those files whole and changing them would have
+  been inventing geography, not measuring it. The harness half is `_SymbolSpans`
+  (`tests/IdleTestsFrontier.gd:@_SymbolSpans`); the bash half lives in the python heredoc of
+  `scripts/check_doc_drift.sh` and gets no anchor, because the model that reads a `.sh` is the
+  shell model and python inside a heredoc declares nothing to it — the sentence tried the
+  `@anchor_spans` of `scripts/check_doc_drift.sh` and the ruler answered `inexistente`, which is
+  the honest answer (and the proof of the bite, on live prose, on the first try): an anchor the
+  model cannot see is a line in disguise, so the claim stays with the file. Same stack, same
+  level rule, one geography (#116) — and the first twin run caught the two judges failing to
+  have it: the harness assembled the path backwards (`do_GET.Handler`), and the seven new
+  controls plus the anchor census then accused the two doc anchors this very change had just
+  written. Nothing was committed green on that reading. Bite is proved on both sides — eight
+  controls in the
+  ruler's self-test and seven in the harness mesa, planted on a python file whose lines each
+  exist for one decision of the
+  machine (method resolves by path, bare name does not, same name twice in one class is
+  `duplo`, the same name in two classes is two keys, the class keeps its block, an indented
+  `X = 1` declares nothing). What it bought, in pointers: the last two python line citations
+  the worklist still charged converted. The checkout 401 that `deploy/COOLIFY.md` describes now
+  names `Handler._resolve_checkout_account` (`companion/server.py:@Handler._resolve_checkout_account`),
+  anchorable only after this change, and the boot-time refusal in `deploy/docker-compose.yml`
+  now names `main` (`companion/server.py:@main`), whose `def` was already at column zero and had
+  simply never been asked. 416 anchors against 301 line pointers, zero accusations.
 - Deleting an auction listing now takes the escrow portrait with it (#168). `ah_escrow_lot`
   (migration 063) writes one row per `(listing, uid)` describing exactly what left the
   seller's inventory, and only the service knew that row existed: its own

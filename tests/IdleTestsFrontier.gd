@@ -403,7 +403,7 @@ static func _IniSpans(lines : PackedStringArray) -> Dictionary:
 		(out[caminho] as Array).append([inicio, maxi(inicio, fim)])
 	return out
 
-# Identidade declared -> span, para TODA declaração de coluna zero (não só `func`).
+# Identidade declared -> span, para TODA declaração do dialeto (não só `func`).
 # A régua de span acima julga `Suite*` com o nome NA MESMA LINHA do número; isto aqui
 # julga qualquer símbolo nomeado na cláusula, de qualquer arquivo de código, e é o que
 # fecha o buraco que a passada do juiz de 2026-09-28 provou com onze exemplos: um
@@ -430,19 +430,40 @@ static func _SymbolSpans(lines : PackedStringArray, ext : String) -> Dictionary:
 		return spans
 	var decls : Array = []
 	for i in lines.size():
-		var name : String = _SymbolNameAt(String(lines[i]), ext)
+		var bruto : String = String(lines[i])
+		var name : String = _SymbolNameAt(bruto, ext)
 		if name == "":
 			continue
-		decls.append([name, i + 1])
+		decls.append([name, i + 1, _IndentCol(bruto)])
+	# Pilha por NÍVEL de sangria (#154), com a MESMA máquina da régua bash (`anchor_spans`):
+	# o índice é o caminho `Classe.método` e o bloco termina na próxima declaração de nível
+	# menor ou igual. GDScript e shell não mudam de comportamento com isso porque `_SymbolNameAt`
+	# só lhes devolve nome de coluna zero — nível 0 esvazia a pilha a cada declaração, então o
+	# caminho fica no nome puro e o fim continua sendo a declaração seguinte, exatamente como
+	# antes. Copiado e não reinventado porque é o #116: dois juízes lendo duas geografias do
+	# mesmo `.py` é o ponteiro aprovado por uma e acusado pela outra.
+	var pilha : Array = []
 	for k in decls.size():
 		var nm : String = String(decls[k][0])
 		var start : int = int(decls[k][1])
-		var finish : int = lines.size()
-		if k + 1 < decls.size():
-			finish = int(decls[k + 1][1]) - 1
-		if not spans.has(nm):
-			spans[nm] = []
-		(spans[nm] as Array).append([start, maxi(start, finish)])
+		var nivel : int = int(decls[k][2])
+		while pilha.size() > 0 and int((pilha[pilha.size() - 1] as Array)[0]) >= nivel:
+			pilha.pop_back()
+		var fim : int = lines.size()
+		for j in range(k + 1, decls.size()):
+			if int((decls[j] as Array)[2]) <= nivel:
+				fim = int((decls[j] as Array)[1]) - 1
+				break
+		# Dono primeiro, símbolo por último — o MESMO caminho que `anchor_spans` monta.
+		var nomes : PackedStringArray = []
+		for s in pilha:
+			nomes.append(String((s as Array)[1]))
+		nomes.append(nm)
+		var caminho : String = ".".join(nomes)
+		if not spans.has(caminho):
+			spans[caminho] = []
+		(spans[caminho] as Array).append([start, maxi(start, fim)])
+		pilha.append([nivel, nm])
 	return spans
 
 # Estrutura da âncora (#124, fatia 2): `arquivo:@símbolo` só vale se o símbolo RESOLVE
@@ -529,8 +550,31 @@ static func _ListVerdict(src : PackedStringArray, de : int, ate : int) -> String
 		return "a linha %d está em branco" % de
 	return ""
 
-# Nome do símbolo declarado nesta linha de coluna zero, ou "" se a linha não declara.
+# Nome do símbolo declarado nesta linha, ou "" se a linha não declara. Coluna zero é exigida
+# em GDScript e shell; em python a sangria é lida (#154) e o nível dela decide quem é dono
+# de quem — ver o comentário do ramo `py` abaixo.
 static func _SymbolNameAt(line : String, ext : String) -> String:
+	# Python (#154): a sangria É a estrutura do arquivo, e o censo medido na árvore — 47
+	# declarações invisíveis para a régua antiga, entre elas os 28 métodos de `Handler` —
+	# mostrou que um `def` de nível um declara tanto quanto a `class` acima dele. Só os três
+	# prefixos de função/classe ganham a tolerância; a atribuição MAIÚSCULA continua na
+	# coluna zero porque `RETENTION = 7` dentro de um método é variável local, e doc nomeando
+	# `RETENTION` não está citando uma declaração do arquivo. GDScript e shell ficam com a
+	# rejeição de sangria abaixo: o censo indentado deles é zero, e afrouxar sem medida é o
+	# jeito de a régua passar a aprovar o que nunca foi conferido.
+	if ext == "py":
+		var enc : String = line.strip_edges()
+		for prefix in ["async def ", "def ", "class "]:
+			if enc.begins_with(prefix):
+				var tok : String = _FirstToken(enc.substr(prefix.length()).strip_edges())
+				return tok if _IsIdent(tok) else ""
+		if _IndentCol(line) > 0:
+			return ""
+		var eqpy : int = line.find("=")
+		if eqpy > 0:
+			var nmpy : String = line.substr(0, eqpy).strip_edges()
+			return nmpy if _IsUpperIdent(nmpy) else ""
+		return ""
 	if line.begins_with(" ") or line.begins_with("\t"):
 		return ""
 	if ext == "gd":
@@ -551,17 +595,24 @@ static func _SymbolNameAt(line : String, ext : String) -> String:
 			var nm : String = line.substr(0, eq).strip_edges()
 			return nm if _IsUpperIdent(nm) else ""
 		return ""
-	if ext == "py":
-		for prefix in ["async def ", "def ", "class "]:
-			if line.begins_with(prefix):
-				var tok : String = _FirstToken(line.substr(prefix.length()).strip_edges())
-				return tok if _IsIdent(tok) else ""
-		var eq : int = line.find("=")
-		if eq > 0:
-			var nm : String = line.substr(0, eq).strip_edges()
-			return nm if _IsUpperIdent(nm) else ""
-		return ""
 	return ""
+
+# Coluna em que a linha começa depois de expandir cada tab para o próximo múltiplo de
+# quatro (#154) — o MESMO número que `anchor_spans` em `scripts/check_doc_drift.sh` compara
+# para empilhar e desapilhar blocos de python. Tab vale 4, mas `expandtabs` é parada de
+# coluna e não multiplicação: "\t x" abre na coluna 5, e é por isso que o laço soma em vez
+# de contar caracteres.
+static func _IndentCol(line : String) -> int:
+	var col : int = 0
+	for i in line.length():
+		var c : int = line.unicode_at(i)
+		if c == 32:
+			col += 1
+		elif c == 9:
+			col += 4 - (col % 4)
+		else:
+			break
+	return col
 
 # Token até o primeiro separador de declaração (espaço, tab, `(`, `=`, `:`, `{`).
 static func _FirstToken(rest : String) -> String:
@@ -1728,6 +1779,47 @@ func SuiteEvidencePointers() -> void:
 			"âncora ini morde dentro da string: `crossorigin=` é atributo de HTML, não chave do conf (%s)" % _AnchorStruct("preset.0.options.crossorigin", "cfg", si11))
 	Check(_AnchorStruct("preset.0.options.html/canvas_resize_policy", "cfg", si11) == "",
 			"âncora ini morde no depois do fechamento: a chave real que vem após o `\"` não é engolida pelas duas de dentro (%s)" % _AnchorStruct("preset.0.options.html/canvas_resize_policy", "cfg", si11))
+	# As sete de baixo são o Python indentado (#154) na MESMA mesa da régua bash
+	# (`ALVO12` em `scripts/check_doc_drift.sh`): mesmo texto de arquivo, mesma expectativa de
+	# veredito, copiados e não reinventados porque é o #116. O que cada casa cobra: método
+	# declarado dentro de classe RESOLVE e seu índice é o caminho; o nome nu desse método não
+	# está no índice (é o caminho ou nada); o mesmo nome duas vezes na MESMA classe é duplo;
+	# o mesmo nome em classes DIFERENTES são duas chaves e cada uma resolve; a classe continua
+	# âncora por nome nu; função de módulo também; e `RETENTION` indentado não é declaração
+	# nenhuma. Os dois `bloco` da mesa bash ficam de fora de propósito: são cláusula, e
+	# cláusula tem um só dono.
+	var pyMesa12 : PackedStringArray = PackedStringArray([
+		"class Handler:",
+		"    def do_GET(self):",
+		"        self._send(404)",
+		"    def _send(self, code):",
+		"        self.rows_sent = 1",
+		"class Store:",
+		"    def connect(self):",
+		"        self.row = 1",
+		"    def connect(self):",
+		"        pass",
+		"class Audit:",
+		"    def connect(self):",
+		"        RETENTION = 7",
+		"def main():",
+		"    serve_forever()",
+	])
+	var sp12 : Dictionary = _SymbolSpans(pyMesa12, "py")
+	Check(_AnchorStruct("Handler.do_GET", "py", sp12) == "",
+			"âncora python morde no método indentado: `def` dentro de `class` declara, e o índice dele é o caminho (%s)" % _AnchorStruct("Handler.do_GET", "py", sp12))
+	Check(_AnchorStruct("do_GET", "py", sp12).contains("nenhuma declaração"),
+			"âncora python morde no nome nu: método tem dono, e âncora que não diz de quem é não é escolha (%s)" % _AnchorStruct("do_GET", "py", sp12))
+	Check(_AnchorStruct("Store.connect", "py", sp12).contains("2 declarações"),
+			"âncora python morde no duplo dentro da classe: dois `connect` no mesmo `Store` são acusação (%s)" % _AnchorStruct("Store.connect", "py", sp12))
+	Check(_AnchorStruct("Audit.connect", "py", sp12) == "",
+			"âncora python morde no homônimo de outra classe: `connect` de `Audit` não herda o duplo de `Store` (%s)" % _AnchorStruct("Audit.connect", "py", sp12))
+	Check(_AnchorStruct("Handler", "py", sp12) == "",
+			"âncora python morde na classe: `class` de coluna zero continua âncora por nome nu (%s)" % _AnchorStruct("Handler", "py", sp12))
+	Check(_AnchorStruct("main", "py", sp12) == "",
+			"âncora python morde na função de módulo: sem dono para nomear, o índice fica no nome puro (%s)" % _AnchorStruct("main", "py", sp12))
+	Check(_AnchorStruct("RETENTION", "py", sp12).contains("nenhuma declaração"),
+			"âncora python morde na atribuição indentada: `X = 1` dentro de método é variável local, não declaração do arquivo (%s)" % _AnchorStruct("RETENTION", "py", sp12))
 	# (9) CONTINUAÇÃO (#124, fatia 5): o número SEM ARQUIVO. A régua de bash passou a ler esta
 	# classe na passada do órfão e este gémeo não a lia: dois juízes da mesma árvore vendo
 	# números diferentes é a doença que o #116 registrou, não um detalhe de paridade de código.
