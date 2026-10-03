@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-01
 
 ### Added
+- Deleting a character now takes what hangs off it (#167). `trg_character_delete` was born in
+  the bootstrap template with four DELETEs — stat, trait, attribute, equipment — which are
+  exactly the four rows `trg_character_new` mints, and every schema object created after that
+  hung rows on a `char_id` nobody ever added to the cascade: `item_instance` (migration 012),
+  `chest_instance` (009), listings by `seller_char` (018). Measured on a clean database with this
+  migration kept out of the directory: one run of `tests/benchmarks.gd` left 34.409 orphan rows —
+  33.922 `item_instance`, 200 `auction_listing`, 129 `item`, 80 `bestiary`, 40 `skill`, 30 `quest`
+  and 8 `chest_instance` — with zero characters living. Not a harness quirk — `SQL.RemoveCharacter` is
+  the player's own delete route (`Server.DeleteCharacter`), while `SQL.EraseAccount` was the
+  only path that knew the full list, so the two disagreed about what a character owns and the
+  settle probe measured latency on top of a dead inventory. Migration
+  `066_character_delete_cascade.sql` puts the cascade in the list, so `RemoveCharacter`,
+  `EraseAccount` and the account cascade clean the same way by construction instead of by
+  whoever wrote the DELETE; sweeps the garbage that is already in every live database once,
+  inside the same `BEGIN TRANSACTION`/`COMMIT` that `SQL.ApplyMigration` wraps around the
+  patch; and adds `idx_auction_listing_seller_char`, without which the cascade would scan
+  every listing in the shop for every character deleted. `ledger_transaction` and
+  `telemetry_event` stay orphan-tolerant on purpose: those are records, not litter. The gate
+  now censuses `char_id` orphans on both sides of the run and charges the DELTA (pre-existing
+  litter is not this run's fault), asserts the purge plan walks the new index rather than
+  scanning, and plants a control in both directions — a row under a live character (must not
+  be counted), a row under a `char_id` that never existed (must be counted), and the living
+  character itself deleted (its child has to leave with it). Counterfactual, same file with
+  066 out of the migrations directory and a clean database: `Censo de órfãos do char_id: 0 na
+  largada, 34409 na chegada`, `Plano do purge de anúncio por seller_char: SCAN auction_listing`
+  and both control legs — `sobraram item=130, auction_listing=201 depois do DELETE, antes era
+  129/200` and `o órfão arrancado não saiu da contagem (item 129→130, auction_listing 200→201)`
+  — 6 failures instead of 2. The
+  gate's own teardowns went from `delete_rows` on `character` to the production APIs, which is
+  the point of the whole thing: the harness and the server now agree by construction, not by
+  remembering.
 - The telemetry buffer now confesses what it throws away (#165). `TelemetryService.Record` has always
   dropped the oldest event once `BufferCap` fills, and the file's own header called that drop-oldest:
   under load the funnel under-reported and nothing in the process said how many events died in the

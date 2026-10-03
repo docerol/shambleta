@@ -80,6 +80,24 @@ const ExpectedZoneCount: int = 27
 # tem que nascer cheia e disputada) e 200 listings para um LIMIT 20.
 const LbSeedChars: int = 60
 const AhSeedListings: int = 200
+# As tabelas que penduram linhas num personagem e que o expurgo PODE apagar. Duas
+# ficam de fora por serem registro, não lixo: `ledger_transaction` (append-only por
+# trigger, migration 056) e `telemetry_event` (poda por tempo, 065). O censo delas
+# é impresso como informação e nunca cobrado.
+const OrphanPurgable: Array[Array] = [
+    ["item", "char_id"],
+    ["item_instance", "char_id"],
+    ["chest_instance", "char_id"],
+    ["skill", "char_id"],
+    ["quest", "char_id"],
+    ["bestiary", "char_id"],
+    ["stat", "char_id"],
+    ["auction_listing", "seller_char"],
+]
+const OrphanDurable: Array[Array] = [
+    ["ledger_transaction", "char_id"],
+    ["telemetry_event", "char_id"],
+]
 
 func _initialize():
     _run_benchmarks()
@@ -133,6 +151,9 @@ func _run_benchmarks():
     var sql: Node = sqlNode
     var economy: Node = launcher.Economy
     var failures: int = 0
+    # Linha de largada do censo de órfãos: lida ANTES de qualquer fixture, para que
+    # o que for cobrado no fim seja lixo mintado por esta corrida, não herança.
+    var orphansBefore: Array[int] = _orphanCounts(sql)
 
     # Benchmark: settle (single character) — caminho real OfflineSettle.
     # (Antes chamava EconomyService.SettleCharacter, que não existe: o
@@ -153,8 +174,11 @@ func _run_benchmarks():
     var settleMs: int = Time.get_ticks_msec() - settleStart
     var settleQueries: int = sql.QueryCount()
     var settleTx: int = sql.TransactionCount()
-    sql.db.delete_rows("character", "nickname = 'BenchSettle'")
-    sql.db.delete_rows("account", "username = 'bench_settle'")
+    # Expurgo pela API de produção, não pelo `delete_rows` cru: é o `RemoveCharacter`
+    # que dispara a cascata da migration 066, e o delete cru era exatamente o defeito
+    # que ela fecha — o gate mintia 40 lotes por settle e levava só a ficha embora.
+    sql.RemoveCharacter(benchChar)
+    sql.RemoveAccount(benchAcct)
     print("Settle benchmark: %d ms, %d queries, %d tx (budget: %d ms)" % [settleMs, settleQueries, settleTx, BudgetSettleMs])
     if settleResult.is_empty():
         print("FAIL: settle returned empty")
@@ -257,11 +281,22 @@ func _run_benchmarks():
     if ahPlan.find("idx_auction_browse") < 0:
         print("FAIL: browse sem o índice de cobertura da migration 047")
         failures += 1
+    # A cascata da migration 066 apaga anúncio por `seller_char` a cada personagem
+    # removido. Sem índice nessa coluna, o expurgo de UM personagem varre a tabela de
+    # anúncios inteira — e o `auction_listing` é justamente a tabela que este gate
+    # enche (200 linhas). O plano é lido com as linhas da fixture na mesa, porque
+    # plano sobre tabela vazia não prova nada.
+    var purgePlan: String = ""
+    for row in sql.Query("EXPLAIN QUERY PLAN DELETE FROM auction_listing WHERE seller_char = %d;" % int(lbSeed[0])):
+        purgePlan += String(row.get("detail", ""))
+    print("Plano do purge de anúncio por seller_char: %s" % purgePlan)
+    if purgePlan.find("idx_auction_listing_seller_char") < 0:
+        print("FAIL: purge de anúncio por seller_char não usa o índice da migration 066 — cada personagem apagado varre os %d anúncios" % AhSeedListings)
+        failures += 1
 
-    sql.db.delete_rows("auction_listing", "seller_account = %d" % lbAcct)
-    sql.db.delete_rows("stat", "char_id IN (SELECT char_id FROM character WHERE account_id = %d)" % lbAcct)
-    sql.db.delete_rows("character", "account_id = %d" % lbAcct)
-    sql.db.delete_rows("account", "username = 'bench_lb'")
+    for seedChar in lbSeed:
+        sql.RemoveCharacter(int(seedChar))
+    sql.RemoveAccount(lbAcct)
 
     # Benchmark: save/logout — round trips de UpdateProgress com o progresso de
     # um jogador razoavelmente avançado (30 quests, 80 mobs, 40 skills). Antes:
@@ -284,11 +319,8 @@ func _run_benchmarks():
     var progQueries: int = sql.QueryCount()
     var progTx: int = sql.TransactionCount()
     var readBack: int = sql.GetQuests(progChar).size() + sql.GetBestiaries(progChar).size() + sql.GetSkills(progChar).size()
-    sql.db.delete_rows("quest", "char_id = %d" % progChar)
-    sql.db.delete_rows("bestiary", "char_id = %d" % progChar)
-    sql.db.delete_rows("skill", "char_id = %d" % progChar)
-    sql.db.delete_rows("character", "nickname = 'BenchProgress'")
-    sql.db.delete_rows("account", "username = 'bench_progress'")
+    sql.RemoveCharacter(progChar)
+    sql.RemoveAccount(progAcct)
     print("Progress save: %d ms, %d queries, %d tx para 150 entradas (budget: <= %d queries, <= %d tx)" % [progMs, progQueries, progTx, BudgetLogoutQueries, BudgetLogoutTransactions])
     if not progOk:
         print("FAIL: UpdateProgress devolveu false")
@@ -387,8 +419,8 @@ func _run_benchmarks():
     var probeTx: int = sql.TransactionCount()
     var memAfter: int = int(Performance.get_monitor(Performance.OBJECT_COUNT))
     var resAfter: int = int(Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT))
-    sql.db.delete_rows("character", "nickname = 'BenchLoad'")
-    sql.db.delete_rows("account", "username = 'bench_load'")
+    sql.RemoveCharacter(loadChar)
+    sql.RemoveAccount(loadAcct)
     probeUs.sort()
     var p50Us: int = probeUs[LoadProbeIters / 2]
     var p99Us: int = probeUs[LoadProbeIters * 99 / 100]
@@ -447,6 +479,24 @@ func _run_benchmarks():
     failures += _atribuirStalls(probeUs, hitchIdx, hitchUs, tailIdx, tailUs, walSizes, walSalts, pageSize, autoCkPages, ckBusy, walStart, probeQueries, probeLots, loadFactor)
     failures += _controlesAtribuicao()
 
+    # Censo na chegada, depois de todo teardown: o que sobrou é o que ESTA corrida
+    # mintou e não levou embora.
+    var orphansAfter: Array[int] = _orphanCounts(sql)
+    var unreadable: String = ""
+    for i in range(orphansAfter.size()):
+        if int(orphansAfter[i]) < 0 or int(orphansBefore[i]) < 0:
+            unreadable += "%s " % OrphanPurgable[i][0]
+    if unreadable != "":
+        print("FAIL: censo de órfãos ilegível em (%s) — ausência de leitura NÃO é 'zero órfãos'" % unreadable.strip_edges())
+        failures += 1
+    else:
+        var orphanDelta: int = _orphanSum(orphansAfter) - _orphanSum(orphansBefore)
+        print("Censo de órfãos do char_id: %d na largada, %d na chegada (delta %d, orçamento 0). Registro que sobrevive por design e não é cobrado: %s" % [_orphanSum(orphansBefore), _orphanSum(orphansAfter), orphanDelta, _durableOrphanText(sql)])
+        if orphanDelta > 0:
+            print("FAIL: a corrida deixou %d linhas órfãs (%s) — alguém apagou personagem sem levar os filhos, e o próximo run mede latência por cima de lixo" % [orphanDelta, _orphanGrowth(orphansBefore, orphansAfter)])
+            failures += 1
+    failures += _controleCensoOrfaos(sql, orphansAfter)
+
     print("== Benchmarks: %d failures ==" % failures)
     quit(failures)
 
@@ -488,6 +538,104 @@ func _scalar(sql: Node, query: String, params: Array) -> int:
     if rows.is_empty():
         return -1
     return int((rows[0] as Dictionary).values()[0])
+
+# Linha órfã = pendurada num char_id que não existe mais. A régua cobra o DELTA da
+# corrida, não o absoluto: um banco que sobreviveu de antes da migration 066 já
+# tinha lixo dentro quando este run começou, e isso não é culpa dele. O que não pode
+# é este run mintar órfão — foi assim que UMA corrida deixou 30.383 `item_instance`
+# com zero personagens vivos, e o probe do settle passou a medir latência por cima
+# de um inventário morto: mais lento a cada passada sem que uma linha do caminho
+# tivesse mudado. Leitura inválida (-1) derruba o censo — ausência de leitura NÃO é
+# "zero órfãos", mesma doutrina da atribuição de stall abaixo.
+func _orphanQuery(check: Array) -> String:
+    return "SELECT count(*) FROM %s WHERE NOT EXISTS (SELECT 1 FROM character c WHERE c.char_id = %s.%s);" % [check[0], check[0], check[1]]
+
+func _orphanCounts(sql: Node) -> Array[int]:
+    var out: Array[int] = []
+    for check in OrphanPurgable:
+        out.append(_scalar(sql, _orphanQuery(check), []))
+    return out
+
+func _orphanSum(counts: Array[int]) -> int:
+    var total: int = 0
+    for n in counts:
+        total += int(n)
+    return total
+
+# Só o que cresceu entra na frase: "item_instance +30383" é diagnóstico, a lista
+# inteira repetida é ruído.
+func _orphanGrowth(before: Array[int], after: Array[int]) -> String:
+    var out: String = ""
+    for i in range(before.size()):
+        var d: int = int(after[i]) - int(before[i])
+        if d > 0:
+            out += "%s +%d " % [OrphanPurgable[i][0], d]
+    return out.strip_edges()
+
+func _durableOrphanText(sql: Node) -> String:
+    var out: String = ""
+    for check in OrphanDurable:
+        out += "%s=%d " % [check[0], _scalar(sql, _orphanQuery(check), [])]
+    return out.strip_edges()
+
+# Controle plantado do censo, nos dois sentidos. Só o sentido "órfão é visto" não
+# prova nada: no fim do run não existe personagem vivo nenhum, e aí QUALQUER coluna
+# que a query casar devolve "tudo é órfão" e o controle passa com o censo quebrado —
+# foi exatamente o que aconteceu na primeira versão desta função, trocando
+# `seller_char` por `id` e vendo o veredito continuar verde. Então o controle planta
+# as duas metades do quadrado: uma linha pendurada num personagem VIVO (não pode ser
+# contada) e uma pendurada num char_id que nunca existiu (tem que ser contada), nas
+# duas formas de coluna que existem na lista (`char_id` e o apelido `seller_char`),
+# e confere que arrancar as duas devolve o número anterior.
+func _controleCensoOrfaos(sql: Node, base: Array[int]) -> int:
+    var failures: int = 0
+    var idxItem: int = -1
+    var idxAh: int = -1
+    for i in range(OrphanPurgable.size()):
+        if String(OrphanPurgable[i][0]) == "item":
+            idxItem = i
+        if String(OrphanPurgable[i][0]) == "auction_listing":
+            idxAh = i
+    if idxItem < 0 or idxAh < 0:
+        print("FAIL: controle do censo — `item` ou `auction_listing` sumiu de OrphanPurgable (%s); o censo que roda não é o censo que este controle assina" % str(OrphanPurgable))
+        return failures + 1
+    if int(base[idxItem]) < 0 or int(base[idxAh]) < 0:
+        print("FAIL: controle do censo — ilegível na chegada (%d / %d), nada a plantar contra" % [base[idxItem], base[idxAh]])
+        return failures + 1
+    var vivo: int = 900010
+    var morto: int = 900011
+    sql.ExecuteBindings("DELETE FROM item WHERE char_id = ? OR char_id = ?;", [vivo, morto])
+    sql.ExecuteBindings("DELETE FROM auction_listing WHERE seller_char = ? OR seller_char = ?;", [vivo, morto])
+    sql.ExecuteBindings("DELETE FROM character WHERE char_id = ? OR char_id = ?;", [vivo, morto])
+    var antes: Array[int] = _orphanCounts(sql)
+    var entrouChar: bool = sql.ExecuteBindings("INSERT INTO character (char_id, account_id, nickname, created_timestamp) VALUES (?, ?, 'CensoVivo', 1);", [vivo, vivo])
+    var entrouItem: bool = sql.ExecuteBindings("INSERT INTO item (item_id, char_id, count, storage, customfield) VALUES (909001, ?, 1, 1, 'censo');", [vivo])
+    var entrouAh: bool = sql.ExecuteBindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, created_at) VALUES (?, ?, 100001, 1, 1, 1);", [vivo, vivo])
+    var vivoLido: Array[int] = _orphanCounts(sql)
+    sql.ExecuteBindings("DELETE FROM character WHERE char_id = ?;", [vivo])
+    var mortoLido: Array[int] = _orphanCounts(sql)
+    var entrouMuertoItem: bool = sql.ExecuteBindings("INSERT INTO item (item_id, char_id, count, storage, customfield) VALUES (909002, ?, 1, 1, 'censo');", [morto])
+    var entrouMuertoAh: bool = sql.ExecuteBindings("INSERT INTO auction_listing (seller_char, seller_account, item_id, count, price_gold, created_at) VALUES (?, ?, 100001, 1, 1, 1);", [morto, morto])
+    var plantado: Array[int] = _orphanCounts(sql)
+    sql.ExecuteBindings("DELETE FROM item WHERE char_id = ?;", [morto])
+    sql.ExecuteBindings("DELETE FROM auction_listing WHERE seller_char = ?;", [morto])
+    var depois: Array[int] = _orphanCounts(sql)
+    if not entrouChar or not entrouItem or not entrouAh or not entrouMuertoItem or not entrouMuertoAh:
+        print("FAIL: controle do censo — o INSERT plantado não entrou (char=%s item=%s ah=%s morto=%s/%s); controle que não planta não prova nada" % [str(entrouChar), str(entrouItem), str(entrouAh), str(entrouMuertoItem), str(entrouMuertoAh)])
+        failures += 1
+    if int(vivoLido[idxItem]) != int(antes[idxItem]) or int(vivoLido[idxAh]) != int(antes[idxAh]):
+        print("FAIL: controle do censo — linha pendurada num personagem VIVO foi contada como órfã (item %d→%d, auction_listing %d→%d); a query casa uma coluna que não é o vínculo, e os anúncios do run entrariam no próximo veredito" % [antes[idxItem], vivoLido[idxItem], antes[idxAh], vivoLido[idxAh]])
+        failures += 1
+    if int(mortoLido[idxItem]) != int(antes[idxItem]) or int(mortoLido[idxAh]) != int(antes[idxAh]):
+        print("FAIL: controle do censo — apagar o personagem não levou os filhos (sobraram item=%d, auction_listing=%d depois do DELETE, antes era %d/%d); é exatamente a linha que a cascade da migration 066 tem que fechar" % [mortoLido[idxItem], mortoLido[idxAh], antes[idxItem], antes[idxAh]])
+        failures += 1
+    if int(plantado[idxItem]) != int(mortoLido[idxItem]) + 1 or int(plantado[idxAh]) != int(mortoLido[idxAh]) + 1:
+        print("FAIL: controle do censo — linha plantada num char_id que nunca existiu não foi contada (item %d→%d, auction_listing %d→%d); um censo que lê 0 do nada absolveria os 30.383 de novo" % [mortoLido[idxItem], plantado[idxItem], mortoLido[idxAh], plantado[idxAh]])
+        failures += 1
+    if int(depois[idxItem]) != int(antes[idxItem]) or int(depois[idxAh]) != int(antes[idxAh]):
+        print("FAIL: controle do censo — o órfão arrancado não saiu da contagem (item %d→%d, auction_listing %d→%d); a régua está contando outra coisa" % [antes[idxItem], depois[idxItem], antes[idxAh], depois[idxAh]])
+        failures += 1
+    return failures
 
 # Settles em que o WAL reiniciou = um checkpoint drenou o arquivo inteiro. Uma
 # leitura inválida (-1) NUNCA conta como dreno: ausência de leitura não absolve.

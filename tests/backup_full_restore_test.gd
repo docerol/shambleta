@@ -127,7 +127,8 @@ func _fxChar(db : SQLite, charID : int) -> Array:
     return rows
 
 # Expurga o que o harness criou, pelas APIs de produção: `RemoveCharacter` dispara
-# o trg_character_delete (leva stat/trait/attribute/equipment junto) e
+# o trg_character_delete, que desde a migration 066 leva junto o que pendura no
+# `char_id` (ficha, inventário, baús, habilidades, quests, bestiário e anúncios) e
 # `RemoveAccount` o trg_account_delete. O ledger NÃO sai — append-only por trigger
 # (`ledger_transaction_no_delete`, migration 009) — e é por isso que a asserção de
 # ledger é por conta recém-nascida, nunca global.
