@@ -450,23 +450,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
-- Stacking a decision row only makes sense where the buttons are side by side, and un-stacking is now reachable (#197, measured 2026-10-03).
-  `WindowPanel.@_enter_tree` runs `GuiUiScale.@ApplyDecisionChrome` over every container holding two or more decision buttons — including the
-  columns the scene already drew one-per-line. Reparenting a column into a runtime `DecisionStack` buys no width (what a column lacks is height)
-  and destroys the declared path before the mounted scene's `_ready` resolves it: `Shop.gd` lost all seven purchase buttons per mount and
-  `SeasonPass.gd` lost its three, each arriving as `ERROR: Node not found` in the engine log, which no gate reads
-  (`scripts/ci_gate_log.sh` only charges `SCRIPT ERROR`). `GuiUiScale.@FitDecisionRow` now stacks only `sideBySide` rows, so the ten paths the
-  panels declare resolve again and the phone pass reports zero owner-inconsistency warnings (it reported thirteen). The other half of the fix is
-  that the reverse existed only on paper: a stacked row has no direct button children, so `FitDecisionRow` left through its own
-  `buttons.is_empty()` guard, and `GuiUiScale.@DecisionRows` counted the `DecisionStack` as a row of its own — `MessageBox.@_fitToHost` re-applies
-  on every resize, so a phone rotated from portrait to landscape kept the stacked layout forever. Both are now pinned by the ruler
-  `_decisionReparentRegression` of `tests/panel_fit_test.gd:@_decisionReparentRegression` (321 checks, 0 failures, 6/6 planted controls biting): the column keeps its scene paths
-  and its owner, a tight horizontal row still stacks and becomes reachable only by name — the `DecisionButton` finder of `sources/gui/WindowPanel.gd:@DecisionButton`
-  is what serves it — and a wide row returns its buttons to the declared parent in the declared order. The order assertion is not decoration — recording the
-  scene index inside the reparent loop gave every button index 0, because each `reparent` shrinks the parent list, and the row came back reversed
-  (`ButtonSubmit, ButtonConfirm, ButtonCancel`). Payoff measured in `tests/hud_decision_fit_test.gd`: the two pinned landscape debts (Shop 1,
-  SeasonPass 1 — one decision button past the fold at 844x390) now measure 0, so the pins were removed and every panel is held to zero overflow in
-  both orientations.
 - The query-mutex contradiction is closed by a guard instead of by engine behaviour, and the fixture that measured it stopped measuring nothing (#188, measured 2026-10-03).
   The five round-trip paths used to lock `queryMutex` directly, and nested calls survived only because Godot 4.7's `Mutex` happens to be recursive —
   recursion is an implementation detail, and a meter that counts a re-entrant lock as a second round trip reports contention that never waited.
