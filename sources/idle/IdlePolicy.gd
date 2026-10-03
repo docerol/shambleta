@@ -65,6 +65,11 @@ var metricWalkDistance : float					= 0.0
 # a única evidência de que o item chegou em alguém.
 var metricDropsPicked : int					= 0
 var metricPotionsUsed : int					= 0
+# O outro lado do mesmo limiar: quantas vezes o HP afundou e a mochila não tinha
+# o que beber. Sem este número, `potions_used = 0` não distingue "nunca precisou"
+# de "precisou e não tinha", que é exatamente a diferença que a régua da esteira
+# afirma quando diz por que o farmer não bebeu.
+var metricPotionShortfalls : int			= 0
 var _metricLastPos : Vector2					= Vector2.ZERO
 
 var currentTargetRID : int					= 0
@@ -78,7 +83,6 @@ var bossIndex : int							= -1
 # var_to_str — coluna nova nenhuma foi necessária; ver /priority).
 var skillLoadout : Array[int]				= []
 var autoPotionPct : float					= 35.0
-var autoPotionItemHash : int				= 215387671		# Apple spike default
 
 # Internals
 var _accumulator : float					= 0.0
@@ -135,6 +139,7 @@ func Setup(pAgent : PlayerAgent, pZoneID : int):
 	metricWalkDistance = 0.0
 	metricDropsPicked = 0
 	metricPotionsUsed = 0
+	metricPotionShortfalls = 0
 	_lastPosition = agent.position if agent else Vector2.ZERO
 	_metricLastPos = _lastPosition
 
@@ -579,19 +584,49 @@ func _tickPotion(delta : float):
 		return
 	_potionAccumulator = 0.0
 
+	if agent.stat == null or agent.stat.current.maxHealth <= 0:
+		return
 	var threshold : float = autoPotionPct / 100.0
-	if agent.stat.current.maxHealth > 0 and float(agent.stat.health) / float(agent.stat.current.maxHealth) < threshold:
-		_usePotion()
+	var needed : int = ceili(float(agent.stat.current.maxHealth) * threshold) - agent.stat.health
+	if needed <= 0:
+		return
+	if not _usePotion(needed):
+		metricPotionShortfalls += 1
 
-func _usePotion():
+# O controle que o jogador configura é um percentual de vida, não um item. A
+# policy bebe a poção de vida que a mochila tem, e escolhe a MENOR que fecha o
+# buraco do limiar; se nenhuma fecha, a maior que ela carrega. Antes havia um
+# único hash fixo na declaração, incapaz de acompanhar a escada de cura do
+# catálogo (20 hp no tier 1 contra 210 hp no tier 9). Devolve false quando nada
+# curável está na mochila — quem conta o buraco é o chamador.
+func _usePotion(needed : int) -> bool:
 	if agent.inventory == null:
-		return
-	var cell : ItemCell = DB.GetItem(autoPotionItemHash)
-	if cell == null or not cell.usable:
-		return
-	if agent.inventory.HasItem(cell, 1):
-		agent.inventory.UseItem(cell)
-		metricPotionsUsed += 1
+		return false
+	var enough : ItemCell = null
+	var enoughHeal : int = 0
+	var biggest : ItemCell = null
+	var biggestHeal : int = 0
+	for item : Item in agent.inventory.items:
+		if item == null:
+			continue
+		var cell : ItemCell = DB.GetItem(item.cellID, item.cellCustomfield)
+		if cell == null or not cell.usable or cell.type != CellCommons.Type.ITEM or cell.modifiers == null:
+			continue
+		var heal : int = int(cell.modifiers.Get(CellCommons.Modifier.Health, false))
+		if heal <= 0:
+			continue
+		if biggest == null or heal > biggestHeal:
+			biggest = cell
+			biggestHeal = heal
+		if heal >= needed and (enough == null or heal < enoughHeal):
+			enough = cell
+			enoughHeal = heal
+	var chosen : ItemCell = enough if enough != null else biggest
+	if chosen == null:
+		return false
+	agent.inventory.UseItem(chosen)
+	metricPotionsUsed += 1
+	return true
 
 # ------------------------------------------------------------------ metrics
 
@@ -631,6 +666,7 @@ func SnapshotMetrics() -> Dictionary:
 		"walk_distance" = metricWalkDistance,
 		"drops_picked" = metricDropsPicked,
 		"potions_used" = metricPotionsUsed,
+		"potion_shortfalls" = metricPotionShortfalls,
 		"secs_per_kill" = sessionGameTime / maxf(1.0, float(sessionKills)),
 		"attacks_per_kill" = float(metricAttacksCast) / maxf(1.0, float(sessionKills)),
 	}

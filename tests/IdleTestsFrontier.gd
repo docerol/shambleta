@@ -3231,6 +3231,28 @@ func SuiteStorefrontHonesty(sql : SQLService) -> void:
 # com a quantidade derrubada vindo de `item.count` (estado da pilha) em vez da
 # mesa. A régua (3) é a que separa os dois desenhos: no antigo um mob vivo
 # segurava célula de mesa, no atual nenhum.
+# Célula `usable` de cura cujo heal vale exatamente `want`, lida do catálogo.
+func _FindHealthPotion(want : int) -> ItemCell:
+	for cellHash in DB.ItemsDB:
+		var cell : ItemCell = DB.ItemsDB[cellHash]
+		if cell == null or not cell.usable or cell.type != CellCommons.Type.ITEM or cell.modifiers == null:
+			continue
+		if int(cell.modifiers.Get(CellCommons.Modifier.Health, false)) == want:
+			return cell
+	return null
+
+# Um usável que NÃO cura vida (comida de mana/stamina). A policy não tem de comê-lo
+# quando o que afundou foi HP, e é dele que `potion_shortfalls` precisa contar a
+# falta — sem este fixture, "bebe qualquer usável" passaria verde.
+func _FindNonHealthUsable() -> ItemCell:
+	for cellHash in DB.ItemsDB:
+		var cell : ItemCell = DB.ItemsDB[cellHash]
+		if cell == null or not cell.usable or cell.type != CellCommons.Type.ITEM or cell.modifiers == null:
+			continue
+		if int(cell.modifiers.Get(CellCommons.Modifier.Health, false)) <= 0:
+			return cell
+	return null
+
 func SuiteIdleLootPipeline(charID : int) -> void:
 	print("[suite] esteira de item do farm vivo")
 	var sql : SQLService = Launcher.SQL
@@ -3307,11 +3329,14 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 	# (1b) A bebereira dirigida: HP forçado no chão e pilha garantida, para medir o
 	# caminho `_tickPotion → limiar → _usePotion → UseItem` sem depender de quanto o
 	# farmer apanhou. É também aqui que o elo coleta→poção vira afirmação sobre a
-	# MESMA célula: `autoPotionItemHash` é a mesa da zona, não um item à parte.
+	# MESMA célula: a maçã é o que o Salt Slime da zona derruba para o chão deste
+	# farmer — `DefaultDropItemHash` (`FarmZoneData.gd:@DefaultDropItemHash`) — e não
+	# um item à parte do fixture.
 	if Check(IdlePolicyService.StartIdleSession(agent, 1) and agent.idlePolicy != null, "loot: sessão dirigida pela bebereira"):
 		var pol : IdlePolicy = agent.idlePolicy
-		var potionCell : ItemCell = DB.GetItem(pol.autoPotionItemHash)
-		if Check(potionCell != null and potionCell.usable, "loot: a célula da bebereira existe e é usável (hash %d)" % pol.autoPotionItemHash):
+		var appleHash : int = FarmZoneData.DefaultDropItemHash
+		var potionCell : ItemCell = DB.GetItem(appleHash)
+		if Check(potionCell != null and potionCell.usable, "loot: a célula da bebereira existe e é usável (hash %d)" % appleHash):
 			var pushPp : bool = agent.inventory.PushItem(potionCell, 2)
 			var ppIdx : int = agent.inventory.FindItemIndex(potionCell) if pushPp else -1
 			var ppBefore : int = int(agent.inventory.items[ppIdx].count) if ppIdx >= 0 else -1
@@ -3322,6 +3347,73 @@ func SuiteIdleLootPipeline(charID : int) -> void:
 			var ppAfter : int = int(agent.inventory.items[ppIdx2].count) if ppIdx2 >= 0 else 0
 			CheckEq(pol.metricPotionsUsed, ppUsed + 1, "loot: com HP abaixo do limiar, um tick bebe exatamente uma vez")
 			CheckEq(ppAfter, ppBefore - 1, "loot: beber consome uma unidade da pilha que a coleta traz (%d → %d)" % [ppBefore, ppAfter])
+
+			# (1c) A escada inteira é comível. A bebereira acima só prova que a maçã
+			# entra; enquanto a policy conhecia UM hash fixo, as outras células `usable`
+			# de cura do catálogo eram conteúdo que nada bebia — medida hoje: 20 hp no
+			# tier 1 contra 210 hp no tier 9, e é o char de tier alto que afunda longe
+			# dos 20. O censo roda `DB.ItemsDB`, não uma lista minha: se alguém voltar a
+			# endereçar poção por hash, a célula que sumir da mesa acusa. A mochila é
+			# esvaziada a cada degrau de propósito: com duas curas dentro a policy bebe
+			# a que escolhe e a recém-pushada sobra, então a régua mediria a ESCOLHA e
+			# não a comibilidade. Um degrau por vez, e só ele, é o que faz "saiu da
+			# mochila" afirmar que foi ESSA cura que desceu.
+			var ladder : int = 0
+			for cellHash in DB.ItemsDB:
+				var cand : ItemCell = DB.ItemsDB[cellHash]
+				if cand == null or not cand.usable or cand.type != CellCommons.Type.ITEM or cand.modifiers == null:
+					continue
+				var candHeal : int = int(cand.modifiers.Get(CellCommons.Modifier.Health, false))
+				if candHeal <= 0:
+					continue
+				ladder += 1
+				_FreeCarriedSlots(agent)
+				if not Check(agent.inventory.PushItem(cand, 1), "poção: cabe uma unidade de %s na mochila (hash %d)" % [cand.name, cellHash]):
+					continue
+				var ldUsed : int = pol.metricPotionsUsed
+				var ldShort : int = pol.metricPotionShortfalls
+				agent.stat.health = 1
+				pol._tickPotion(IdlePolicy.PotionCheckInterval + 0.5)
+				CheckEq(pol.metricPotionsUsed, ldUsed + 1, "poção: a escada é comível — %s (cura %d) bebe" % [cand.name, candHeal])
+				CheckEq(pol.metricPotionShortfalls, ldShort, "poção: beber não é falta de poção (%s)" % cand.name)
+				Check(agent.inventory.GetItem(cand) == null, "poção: %s saiu da mochila ao ser bebida" % cand.name)
+			Check(ladder >= 2, "poção: a escada de cura do catálogo tem mais de um degrau (censo %d)" % ladder)
+
+			# (1d) A escolha é a MENOR que fecha o buraco, não a primeira nem a maior:
+			# com cura 20 e cura 100 na mochila e um buraco que a maçã fecha, queimar o
+			# elixir é a economia do jogador gasta pela policy.
+			var elixir : ItemCell = _FindHealthPotion(100)
+			if Check(elixir != null, "poção: o catálogo tem uma cura de exatamente 100 para o teste de escolha"):
+				_FreeCarriedSlots(agent)
+				var pushSm : bool = agent.inventory.PushItem(potionCell, 1) and agent.inventory.PushItem(elixir, 1)
+				if Check(pushSm, "poção: mochila com a maçã e a %s juntas" % elixir.name):
+					var smUsed : int = pol.metricPotionsUsed
+					# O buraco é medido DO LIMIAR, não da vida máxima: a régua abaixo do
+					# `autoPotionPct` é o que decide se a policy bebe ou não, e um HP
+					# "baixo" acima dele nem chega a chamar `_usePotion`.
+					var floorHp : int = ceili(float(agent.stat.current.maxHealth) * pol.autoPotionPct / 100.0)
+					agent.stat.health = floorHp - 10
+					pol._tickPotion(IdlePolicy.PotionCheckInterval + 0.5)
+					CheckEq(pol.metricPotionsUsed, smUsed + 1, "poção: buraco pequeno bebe exatamente uma vez")
+					Check(agent.inventory.GetItem(elixir) != null, "poção: buraco pequeno NÃO gasta a cura cara (%s intacta)" % elixir.name)
+					Check(agent.inventory.GetItem(potionCell) == null, "poção: buraco pequeno gasta a cura barata (maçã consumida)")
+
+			# (1e) Nada curável ≠ nada bebido. Com a mochila cheia de comida que não cura
+			# vida, o tick não bebe e confessa a falta no número do lado errado do
+			# limiar — é o que separa "nunca precisou" de "precisou e não tinha", que a
+			# régua da esteira afirma sobre o `potions_used` da sessão. O lanche entra
+			# numa mochila esvaziada: com uma cura de outro degrau ainda dentro, o que
+			# se bebe é ela e o shortfall fica em zero por causa do fixture.
+			var snack : ItemCell = _FindNonHealthUsable()
+			if Check(snack != null, "poção: o catálogo tem um usável que não cura vida (comida de mana/stamina)"):
+				_FreeCarriedSlots(agent)
+				Check(agent.inventory.PushItem(snack, 1), "poção: cabe o lanche que não cura")
+				var snUsed : int = pol.metricPotionsUsed
+				var snShort : int = pol.metricPotionShortfalls
+				agent.stat.health = 1
+				pol._tickPotion(IdlePolicy.PotionCheckInterval + 0.5)
+				CheckEq(pol.metricPotionsUsed, snUsed, "poção: usável sem cura de vida não é bebido por engano (%s)" % snack.name)
+				CheckEq(pol.metricPotionShortfalls, snShort + 1, "poção: afundar sem o que beber vira shortfall (+1)")
 		IdlePolicyService.StopIdleSession(agent)
 
 	# (2) Elo do mob: matar empurra a mesa para o chão, NA taxa da mesa. O roll é

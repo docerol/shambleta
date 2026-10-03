@@ -42,8 +42,10 @@ const GoldPerKillDiv : int = 8
 # online agora rende acima do que o par paga offline, que é a direção certa num
 # idle (quem joga não perde para quem loga depois). O texto anterior deste
 # comentário ("~160–184 kills/h") descrevia um probe que media o regime morto.
-# Custo visível do ciclo: ~8 mortes por sessão de 300 s no L1 novo (a policy não
-# acha poção — ver IdlePolicy.autoPotionItemHash) e cada uma custa RespawnDelay.
+# Custo visível do ciclo: ~8 mortes por sessão de 300 s no L1 novo (a bebereira
+# bebe a cura que a mochila tem — ver `_usePotion`
+# (`sources/idle/IdlePolicy.gd:@_usePotion`) — e o farmer nu chega sem nenhuma)
+# e cada uma custa RespawnDelay.
 const ParBaseSeconds : float = 24.0
 const ParPerZoneSeconds : float = 0.9
 

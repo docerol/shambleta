@@ -450,6 +450,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The auto-potion leg drank one item, and that item was an Apple. `_usePotion`
+  (`sources/idle/IdlePolicy.gd:@_usePotion`) resolved a hash written once in the declaration
+  (`autoPotionItemHash = 215387671`), and no persisted path ever fed it: `SaveFormation`
+  (`sources/sql/SQL.gd:@SaveFormation`) carries the player's percentage and nothing else, and the
+  field's only other readers in `HEAD` were the policy's own lookup, one comment and the fixture
+  that asked the policy which item it knows about — so every character in the game shared one
+  tier-1 fruit as its cure, and the harness proved the loop against the answer it was handed. The
+  task that opened this claimed the opposite ("auto-poção nunca dispara, `potions_used` = 0 com hp
+  a 6/112"), and measuring first killed that premise too: the same 300 s probe reports
+  `potions_used: 18`. What the measurement exposed instead is the single hash. The catalog answers
+  eight `usable` cells carrying a health modifier — 15, 20, 20, 20, 75, 100, 160, 210 — and seven
+  of them were content no policy could drink, at exactly the tiers where 20 hp stops covering a
+  hit. `_usePotion` now scans the bag and drinks the SMALLEST cure that closes the hole, falling
+  back to the biggest it carries; `_tickPotion` kept the same decision boundary it always had
+  (`health < x` and `health < ceili(x)` are the same set of integers), so nothing about WHEN the
+  policy drinks changed, only WHAT. The other half is a number the game never had:
+  `metricPotionShortfalls` counts the ticks that sank below the threshold with nothing drinkable in
+  the bag, and the probe answers 86 against those 18 drinks — which turns `potions_used = 0` from a
+  verdict into a question and opens the supply leg as a work order (two of twelve mobs carrying
+  `_drops` hand out a cure, both tier 1, and the tier-7 band has no usable cell at all). Bite
+  proven with three mutants through the real gate, one per run: putting the single hash back prints
+  `== RESULT: 3388 checks, 21 failures ==` and the census names all seven (`Ambrosia Flask`,
+  `Cactus Drink`, `Cactus Elixir`, `Cactus Potion`, `Cactus Sour Candy`, `Pitaya`, `Water Bottle`);
+  reversing the choice to biggest-first prints 2 failures on the economics pair — the expensive
+  cure is gone and the cheap one is intact — while "it drinks exactly once" stays green; dropping
+  the health-effect filter prints 2 failures on the planted control, the `Croissant` is drunk and
+  the shortfall stays at zero. The census runs `DB.ItemsDB` rather than a list of mine, so
+  re-hardcoding one hash now accuses the cells that leave the table. Gates:
+  `bash scripts/test.sh one run_idle_tests 1200` → `3388 checks, 0 failures` (1200 is the number
+  the `all` path already declares for this harness; `one` falls back to a 900 s default the harness
+  outlives, which is its own open task), and `scripts/check_doc_drift.sh` →
+  `2033 checks, 0 failures`. Left alone on purpose: `BLIND_JUDGE_PROTOCOL.md` still names
+  `autoPotionItemHash` in the round-3 and round-4 rows — that is a dated judge record, so the words
+  stay and this line is what a reader gets instead of a rewritten verdict.
 - `docs/development/testing.md` was selling `telemetry_census_test` as proof that "the table is
   pruned by a declared window", and no ruler reads a row's prose — only its name. The harness has no
   `DELETE` in it, and the census of deletes across `sources/` before writing this line found exactly
