@@ -1,7 +1,7 @@
 extends SceneTree
 
 # SOM-CONTENT: régua de higiene de conteúdo (juiz 2026-09-27: "os sistemas
-# correm na frente do conteúdo"). Seis classes de defeito que HOJE nada lê no
+# correm na frente do conteúdo"). Sete classes de defeito que HOJE nada lê no
 # portão:
 #
 #  (0) CATÁLOGO PELA METADE — `.tres` de entidade que não chega ao `EntitiesDB`.
@@ -41,6 +41,12 @@ extends SceneTree
 #      gold debitado contra um item que `GetItem` não conhece. Ver
 #      `_suiteMarketItemNames`.
 #
+#  (6) CURA DOMINADA — oferta mais cara comprando MENOS vida. O vendor é a única
+#      fonte de preço de cura do jogo e `AHVendorUnitPrice` lê esta mesma tabela
+#      para ancorar o ask, então preço de loja errado vira banda de leilão.
+#      Medido em 2026-10-03: `Pitaya` custava 350 gp curando 15 hp onde `Apple`
+#      custava 50 curando 20. Ver `_suiteVendorCureLadder`.
+#
 # Uso: godot --headless --path . -s tests/content_hygiene_test.gd
 # Régua do gate = última linha `== RESULT: N checks, M failures ==` e o exit code.
 
@@ -53,6 +59,8 @@ var _farm : GDScript = null
 var _bossService : GDScript = null
 var _econCatalog : GDScript = null
 var _monsterType : int = 0
+var _itemType : int = 0
+var _healthMod : int = 0
 
 func _initialize():
 	_run()
@@ -86,7 +94,7 @@ func _asInt(value : Variant) -> int:
 	return 0
 
 func _run():
-	print("== content hygiene harness (censo de entidades + rosters + faixas de drop + escada de boss + nomes de mercado) ==")
+	print("== content hygiene harness (censo de entidades + rosters + faixas de drop + escada de boss + nomes de mercado + escada de cura) ==")
 	_launcher = root.get_node_or_null(^"Launcher")
 	if _launcher == null:
 		print("FATAL: Launcher autoload missing")
@@ -108,6 +116,9 @@ func _run():
 	var commons : GDScript = load("res://sources/actor/ActorCommons.gd")
 	_monsterType = int(commons.Type.MONSTER)
 	_econCatalog = load("res://sources/economy/EconomyCatalog.gd")
+	var cellCommons : GDScript = load("res://sources/cell/CellCommons.gd")
+	_itemType = int(cellCommons.Type.ITEM)
+	_healthMod = int(cellCommons.Modifier.Health)
 
 	var dbReady : bool = false
 	for i in 80:
@@ -128,6 +139,7 @@ func _run():
 	_suiteDropBands()
 	_suiteBossLadder(worldNode)
 	_suiteMarketItemNames()
+	_suiteVendorCureLadder()
 	_suiteSpawnSource()
 
 # ------------------------------------------------------- (0) censo do EntitiesDB
@@ -676,4 +688,52 @@ func _suiteMarketItemNames():
 		if int(ahPricing.AHVendorUnitPrice(itemName.hash())) <= 0:
 			anchored.append(str(offer.get("id", itemName)))
 	_checkEq(anchored.size(), 0, "toda oferta que resolve tem preço de vendor devolvido pela âncora do ask: %s" % ", ".join(anchored))
+
+# ------------------------------------------------- (6) escada de cura do vendor
+
+# Por que esta suíte existe. O vendor é a única fonte de preço de cura do jogo, e
+# `AHVendorUnitPrice` lê exatamente esta tabela para ancorar o ask de um item sem
+# histórico — preço de vendor errado não é só loja: vira banda de leilão. Medido em
+# 2026-10-03 cruzando as duas tabelas declaradas (custo do `VENDOR_CATALOG` ×
+# `Modifier.Health` da célula): Pitaya custava 350 gp curando 15 hp, onde Apple
+# custava 50 curando 20 hp. Ou seja: o item mais caro da escada antes da poção era
+# o ÚNICO que curava menos que o mais barato, e nenhuma régua lia os dois lados.
+#
+# A régua não é um preço preferido: é a propriedade de que pagar mais nunca compra
+# menos cura. Ordena as ofertas de cura por preço unitário e exige cura
+# não-decrescente. Comida de mana/stamina fica fora (cura de vida 0).
+func _suiteVendorCureLadder():
+	print("[suite] escada de cura do vendor: preço unitário não pode comprar menos cura")
+	var offers : Array = []
+	for entry in _econCatalog.VENDOR_CATALOG:
+		var offer : Dictionary = entry
+		var itemName : String = str(offer.get("item", ""))
+		var cell = _dbScript.ItemsDB.get(itemName.hash(), null)
+		if cell == null:
+			continue # já acusado pela suíte de nomes; aqui só poluiria a escada
+		if not cell.usable or int(cell.type) != _itemType or cell.modifiers == null:
+			continue
+		var heal : int = int(cell.modifiers.Get(_healthMod, false))
+		if heal <= 0:
+			continue
+		var perOffer : int = maxi(1, int(offer.get("count", 1)))
+		offers.append({
+			"name": str(offer.get("id", itemName)),
+			"heal": heal,
+			"unit": maxi(1, int(round(float(offer.get("cost", 0)) / float(perOffer)))),
+		})
+	if not _check(offers.size() >= 4, "a escada de cura tem ao menos 4 ofertas medidas (achado %d)" % offers.size()):
+		return
+	offers.sort_custom(func(a, b):
+		var ua : int = int(a["unit"])
+		var ub : int = int(b["unit"])
+		return ua < ub or (ua == ub and int(a["heal"]) <= int(b["heal"]))
+	)
+	var inversions : Array = []
+	for i in range(1, offers.size()):
+		if int(offers[i]["heal"]) < int(offers[i - 1]["heal"]):
+			inversions.append("%s (%d gp/un, cura %d) paga MENOS cura que %s (%d gp/un, cura %d)" % [
+				str(offers[i]["name"]), int(offers[i]["unit"]), int(offers[i]["heal"]),
+				str(offers[i - 1]["name"]), int(offers[i - 1]["unit"]), int(offers[i - 1]["heal"])])
+	_checkEq(inversions.size(), 0, "pagar mais nunca compra menos cura: %s" % " | ".join(inversions))
 

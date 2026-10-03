@@ -197,13 +197,17 @@ const VENDOR_STOCK_PER_DAY : int = 20
 # desta tabela (`BuyVendorOffer`, `EnsureAuctionBots`, `AHVendorUnitPrice`) fazem
 # `str(offer.item).hash()`. Escrito com o basename, a oferta vira item fantasma.
 # A régua é `_suiteMarketItemNames` (`tests/content_hygiene_test.gd:@_suiteMarketItemNames`).
+# #173: `cost` também é conteúdo medido — `_suiteVendorCureLadder`
+# (`tests/content_hygiene_test.gd:@_suiteVendorCureLadder`) exige que pagar mais nunca
+# compre menos cura. Pitaya custava 350 gp curando 15 hp ao lado de um drink de 75 hp
+# por 200; agora 40, que é a mesma taxa por hp do drink (2,67 gp/hp).
 const VENDOR_CATALOG : Array = [
 	{"id": "apple", "label": "Apple x1", "item": "Apple", "count": 1, "cost": 50},
 	{"id": "water", "label": "Water Bottle x1", "item": "Water Bottle", "count": 1, "cost": 80},
 	{"id": "candy", "label": "Cactus Sour Candy x1", "item": "Cactus Sour Candy", "count": 1, "cost": 150},
 	{"id": "croissant", "label": "Croissant x1", "item": "Croissant", "count": 1, "cost": 120},
 	{"id": "drink", "label": "Cactus Drink x1", "item": "Cactus Drink", "count": 1, "cost": 200},
-	{"id": "pitaya", "label": "Pitaya x1", "item": "Pitaya", "count": 1, "cost": 350},
+	{"id": "pitaya", "label": "Pitaya x1", "item": "Pitaya", "count": 1, "cost": 40},
 	{"id": "potion", "label": "Cactus Potion x1", "item": "Cactus Potion", "count": 1, "cost": 500},
 ]
 

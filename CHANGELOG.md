@@ -450,6 +450,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The weakest cure in the game was the second most expensive one, and it bought less health than
+  the cheapest. Crossing the two declared tables — unit `cost` of `VENDOR_CATALOG`
+  (`sources/economy/EconomyCatalog.gd:@VENDOR_CATALOG`) against each cell's `Modifier.Health` —
+  the ladder answered `apple` 50 gp/20 hp, `water` 80/20, `candy` 150/20, `drink` 200/75,
+  `pitaya` 350/15, `potion` 500/100. Pitaya is the only rung that heals less than the rung below
+  it while costing seven times as much: 23.3 gp per hit point against the entry step's 2.5. This
+  is not a taste question, because the vendor is the game's only source of cure price and
+  `AHVendorUnitPrice` (`sources/economy/AuctionHousePricing.gd:@AHVendorUnitPrice`) reads this same
+  table to anchor the ask of an item with no history — a wrong shop number becomes an auction
+  band. `croissant` is excluded by the ruler, not by hand: its modifiers are mana and stamina, so
+  its health cure is 0. The ruler is `_suiteVendorCureLadder`
+  (`tests/content_hygiene_test.gd:@_suiteVendorCureLadder`), class (6) of the content-hygiene
+  harness: it sorts the cure offers by unit price and requires non-decreasing health, with a
+  declared denominator (at least 4 measured offers) so an empty sweep cannot read green. It
+  encodes the property "paying more never buys less cure", not a preferred number, so any
+  re-price that respects the order survives it. The fix is the smallest number the ladder itself
+  asks for: the best rate after Apple is the drink's 2.67 gp/hp, and 15 × 2.67 → `cost` 40, which
+  puts price order (40, 50, 80, 150, 200, 500) and cure order (15, 20, 20, 20, 75, 100) on the same
+  side. Checked before touching it: nothing else in the repo assumes 350 — Pitaya appears in three
+  NPC scripts and two quests, always as an item and never as a price, and no quest carries a
+  `repeatable` field, so the cheaper cure does not open a buy-and-resell loop. Bite measured on
+  the real gate: with the old data the harness prints `== RESULT: 7264 checks, 1 failures ==`
+  naming `pitaya (350 gp/un, cura 15) paga MENOS cura que drink (200 gp/un, cura 75)`; with the
+  data fixed, `7264 checks, 0 failures`. Gates of this tree: `content_hygiene_test`,
+  `balance_test` (`1919 checks, 0 failures`), `core_loop_cycle_test` (`71`),
+  `faucet_census_test` (`63`), `spend_confirm_test` (`227`), `marketplace_depth_test` (`249`),
+  `bash scripts/test.sh one run_idle_tests 1200` → `3389 checks, 0 failures`, and
+  `scripts/check_doc_drift.sh` → `2044 checks, 0 failures`.
 - Four of seven shop offers and four of six auction-bot seeds sold nothing. `ParseCellDB`
   (`sources/db/DB.gd:@ParseCellDB`) keys `ItemsDB` by `SetCellHash(cell.name)` — the display
   name declared inside the `.tres`, not the file it lives in: `WaterBottle.tres` says
