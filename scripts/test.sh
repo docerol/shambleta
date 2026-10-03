@@ -488,7 +488,9 @@ gate_py() {
 		return 0
 	fi
 	set +e
-	timeout 300 python3 "companion/$script.py" > "$log" 2>&1
+	# O 300 digitado aqui era o mesmo número da tabela, só que sem a tabela: um
+	# segundo relógio para a mesma pergunta (#138 em miniatura).
+	timeout "$(harness_timeout "$script")" python3 "companion/$script.py" > "$log" 2>&1
 	local code=$?
 	set -e
 	echo "python exit=$code" >> "$log"
@@ -545,7 +547,11 @@ gate_sh() {
 		return 0
 	fi
 	set +e
-	bash "$script" > "$log" 2>&1
+	# O orçamento vem da mesma tabela do godot, pelo nome do gate e SEM a extensão:
+	# a chave de `harness_timeout` é o nome do harness nas três portas (godot, python,
+	# bash), e uma linha `" check_secrets ") ` precisa casar com o que o corpo busca.
+	# Sem orçamento, um portão que pendura pendura o `all` inteiro e ninguém corta.
+	timeout "$(harness_timeout "$(basename "$script" .sh)")" bash "$script" > "$log" 2>&1
 	local code=$?
 	set -e
 	echo "bash exit=$code" >> "$log"
@@ -596,24 +602,43 @@ harnesses_extra() {
 	done
 }
 
-# Orçamento de tempo por harness — a ÚNICA fonte, lida pelo default de `gate()`.
+# Orçamento de tempo por gate — a ÚNICA fonte, lida pelo default de `gate()` e pelos
+# corpos de `gate_sh` e `gate_py`. A chave é o nome do harness SEM extensão nas três
+# portas: `run_idle_tests` (`.gd`), `test_webhook` (`.py`), `check_secrets` (`.sh`).
 # #138: o timeout era reescrito à mão em cada chamada e o `one` caía no default de
 # 900 s que a função carregava. Medido em 2026-10-03 nesta árvore, com o
 # `testing.db` de 1,2 MB do run anterior ainda vivo em `.test-home/run_idle_tests/`
 # (o reaper só limpa sandbox de run INTERROMPIDO — ver `_reap_interrupted_sandbox`
 # acima), `bash scripts/test.sh one run_idle_tests` morreu em exatamente 900 s de
 # parede: `godot exit=124`, o engine tinha 745 s de vida, nenhuma linha `== RESULT:`
-# no log e o portão devolveu `GATE VERMELHO: run_idle_tests`. O mesmo run até o fim
-# imprime o veredito com o engine aos 947 s, e 947 + os ~155 s de boot/import que a
-# morte deixou medidos = ~1100 s de parede. 1200 não é preferência: é o número que
-# sobra dessa conta, e é o que `all`, `idle` e a CI já cobravam — cinco números
-# copiados para a mesma pergunta, sem régua nenhuma conferindo os lados.
+# no log e o portão devolveu `GATE VERMELHO: run_idle_tests`. O mesmo run, medido de
+# ponta a ponta nesta mesma árvore (06:14:14 → 06:30:04), fechou em 950 s de parede com
+# `== RESULT: 3389 checks, 0 failures ==`: 900 era ~50 s CURTO e matou um run que ia
+# fechar; 1200 é o mesmo número com ~250 s de volta, e é o que `all`, `idle` e a CI já
+# cobravam — cinco números copiados para a mesma pergunta, sem régua nenhuma conferindo
+# os lados.
 #
 # O default 300 é o teto que a CI impõe hoje a todo harness descoberto (o job de
 # idle roda o passo `fixation`, que chama `gates_extra`, e está verde com ele);
 # nenhum harness descoberto tem laço de tempo real comparável ao do agregador — o
 # maior `create_timer` entre eles é 0,8 s. Quem precisa de mais entra na tabela
 # com a medida, ou pede no argumento explícito do `one`.
+#
+# A mesma tabela orça os gates que NÃO são godot, e aqui ela tapou um buraco de
+# outro tipo: `gate_sh` corria `bash "$script"` sem orçamento nenhum, então um
+# portão de estrutura que pendure (lock alheio, grep num repo que cresce, qualquer
+# espera) pendura o `all` local para sempre, e o workflow não põe `timeout-minutes`
+# no job — não há quem corte. Medido em 2026-10-03, nesta árvore, um a um: pior
+# gate 57 s (`check_gate_markers.sh`), depois 13 s (`check_secrets.sh`), os outros
+# nove entre 0 e 3 s, e o job "Code Health (structure gates)" inteiro durou 125 s
+# na CI (07:59:35→08:01:40). Python: 10 suites, todas ≤ 2 s, job de 17 s. Os 300 s
+# do default são 2,4× o job inteiro: folga medida, não medição apertada.
+#
+# EXCEÇÃO declarada, não escondida: o `timeout 900` do `--import` em
+# `ensure_class_cache` não vem daqui e não é orçamento de gate — é o boot frio do
+# cache de classes, medido aqui só QUENTE (4 s com `.godot/` no lugar). Pôr 300
+# nele seria trocar um número medido por uma preferência, que é a doença que esta
+# tabela existe para matar. Ele sai quando houver a medida do boot frio.
 harness_timeout() {
 	case " $1 " in
 		" run_idle_tests ") echo 1200 ;;

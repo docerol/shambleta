@@ -135,6 +135,9 @@ jobs:
       # Os 11 gates de estrutura pela mesma porta do `test.sh structure`: o job
       # chamava check_god_nodes.sh direto e o check_doc_drift.sh, escrito nesta
       # rodada, não era chamado por ninguém — régua sem execução é régua sem efeito.
+      # Desde #175 cada gate chega com o tempo que `harness_timeout` de scripts/test.sh
+      # dá ao seu nome (medido: pior 57 s local, o job inteiro 125 s), então portão
+      # pendurado deixou de ser um estado possível deste job.
       - name: Run structure gates
         run: |
           bash scripts/test.sh structure

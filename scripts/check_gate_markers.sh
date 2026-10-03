@@ -40,6 +40,15 @@
 #       "$a")}"`) com `set -u` deixa `timeout` vazio e `timeout "" godot` mata
 #       qualquer harness com exit=125 sem uma linha de veredito — foi o que a
 #       primeira versão de #138 fez, e `one repo_layout_test` acusou.
+#   R9  o corpo que EXECUTA é orçado: extraído de `scripts/test.sh` linha a linha,
+#       nenhum dos três corpos (`gate`, `gate_sh`, `gate_py`) digita `timeout NNNN`
+#       nem deixa de consultar a tabela. R7 olha o call site e R8 a resolução do
+#       default de `gate`; falta o outro portão. #175: `gate_sh` rodava
+#       `bash "$script"` sem relógio nenhum — portão de estrutura que pendura
+#       pendura o `all` inteiro, e o workflow não põe `timeout-minutes` no job para
+#       cortar — enquanto `gate_py` digitava o 300 ao lado da tabela. Só linha de
+#       código conta: o mutante que tirou o timeout de `gate_sh` foi aprovado até a
+#       régua parar de ler o comentário que nomeia a tabela.
 #
 # Uso:   bash scripts/check_gate_markers.sh
 # Saída: uma linha por regra ([PASS]/[FAIL]) e, no fim,
@@ -220,12 +229,14 @@ verdict_r4() { # <nome> <linha-renderizada> <marcador-cobrado>
 }
 
 # ------------------------------------------------------------------ R7 (orçamento)
-# `gate_timeout_literals <testsh>` — as chamadas `gate` que escrevem um NÚMERO como
-# 4º argumento. Depois de #138 o lugar do número é `harness_timeout`, e o default de
-# `gate` busca a tabela pelo nome: um literal no call site não é estilo diferente, é
-# a segunda fonte de verdade voltando (foram cinco, inclusive a do `one`).
+# `gate_timeout_literals <testsh>` — as chamadas de portão (`gate`, `gate_sh`,
+# `gate_py`) que escrevem um NÚMERO como 4º argumento. Depois de #138 o lugar do
+# número é `harness_timeout`, e o default de `gate` busca a tabela pelo nome: um
+# literal no call site não é estilo diferente, é a segunda fonte de verdade
+# voltando (foram cinco, inclusive a do `one`). A classe de nome aceita caminho
+# porque `gate_sh` nomeia o gate por `scripts/check_*.sh`.
 gate_timeout_literals() {
-	sed -nE 's/^[[:space:]]*gate[[:space:]]+[^[:space:]]+[[:space:]]+"[^"]*"[[:space:]]+([A-Za-z0-9_]+)[[:space:]]+([0-9]+)[[:space:]]*$/\1 \2/p' "$1" 2>/dev/null
+	sed -nE 's/^[[:space:]]*(gate_sh|gate_py|gate)[[:space:]]+[^[:space:]]+[[:space:]]+"[^"]*"[[:space:]]+([A-Za-z0-9_./-]+)[[:space:]]+([0-9]+)[[:space:]]*$/\2 \3/p' "$1" 2>/dev/null
 }
 # `ci_timeout_literals <workflow…>` — os `timeout NNNN godot … -s tests/<nome>.gd` que o
 # workflow EXECUTA. Linha de comentário fora antes do match: o workflow tem prosa
@@ -291,6 +302,52 @@ verdict_r8() { # <testsh> — imprime o que o default de `gate` não resolve, 0 
 		printf '  o override pedido em `gate … run_idle_tests 77` foi engolido pela tabela (veio "%s") — não há mais como rodar um harness com orçamento próprio\n' "$over"
 		return 1
 	fi
+	return 0
+}
+
+# ------------------------------------------------------------------ R9 (o corpo pede à tabela)
+# R7 olha o CALL SITE, R8 olha a RESOLUÇÃO do default; falta o meio do caminho: o
+# corpo da função que realmente executa. `gate_sh` rodava `bash "$script"` sem
+# orçamento nenhum (#175) — portão que pendura pendura o `all`, e o workflow não põe
+# `timeout-minutes` no job para cortar — e `gate_py` digitava `timeout 300` ao lado
+# da tabela. A régua lê o CORPO extraído de `scripts/test.sh`, não o texto copiado:
+# corpo ausente é acusação, não verde.
+gate_body() { # <testsh> <função> — o corpo de uma função de topo, linha a linha
+	awk -v f="$2" '
+		$0 ~ "^"f"\\(\\) \\{" { inb = 1 }
+		inb { print }
+		inb && /^}/ { inb = 0 }
+	' "$1" 2>/dev/null
+}
+body_timeout_literals() { # <corpo> — os `timeout NNNN` escritos DENTRO do corpo
+	printf '%s\n' "$1" | grep -vE '^[[:space:]]*#' | sed -nE 's/.*[^A-Za-z0-9_(]timeout[[:space:]]+([0-9]+).*/\1/p'
+}
+verdict_r9() { # <testsh> — imprime o corpo que não orça pela tabela, 0 se nenhum
+	local tf="$1" bad="" fn body code lit
+	for fn in gate gate_sh gate_py; do
+		body="$(gate_body "$tf" "$fn")"
+		if [ -z "$body" ]; then
+			bad="$bad
+      \`$fn\` não foi extraída de $tf — sem corpo, a régua está lendo zero linhas e aprova zero defeitos"
+			continue
+		fi
+		# Só LINHA DE CÓDIGO conta como orçamento. O mutante do canário tirou o
+		# `timeout` de `gate_sh` e a régua aprovou: sobrou no corpo o comentário que
+		# NOMEIA a tabela, e casar texto em comentário é a cegueira que esta casa já
+		# enterrou (a mesma razão pela qual `ci_timeout_literals` limpa o `#` antes).
+		code="$(printf '%s\n' "$body" | grep -vE '^[[:space:]]*#')"
+		lit="$(body_timeout_literals "$code")"
+		if [ -n "$lit" ]; then
+			bad="$bad
+      \`$fn\` escreve timeout $(printf '%s' "$lit" | tr '\n' ' ')à mão — o número mora em harness_timeout, e aqui ele já foi 300 digitado ao lado da tabela (#138 em miniatura)"
+		fi
+		case "$code" in
+			*harness_timeout*) : ;;
+			*) bad="$bad
+      \`$fn\` nunca consulta harness_timeout — é o corpo sem orçamento nenhum, o portão que pendura para sempre (#175)" ;;
+		esac
+	done
+	[ -z "$bad" ] || { printf '%s\n' "$bad"; return 1; }
 	return 0
 }
 
@@ -428,6 +485,14 @@ if [ -z "$r8_out" ]; then
 	pass "R8: gate() sem 4º argumento chega em harness_timeout ($(harness_timeout run_idle_tests) s para run_idle_tests) e ainda obedece ao override"
 else
 	fail "R8: o default de \`gate\` não resolve na tabela (ou engoliu a exceção)" "timeout == harness_timeout <nome>, override == o número pedido" "$r8_out"
+fi
+
+# ------------------------------------------------------------------ R9
+r9_out="$(verdict_r9 "$TESTSH" || true)"
+if [ -z "$r9_out" ]; then
+	pass "R9: os três corpos que executam — gate, gate_sh e gate_py — orçam por harness_timeout, sem número digitado no corpo"
+else
+	fail "R9: um corpo de portão está sem orçamento da tabela (ou com timeout digitado dentro dele)" "todo gate que executa tirar seu tempo de harness_timeout" "$r9_out"
 fi
 
 # ------------------------------------------------------------------ R6 canário
@@ -625,6 +690,50 @@ if [ -z "$o" ]; then
 	pass "R8/canário: a cópia limpa do gate passa — a régua não come tudo"
 else
 	fail "R8/canário: a árvore limpa reprovada" "verdict_r8 aprovar o gate de hoje" "falsa acusação ($o)"
+fi
+
+# ------------------------------------------------------------------ canário de R9
+# Os dois formatos do mesmo defeito (#175): o corpo que digita o número ao lado da
+# tabela (era o `timeout 300` do `gate_py`) e o corpo que não digita nenhum (era o
+# `bash "$script"` do `gate_sh`, sem relógio e sem quem corte). Mutantes são cópias
+# em $WORK; a âncora de `sed` que some é denunciada antes de virar verde por inércia.
+mut_pylit="$WORK/testsh.gatepy300"
+cp "$TESTSH" "$mut_pylit"
+sed -i -E 's@^([[:space:]]*)timeout "\$\(harness_timeout "\$script"\)"( python3.*)@\1timeout 300\2@' "$mut_pylit"
+if cmp -s "$TESTSH" "$mut_pylit"; then
+	fail "R9/canário: a volta do 300 no gate_py não mudou o arquivo (âncora sumiu)" 'o sed achar o timeout "$(harness_timeout "$script")" da linha do python3' "cópia idêntica — canário cego"
+else
+	o="$(verdict_r9 "$mut_pylit" || true)"
+	case "$o" in
+		*"à mão"*)
+			pass "R9/canário: \`timeout 300\` de volta dentro de \`gate_py\` é REPROVADO como número à mão" ;;
+		*)
+			fail "R9/canário: o gate_py com literal de volta foi aprovado" "R9 reprovar número digitado no corpo" "verde com o defeito plantado ($o)"
+		esac
+fi
+
+mut_nobud="$WORK/testsh.gateshsemrel"
+cp "$TESTSH" "$mut_nobud"
+sed -i -E 's@^([[:space:]]*)timeout "\$\(harness_timeout "\$\(basename "\$script" \.sh\)"\)"( bash "\$script".*)@\1\2@' "$mut_nobud"
+if cmp -s "$TESTSH" "$mut_nobud"; then
+	fail "R9/canário: a retirada do timeout do gate_sh não mudou o arquivo (âncora sumiu)" 'o sed achar o timeout "$(harness_timeout "$(basename "$script" .sh)")" da linha do bash' "cópia idêntica — canário cego"
+else
+	o="$(verdict_r9 "$mut_nobud" || true)"
+	case "$o" in
+		*"sem orçamento nenhum"*)
+			pass "R9/canário: \`gate_sh\` de volta sem relógio é REPROVADO pelo nome do corpo" ;;
+		*)
+			fail "R9/canário: o gate_sh sem timeout foi aprovado" "R9 reprovar corpo que não consulta a tabela" "verde com o defeito plantado ($o)"
+		esac
+fi
+
+mut_r9clean="$WORK/testsh.r9clean"
+cp "$TESTSH" "$mut_r9clean"
+o="$(verdict_r9 "$mut_r9clean" || true)"
+if [ -z "$o" ]; then
+	pass "R9/canário: a cópia limpa dos três corpos passa — a régua não come tudo"
+else
+	fail "R9/canário: a árvore limpa reprovada" "verdict_r9 aprovar os corpos de hoje" "falsa acusação ($o)"
 fi
 
 echo "== GATE-MARKER: $CHECKS checks, $FAILURES failures =="

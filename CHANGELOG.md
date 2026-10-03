@@ -450,6 +450,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The two gates that are not godot had no clock at all, and one of them had a fake one. `gate_sh`
+  (`scripts/test.sh:@gate_sh`) ran `bash "$script"` with no `timeout` in front of it: a structure
+  gate that hangs — another run's lock, a grep over a tree that keeps growing, any wait at all —
+  hangs `bash scripts/test.sh all` forever, and nobody on the other side cuts it, because
+  `grep -c 'timeout-minutes' .github/workflows/godot-ci.yml` is 0. `gate_py`
+  (`scripts/test.sh:@gate_py`) did type a number, `timeout 300`, beside the table #138 had just
+  made the single source: the same second-clock bug in miniature, and the proof that a rule about
+  call sites could not see it. Both now ask `harness_timeout`
+  (`scripts/test.sh:@harness_timeout`) by harness name, and the key is the name with no extension
+  on all three doors (`run_idle_tests`, `test_webhook`, `check_secrets`), so a row cannot be
+  written in a shape that silently never matches. The number was measured before it was kept: the
+  eleven gates of `structure_gates` (`scripts/test.sh:@structure_gates`) run one by one on this
+  tree take 57 s at worst (`check_gate_markers.sh`), then 13 s (`check_secrets.sh`), and the other
+  nine between 0 and 3 s, while the CI job that runs them took 125 s end to end; the ten python
+  suites are all ≤ 2 s in a 17 s job. The unlisted default of 300 s is 2,4× the whole structure
+  job — slack measured, not a tight guess. The bite was proved on the real body, not on a
+  transcription of it: `gate_sh` extracted from `scripts/test.sh` was handed a synthetic gate that
+  sleeps 3600 s and cut it at 300.000 s of wall (log born 06:52:44.24, `bash exit=124` appended
+  06:57:44.24), with the verdict layer refusing the unfinished line —
+  `::error::linha de resultado presente mas não reconhecida` — which is the honest shape of a
+  timeout: red by clock, and saying so. Before the change, that job simply never ended.
+  Durability is R9, the function `verdict_r9` (`scripts/check_gate_markers.sh:@verdict_r9`), which
+  extracts the BODY of the three functions that execute — `gate`, `gate_sh`, `gate_py` — and
+  rejects both a `timeout NNNN` typed inside a body and a body that never consults the table; an
+  empty extraction is accused, not approved. Its three canaries plant both shapes and spare the
+  clean copy, and the middle one earned its keep on the first run: the mutant that removed
+  `gate_sh`'s timeout was APPROVED, because the body still held the comment that names the table,
+  until the ruler was changed to read code lines only. One exception is declared rather than
+  hidden: the `timeout 900` in `ensure_class_cache` (`scripts/test.sh:@ensure_class_cache`) is the
+  cold import of the class cache, not a gate, and only its warm form has been measured (4 s with
+  `.godot/` in place); it joins the table when the cold one is measured (#176).
 - The gate's clock was written by hand in five places, and the fifth one lied. `gate` carried a
   default of 900 s that nobody had measured, `one` inherited it, and the named paths each typed
   their own number again (`run_idle_tests` 1200, `run_rpc_identity_test` 180, the three others

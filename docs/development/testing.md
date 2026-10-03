@@ -388,6 +388,26 @@ timeout="${4:-$(... "$script")}"` — com `set -u` deixa `timeout` vazio e
 `timeout "" godot` mata qualquer harness com exit=125 sem linha de veredito; foi o que
 a primeira versão desta tabela fez.
 
+A tabela também orça os portões que não são godot, e aí o buraco era de outro tipo:
+`gate_sh` (`scripts/test.sh:@gate_sh`) rodava `bash "$script"` sem relógio nenhum, e
+`gate_py` (`scripts/test.sh:@gate_py`) digitava o `timeout 300` ao lado da tabela. Sem
+orçamento, um portão de estrutura que pendure — lock alheio, um grep sobre um repo que
+cresce, qualquer espera — pendura o `all` local para sempre, e o workflow não põe
+`timeout-minutes` em job nenhum: não há quem corte do outro lado. Medido nesta árvore em
+2026-10-03, portão por portão e depois conferido de novo: o pior dos onze gates de
+`structure_gates` (`scripts/test.sh:@structure_gates`) é `check_gate_markers.sh` a 57 s,
+depois `check_secrets.sh` a 13 s, e os outros nove entre 0 e 3 s; na CI o job "Code
+Health (structure gates)" durou 125 s e o das dez suítes python, 17 s com cada suíte ≤ 2 s.
+Os 300 s do default são folga de 2,4× sobre o job inteiro — número medido, não aperto.
+Quem confere é R9, `verdict_r9` (`scripts/check_gate_markers.sh:@verdict_r9`), que extrai
+o CORPO das três funções que executam e não aceita nem número digitado no corpo nem corpo
+que ignore a tabela; o mutante que tirou o `timeout` de `gate_sh` foi APROVADO até a régua
+parar de ler o comentário que nomeia a tabela, e é por isso que lá dentro só linha de
+código conta. A chave é o nome do harness sem extensão nas três portas (`run_idle_tests`,
+`test_webhook`, `check_secrets`). Continua declarada a única exceção: o `timeout 900` do
+`--import` em `ensure_class_cache` (`scripts/test.sh:@ensure_class_cache`) é boot de cache
+de classes, não portão, e dele só existe a medida quente — 4 s com `.godot/` no lugar.
+
 Esse isolamento tem um ângulo morto que virou mecanismo: um harness **morto no meio**
 deixa o sandbox sujo — banco e WAL de um teardown que nunca aconteceu — e o próximo
 boot do mesmo harness abre por cima desse estado e morre antes de dar veredito.
