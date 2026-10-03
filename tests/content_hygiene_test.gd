@@ -1,7 +1,7 @@
 extends SceneTree
 
 # SOM-CONTENT: régua de higiene de conteúdo (juiz 2026-09-27: "os sistemas
-# correm na frente do conteúdo"). Quatro classes de defeito que HOJE nada lê no
+# correm na frente do conteúdo"). Seis classes de defeito que HOJE nada lê no
 # portão:
 #
 #  (0) CATÁLOGO PELA METADE — `.tres` de entidade que não chega ao `EntitiesDB`.
@@ -31,6 +31,16 @@ extends SceneTree
 #      string: entidade real no EntitiesDB, sala real no MapsDB e o MOB daquela
 #      sala spawneado nela.
 #
+#  (4) PONTO CEGO DE IMPORT — o elenco escrito à mão no artefato `.tres` que o
+#      `.tmx` fonte não tem: a CI reimporta e apaga o que só existe no artefato.
+#      Ver `_suiteSpawnSource`.
+#
+#  (5) NOME QUE NÃO RESOLVE — oferta de loja e de bot escrita com o basename do
+#      arquivo, quando a chave do `ItemsDB` é o hash do nome de exibição da célula.
+#      Medido em 2026-10-03: 4 de 7 ofertas do vendor e 4 de 6 seeds da AH davam
+#      gold debitado contra um item que `GetItem` não conhece. Ver
+#      `_suiteMarketItemNames`.
+#
 # Uso: godot --headless --path . -s tests/content_hygiene_test.gd
 # Régua do gate = última linha `== RESULT: N checks, M failures ==` e o exit code.
 
@@ -41,6 +51,7 @@ var _launcher : Node = null
 var _dbScript : GDScript = null
 var _farm : GDScript = null
 var _bossService : GDScript = null
+var _econCatalog : GDScript = null
 var _monsterType : int = 0
 
 func _initialize():
@@ -75,7 +86,7 @@ func _asInt(value : Variant) -> int:
 	return 0
 
 func _run():
-	print("== content hygiene harness (censo de entidades + rosters + faixas de drop + escada de boss) ==")
+	print("== content hygiene harness (censo de entidades + rosters + faixas de drop + escada de boss + nomes de mercado) ==")
 	_launcher = root.get_node_or_null(^"Launcher")
 	if _launcher == null:
 		print("FATAL: Launcher autoload missing")
@@ -96,6 +107,7 @@ func _run():
 	_bossService = load("res://sources/idle/BossService.gd")
 	var commons : GDScript = load("res://sources/actor/ActorCommons.gd")
 	_monsterType = int(commons.Type.MONSTER)
+	_econCatalog = load("res://sources/economy/EconomyCatalog.gd")
 
 	var dbReady : bool = false
 	for i in 80:
@@ -115,6 +127,7 @@ func _run():
 	_suiteRosters(worldNode)
 	_suiteDropBands()
 	_suiteBossLadder(worldNode)
+	_suiteMarketItemNames()
 	_suiteSpawnSource()
 
 # ------------------------------------------------------- (0) censo do EntitiesDB
@@ -612,3 +625,55 @@ func _tmxAttrs(tag : String, attrRe : RegEx) -> Dictionary:
 	for m in attrRe.search_all(tag):
 		out[str(m.get_string(1))] = str(m.get_string(2))
 	return out
+
+# ------------------------------------------- (5) nomes do catálogo do mercado
+
+# Por que esta suíte existe. `ParseCellDB` chaveia o `ItemsDB` por
+# `SetCellHash(cell.name)` — o NOME DE EXIBIÇÃO da célula, não o basename do
+# arquivo. `WaterBottle.tres` declara `name = "Water Bottle"`. As duas tabelas de
+# mercado do catálogo gravaram o basename: `VENDOR_CATALOG` e `AH_BOT_LISTINGS`
+# trazem "WaterBottle", "CactusSourCandy", "CactusDrink", "CactusPotion". Medido em
+# 2026-10-03: 4 de 7 ofertas do vendor e 4 de 6 seeds da AH apontam para um hash que
+# não existe no `ItemsDB` — nem em lugar nenhum. Não é erro de render:
+# `BuyVendorOffer` debita o gold e chama `_GrantStackRaw` com o id órfão (o kernel
+# não valida o catálogo de propósito, para hash de template de craft não dar
+# `push_error` dentro de transação), então a linha nasce no inventário do jogador
+# pagante com um item que `GetItem` não conhece. `EnsureAuctionBots` semeia a
+# vitrine do lançamento com o mesmo id, e `AHVendorUnitPrice` — que é a âncora de
+# ask de item sem histórico — compara `str(offer.item).hash()` e nunca casa, ou
+# seja: quatro consumíveis têm preço de loja e banda nenhuma.
+#
+# A régua é a mesma comparação que os três consumidores fazem, e a prova de
+# mordida é a última perna: para cada oferta que resolve, `AHVendorUnitPrice` tem
+# de devolver preço > 0. Varredura vazia não dá verde — o denominador é o
+# comprimento declarado das duas tabelas.
+func _phantomNames(table : Array, tag : String) -> Array:
+	var out : Array = []
+	for i in table.size():
+		var entry : Dictionary = table[i]
+		var itemName : String = str(entry.get("item", ""))
+		if _dbScript.ItemsDB.has(itemName.hash()):
+			continue
+		out.append("%s[%d] -> '%s'" % [tag, i, itemName])
+	return out
+
+func _suiteMarketItemNames():
+	print("[suite] nomes de mercado: toda oferta do catálogo resolve para célula real")
+	var vendor : Array = _econCatalog.VENDOR_CATALOG
+	var botSeed : Array = _econCatalog.AH_BOT_LISTINGS
+	_check(vendor.size() >= 7, "o catálogo do vendor tem ao menos 7 ofertas declaradas (medido %d)" % vendor.size())
+	_check(botSeed.size() >= 6, "o seed de bot da AH tem ao menos 6 ofertas declaradas (medido %d)" % botSeed.size())
+	var phantoms : Array = _phantomNames(vendor, "VENDOR_CATALOG")
+	phantoms.append_array(_phantomNames(botSeed, "AH_BOT_LISTINGS"))
+	_checkEq(phantoms.size(), 0, "nenhum item de mercado é nome que não existe no ItemsDB (chave = hash do nome de exibição): %s" % ", ".join(phantoms))
+	var anchored : Array = []
+	var ahPricing : GDScript = load("res://sources/economy/AuctionHousePricing.gd")
+	for entry in vendor:
+		var offer : Dictionary = entry
+		var itemName : String = str(offer.get("item", ""))
+		if not _dbScript.ItemsDB.has(itemName.hash()):
+			continue
+		if int(ahPricing.AHVendorUnitPrice(itemName.hash())) <= 0:
+			anchored.append(str(offer.get("id", itemName)))
+	_checkEq(anchored.size(), 0, "toda oferta que resolve tem preço de vendor devolvido pela âncora do ask: %s" % ", ".join(anchored))
+

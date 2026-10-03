@@ -450,6 +450,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Four of seven shop offers and four of six auction-bot seeds sold nothing. `ParseCellDB`
+  (`sources/db/DB.gd:@ParseCellDB`) keys `ItemsDB` by `SetCellHash(cell.name)` — the display
+  name declared inside the `.tres`, not the file it lives in: `WaterBottle.tres` says
+  `name = "Water Bottle"`. Both market tables of `EconomyCatalog` had stored the basename, and
+  all three readers of the field hash it as written — `BuyVendorOffer`
+  (`sources/economy/ShopService.gd:@BuyVendorOffer`) for the gold debit, `EnsureAuctionBots`
+  (`sources/economy/AuctionHouseService.gd:@EnsureAuctionBots`) for the launch storefront and
+  `AHVendorUnitPrice` (`sources/economy/AuctionHousePricing.gd:@AHVendorUnitPrice`) for the ask
+  anchor of an item with no history. The four names containing a space hash to a key that is
+  nothing. This is not a render defect: `_GrantStackRaw`
+  (`sources/economy/EconomyKernel.gd:@_GrantStackRaw`) deliberately does not validate against the
+  catalog — a craft-template hash has to be grantable inside a transaction without
+  `push_error` — so the paying player received a row naming an id `GetItem` cannot resolve, with
+  no name, no sprite and no use, and four consumibles with a vendor price carried no auction
+  band at all. The fix is data, not code: the two tables now write the display name, and no
+  caller changes. The ruler is `_suiteMarketItemNames` (`tests/content_hygiene_test.gd:@_suiteMarketItemNames`),
+  class (5) of the content-hygiene harness: it replays the three consumers' comparison over both
+  tables, declares its denominators (7 vendor offers, 6 bot listings) so an empty sweep cannot
+  read green, and its second leg requires every resolving offer to hand back a price > 0 through
+  the ask anchor. Bite measured on the final tree: with the old data the harness prints
+  `== RESULT: 7262 checks, 1 failures ==` and names all eight strings
+  (`VENDOR_CATALOG[1] 'WaterBottle'` through `AH_BOT_LISTINGS[5] 'CactusPotion'`); with the data
+  fixed it prints `7262 checks, 0 failures`. Gates of this tree: `content_hygiene_test`, the
+  neighbours that read the catalog (`core_loop_cycle_test`, `faucet_census_test`,
+  `spend_confirm_test`, `marketplace_depth_test`), `bash scripts/test.sh one run_idle_tests 1200`
+  → `3389 checks, 0 failures`, and `scripts/check_doc_drift.sh` → `2034 checks, 0 failures`.
+  Pitaya's price (350 gp for 15 hp where Apple gives 20 hp for 50) is deliberately not here: the
+  cure ladder can only rank offers that resolve, and it ships as its own discovery with its own
+  ruler.
 - The auto-potion leg drank one item, and that item was an Apple. `_usePotion`
   (`sources/idle/IdlePolicy.gd:@_usePotion`) resolved a hash written once in the declaration
   (`autoPotionItemHash = 215387671`), and no persisted path ever fed it: `SaveFormation`

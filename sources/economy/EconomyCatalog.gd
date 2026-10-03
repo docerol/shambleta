@@ -192,14 +192,19 @@ const FINALE_WINDOW_SEC : int = 2 * 86400
 const VENDOR_STOCK_PER_DAY : int = 20
 
 # (de EconomyService.gd, antes da divisao)
+# #174: `item` é o NOME DE EXIBIÇÃO da célula, não o basename do arquivo —
+# `ParseCellDB` chaveia o `ItemsDB` por `SetCellHash(cell.name)` e os três leitores
+# desta tabela (`BuyVendorOffer`, `EnsureAuctionBots`, `AHVendorUnitPrice`) fazem
+# `str(offer.item).hash()`. Escrito com o basename, a oferta vira item fantasma.
+# A régua é `_suiteMarketItemNames` (`tests/content_hygiene_test.gd:@_suiteMarketItemNames`).
 const VENDOR_CATALOG : Array = [
 	{"id": "apple", "label": "Apple x1", "item": "Apple", "count": 1, "cost": 50},
-	{"id": "water", "label": "Water Bottle x1", "item": "WaterBottle", "count": 1, "cost": 80},
-	{"id": "candy", "label": "Cactus Sour Candy x1", "item": "CactusSourCandy", "count": 1, "cost": 150},
+	{"id": "water", "label": "Water Bottle x1", "item": "Water Bottle", "count": 1, "cost": 80},
+	{"id": "candy", "label": "Cactus Sour Candy x1", "item": "Cactus Sour Candy", "count": 1, "cost": 150},
 	{"id": "croissant", "label": "Croissant x1", "item": "Croissant", "count": 1, "cost": 120},
-	{"id": "drink", "label": "Cactus Drink x1", "item": "CactusDrink", "count": 1, "cost": 200},
+	{"id": "drink", "label": "Cactus Drink x1", "item": "Cactus Drink", "count": 1, "cost": 200},
 	{"id": "pitaya", "label": "Pitaya x1", "item": "Pitaya", "count": 1, "cost": 350},
-	{"id": "potion", "label": "Cactus Potion x1", "item": "CactusPotion", "count": 1, "cost": 500},
+	{"id": "potion", "label": "Cactus Potion x1", "item": "Cactus Potion", "count": 1, "cost": 500},
 ]
 
 # (de EconomyService.gd, antes da divisao)
@@ -224,11 +229,11 @@ const LIVE_EVENT_SEED_WEEKS : int = 2
 const AH_BOT_ACCOUNTS : Array[String] = ["ah_bot_trader", "ah_bot_farmhand", "ah_bot_merchant"]
 const AH_BOT_LISTINGS : Array = [
 	{"item": "Apple", "count": 5, "price": 60},
-	{"item": "WaterBottle", "count": 5, "price": 95},
+	{"item": "Water Bottle", "count": 5, "price": 95},
 	{"item": "Croissant", "count": 5, "price": 145},
-	{"item": "CactusSourCandy", "count": 5, "price": 180},
-	{"item": "CactusDrink", "count": 5, "price": 240},
-	{"item": "CactusPotion", "count": 3, "price": 600},
+	{"item": "Cactus Sour Candy", "count": 5, "price": 180},
+	{"item": "Cactus Drink", "count": 5, "price": 240},
+	{"item": "Cactus Potion", "count": 3, "price": 600},
 ]
 
 # (de EconomyService.gd, antes da divisao)
