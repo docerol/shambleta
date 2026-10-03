@@ -533,6 +533,22 @@ da auditoria. Lição que vale para qualquer mitigação futura neste repositór
 `_process`, nenhum benchmark daqui a exercita**; ou se expõe o efeito no laço medido, ou se declara no
 endereço do runtime real.
 
+**2026-10-03 — a lição de cima foi cobrada, e o checkpoint voltou (#125).** Este parágrafo não apaga o
+de 2026-09-26: o tick que ele descreve continua morto como estava, e o motivo da morte continua verdadeiro.
+O que mudou é que a lição foi lida até o fim — o remédio não mora *só* em `_process`, mora num chamador
+que as duas vidas do processo invocam: `MaybeCheckpoint()` (`sources/sql/SQL.gd:@MaybeCheckpoint`) decide
+por cadência de trabalho (40 transações, `CheckpointEveryTx` em `sources/sql/SQLCommons.gd:@CheckpointEveryTx`),
+se recusa dentro de transação aberta, e é chamado pelo tick de 1 s de `_process`
+(`sources/world/World.gd:@_process`) em produção **e** pelo laço medido do gate entre amostras cronometradas,
+fora do bracket. O `wal_autocheckpoint=4000` ficou onde está, mas desceu de dono a cinto: quem manda no
+*quando* passou a ser o chamador de `MaybeCheckpoint()`. Medido no gate: 20 disparos, 19 drenos todos em múltiplo exato de 40, **0 de 800
+settles acima de 50 ms** (a passada de 2026-09-26 devolvia 2 hitches de ~427 ms, e os runs seguintes 8 a 10),
+busy 0, 40626 páginas drenadas, pico de um dreno 454535 µs. A régua que fecha a porta é `_drenosSemDono`
+(`tests/benchmarks.gd:@_drenosSemDono`): dreno sem dono nas duas bordas do disparo É o autocheckpoint
+dentro do commit, e isso é falha, não estatística. O vermelho que sobrou não é o deste parágrafo — é o
+I/O de regime desta máquina (p99 2650 µs com a máquina a 1,00× no controle de CPU), tratado como
+escalada em `docs/development/testing.md`.
+
 **O gate de benchmark foi reconstruído junto**, porque o probe antigo media o que não existia: o
 XP walk era `totalXp += 10` (a auditoria chamou de medir zero) e saiu; entraram leaderboard com
 asserção de `EXPLAIN QUERY PLAN` (usa `idx_character_leaderboard`, ordem `power_score DESC`, nenhum

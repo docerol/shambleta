@@ -40,6 +40,14 @@ const LedgerRetentionEnv : String		= "SHAMBLETA_LEDGER_RETENTION"
 # passe (e portanto o quanto de writer um único disparo pode consumir).
 const LedgerRetentionMaxRounds : int	= 20
 
+# #125 — transações de escrita entre dois checkpoints do dono (`SQL.MaybeCheckpoint`).
+# O número é uma fração, não um gosto: com `wal_autocheckpoint` em 4000 páginas, o
+# backstop drena ~16 MB de uma vez no commit de um jogador ao acaso. Medido no gate de
+# benchmark, um settle offline escreve ~140 KB de `-wal`, então 40 transações ≈ 5,6 MB
+# ≈ ~1370 páginas ≈ 34% do teto: nenhum commit cruza o backstop na prática e cada
+# PASSIVE drena um terço do volume (um terço do fsync) fora do caminho do jogador.
+const CheckpointEveryTx : int			= 40
+
 enum BackupFrequency {DAILY, WEEKLY, MONTHLY}
 
 const BackupLimits : Dictionary[BackupFrequency, int] = {
@@ -87,6 +95,90 @@ const ReadPoolBusyTimeoutMs : int		= 5000
 # gritado. No worker thread, cada `push_error` de PRAGMA custodiado viraria ruído
 # no log que o gate §24-8 lê.
 const ReadPoolVerbosity : SQLite.VerbosityLevel	= SQLite.QUIET
+
+# ---------------------------------------------------------------- reentrância da queryMutex (#188)
+# O processo tem UMA mutex de escrita (`queryMutex`, sources/sql/SQL.gd:@queryMutex) e o
+# funil a segura enquanto chama o lambda de `Transaction()` (sources/sql/SQL.gd:@Transaction):
+# qualquer porta do funil alcançada de dentro desse lambda pede a mutex outra vez para a
+# MESMA thread. A engine desta máquina atende o pedido — medido em `TestMutexReentryGuard()`
+# (tests/read_pool_test.gd:@TestMutexReentryGuard) — mas recursão é acidente de
+# implementação, não contrato, e o contrato que a casa jurava em voz alta era o oposto
+# ("não é reentrante, deadlockaria"). Os dois textos discordando do mesmo objeto é o
+# defeito. O guard abaixo troca acidente e prosa por regra: o nível repetido é emprestado
+# e contado; a mutex crua nunca é pedida duas vezes pela mesma thread. O medidor é o
+# contador, não o log — gritar aqui é caro exatamente onde não se pode pagar: medido em
+# 2026-10-03, um settle offline pede o nível emprestado quatro vezes (`GetCharacter`,
+# duas statements de `AddItemsBatchToCharacter` e `GetGuildForAccount`), e o despejo com
+# backtrace dentro da região timed de `tests/benchmarks.gd` apareceu na própria régua de
+# regressão do settle, que não foi afrouxada.
+#
+# Estado em `static var` porque o funil é um só: `scripts/check_write_funnel.sh` não deixa
+# existir um segundo writer. A mutex de estado (`queryMutexState`) é pega por duas linhas
+# no máximo e SEMPRE solta antes de alguém bloquear na mutex crua — quem não é o dono lê o
+# estado, devolve a mutex de estado e só então chama `lock()`. Ordem única (crua → estado,
+# nunca estado → crua segurada por cima de um bloqueio), logo sem ciclo.
+static var queryMutexDepth : int			= 0
+static var queryMutexOwnerThread : int		= -1
+static var queryMutexState : Mutex			= Mutex.new()
+# Contador de níveis emprestados — a acusação é este número, não uma linha de log.
+# Ele é exposto em `QueryMutexWaitStats()`
+# (sources/sql/SQL.gd:@QueryMutexWaitStats), no mesmo dicionário dos outros contadores
+# desta mutex, porque é lá que o `/metrics` e os harnesses já olham.
+static var mutexReentries : int				= 0
+
+# true = este chamador é o dono do nível de topo e acabou de travar a mutex crua;
+# false = nível emprestado de quem já a segura (contado acima). O guard não
+# decide por `try_lock()`: decidir antes de travar é o que torna impossível o hang.
+static func EnterQueryMutex(queryMutex : Mutex) -> bool:
+	var caller : int = OS.get_thread_caller_id()
+	queryMutexState.lock()
+	var borrowed : bool = queryMutexDepth > 0 and queryMutexOwnerThread == caller
+	if borrowed:
+		mutexReentries += 1
+		queryMutexDepth += 1
+	queryMutexState.unlock()
+	if borrowed:
+		return false
+	queryMutex.lock()
+	queryMutexState.lock()
+	queryMutexOwnerThread = caller
+	queryMutexDepth += 1
+	queryMutexState.unlock()
+	return true
+
+# Os getters de estatística não medem espera (ler estatística não é round trip de SQL), mas
+# entram no MESMO guard: um `QueryMutexWaitStats()` dentro de `Transaction()` é re-entrância
+# tanto quanto um `QueryBindings()`, e a regra não pode depender de qual porta bateu.
+static func EnterQueryMutexStats(queryMutex : Mutex) -> void:
+	EnterQueryMutex(queryMutex)
+
+# Devolve um nível. Só o de topo tem o direito de abrir a mutex crua, e os dois gritos
+# abaixo são os outros dois modos de a contagem quebrar: sair sem nível (unlock de quem
+# nunca travou) e sair por fora (uma thread devolvendo a seção crítica de outra).
+static func ExitQueryMutex(queryMutex : Mutex) -> void:
+	var caller : int = OS.get_thread_caller_id()
+	queryMutexState.lock()
+	if queryMutexDepth == 0:
+		queryMutexState.unlock()
+		push_error("SQL: queryMutex devolvida sem nível aberto — desbalanceamento no chamador; a mutex crua não foi tocada.")
+		return
+	if queryMutexOwnerThread != caller:
+		var holder : int = queryMutexOwnerThread
+		queryMutexState.unlock()
+		push_error("SQL: queryMutex devolvida por thread que não a possui (dono %d, quem devolveu %d) — desbalanceamento no chamador; a mutex crua não foi tocada." % [holder, caller])
+		return
+	queryMutexDepth -= 1
+	var top : bool = queryMutexDepth == 0
+	if top:
+		queryMutexOwnerThread = -1
+	queryMutexState.unlock()
+	if top:
+		queryMutex.unlock()
+
+# Zera só a contagem de acusações: profundidade e dono são estado de TRAVA, não de medida,
+# e limpar isso no meio de uma seção crítica destraria a mutex.
+static func ResetQueryMutexStats() -> void:
+	mutexReentries = 0
 
 # Utils
 static func HasValue(data : Dictionary, key : String) -> bool:

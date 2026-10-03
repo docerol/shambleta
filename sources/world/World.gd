@@ -19,6 +19,11 @@ func _process(delta : float) -> void:
 		Presence.Tick(Launcher.SQL, _autoIdleAccum, int(Time.get_unix_time_from_system()))
 		_autoIdleAccum = 0.0
 		IdlePolicyService.TickAutoIdle()
+		# #125: o checkpoint do WAL tem dono, e o dono é este tick — não o commit do
+		# próximo jogador. `MaybeCheckpoint()` decide por CADÊNCIA DE TRABALHO, então
+		# servidor parado não paga fsync nenhum e servidor em movimento drena fora do
+		# caminho quente. Aqui é endereço de conveniência, não o único gatilho.
+		Launcher.SQL.MaybeCheckpoint()
 	# Drena o passe de persistência em slices curtos (um chunk por frame). O worker
 	# só marca o início; o esvaziamento roda no thread principal, então cada fatia
 	# segura o queryMutex por pouco tempo e as writes de RPC não esperam um burst.

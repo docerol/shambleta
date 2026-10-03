@@ -30,8 +30,10 @@ const FlushGraceSec : float				= 0.25
 const MetricsCacheSec : int				= 5
 # OPS-4 (Analytics): janela do funil diário que vai no scrape. Sete dias é a
 # granularidade com que a doc de produto compara janelas de onboarding, e o
-# `FunnelDaily` faz duas queries GROUP BY por chamada — com o cache de 5 s abaixo,
-# o custo máximo é ~24 leituras por minuto, em reads `query_only` do pool.
+# `FunnelDaily` faz três queries GROUP BY por chamada (contagem por kind, coorte e
+# varredura de identidade do eixo de pessoa), mais as duas janelas de
+# `FunnelGaugeLines` (contas distintas e pessoas distintas) — com o cache de 5 s
+# abaixo, o custo máximo é ~25 leituras por minuto, em reads `query_only` do pool.
 const FunnelWindowDays : int			= 7
 
 var listenPort : int					= DefaultPort
@@ -135,6 +137,10 @@ func MetricsBody() -> String:
 	var mutexOver1ms : int = 0
 	var mutexOver10ms : int = 0
 	var mutexOver100ms : int = 0
+	var ckRuns : int = 0
+	var ckBusy : int = 0
+	var ckFrames : int = 0
+	var ckMaxMicros : int = 0
 	var schemaVersion : int = 0
 	var migrationPatches : int = 0
 	var migrationFailures : int = 0
@@ -176,6 +182,16 @@ func MetricsBody() -> String:
 		mutexOver1ms = int(waits.get("over1ms", 0))
 		mutexOver10ms = int(waits.get("over10ms", 0))
 		mutexOver100ms = int(waits.get("over100ms", 0))
+		# #125: o dono do checkpoint precisa de sinal próprio porque a ausência dele é
+		# silenciosa por construção — `runs` parado no zero é o dono morrendo de fome, e
+		# quem paga o dreno volta a ser o commit de um jogador qualquer, sem que nada
+		# neste processo grite. A cauda (`max_seconds`) é a régua do ops: dreno do dono
+		# crescendo é o WAL chegando no cinto de 4000 páginas.
+		var ck : Dictionary = Launcher.SQL.CheckpointStats()
+		ckRuns = int(ck.get("runs", 0))
+		ckBusy = int(ck.get("busy", 0))
+		ckFrames = int(ck.get("frames", 0))
+		ckMaxMicros = int(ck.get("maxMicroseconds", 0))
 		# P0-STAMP: as migrations agora são fail-closed (sources/sql/SQL.gd), e um
 		# patch que falha PARA o boot em vez de virar carimbo falso. Isso só vale se
 		# alguém acordar — o número do patch travado e a versão gravada saem aqui,
@@ -237,6 +253,23 @@ func MetricsBody() -> String:
 	body += "# HELP shambleta_sql_query_mutex_wait_over_100ms esperas individuais acima de 100 ms — um jogador travado.\n"
 	body += "# TYPE shambleta_sql_query_mutex_wait_over_100ms counter\n"
 	body += "shambleta_sql_query_mutex_wait_over_100ms %d\n" % mutexOver100ms
+	# #125 — o par que diz se o checkpoint tem dono: `..._runs_total` crescendo é o
+	# dono trabalhando; `..._busy_total` subindo é o dreno voltando a disputar o
+	# handle com um leitor. Nenhuma regra de alerta aqui de propósito: a régua de
+	# nome citado (`tests/deploy_ops_test.gd`) só cobra regra existente para métrica
+	# que o doc endereça por nome de regra, e este passo não endereça.
+	body += "# HELP shambleta_sql_checkpoint_runs_total checkpoints PASSIVE disparados pelo dono (#125).\n"
+	body += "# TYPE shambleta_sql_checkpoint_runs_total counter\n"
+	body += "shambleta_sql_checkpoint_runs_total %d\n" % ckRuns
+	body += "# HELP shambleta_sql_checkpoint_busy_total checkpoints que devolveram busy (leitor segurou frames).\n"
+	body += "# TYPE shambleta_sql_checkpoint_busy_total counter\n"
+	body += "shambleta_sql_checkpoint_busy_total %d\n" % ckBusy
+	body += "# HELP shambleta_sql_checkpoint_frames_total páginas de WAL drenadas pelo dono desde o boot.\n"
+	body += "# TYPE shambleta_sql_checkpoint_frames_total counter\n"
+	body += "shambleta_sql_checkpoint_frames_total %d\n" % ckFrames
+	body += "# HELP shambleta_sql_checkpoint_max_seconds dreno individual mais longo do dono desde o boot.\n"
+	body += "# TYPE shambleta_sql_checkpoint_max_seconds gauge\n"
+	body += "shambleta_sql_checkpoint_max_seconds %.6f\n" % (float(ckMaxMicros) / 1000000.0)
 	# P0-STAMP: saúde das migrations. O par que o alerta lê é
 	# `shambleta_schema_version` contra `shambleta_migration_patches_visible` — a
 	# diferença entre elas é "o binário tem patch que a base não tem", que é o

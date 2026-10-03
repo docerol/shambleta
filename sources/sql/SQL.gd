@@ -648,27 +648,23 @@ func GetStat(charID : int) -> Dictionary:
 	return {} if results.is_empty() else results[0]
 
 # SOM-IDLE: F2 settle — atomic transaction wrapper for OfflineSettle
-# NOTE: godot-sqlite's update_rows/delete_rows wrap their statement in their
-# own BEGIN/END — calling them inside this lambda nests transactions and
-# corrupts the commit sequence (nested END commits the outer work, outer
-# COMMIT then fails). Measured on this repo's libgdsqlite (2026-09-26): the
-# inner BEGIN fails, the UPDATE/DELETE runs, the inner END commits the whole
-# lambda, and the outer ROLLBACK answers "no transaction is active" while the
-# writer still returns true. `insert_row` does NOT show that behaviour and is
-# allowed. Inside a lambda, use UpdateRowsRaw/DeleteRowsRaw/insert_row/
-# select_rows/ExecNoLock ONLY. The QueryBindings/ExecuteBindings helpers are
-# also off the list: they re-lock queryMutex, which does survive re-entry on
-# Godot 4.7 (its Mutex is recursive) — but recursion is an implementation
-# detail, not a promise, and a lambda that outlives it deadlocks the process.
+# NOTE: o addon fecha BEGIN/END próprio em `update_rows`/`delete_rows`, então chamá-los
+# dentro deste lambda aninha transações e corrompe a sequência de commit: medido no
+# libgdsqlite deste repo (2026-09-26), o BEGIN de dentro falha, o UPDATE roda, o END de
+# dentro comita o lambda inteiro e o ROLLBACK de fora responde "no transaction is
+# active" enquanto o writer devolve true. `insert_row` não mostra isso e é permitido.
+# Dentro do lambda só ops raw: `UpdateRowsRaw`/`DeleteRowsRaw`/`insert_row`/
+# `select_rows`/`ExecNoLock`. As portas com lock (`Query`, `QueryBindings`,
+# `ExecuteBindings`) passam pelo guard de `_LockQueryMutex`, não pela sorte da engine.
 func Transaction(callable : Callable) -> bool:
 	var committed : bool = false
 	_LockQueryMutex()
 	txCounter += 1
-	# Contador (não flag) porque a queryMutex é recursiva no Godot 4.7 e um lambda
-	# pode aninhar `Transaction()`: com flag, a saída do interno abriria a rota do
-	# pool para o externo, que ainda tem escrita não cometida no handle `db`.
-	# Incrementado sob a mutex, junto do BEGIN — é o que define "existe transação
-	# de escrita em aberto neste processo".
+	# Contador, não flag: um lambda pode chamar `Transaction()` de novo (o guard do funil
+	# não grita: empresta o nível e conta, mas a statement roda), e com flag a saída do nível interno abriria a
+	# rota do pool para o externo, que ainda tem escrita não cometida no handle `db`.
+	# Incrementado sob a mutex, junto do BEGIN — é o que define "existe transação de
+	# escrita em aberto neste processo".
 	readTxnDepth += 1
 	if db.query("BEGIN TRANSACTION;"):
 		var result : bool = callable.call()
@@ -1534,11 +1530,11 @@ var txCounter : int = 0
 # para fazê-las. Sem esse número, "o banco está lento" e "todo mundo está esperando
 # o writer" são indistinguíveis em produção — e são diagnósticos com remédios
 # opostos. Os contadores abaixo são incrementados DEPOIS do lock, dentro da seção
-# crítica, porque é escrito de thread concorrente (o worker de backup também passa
-# por aqui, sources/sql/SQLBackups.gd:5).
+# crítica, porque é escrito de thread concorrente (o worker de backup tem a sua,
+# `thread` (sources/sql/SQLBackups.gd:@thread)).
 #
-# Leitura barata e sem lock: `QueryMutexWaitStats()` copia o par {waits, µs} dentro
-# da própria mutex, então o número nunca é rasgado — e um /metrics scrape a cada 30 s
+# Leitura barata: `QueryMutexWaitStats()` copia o par {waits, µs} dentro da própria
+# mutex, então o número nunca é rasgado — e um /metrics scrape a cada 30 s
 # (deploy/docker-compose.yml, healthcheck do `game`) não pode custar uma query.
 var mutexWaits : int = 0
 var mutexWaitMicroseconds : int = 0
@@ -1550,15 +1546,16 @@ var mutexWaitOver1Ms : int = 0
 var mutexWaitOver10Ms : int = 0
 var mutexWaitOver100Ms : int = 0
 
-# Ponto único de lock dos caminhos de round trip (os quatro chamadores são
-# `Transaction`, `Query`, `QueryBindings`, `ExecuteBindings`): medir a espera aqui é
-# o que garante que nenhum caminho com lock esquece o contador. O getter
-# `QueryMutexWaitStats()` abaixo usa a mutex crua de propósito — ler estatística não
-# é round trip de SQL e não pode inflar a própria medida. O custo da medição é duas
-# chamadas a `Time.get_ticks_usec()` (~0,1 µs) por seção crítica.
+# Ponto único de lock dos cinco caminhos de round trip (`TryExec`, `Transaction`,
+# `Query`, `QueryBindings`, `ExecuteBindings`) e ponto único do guard de reentrância
+# (#188): medir a espera aqui garante que nenhum caminho com lock esquece o contador,
+# e nenhum deles pode travar a mutex duas vezes — `SQLCommons` devolve o nível
+# emprestado e conta — o medidor é `QueryMutexWaitStats()['reentries']`, não uma linha de log. O custo da medição é duas chamadas a
+# `Time.get_ticks_usec()` (~0,1 µs) por seção crítica.
 func _LockQueryMutex() -> void:
 	var started : int = Time.get_ticks_usec()
-	queryMutex.lock()
+	if not SQLCommons.EnterQueryMutex(queryMutex):
+		return # nível emprestado do dono: a acusação e a contagem já aconteceram
 	var waited : int = maxi(Time.get_ticks_usec() - started, 0)
 	mutexWaits += 1
 	mutexWaitMicroseconds += waited
@@ -1572,7 +1569,7 @@ func _LockQueryMutex() -> void:
 		mutexWaitOver1Ms += 1
 
 func _UnlockQueryMutex() -> void:
-	queryMutex.unlock()
+	SQLCommons.ExitQueryMutex(queryMutex)
 
 # Acumulado de espera na mutex, em segundos — forma de counter Prometheus
 # (monotônico no processo), que é o que o `/metrics` precisa expor.
@@ -1580,7 +1577,7 @@ func QueryMutexWaitSeconds() -> float:
 	return float(mutexWaitMicroseconds) / 1000000.0
 
 func QueryMutexWaitStats() -> Dictionary:
-	queryMutex.lock()
+	SQLCommons.EnterQueryMutexStats(queryMutex)
 	var stats : Dictionary = {
 		"waits": mutexWaits,
 		"microseconds": mutexWaitMicroseconds,
@@ -1588,8 +1585,75 @@ func QueryMutexWaitStats() -> Dictionary:
 		"over1ms": mutexWaitOver1Ms,
 		"over10ms": mutexWaitOver10Ms,
 		"over100ms": mutexWaitOver100Ms,
+		"reentries": SQLCommons.mutexReentries,
 	}
-	queryMutex.unlock()
+	SQLCommons.ExitQueryMutex(queryMutex)
+	return stats
+
+# ---------------------------------------------------------------- checkpoint com dono (#125)
+# `wal_autocheckpoint` não escolhe QUANDO drenar: escolhe QUAL commit paga o dreno. Como
+# este processo tem um único laço de escrita, o escolhido é um jogador ao acaso — 400 ms
+# de fsync dentro do `COMMIT` de um settle offline. Quem hoje nomeia o culpado é
+# `_atribuirStalls` (tests/benchmarks.gd:@_atribuirStalls), e o remédio é o que está aqui:
+# `MaybeCheckpoint()` roda o mesmo `wal_checkpoint(PASSIVE)` fora de qualquer transação, na
+# cadência de trabalho, no mesmo endereço das duas vidas do processo — o tick de 1 s de
+# `_process` (sources/world/World.gd:@_process) em produção e o laço medido no harness. O
+# autocheckpoint fica em 4000 páginas como cinto contra disco sem teto: morrendo de fome o
+# dono, o dreno volta a cair num commit, e a régua que procura esse caso nas duas bordas do
+# disparo é `_drenosSemDono` (tests/benchmarks.gd:@_drenosSemDono).
+#
+# `checkpointEveryTx` é var porque é o seam do harness para mudar a cadência sem recompilar;
+# o default é a medida de `CheckpointEveryTx` (sources/sql/SQLCommons.gd:@CheckpointEveryTx).
+var checkpointEveryTx : int = SQLCommons.CheckpointEveryTx
+var lastCheckpointTx : int = 0
+# Mesma forma dos contadores de mutex acima: inteiros crus, cauda (`maxMicroseconds`)
+# em vez de média, e getter sob a MESMA mutex da escrita: ler estatística não é round
+# trip, então não mede espera nem conta round trip. Quem escreve é só o chamador de
+# `MaybeCheckpoint()` (a main thread) — o worker de backup nunca passa por aqui.
+var checkpointRuns : int = 0
+var checkpointBusy : int = 0
+var checkpointFramesTotal : int = 0
+var checkpointMaxMicroseconds : int = 0
+
+func MaybeCheckpoint() -> Dictionary:
+	# Dentro de transação não se checkpointa: disputaria o handle com o COMMIT em
+	# aberto, e `readTxnDepth` é o mesmo contador que já fecha a rota do pool de leitura.
+	if db == null or readTxnDepth > 0:
+		return {"fired": false, "reason": "txn"}
+	if txCounter - lastCheckpointTx < checkpointEveryTx:
+		return {"fired": false, "reason": "cadencia"}
+	# `Query()`, não `db.query()`: PRAGMA está em `SQLReadRules.WriteVerbs`, então a
+	# statement vai para o handle do writer sob a mutex e entra na contagem de round trips.
+	var started : int = Time.get_ticks_usec()
+	var rows : Array = Query("PRAGMA wal_checkpoint(PASSIVE);")
+	var us : int = maxi(Time.get_ticks_usec() - started, 0)
+	lastCheckpointTx = txCounter
+	checkpointRuns += 1
+	var busy : int = -1
+	var frames : int = -1
+	if not rows.is_empty():
+		var cols : Array = (rows[0] as Dictionary).values()
+		if cols.size() >= 3:
+			busy = int(cols[0])
+			frames = int(cols[2])
+	if busy != 0:
+		checkpointBusy += 1
+	if frames > 0:
+		checkpointFramesTotal += frames
+	if us > checkpointMaxMicroseconds:
+		checkpointMaxMicroseconds = us
+	return {"fired": true, "busy": busy, "frames": frames, "us": us}
+
+func CheckpointStats() -> Dictionary:
+	SQLCommons.EnterQueryMutexStats(queryMutex)
+	var stats : Dictionary = {
+		"runs": checkpointRuns,
+		"busy": checkpointBusy,
+		"frames": checkpointFramesTotal,
+		"maxMicroseconds": checkpointMaxMicroseconds,
+		"every": checkpointEveryTx,
+	}
+	SQLCommons.ExitQueryMutex(queryMutex)
 	return stats
 
 func QueryCount() -> int:
@@ -1609,6 +1673,15 @@ func ResetCounters() -> void:
 	mutexWaitOver1Ms = 0
 	mutexWaitOver10Ms = 0
 	mutexWaitOver100Ms = 0
+	SQLCommons.ResetQueryMutexStats()
+	checkpointRuns = 0
+	checkpointBusy = 0
+	checkpointFramesTotal = 0
+	checkpointMaxMicroseconds = 0
+	# Re-âncora, não zera de propósito: `txCounter` volta a zero logo acima, então
+	# "zero transações desde o último dreno" é o estado correto de um banco recém-medido
+	# e o primeiro disparo do dono acontece `checkpointEveryTx` transações depois.
+	lastCheckpointTx = txCounter
 	if readPool != null:
 		readPool.ResetStats()
 
@@ -1743,6 +1816,15 @@ func _post_launch():
 			# a 4000 páginas, 800 settles fecham p50 382 µs / p99 527 µs com 2 hitches
 			# de ~427 ms, ~1,0 ms amortizado por settle contra ~2,5 ms do default. O
 			# pico unitário é maior de propósito: é nessa troca que a curva tem joelho.
+			# Desde #125 este número é CINTO, não dono. Quem drena é `MaybeCheckpoint()`
+			# (sources/sql/SQL.gd:@MaybeCheckpoint) a cada 40 transações, sempre fora de
+			# transação aberta, e é por isso que o teto de 4000 páginas deixa de ser
+			# alcançado: no gate de 800 settles, 19 drenos caíram TODOS em múltiplo exato
+			# de 40, 0 commits acima de 50 ms (antes, 2 a 10 hitches de ~400 ms) e 0 dreno
+			# sem dono na borda — a régua é `_drenosSemDono` (tests/benchmarks.gd:@_drenosSemDono).
+			# O valor NÃO vai a 0 porque a fome do dono tem que continuar paga: loop
+			# parado, processo recém-aberto ou um passe maior que a cadência devolvem o
+			# dreno para o commit seguinte, e sem cinto o WAL cresce até o disco.
 			Query("PRAGMA wal_autocheckpoint=4000;")
 			if not LauncherCommons.DebugServiceLive() and not LauncherCommons.isWeb:
 				backups = SQLBackups.new()

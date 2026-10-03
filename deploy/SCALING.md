@@ -299,6 +299,18 @@ bash scripts/test.sh one shard_capacity_test
   aqui chamava `QueryMutexWaitSeconds()`, função que ninguém definiu — era pedido
   escrito depois de o trabalho ter sido feito, do mesmo tipo de ficção que faz um
   operador re-inventar uma linha que já roda.
+- **O checkpoint do WAL tem dono, e o dono é numerado (#125, 2026-10-03).** O par que
+  diz se ele está vivo é `shambleta_sql_checkpoint_runs_total` contra
+  `shambleta_sql_checkpoint_busy_total`, com volume em
+  `shambleta_sql_checkpoint_frames_total` e cauda em
+  `shambleta_sql_checkpoint_max_seconds`; os quatro saem do corpo de `MetricsBody()`
+  (`sources/system/MetricsServer.gd:@MetricsBody`) lidos de `CheckpointStats()`
+  (`sources/sql/SQL.gd:@CheckpointStats`). `runs` parado no zero é o dono morrendo de
+  fome, e aí o dreno volta a cair no `COMMIT` de um jogador qualquer — o `cinto` de
+  `wal_autocheckpoint=4000` garante o disco, não o tail. Não há regra de alerta para
+  essas quatro séries ainda, e isso é declarado, não esquecido: a régua de nome citado
+  (`tests/deploy_ops_test.gd`) cobra que toda métrica endereçada por nome de regra seja
+  emitida, então regra e emissão têm que entrar no mesmo commit, com canário próprio.
 
 ## 7. Presença durável — o que a migration 057 passou a custar
 

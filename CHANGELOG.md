@@ -450,6 +450,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Stacking a decision row only makes sense where the buttons are side by side, and un-stacking is now reachable (#197, measured 2026-10-03).
+  `WindowPanel.@_enter_tree` runs `GuiUiScale.@ApplyDecisionChrome` over every container holding two or more decision buttons — including the
+  columns the scene already drew one-per-line. Reparenting a column into a runtime `DecisionStack` buys no width (what a column lacks is height)
+  and destroys the declared path before the mounted scene's `_ready` resolves it: `Shop.gd` lost all seven purchase buttons per mount and
+  `SeasonPass.gd` lost its three, each arriving as `ERROR: Node not found` in the engine log, which no gate reads
+  (`scripts/ci_gate_log.sh` only charges `SCRIPT ERROR`). `GuiUiScale.@FitDecisionRow` now stacks only `sideBySide` rows, so the ten paths the
+  panels declare resolve again and the phone pass reports zero owner-inconsistency warnings (it reported thirteen). The other half of the fix is
+  that the reverse existed only on paper: a stacked row has no direct button children, so `FitDecisionRow` left through its own
+  `buttons.is_empty()` guard, and `GuiUiScale.@DecisionRows` counted the `DecisionStack` as a row of its own — `MessageBox.@_fitToHost` re-applies
+  on every resize, so a phone rotated from portrait to landscape kept the stacked layout forever. Both are now pinned by the ruler
+  `_decisionReparentRegression` of `tests/panel_fit_test.gd:@_decisionReparentRegression` (321 checks, 0 failures, 6/6 planted controls biting): the column keeps its scene paths
+  and its owner, a tight horizontal row still stacks and becomes reachable only by name — the `DecisionButton` finder of `sources/gui/WindowPanel.gd:@DecisionButton`
+  is what serves it — and a wide row returns its buttons to the declared parent in the declared order. The order assertion is not decoration — recording the
+  scene index inside the reparent loop gave every button index 0, because each `reparent` shrinks the parent list, and the row came back reversed
+  (`ButtonSubmit, ButtonConfirm, ButtonCancel`). Payoff measured in `tests/hud_decision_fit_test.gd`: the two pinned landscape debts (Shop 1,
+  SeasonPass 1 — one decision button past the fold at 844x390) now measure 0, so the pins were removed and every panel is held to zero overflow in
+  both orientations.
+- The query-mutex contradiction is closed by a guard instead of by engine behaviour, and the fixture that measured it stopped measuring nothing (#188, measured 2026-10-03).
+  The five round-trip paths used to lock `queryMutex` directly, and nested calls survived only because Godot 4.7's `Mutex` happens to be recursive —
+  recursion is an implementation detail, and a meter that counts a re-entrant lock as a second round trip reports contention that never waited.
+  The single lock point is now the helper `_LockQueryMutex` of `sources/sql/SQL.gd:@_LockQueryMutex` and the nested level is lent by
+  `EnterQueryMutex` of `sources/sql/SQLCommons.gd:@EnterQueryMutex`: the
+  nested call does not wait, does not double-count, and is charged to `QueryMutexWaitStats()['reentries']` rather than to a log line. Cost of the
+  instrumentation measured at two `Time.get_ticks_usec()` calls per critical section (~0.1 µs). The guard's own fixture was blind before it was
+  right: GDScript lambdas capture by value, so a scalar written inside the transaction lambda never reached the caller — the check read its initial
+  value, which made green impossible and red meaningless. Mutating a captured Dictionary crosses instead, and with that fixed the nested
+  `Transaction` + `QueryBindings` measures reentries 1 and waits 1 (one round trip, not two) with the inner read returning rows.
+- The WAL checkpoint changed owner, so no player's offline settle pays the drain (#125, measured 2026-10-03).
+  `wal_autocheckpoint` never chose *when* to drain, it chose *which commit* drained, and with one write loop
+  the chosen payer was a random player: ~400 ms of fsync inside the settle `COMMIT`, which is everyone's spike.
+  The owner is `MaybeCheckpoint` (`sources/sql/SQL.gd:@MaybeCheckpoint`) — the same passive checkpoint, run outside
+  any open transaction on work cadence, the constant being `CheckpointEveryTx`
+  (`sources/sql/SQLCommons.gd:@CheckpointEveryTx`: 40 transactions ≈ 5.6 MB ≈ ~1370 pages, a third of the backstop).
+  It is called from both lives of the process: the 1 s tick of `_process` (`sources/world/World.gd:@_process`)
+  in production, and the measured loop between timed samples, outside the bracket, in the harness. The plural is
+  the whole point — the 2026-09-26 revert (`deploy/LAUNCH_HANDOFF.md`) had left an owner that lived only in the
+  frame callback, which never fires under `godot --headless -s`, so the gate was green on the absence of the remedy.
+  The guard is `_drenosSemDono` (`tests/benchmarks.gd:@_drenosSemDono`): a drain with no owner on either edge of a
+  fire IS the in-commit autocheckpoint, and it now fails the gate instead of being attributed after the fact;
+  `_controlesOwnership` (`tests/benchmarks.gd:@_controlesOwnership`) plants the unowned case, the low edge, the
+  same index, the non-elastic distance and index zero, and requires the ruler to bite each one.
+  Measured: 20 fires, 19 drains landing on an exact multiple of the cadence, busy 0, 40626 pages drained, and
+  0 of 800 settles above 50 ms — the same probe before the owner returned 8 to 10 hitches of ~400 ms. The backstop
+  stayed at 4000 pages on purpose: a starved owner has to cost a commit again, not an unbounded WAL. The ruler did
+  not move: `RegressionHeadroom` (`tests/benchmarks.gd:@RegressionHeadroom`) and the recorded baseline are untouched,
+  and the tail was still red in that run (p99 2650 µs with the CPU control reading 1.00×); the leftover was blamed on
+  the machine's steady-state I/O and escalated as its own decision rather than absorbed here. The entry above this one
+  shows that diagnosis was wrong — the leftover was the instrument. Four series name the owner in `/metrics`:
+  runs, busy, frames and a max-duration gauge, emitted by `MetricsBody` (`sources/system/MetricsServer.gd:@MetricsBody`)
+  off `CheckpointStats` (`sources/sql/SQL.gd:@CheckpointStats`); no alert rule yet, and that is declared in
+  `deploy/SCALING.md` §6 rather than forgotten, because `tests/deploy_ops_test.gd` requires rule and emission to
+  land in the same commit.
 - The two gates that are not godot had no clock at all, and one of them had a fake one. `gate_sh`
   (`scripts/test.sh:@gate_sh`) ran `bash "$script"` with no `timeout` in front of it: a structure
   gate that hangs — another run's lock, a grep over a tree that keeps growing, any wait at all —

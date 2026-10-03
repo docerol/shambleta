@@ -14,7 +14,8 @@ extends SceneTree
 # O que ele responde, na ordem:
 #   1) A REGRA (SQLReadRules): o que roteia e o que nunca pode rotear.
 #   2) A API DA ENGINE, medida: existe segundo handle no mesmo arquivo? A flag
-#      `read_only` da engine funciona com WAL? `PRAGMA query_only=1` funciona?
+#      `read_only` da engine funciona com WAL? `PRAGMA query_only=1` funciona? E o
+#      guard de reentrância da queryMutex (#188), provocado com e sem o nó real.
 #   3) Os GATES do pool: banco fora de WAL não abre; escrita não passa; falha é
 #      contada e devolve ok=false — nunca "zero linhas".
 #   4) A CONSISTÊNCIA EXIGIDA: leitura depois de escrita cometida vê a escrita —
@@ -63,6 +64,7 @@ var failures : int = 0
 
 var rulesScript : GDScript = null
 var poolScript : GDScript = null
+var commonsScript : GDScript = null
 var isPure : Callable = Callable()
 var shouldRoute : Callable = Callable()
 var sqlNode : Node = null
@@ -172,6 +174,7 @@ func _initialize():
 	DirAccess.make_dir_recursive_absolute(TmpRoot)
 	rulesScript = load("res://sources/sql/SQLReadRules.gd")
 	poolScript = load("res://sources/sql/SQLReadPool.gd")
+	commonsScript = load("res://sources/sql/SQLCommons.gd")
 	if not Check(rulesScript != null and poolScript != null, "SQLReadRules.gd e SQLReadPool.gd carregam"):
 		print("FATAL: sem os modulos do pool nao ha o que medir")
 		print("== RESULT: %d checks, %d failures ==" % [checks, failures])
@@ -202,6 +205,7 @@ func _initialize():
 		return
 	TestRules()
 	TestEngineApi()
+	TestMutexReentryGuard()
 	TestPoolGates()
 	TestConsistency()
 	TestTransactionGuard()
@@ -341,20 +345,22 @@ func TestRules() -> void:
 # ---------------------------------------------------------------------------
 func TestEngineApi() -> void:
 	print("-- 2) API da engine (Godot %s) --" % str(Engine.get_version_info().string))
-	# A queryMutex de SQL.gd:7 protege o handle único, e duas comentários no repo
-	# discordavam sobre o que ela faz quando a MESMA thread pede de novo: um dizia
-	# "recursiva" (SQL.gd:535), o outro "não é reentrante, deadlockaria"
-	# (AdsCosmeticsService.gd). Os dois não podem estar certos, e os dois guiam
-	# decisão de dinheiro. Medido aqui, na engine deste build, sem banco no meio.
-	# O motivo real para não aninhar `Transaction()` é o outro bloco abaixo.
+	# A `queryMutex` (sources/sql/SQL.gd:@queryMutex) protege o handle único, e dois
+	# comentários do repo discordavam sobre o que ela faz quando a MESMA thread pede de
+	# novo: um dizia "recursiva", o outro "não é reentrante, deadlockaria". Os dois
+	# guiam decisão de dinheiro e os dois não podem estar certos. Medido aqui, na engine
+	# deste build, sem banco no meio: o pedido repetido É atendido — e é exatamente por
+	# isso que o funil não pode depender disso. Recursão é acidente de implementação; a
+	# regra agora é o guard de `EnterQueryMutex` (sources/sql/SQLCommons.gd:@EnterQueryMutex),
+	# provocado e cobrado em `TestMutexReentryGuard` (tests/read_pool_test.gd:@TestMutexReentryGuard).
 	var probe : Mutex = Mutex.new()
 	probe.lock()
 	var reentered : bool = probe.try_lock()
 	if reentered:
 		probe.unlock()
 	probe.unlock()
-	Check(reentered, "Mutex da engine ACEITA re-entrada da mesma thread (try_lock devolve true) — a queryMutex não trava sozinha")
-	Note("se a engine mudarem e isto virar false, SQL.Transaction() aninhado passa a DEADLOCKAR e o aviso de SQL.gd:535-538 vira regra, não curiosidade")
+	Check(reentered, "Mutex da engine ACEITA re-entrada da mesma thread (try_lock devolve true) — o que a queryMutex faz hoje, nao o que ela promete")
+	Note("se a engine mudar e isto virar false, nada muda no produto: o guard devolve o nivel emprestado ANTES de pedir a mutex crua, entao nao ha segundo lock a onde travar")
 	WipeTmp()
 	var writer : Object = OpenHandle(TmpDB, false)
 	if not Check(writer != null, "handle de escrita abre no banco temporario"):
@@ -381,10 +387,10 @@ func TestEngineApi() -> void:
 	Note("read_only=true: open_db=%s SELECT=%s erro=\"%s\"" % [str(roOpened), str(roRead), String(roFlag.error_message)])
 	if roOpened:
 		roFlag.close_db()
-	# O outro lado da mesma discórdia: por que `SQL.Transaction()` não pode ser
-	# aninhado, se a mutex deixa? Medido no handle cru, sem o nó de produção no
-	# meio — é o comportamento do libgdsqlite deste repo, documentado em
-	# SQL.gd:528-533 e citado (com o motivo errado) em AdsCosmeticsService.gd.
+	# O outro lado da mesma discórdia: por que `Transaction()` (sources/sql/SQL.gd:@Transaction)
+	# não pode ser aninhado, se a mutex deixa? Medido no handle cru, sem o nó de
+	# produção no meio — é o comportamento do libgdsqlite deste repo, escrito hoje no
+	# NOTE que abre o bloco da própria função.
 	var outerBegin : bool = bool(writer.query("BEGIN;"))
 	writer.query("INSERT INTO t (v) VALUES ('outer');")
 	var innerBegin : bool = bool(writer.query("BEGIN;"))
@@ -402,6 +408,71 @@ func TestEngineApi() -> void:
 	Check(outerBegin and not innerBegin, "BEGIN aninhado FALHA no libgdsqlite (não existe transação dentro de transação)")
 	Check(innerEnd and seen == 4, "o END interno cometeu o trabalho do externo também: um witness vê %d linhas, não 2 — aninhar comete cedo, não trava" % seen)
 	Check(not outerCommit, "o COMMIT do externo falha depois: a transação que ele achava que controlava já foi")
+
+# ---------------------------------------------------------------------------
+# 2b) O guard da reentrância, PROVOCADO. `TestEngineApi` mede o que a engine
+# aceita; esta suíte cobra o que o funil faz com isso: o pedido repetido da mesma
+# thread tem que ser emprestado e contado — nunca um segundo lock. As
+# duas fixtures passam pelo mesmo predicado do produto (nada de lógica copiada
+# aqui) e cada uma tem a sua negativa: sem o guard, (A) devolve `true` e (B)
+# conta dois round trips de lock em vez de um.
+# ---------------------------------------------------------------------------
+func TestMutexReentryGuard() -> void:
+	print("-- 2b) guard de reentrancia da queryMutex --")
+	if commonsScript == null:
+		Check(false, "SQLCommons.gd carrega para a suite do guard")
+		return
+	# (A) O guard puro: mutex crua própria, sem banco e sem nó. O primeiro pedido da
+	#     thread é o nível de topo; o segundo, emprestado — e a acusação é contador, não
+	#     curiosidade de log.
+	var probe : Mutex = Mutex.new()
+	var accusedBefore : int = int(commonsScript.get("mutexReentries"))
+	Check(bool(commonsScript.call("EnterQueryMutex", probe)), "nivel de topo: o primeiro pedido trava a mutex de verdade")
+	Check(not bool(commonsScript.call("EnterQueryMutex", probe)), "nivel emprestado: o segundo pedido da mesma thread NAO trava de novo")
+	var accused : int = int(commonsScript.get("mutexReentries")) - accusedBefore
+	Check(accused == 1, "a reentrancia foi CONTADA no medidor do funil (delta 1; visto: %d)" % accused)
+	Check(int(commonsScript.get("queryMutexDepth")) == 2, "e os dois niveis estao registrados (profundidade 2; visto: %d)" % int(commonsScript.get("queryMutexDepth")))
+	commonsScript.call("ExitQueryMutex", probe)
+	Check(int(commonsScript.get("queryMutexDepth")) == 1, "devolver o nivel emprestado nao devolve a mutex crua: falta o do topo (visto: %d)" % int(commonsScript.get("queryMutexDepth")))
+	commonsScript.call("ExitQueryMutex", probe)
+	Check(int(commonsScript.get("queryMutexDepth")) == 0, "e o do topo fecha o ciclo (visto: %d)" % int(commonsScript.get("queryMutexDepth")))
+	Check(int(commonsScript.get("queryMutexOwnerThread")) == -1, "sem dono registrado, a proxima thread nao herda um nivel emprestado")
+	Check(bool(commonsScript.call("EnterQueryMutex", probe)), "segundo ciclo: pedido novo volta a ser nivel de topo")
+	commonsScript.call("ExitQueryMutex", probe)
+	# Devolver sem nível é o outro modo de a contagem quebrar (abriria a seção crítica
+	# de outra thread). Plantado: a profundidade parada em zero, não em -1.
+	commonsScript.call("ExitQueryMutex", probe)
+	Check(int(commonsScript.get("queryMutexDepth")) == 0, "unlock orfao nao afunda a contagem (visto: %d)" % int(commonsScript.get("queryMutexDepth")))
+	# (B) No nó real: o lambda de uma transação chama uma porta com lock com a mutex na
+	#     mão — reentrância de produção, a mesma forma que `CheckoutService` e
+	#     `SQLGrants` já exercitam. O que se cobra é a contagem e a prova de que a mutex
+	#     crua não foi pedida duas vezes.
+	if sqlNode == null:
+		Check(false, "Launcher.SQL disponivel para a fixture de transacao aninhada")
+		return
+	var sql : Node = sqlNode
+	var before : Dictionary = sql.call("QueryMutexWaitStats")
+	# GDScript captura por VALOR: `x = ...` dentro do lambda não chega a quem chama — só
+	# atravessa a MUTAÇÃO do container capturado (a cópia do endereço aponta pro mesmo
+	# dicionário). Medido nesta casa em 2026-10-03: com a scalar `readInside` o check
+	# lia sempre o valor inicial, verde era impossível e vermelho não dizia nada do
+	# produto. O container é o canal; o que se afirma continua sendo o número lá dentro.
+	var seen : Dictionary = {"rows": -1}
+	var startedUs : int = Time.get_ticks_usec()
+	Check(not bool(sql.call("Transaction", func() -> bool:
+		var rows : Array = sql.call("QueryBindings", "SELECT count(*) AS v FROM sqlite_master;", [])
+		seen["rows"] = int(rows[0]["v"]) if not rows.is_empty() else -1
+		return false)), "txn com leitura aninhada roda ate o fim e faz rollback (sem hang)")
+	var spentUs : int = Time.get_ticks_usec() - startedUs
+	var after : Dictionary = sql.call("QueryMutexWaitStats")
+	var waitDelta : int = int(after["waits"]) - int(before["waits"])
+	var reentryDelta : int = int(after["reentries"]) - int(before["reentries"])
+	var readInside : int = int(seen["rows"])
+	Check(reentryDelta == 1, "Transaction+QueryBindings aninhados acusam o nivel emprestado (delta 1; visto: %d)" % reentryDelta)
+	Check(waitDelta == 1, "e contam UM round trip de lock, nao dois: o emprestado nao mede espera (visto: %d)" % waitDelta)
+	Check(readInside > 0, "a leitura aninhada roda no handle da transacao e devolve linha (contagem %d)" % readInside)
+	Check(spentUs < 200000, "o pedido emprestado nao esperou na fila: %d us na transacao inteira" % spentUs)
+	Note("sem o guard esta fixture dependeria da recursao da engine: ou dois locks medidos, ou um hang ate o timeout do portao")
 
 # ---------------------------------------------------------------------------
 # 3) Gates do pool.

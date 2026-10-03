@@ -49,6 +49,34 @@ const ControlReps: int = 3
 # mudado uma linha. A auto-auditoria abaixo recusa qualquer folga que fique abaixo
 # dele.
 const WorstP99NormalizadoSobCargaUs: int = 1601
+# ---------------------------------------------------------------------------
+# #178 — o dispositivo em que os µs acima são julgados.
+#
+# Baseline, teto e controle acima são todos ABSOLUTOS, e um número absoluto só quer
+# dizer alguma coisa no dispositivo onde foi gravado. O `user://` do harness era sempre
+# `$PROJECT/.test-home/<script>`, i.e. o disco onde o repo mora — nesta máquina um
+# WDC WD10SPZX a 5400 rpm. Medido em 2026-10-03 com o mesmo trabalho de um settle
+# (SQLite CLI, `journal_mode=WAL`, `synchronous=NORMAL`, 200 commits de ~140 KB, duas
+# passadas, máquina ociosa):
+#   /dev/sda1 ext4, onde o repo está .... 6494 µs e 7512 µs por commit
+#   /home     btrfs em nvme0n1p3 ........  845 µs e  847 µs
+#   /dev/shm  tmpfs .....................  430 µs e  430 µs
+# O teto que a régua cobra do settle INTEIRO é 2076 µs. Um disco que paga 6494 µs só
+# para cometer o que um settle escreve não tem teto a cumprir, e o vermelho que sai
+# dali acusa o código do caminho por um defeito do dispositivo — foi exatamente assim
+# que esta máquina manteve o `one benchmarks` vermelho depois do #125 ter levado o
+# checkpoint para fora do COMMIT (drenos sem dono: zero; hitches no settle: zero;
+# p99: ainda estourado).
+#
+# O probe abaixo mede o dispositivo DE ONDE O RUN ESTÁ, pelo funil, no mesmo arquivo
+# do banco, com a massa de um settle. Ele não afrouxa nada: onde o dispositivo cabe no
+# teto, os vereditos em µs correm byte por byte como corriam antes; onde não cabe, o
+# run confessa que não é mensurável e continua VERMELHO — com o motivo, o número e o
+# comando que consertam. A alternativa silenciosa (dividir o p99 pela latência do disco)
+# compraria verde nesta máquina e escondia a pergunta.
+const IoProbePages: int = 34
+const IoProbeReps: int = 5
+const IoProbeTable: String = "bench_io_probe"
 # Cercas de sanidade que ficam, e por quê: o one-shot de 500 ms e as duas leituras
 # ordenadas (50 ms) medem um round trip com cache frio, onde a amostra única é
 # dominada por aquecimento — não há baseline estável para regressar. O que nelas é
@@ -129,6 +157,52 @@ func _measureControl() -> int:
         _controlSink = acc
         best = mini(best, Time.get_ticks_usec() - controlStart)
     return best
+
+# Uma transação do probe: `IoProbePages` linhas de uma página cada, escritas pelo funil
+# com o writer já travado (`ExecNoLock` é o único writer permitido dentro de
+# `Transaction()` — os helpers re-travam a mutex, e recursão é detalhe de implementação,
+# não promessa, como a nota de `SQL.gd` em volta do `Transaction` diz).
+func _ioProbeTx(sql: Node, pageSize: int) -> bool:
+    for i in range(IoProbePages):
+        if not sql.ExecNoLock("INSERT INTO %s (b) VALUES (randomblob(%d));" % [IoProbeTable, pageSize]):
+            return false
+    return true
+
+# Melhor das `IoProbeReps` transações, em µs — o MESMO melhor-de-N do controle de CPU,
+# pela mesma razão: o que se quer saber é o piso do dispositivo, não o pico da disputa.
+# Devolve -1 se o probe não mediu nada (DDL que não entra, transação que não comete):
+# ausência de leitura não é "dispositivo rápido", é ausência.
+func _measureDeviceCommitUs(sql: Node, pageSize: int) -> int:
+    if pageSize <= 0:
+        return -1
+    if not sql.TryExec("CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, b BLOB);" % IoProbeTable):
+        return -1
+    var best: int = -1
+    var falhou: bool = false
+    for rep in range(IoProbeReps):
+        var started: int = Time.get_ticks_usec()
+        if not sql.Transaction(_ioProbeTx.bind(sql, pageSize)):
+            falhou = true
+            break
+        var took: int = Time.get_ticks_usec() - started
+        if best < 0 or took < best:
+            best = took
+    if not sql.TryExec("DROP TABLE %s;" % IoProbeTable):
+        return -1
+    # Uma repetição que não comite não é "runha mais lenta": o probe perdeu a capacidade
+    # de escrever a classe de trabalho que ele mesmo julga, e um piso vindo de 2 de 5
+    # tentativas seria ler o dispositivo pela metade.
+    return -1 if falhou else best
+
+# Por que os vereditos em µs não podem ser julgados aqui, em uma frase — separada da
+# impressão para que o controle plantado exercite cada ramo, mesma forma de
+# `_motivoAtribuicaoImpossivel`.
+func _motivoDispositivoImpossivel(ioUs: int, ceilingUs: int) -> String:
+    if ioUs < 0:
+        return "o probe do dispositivo não mediu nada (a transação de %d páginas não comitou)" % IoProbePages
+    if ioUs > ceilingUs:
+        return "um commit de %d páginas custa %d µs neste dispositivo, acima dos %d µs que a régua cobra do settle inteiro" % [IoProbePages, ioUs, ceilingUs]
+    return ""
 
 func _run_benchmarks():
     print("== Performance Benchmarks ==")
@@ -389,10 +463,30 @@ func _run_benchmarks():
     # como vermelho, nunca como "nenhum stall".
     var walSizes: Array[int] = []
     var walSalts: Array[int] = []
+    # #125: em quais settles o DONO do checkpoint disparou. Um dreno observado do `-wal` só
+    # é absolvido se o dono estiver numa de suas duas bordas, e quem calcula isso é
+    # `_drenosSemDono` (tests/benchmarks.gd:@_drenosSemDono). Sem esta série a régua não
+    # distingue o fsync que o servidor paga no tick ocioso daquele que ainda cai dentro do
+    # COMMIT de um jogador — que é o defeito, não o dreno em si.
+    var ownerFired: Array[bool] = []
     var pageSize: int = _pragmaOne(sql, "PRAGMA page_size;")
     var autoCkPages: int = _pragmaOne(sql, "PRAGMA wal_autocheckpoint;")
     var dbPath: String = String(load("res://sources/sql/SQLCommons.gd").call("GetDBPath"))
     var walPath: String = dbPath + "-wal"
+    # #178 — o DISPOSITIVO em que os µs abaixo serão julgados, medido antes do probe e
+    # antes do TRUNCATE de propósito: as páginas do probe entram no `-wal` e o
+    # `wal_checkpoint(TRUNCATE)` logo abaixo as devolve a zero, então a série de saltos
+    # continua tendo o mesmo estado inicial lido que `_motivoAtribuicaoImpossivel` cobra.
+    # O probe usa o funil inteiro (`Transaction()` + `ExecNoLock`) com os pragmas já
+    # ligados — é a classe de escrita do settle, não um fsync genérico de outro processo.
+    var ioCommitUs: int = _measureDeviceCommitUs(sql, pageSize)
+    var deviceCeilingUs: int = BaselineSettleP99Us * RegressionHeadroom
+    var motivoDispositivo: String = _motivoDispositivoImpossivel(ioCommitUs, deviceCeilingUs)
+    # Nada aqui afrouxa teto, baseline ou folga: `mensuravel == false` custa UMA falha
+    # vermelha com motivo, número e comando, e as réguas de taxa (hitches, drenos,
+    # ownership, censo de trabalho) e os invariantes do #125 correm do mesmo jeito. Um run
+    # que não pode medir não é um run verde — é um run que confessa o que falta.
+    var mensuravel: bool = motivoDispositivo == ""
     var ckRows: Array = sql.Query("PRAGMA wal_checkpoint(TRUNCATE);")
     var ckBusy: int = -1
     if not ckRows.is_empty():
@@ -408,6 +502,13 @@ func _run_benchmarks():
         var walProbe: Array[int] = _walProbe(walPath)
         walSizes.append(walProbe[0])
         walSalts.append(walProbe[1])
+        # O dono do checkpoint é chamado DEPOIS da amostra e FORA do bracket cronometrado,
+        # que é o espelho exato da produção, onde quem o dispara é `_process` (sources/world/World.gd:@_process)
+        # no tick de 1 s, não dentro de um settle. Media-lo dentro da amostra seria cobrar
+        # do jogador um custo que ele não paga; omiti-lo inteiro seria o tick revertido em
+        # 2026-09-26, que nunca dispara sob `-s`. O dreno aparece no salt do settle
+        # SEGUINTE, e é por isso que o dono é procurado nas duas bordas.
+        ownerFired.append(bool(sql.MaybeCheckpoint().get("fired", false)))
         if probeUs[-1] > TailFloorUs:
             tailIdx.append(i)
             tailUs.append(probeUs[-1])
@@ -422,6 +523,10 @@ func _run_benchmarks():
     # Contador lido ainda dentro do probe: os `delete_rows` abaixo não passam pelo
     # chokepoint contado, mas ler aqui deixa o número inequívoco.
     probeQueries = sql.QueryCount()
+    # Leituras do dono, ainda dentro do probe: `runs` é a prova de que o dono disparou
+    # (um dono que não dispara é o tick de `_process` revertido com outro nome) e
+    # `busy` é a fração de disparos que o SQLite devolveu sem drenar nada.
+    var ckStats: Dictionary = sql.CheckpointStats()
     # O denominador de tudo abaixo é TRABALHO, e trabalho tem que ser contado: sem
     # isto, um settle que deixasse de mintar lotes pareceria 40× mais rápido.
     var probeLots: int = _scalar(sql, "SELECT count(*) FROM item_instance WHERE char_id = ? AND reason = ?", [loadChar, "settle"])
@@ -444,6 +549,7 @@ func _run_benchmarks():
     print("Load probe: %d settles — p50 %d µs, p99 %d µs, max %d µs (budget p99: %d µs), erros: %d, %d queries, %d tx" % [LoadProbeIters, p50Us, p99Us, maxUs, BaselineSettleP99Us * RegressionHeadroom, probeErrors, probeQueries, probeTx])
     print("Régua de regressão do settle: baseline gravado p50 %d µs / p99 %d µs (run mais quieto de 13, máquina ociosa, load 0,31, 12 núcleos, 2026-09-27) × folga %d× → tetos p50 %d µs / p99 %d µs" % [BaselineSettleP50Us, BaselineSettleP99Us, RegressionHeadroom, BaselineSettleP50Us * RegressionHeadroom, BaselineSettleP99Us * RegressionHeadroom])
     print("   neste run: controle %d/%d µs vs %d µs gravados → máquina a %.2f×; normalizado p50 %d µs (%.2f× o baseline), p99 %d µs (%.2f× o baseline)" % [controlBefore, controlAfter, BaselineControlUs, loadFactor, p50AdjUs, float(p50AdjUs) / float(BaselineSettleP50Us), p99AdjUs, float(p99AdjUs) / float(BaselineSettleP99Us)])
+    print("   dispositivo do settle: um commit de %d páginas custa %d µs (piso de %d tentativas) e a régua cobra o settle inteiro em %d µs — %s em %s" % [IoProbePages, ioCommitUs, IoProbeReps, deviceCeilingUs, "mensurável" if mensuravel else "NÃO MENSURÁVEL", OS.get_user_data_dir()])
     print("   rode `godot --headless --path . -s tests/perf_baseline.gd` para recalcular o baseline e auditar o fator")
     print("Load probe hitches: %d de %d settles acima de 50 ms (budget: %d)" % [slowCount, LoadProbeIters, BudgetSlowIterPct * LoadProbeIters / 100])
     if slowIdx != "":
@@ -464,7 +570,15 @@ func _run_benchmarks():
     if probeErrors > 0:
         print("FAIL: settle devolveu vazio em %d iterações" % probeErrors)
         failures += 1
-    if p50AdjUs > BaselineSettleP50Us * RegressionHeadroom:
+    if not mensuravel:
+        # A falha é UMA e é a confissão, não o número do settle: sem um dispositivo que
+        # caiba no teto, "p50 estourou" é medida do arquivo, não do código. As réguas de
+        # taxa continuam correndo, e o run continua VERMELHO até alguém mudar o root do
+        # sandbox — que é exatamente o que `scripts/test.sh` já faz quando `/dev/shm` é
+        # utilizável, e o root é decidido num só lugar: `_sandbox_root` (scripts/test.sh:@_sandbox_root).
+        print("FAIL: settle NÃO MENSURÁVEL — %s. Nada foi afrouxado: tetos, baseline e folga seguem os mesmos, e este é o preço de medir onde não dá para medir." % motivoDispositivo)
+        failures += 1
+    elif p50AdjUs > BaselineSettleP50Us * RegressionHeadroom:
         print("FAIL: p50 do settle estourou a régua de regressão (%d µs normalizado vs teto %d µs; baseline %d µs × %d)" % [p50AdjUs, BaselineSettleP50Us * RegressionHeadroom, BaselineSettleP50Us, RegressionHeadroom])
         failures += 1
     # O p99 sozinho absolve um checkpoint que só aparece uma vez a cada cem
@@ -486,8 +600,10 @@ func _run_benchmarks():
     # taxa acima e pela contagem de drenos, que é nova. Um hitch que não coincide
     # com dreno nenhum não é checkpoint e vai inteiro no p99, contra o mesmo teto
     # de sempre: BaselineSettleP99Us × RegressionHeadroom, intocado.
-    failures += _atribuirStalls(probeUs, hitchIdx, hitchUs, tailIdx, tailUs, walSizes, walSalts, pageSize, autoCkPages, ckBusy, walStart, probeQueries, probeLots, loadFactor)
+    failures += _atribuirStalls(probeUs, hitchIdx, hitchUs, tailIdx, tailUs, walSizes, walSalts, ownerFired, ckStats, pageSize, autoCkPages, ckBusy, walStart, probeQueries, probeLots, loadFactor, mensuravel)
     failures += _controlesAtribuicao()
+    failures += _controlesOwnership()
+    failures += _controlesDispositivo()
 
     # Censo na chegada, depois de todo teardown: o que sobrou é o que ESTA corrida
     # mintou e não levou embora.
@@ -702,6 +818,20 @@ func _drenagens(walSalts: Array[int]) -> Array[int]:
             out.append(i)
     return out
 
+# Dreno SEM dono é autocheckpoint pago dentro do COMMIT de um settle — o defeito que
+# o #125 fecha. Um `-wal` que reinicia na borda de um disparo do dono é o fsync que o
+# servidor paga fora do caminho quente: `ownerFired[d-1]` porque a amostra do settle
+# é lida ANTES do dono no mesmo índice (o dreno aparece um settle depois), e
+# `ownerFired[d]` como folga de uma amostra. Fora das duas bordas não há quem tenha
+# chamado o checkpoint, e aí o pagante é o jogador.
+func _drenosSemDono(drainIdx: Array[int], ownerFired: Array[bool]) -> Array[int]:
+    var out: Array[int] = []
+    for d in drainIdx:
+        var dono: bool = (d > 0 and d <= ownerFired.size() and ownerFired[d - 1]) or (d < ownerFired.size() and ownerFired[d])
+        if not dono:
+            out.append(d)
+    return out
+
 # Hitch → dreno, com a folga de amostragem de `_tol` settles (a série é lida logo
 # depois do COMMIT). Pura de propósito: é a única parte da régua que o controle
 # plantado consegue exercitar.
@@ -742,7 +872,7 @@ func _distanciaDreno(idx: int, drainIdx: Array[int]) -> int:
             melhor = idx - d
     return melhor
 
-func _atribuirStalls(probeUs: Array[int], hitchIdx: Array[int], hitchUs: Array[int], tailIdx: Array[int], tailUs: Array[int], walSizes: Array[int], walSalts: Array[int], pageSize: int, autoCkPages: int, ckBusy: int, walStart: int, probeQueries: int, probeLots: int, loadFactor: float) -> int:
+func _atribuirStalls(probeUs: Array[int], hitchIdx: Array[int], hitchUs: Array[int], tailIdx: Array[int], tailUs: Array[int], walSizes: Array[int], walSalts: Array[int], ownerFired: Array[bool], ckStats: Dictionary, pageSize: int, autoCkPages: int, ckBusy: int, walStart: int, probeQueries: int, probeLots: int, loadFactor: float, mensuravel: bool) -> int:
     var failures: int = 0
     var threshold: int = pageSize * autoCkPages
     print("Atribuição de stall: page_size %d × wal_autocheckpoint %d páginas = dreno a cada %d bytes; `-wal` devolvido a %d bytes antes do probe" % [pageSize, autoCkPages, threshold, walStart])
@@ -759,6 +889,27 @@ func _atribuirStalls(probeUs: Array[int], hitchIdx: Array[int], hitchUs: Array[i
         return failures + 1
 
     var drainIdx: Array[int] = _drenagens(walSalts)
+    # Série de ownership na MESMA largura da série do `-wal`: sem as duas, "todo dreno
+    # tem dono" é conta sobre o que não foi observado — a mesma régua de completude de
+    # cima, agora aplicada ao disparo do dono.
+    if ownerFired.size() != walSalts.size():
+        print("FAIL: atribuição impossível — dono registrado em %d settles contra %d amostras do `-wal`; com as séries de larguras diferentes nenhum dreno pode ser absolvido" % [ownerFired.size(), walSalts.size()])
+        return failures + 1
+    # Invariante 1 — o dono tem que EXISTIR no laço medido. Um dono que nunca disparou
+    # é o tick de `_process` revertido com outro nome: sob `-s` não há frame nenhum, e
+    # foi assim que o gate ficou verde sobre a ausência do remédio (a passada de
+    # 2026-09-26 de deploy/LAUNCH_HANDOFF.md registra o fato).
+    var ckRuns: int = int(ckStats.get("runs", -1))
+    var semDono: Array[int] = _drenosSemDono(drainIdx, ownerFired)
+    print("   dono do checkpoint: %d disparos (cadência %d tx, busy %d, %d frames drenados, pico %d µs) — %d drenos observados, %d sem dono" % [ckRuns, int(ckStats.get("every", -1)), int(ckStats.get("busy", -1)), int(ckStats.get("frames", -1)), int(ckStats.get("maxMicroseconds", -1)), drainIdx.size(), semDono.size()])
+    if ckRuns <= 0:
+        print("FAIL: o dono do checkpoint não disparou em %d settles — ausência de disparo NÃO é 'nenhum stall no commit': quem paga o fsync voltou a ser o commit que cruza as %d páginas" % [LoadProbeIters, autoCkPages])
+        failures += 1
+    # Invariante 2 — dreno fora das duas bordas do disparo É autocheckpoint dentro do
+    # COMMIT de um jogador. É este, e não o p99, que o #125 promete fechar.
+    if not semDono.is_empty():
+        print("FAIL: %d drenos do WAL sem dono (%s) — cada um caiu dentro do COMMIT de um settle, que é o defeito que o #125 fecha; nenhum disparo de `MaybeCheckpoint()` precede a borda dele" % [semDono.size(), str(semDono.slice(0, 8))])
+        failures += 1
     var grade: Dictionary = _atribuirHitches(hitchIdx, drainIdx, DrainTolSettles)
     var attributed: int = int(grade.get("attributed", 0))
     var inexplicado: Array = grade.get("inexplicado", [])
@@ -800,7 +951,13 @@ func _atribuirStalls(probeUs: Array[int], hitchIdx: Array[int], hitchUs: Array[i
     var tailP99Us: int = tail[tail.size() * 99 / 100]
     var tailP99Adj: int = int(float(tailP99Us) / loadFactor)
     print("   cauda sem checkpoint: p99 %d µs (%d µs normalizado, %.2f× o baseline) vs teto %d µs — %d de %d amostras removidas" % [tailP99Us, tailP99Adj, float(tailP99Adj) / float(BaselineSettleP99Us), BaselineSettleP99Us * RegressionHeadroom, drop, LoadProbeIters])
-    if tailP99Adj > BaselineSettleP99Us * RegressionHeadroom:
+    if not mensuravel:
+        # Só esta linha e a do p50 deixam de morder, e o run continua VERMELHO pela
+        # confissão do dispositivo, contada uma vez no chamador. O que continua julgado é
+        # o que NÃO depende do disco: drenos sem dono, hitches acima de 50 ms contra
+        # orçamento de taxa, completude das séries e o censo de trabalho do settle.
+        print("   cauda NÃO julgada em µs absolutos: um teto que não cabe no arquivo não pode ficar verde nem vermelho por esta linha — a causa seria o dispositivo, não o código")
+    elif tailP99Adj > BaselineSettleP99Us * RegressionHeadroom:
         print("FAIL: p99 do settle estourou a régua de regressão (%d µs normalizado vs teto %d µs; baseline %d µs × %d)" % [tailP99Adj, BaselineSettleP99Us * RegressionHeadroom, BaselineSettleP99Us, RegressionHeadroom])
         failures += 1
 
@@ -898,6 +1055,84 @@ func _controlesAtribuicao() -> int:
             failures += 1
     if _motivoAtribuicaoImpossivel(4096, 4000, 0, 0) != "":
         print("FAIL: controle de impossibilidade — estado bom (4096/4000/busy 0/wal 0) declarado ilegível")
+        failures += 1
+    return failures
+
+# Controles do #125: cada ramo de `_drenosSemDono` (tests/benchmarks.gd:@_drenosSemDono)
+# tem que morder em série plantada. Sem isso a asserção "todo dreno tem dono" é enfeite —
+# e o verde de amanhã seria o mesmo falso-verde do tick que só disparava em frame.
+func _controlesOwnership() -> int:
+    var failures: int = 0
+    var drenos: Array[int] = [2]
+    var nenhuma: Array[bool] = [false, false, false, false]
+    # Borda de baixo: a amostra do `-wal` é lida ANTES do dono no mesmo índice, então o
+    # dreno do disparo de `d-1` aparece em `d`. Condenar isto é acusar o remédio certo.
+    var bordaBaixa: Array[bool] = [false, true, false, false]
+    if not _drenosSemDono(drenos, bordaBaixa).is_empty():
+        print("FAIL: controle de ownership — dreno na borda do disparo do dono foi condenado (%s)" % str(_drenosSemDono(drenos, bordaBaixa)))
+        failures += 1
+    # Borda de cima: o dono que dispara no mesmo settle em que o arquivo reinicia.
+    var mesmoIndice: Array[bool] = [false, false, true, false]
+    if not _drenosSemDono(drenos, mesmoIndice).is_empty():
+        print("FAIL: controle de ownership — dreno no índice do próprio disparo foi condenado (%s)" % str(_drenosSemDono(drenos, mesmoIndice)))
+        failures += 1
+    # O ramo que tem que morder: dreno sem nenhum disparo por perto É o autocheckpoint
+    # dentro do COMMIT. Se este plantado for absolvido, a régua não existe.
+    var condenados: Array[int] = _drenosSemDono(drenos, nenhuma)
+    if condenados != [2]:
+        print("FAIL: controle de ownership — dreno plantado sem dono nenhum foi absolvido (%s); um autocheckpoint pago dentro do COMMIT de um jogador passaria verde nesta régua" % str(condenados))
+        failures += 1
+    # A borda não é elástica: dois settles de distância do disparo não é o dono drenando,
+    # é o commit que cruzou as páginas.
+    var longe: Array[int] = [3]
+    var disparo0: Array[bool] = [true, false, false, false]
+    if _drenosSemDono(longe, disparo0) != [3]:
+        print("FAIL: controle de ownership — dreno a dois settles do disparo foi absolvido (%s); borda elástica é a régua escolhendo o veredito" % str(_drenosSemDono(longe, disparo0)))
+        failures += 1
+    # Índice 0 não pode ler `-1`: sem borda de baixo disponível, o dreno é condenado.
+    var primeiro: Array[int] = [0]
+    if _drenosSemDono(primeiro, nenhuma) != [0]:
+        print("FAIL: controle de ownership — dreno no primeiro settle absolvido por leitura de índice negativo (%s)" % str(_drenosSemDono(primeiro, nenhuma)))
+        failures += 1
+    var vazio: Array[int] = []
+    if not _drenosSemDono(vazio, bordaBaixa).is_empty():
+        print("FAIL: controle de ownership — série sem dreno devolveu condenação; ausência de dreno lida como dreno sem dono acusaria o remédio")
+        failures += 1
+    return failures
+
+# Controles do #178: a régua que decide "este run pode julgar µs?" é a única linha do gate
+# que pode ser afrouxada sem tocar em teto, baseline ou folga, então cada ramo dela morder
+# é obrigatório. Os três números plantados são medidos, não inventados: 6494 µs é o commit
+# de 34 páginas no HDD de 5400 rpm onde este repo mora, 430 µs é o mesmo commit em tmpfs,
+# e a borda é o teto real da régua do settle.
+func _controlesDispositivo() -> int:
+    var failures: int = 0
+    var teto: int = BaselineSettleP99Us * RegressionHeadroom
+    # Ausência de leitura JAMAIS é "dispositivo rápido": é o ramo que, se absolvido,
+    # transformaria um probe quebrado em verde.
+    if _motivoDispositivoImpossivel(-1, teto) == "":
+        print("FAIL: controle de dispositivo — probe que não mediu nada foi absolvido como mensurável; um `page_size` ilegível passaria verde sem medir disco nenhum")
+        failures += 1
+    if _measureDeviceCommitUs(null, 0) >= 0:
+        print("FAIL: controle de dispositivo — page_size 0 devolveu leitura em vez de ausência; o probe contaria páginas que não existem")
+        failures += 1
+    if _motivoDispositivoImpossivel(6494, teto) == "":
+        print("FAIL: controle de dispositivo — um commit de 6494 µs sob teto de %d µs foi absolvido (é o HDD medido em 2026-10-03)" % teto)
+        failures += 1
+    if _motivoDispositivoImpossivel(430, teto) != "":
+        print("FAIL: controle de dispositivo — o piso medido em tmpfs (430 µs) foi declarado impossível; a régua estaria confessando um dispositivo que cabe no teto")
+        failures += 1
+    # A borda não é elástica para nenhum dos dois lados: no teto cabe, 1 µs acima não.
+    if _motivoDispositivoImpossivel(teto, teto) != "":
+        print("FAIL: controle de dispositivo — o valor exatamente no teto de %d µs foi declarado impossível" % teto)
+        failures += 1
+    if _motivoDispositivoImpossivel(teto + 1, teto) == "":
+        print("FAIL: controle de dispositivo — 1 µs acima do teto de %d µs foi absolvido" % teto)
+        failures += 1
+    # O probe tem que medir alguma coisa: com zero páginas ele não escreve, e com uma
+    # repetição não existe "piso do dispositivo", só o pico da disputa.
+    if IoProbePages < 1 or IoProbeReps < 2:
+        print("FAIL: controle de dispositivo — probe configurado com %d páginas e %d repetições; sem escrita não há commit e sem duas leituras não há piso" % [IoProbePages, IoProbeReps])
         failures += 1
     return failures
 
