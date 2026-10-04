@@ -292,6 +292,22 @@ static func Invite(actorAccount : int, targetAccount : int) -> Dictionary:
 	result["guild"] = guildID
 	return result
 
+# Os verbos que a FILEIRA de membro oferece como clique. É a lista do desenho
+# (`sources/gui/GuildMemberRoster.gd`), não uma segunda autoridade: o `match` de `Run`
+# abaixo é quem decide o que existe, e `tests/guild_roster_actions_test.gd` amarra as
+# duas pontas medindo — todo verbo desenhado tem que ser aceito por `Run`, e todo verbo
+# de fileira que `Run` aceita tem que estar desenhado. `invite` fica fora de propósito:
+# o alvo é quem ainda NÃO está na guilda, então não há fileira onde pendurar o botão.
+const RowVerbs : Array[String] = ["promote", "demote", "kick"]
+
+# O fio entre as bocas. O clique e o que o jogador digitava têm que ser a MESMA string,
+# composta num lugar só: é isso que faz os dois caminhos caírem no MESMO
+# `GuildRoster.Command` (o comando de chat faz `split(" ")` e escolhe o verbo pelo
+# mesmo token). Sem a barra inicial — `Chat.gd` a corta antes de enviar e
+# `CommandManager.Parse` procura o nome sem ela (precedente: `sources/gui/Formation.gd`).
+static func ActionText(verb : String, target : String) -> String:
+	return "guild %s %s" % [verb, target]
+
 static func Run(verb : String, actorAccount : int, targetAccount : int) -> Dictionary:
 	match verb:
 		"kick":
@@ -308,8 +324,10 @@ static func Run(verb : String, actorAccount : int, targetAccount : int) -> Dicti
 			return result
 
 # ------------------------------------------------------------------ a boca dos verbos
-# Chamada pelo comando (`/guild <verb> <nick>`, com o alvo já resolvido pelo servidor) e
-# pela UI (`GuildPanel`), com a mesma assinatura. Existe para os dois caminhos não
+# Chamada pelo comando (`/guild <verb> <nick>`, com o alvo já resolvido pelo servidor),
+# pelo clique da fileira quando o serviço mora no mesmo processo, e pelo MESMO texto do
+# comando que o clique compõe em `ActionText` quando o painel é cliente puro — sempre a
+# mesma assinatura. Existe para os caminhos não
 # reinventarem o que vem depois da escrita: a frase que o jogador lê e o estado fresco
 # que as duas telas precisam ver. `nick` é só para a frase — nada aqui aceita id de
 # alvo vindo de pacote: quem resolve nick → conta é `WorldCommands.GetAccountID`, e quem

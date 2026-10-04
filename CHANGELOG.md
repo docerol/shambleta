@@ -450,6 +450,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- Promote, demote and kick existed only as typed text, and no ruler would have noticed a button appearing (#193, measured 2026-10-04).
+  `Render` of `sources/gui/GuildMemberRoster.gd:@Render` drew `Label` lines and nothing else — zero `Button`, zero `pressed` — while the same panel already
+  drew a click for every other guild action (vault shelves, level-up, slots). The blind judge scored the Social axis 6.5/7.0 and named the consequence: the
+  governance harness reads authority out of the database, so not one of its checks moves when a button appears. The row's verbs now come from the policy
+  rather than from a second list that can age: `RowVerbs` of `sources/economy/GuildRoster.gd:@RowVerbs` is the list the drawing iterates, and `ActionText`
+  (`sources/economy/GuildRoster.gd:@ActionText`) is the one wire format both lives of the action speak, so the click and the typed command fall into the same
+  `Command` of `sources/economy/GuildRoster.gd:@Command` instead of two callers agreeing by copy. `invite` stays out of the row on purpose — its target is not in
+  the guild yet, so there is no row to hang the button on — and the exemption is declared in the ruler rather than left silent. The tie is measured by
+  `_testPolicyTie` of `tests/guild_roster_actions_test.gd:@_testPolicyTie`, which parses the `match` arms of `Run` out of the source file, stopping at the end of
+  the function because a parser that only knew quotes would read another method's arms, and compares them with the constant in both directions. The runtime blocks
+  use the real thing: three accounts in the fixture database and `presets/gui/GuildPanel.tscn` instantiated under `Gui.windows`, asserting that a kick click clears
+  `guild_member`, writes the `guild_governance_log` row, returns the server's own sentence rather than "sent to the server", and repaints three rows to two; that an
+  officer sees no button at all; and that a pure client (economy removed for the click) moves nothing in the bank while confessing the send. The typed path stays
+  covered because the same harness drives `Handle` of `sources/debug/CommandManager.gd:@Handle` with a live `PlayerAgent`, plus a non-writing probe of `Run` against a
+  stranger account — every drawn verb must exist, and the probe is not allowed to kick anybody. Four mutations were planted, each made to bite, then reverted: a verb
+  added to `RowVerbs` with no arm in `Run` (76 checks, 2 failures), the leading slash returning to `ActionText` (6 failures — and the typed path really stops working,
+  which is what makes asserting the format worth it), the row gated on an officer's `canManage` instead of the leader (1 failure: three refusals per click is not a
+  door), and the `pressed.connect` deleted from the button (16 failures). The last one first crashed instead of accusing, and `_clickField` of
+  `tests/guild_roster_actions_test.gd:@_clickField` is what turned that crash into measurements — a ruler that dies on a mutation has reported nothing. Final state:
+  74 checks / 0 failures, teardown 1750 references against the recorded ceiling 2251 (`data/conf/teardown_baseline.txt`), the same world-boot floor the sibling guild
+  harnesses pay.
 - The memory faucet moved gold with no ledger row, and the supply census had no owner outside a harness (#185, measured 2026-10-04).
   The gold faucet `AddGP` of `sources/actor/Stats.gd:@AddGP` credits gold in memory: a zone kill by default, a quest turn-in through the `AddGP` wrapper
   of `sources/actor/agent/NpcCommons.gd:@AddGP`, a boss step through `SettleBossResult` of `sources/economy/BossProgressionService.gd:@SettleBossResult`.

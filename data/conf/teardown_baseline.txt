@@ -30,6 +30,7 @@ godnodes = 64
 gold_sink_scale_test = 2247
 guild_chat_fanout_test = 2249
 guild_governance_test = 2247
+guild_roster_actions_test = 2251
 guild_roster_race_test = 2247
 guild_rpc_wiring_test = 2247
 guild_vault_gate_test = 2247

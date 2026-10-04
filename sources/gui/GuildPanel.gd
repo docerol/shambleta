@@ -36,7 +36,7 @@ class_name GuildPanel
 # `sources/gui/`, cada um testável sozinho:
 #   `GuildWithdrawGate`  — o portão anti-dreno de §14 (aritmética de janela),
 #   `GuildSlotShop`      — a loja dos dois gastos de gems (preço, prévia, cobrança),
-#   `GuildMemberRoster`  — as linhas de membro com presença,
+#   `GuildMemberRoster`  — as linhas de membro com presença e os cliques de roster,
 #   `GuildVaultShelves`  — as prateleiras do vault com o botão de saque,
 #   `GuildListings`      — resultado de busca e placa de ranking,
 #   `GuildVaultTrail`    — o rastro do vault,
@@ -591,6 +591,29 @@ func _OnChatPressed() -> void:
 func _OnWithdrawStack(itemID : int, count : int) -> void:
 	WithdrawItem(itemID, count)
 
+func _OnRosterAction(verb : String, target : String, targetAccount : int) -> void:
+	RosterAction(verb, target, targetAccount)
+
+# O clique da fileira e o que o jogador digitava no chat chegam à MESMA boca. Com o
+# serviço neste processo, a linha é chamada direto; sem ele, o texto composto por
+# `GuildRoster.ActionText` entra pelo mesmo RPC do chat (`TriggerCommand`) e cai no
+# mesmo ramo de `CommandGuild` (`sources/world/WorldCommands.gd:@CommandGuild`) — um terceiro caminho
+# para a mesma política seria a segunda autoridade que a casa proíbe. O alvo vem do
+# ESTADO que o servidor mandou, nunca de pacote, e a política re-confere filiação e
+# posto de qualquer jeito (`Kick` de `sources/economy/GuildRoster.gd:@Kick`). A frase da
+# tela é a do próprio catálogo de motivos (`Feedback`), não o token cru.
+func RosterAction(verb : String, target : String, targetAccount : int) -> bool:
+	var eco : EconomyService = _ResolveEconomy()
+	var accountID : int = int(LocalPlayerIDs().get("account", 0))
+	if eco == null or accountID <= 0:
+		_WriteOverNetwork("Guild " + verb,
+			func() -> void: Network.TriggerCommand(GuildRoster.ActionText(verb, target)))
+		return false
+	var admin : Dictionary = GuildRoster.Command(verb, accountID, targetAccount, target)
+	SetFeedback(str(admin.get("text", "")))
+	Refresh()
+	return bool(admin.get("ok", false))
+
 func _OnJoinFound(guildID : int) -> void:
 	JoinGuildByID(guildID)
 
@@ -639,12 +662,18 @@ func RenderState(state : Dictionary) -> void:
 		_SetVisible(createButton, false)
 		var rank : String = str(mine.get("my_rank", ""))
 		var canManage : bool = rank == "leader" or rank == "officer"
+		# O roster NÃO segue `canManage`: os três verbos de fileira exigem o posto de
+		# líder e nada mais, decidido em `Kick` de `sources/economy/GuildRoster.gd:@Kick`.
+		# Um oficial que visse os botões veria três recusas por clique, então o posto
+		# comparado aqui é a constante da política, não a string repetida.
+		var isLeader : bool = rank == GuildRoster.RankLeader
 		_SetVisible(depositButton, true)
 		_SetVisible(actionRow, true)
 		_SetVisible(leaveButton, true)
 		_SetVisible(fastButton, canManage)
 		_SetVisible(slotButton, canManage)
-		GuildMemberRoster.Render(membersList, mine.get("members", []), _IsNickOnline)
+		GuildMemberRoster.Render(membersList, mine.get("members", []), _IsNickOnline,
+			isLeader, _OnRosterAction, int(LocalPlayerIDs().get("account", 0)))
 		GuildVaultShelves.Render(vaultList, mine.get("vault_stacks", []), canManage, _OnWithdrawStack)
 		# §14: o rastro sai do MESMO estado que encheu o vault — nada aqui toca o
 		# banco, então a lista que o oficial vê é a lista que o serviço autorizou.
