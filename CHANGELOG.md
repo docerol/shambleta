@@ -450,6 +450,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The quest log was running the Settings script, and no ruler could see it (#195, measured 2026-10-03).
+  `presets/gui/Progress.tscn` carries a quest-log node tree but declared `res://sources/gui/Settings.gd` at its root, so the six
+  `@onready` accessors of `sources/gui/Progress.gd` had nothing to resolve against in the file — every path the quest log names is absent
+  from the settings tree. It shipped that way because `presets/gui/Game.tscn` re-declared `Progress.gd` on the instanced node: the panel
+  only works through the mask, and the file, which is what every other load path reads, stayed wrong. The engine log was not the blind
+  spot, the log readers were: `scripts/ci_gate_log.sh` charges `SCRIPT ERROR` and `Parse Error`, and a `Node not found` raised from
+  `_ready` is neither, so the line that names this defect is read by nothing. The fit ruler was blind the other way — its census keys
+  scenes to panels by root-script stem, so a scene wearing another panel's script is simply absent from the roster and the panel gets
+  measured as a bare `script.new()` (which is how Progress was measured empty, and green). Fix: `Progress.tscn` now binds `Progress.gd`,
+  the instance override in `Game.tscn` is gone, and suite E walks every `.tscn` under `res://presets` in `_suiteSceneScript`
+  (`tests/repo_layout_test.gd:@_suiteSceneScript`) — `load` + `instantiate` + `get_node_or_null`, no tree, so no `_ready` side effects —
+  asserting both directions: every
+  node path a root script declares in `@onready` resolves in the scene that wears it, and no node inherited from another scene wears a
+  script other than the one that scene declares. Numbers from the same box: before, 256 charged paths with 1 scene accused (the quest log
+  missing 2 of the 2 paths its own bound script names) and 1 mask; after, 260 paths with 0 accused and 0 masks. The ruler was then run
+  against the two reverted scenes and turns red on exactly those three checks, which is what makes this change judged rather than
+  described. Two candidate rules were measured and declined: "no two scenes share a root script" is false by design (five effect scenes on
+  `res://sources/effects/Projectile.gd`, two context menus on `ContextMenu.gd`), and "no node re-declares a script" would have charged the
+  28 map blocks that reprint the *same* script the child already declares. Five planted controls pin the boundary in both directions — two
+  extraction forms that must be accused, the `get_node_or_null` form that must not be, the mask that must be accused, the redundant
+  re-declaration that must not be, and one real panel's honest text that must produce no gap.
 - The query-mutex contradiction is closed by a guard instead of by engine behaviour, and the fixture that measured it stopped measuring nothing (#188, measured 2026-10-03).
   The five round-trip paths used to lock `queryMutex` directly, and nested calls survived only because Godot 4.7's `Mutex` happens to be recursive —
   recursion is an implementation detail, and a meter that counts a re-entrant lock as a second round trip reports contention that never waited.

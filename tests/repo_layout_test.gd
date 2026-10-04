@@ -32,6 +32,14 @@ extends SceneTree
 #     para quem encosta na cerca por baixo. Não refatorei nada: a regra da casa é
 #     "sem reescrita sem benefício mensurável".
 #
+#  E) CENA x SCRIPT. Uma cena veste um script e o script nomeia caminhos de nó. Quando
+#     os dois divergem o engine escreve `ERROR: Node not found` no log, e NENHUM portão
+#     deste repo lê essa linha (`scripts/ci_gate_log.sh` é um script plano, sem função,
+#     e cobra `SCRIPT ERROR` e `Parse Error` — um `Node not found` de `_ready` não é
+#     nenhum dos dois). Foi assim que `presets/gui/Progress.tscn` passou a história
+#     inteira vestindo o script de outro painel. A suíte mede os dois sentidos da
+#     costura, cena por cena, com controle plantado em cada direção.
+#
 # Escopo declarado (e por quê): A e C medem a ÁRVORE DE TRABALHO, que é onde um
 # scratch se esconde. D mede o que o índice registra (`git ls-files --cached`),
 # porque um arquivo ainda não rastreado é obra em curso de outro agente e o dono
@@ -64,6 +72,10 @@ var _gitSeq : int = 0
 var _gitRc : int = -1
 var _gitErr : String = ""
 var _indexDiag : String = ""
+# Mapa caminho-de-cena -> script da raiz, montado sob demanda pela suíte E. As cenas
+# de mapa instanciam as mesmas folhas dezenas de vezes; sem aqui, a suíte relia o
+# mesmo arquivo a cada bloco.
+var _rootScriptCache : Dictionary = {}
 
 func Check(condition : bool, label : String) -> bool:
 	checks += 1
@@ -606,16 +618,300 @@ func _suiteCeiling() -> void:
 	Check(rows.size() > 150, "%d arquivos próprios medidos contra o teto de %d%s" % [rows.size(), ceiling, _gitBlame()])
 	suitesDone += 1
 
+# --- E) cena x script -------------------------------------------------------
+
+# Uma cena veste um script na raiz, e o script nomeia caminhos de nó. Quando os dois
+# divergem o engine reclama no log com `ERROR: Node not found`, e NENHUM portão deste
+# repo lê essa linha: `scripts/ci_gate_log.sh` cobra `SCRIPT ERROR` e `Parse Error`, e
+# um `Node not found` de `_ready` não é nenhum dos dois. Foi assim que
+# `presets/gui/Progress.tscn` passou a história inteira vestindo `res://sources/gui/Settings.gd`
+# numa árvore de log de missões: o painel só existia de verdade porque
+# `presets/gui/Game.tscn` redeclarava `Progress.gd` por cima da instância, e o
+# arquivo — que é o que qualquer outro caminho de carga lê — estava errado.
+#
+# Duas asserções, cada uma com controle plantado no fim da suíte:
+#   E1  todo caminho de nó que o script da raiz DECLARA numa `@onready` (`$A/B`,
+#       `$"A B"` ou `get_node("A/B")`) resolve no nó real da cena que o veste;
+#   E2  nenhum nó que uma cena INSTANCIA de outra cena veste um script DIFERENTE do que
+#       a cena filha declara na raiz — é o dispositivo que esvazia E1 no produto.
+#
+# O que deliberadamente NÃO é régua aqui, e foi medido para chegar nisso:
+#  - "duas cenas não podem vestir o mesmo script". Há três compartilhamentos no
+#    diretório e dois deles são o design (cinco cenas de efeito em
+#    `res://sources/effects/Projectile.gd`, dois menus em
+#    `res://sources/gui/context/ContextMenu.gd`).
+#  - "nada redeclara script num nó instanciado". 28 blocos em `presets/maps/layers/`
+#    reimprimem o MESMO script da filha — é ruído do editor, não máscara. Acusar isso
+#    trocaria 28 falsos positivos por um verdadeiro, e o controle plantado da
+#    redundância é exatamente o que impede a régua de escorregar para lá.
+#  - `get_node_or_null`: quem o escreve declarou que o nó pode faltar (há um caso real
+#    no `Timer` de `res://sources/gui/SpeechBubble.gd`). Cobrar esse seria a régua
+#    mentir sobre a intenção do código.
+#
+# Escopo da extração, declarado: só `@onready`, que é onde um caminho errado é
+# garantidamente nulo antes de qualquer uso.
+
+const SCENE_ROOT : String = "res://presets"
+
+func _suiteSceneScript() -> void:
+	print("-- E) toda cena veste o script que declara, e o script acha os nós que declara")
+	var scenes : Array = []
+	_walk(SCENE_ROOT, PackedStringArray(["tscn"]), scenes)
+	if not Check(scenes.size() > 100, "%d cenas lidas de %s (o censo é do diretório, não de lista escrita)" % [scenes.size(), SCENE_ROOT]):
+		return
+	var charged : int = 0
+	var gaps : Array[String] = []
+	var unbuilt : Array[String] = []
+	var overrides : Array[String] = []
+	for scenePath in scenes:
+		var packed : PackedScene = load(String(scenePath)) as PackedScene
+		var inst : Node = null if packed == null else packed.instantiate()
+		if inst == null:
+			unbuilt.append(String(scenePath))
+			continue
+		var scr : Script = inst.get_script()
+		if scr != null:
+			var scriptPath : String = String(scr.resource_path)
+			if scriptPath.begins_with("res://sources/"):
+				var declared : Dictionary = _declaredNodePaths(_read(scriptPath))
+				charged += declared.size()
+				for nodePath in declared:
+					if inst.get_node_or_null(NodePath(String(nodePath))) == null:
+						gaps.append("%s <- %s: %s" % [String(scenePath), scriptPath, String(nodePath)])
+		for blocked in _sceneOverrides(String(scenePath)):
+			overrides.append(String(blocked))
+		inst.free()
+	CheckEq(unbuilt.size(), 0, "todas as %d cenas de %s instanciam (%s)" % [scenes.size(), SCENE_ROOT, ", ".join(unbuilt)])
+	CheckEq(gaps.size(), 0, "%d caminhos de nó declarados em `@onready` por %d cenas: todos resolvem no nó real (%s)" % [charged, scenes.size(), " | ".join(gaps)])
+	CheckEq(overrides.size(), 0, "%d cenas: nenhum nó herdado de outra cena veste um script diferente do que ela declara (%s)" % [scenes.size(), " | ".join(overrides)])
+
+	# O caso concreto, preso sem depender do censo: a cena do log de missões veste o
+	# script do log de missões, e os seis caminhos que ele nomeia estão na árvore.
+	var progress : PackedScene = load("res://presets/gui/Progress.tscn") as PackedScene
+	var progressNode : Node = null if progress == null else progress.instantiate()
+	if Check(progressNode != null, "Progress.tscn instancia"):
+		var progressScript : Script = progressNode.get_script()
+		CheckEq(String(progressScript.resource_path) if progressScript != null else "", "res://sources/gui/Progress.gd", "Progress.tscn veste Progress.gd, e não o script de outro painel")
+		var progressDeclared : Dictionary = _declaredNodePaths(_read("res://sources/gui/Progress.gd"))
+		CheckEq(progressDeclared.size(), 6, "Progress.gd nomeia os seis caminhos de nó do painel")
+		var progressMissing : int = 0
+		for nodePath in progressDeclared:
+			if progressNode.get_node_or_null(NodePath(String(nodePath))) == null:
+				progressMissing += 1
+		CheckEq(progressMissing, 0, "os seis caminhos de Progress.gd resolvem em Progress.tscn")
+		progressNode.free()
+
+	CheckEq(_sceneControls(), 0, "controles plantados da suíte E: os cinco morderam")
+	suitesDone += 1
+
+# Caminhos de nó que um script nomeia nas suas `@onready`. Duas formas duras:
+# `$A/B` (e a variante com aspas `$"A B"`) e `get_node("A/B")`. Devolve conjunto.
+# `get_node_or_null` fica de fora de propósito: quem o escreve declarou que o nó pode
+# faltar, e acusar isso seria a régua mentir sobre a intenção do código.
+func _declaredNodePaths(scriptText : String) -> Dictionary:
+	var out : Dictionary = {}
+	var reNode : RegEx = RegEx.create_from_string("get_node\\([[:space:]]*\"([^\"]+)\"")
+	var reQuoted : RegEx = RegEx.create_from_string("\\$\"([^\"]+)\"")
+	var reDollar : RegEx = RegEx.create_from_string("\\$([A-Za-z0-9_/\\.]+)")
+	for rawLine in scriptText.split("\n"):
+		var line : String = String(rawLine)
+		if not line.contains("@onready"):
+			continue
+		for each in [reNode, reQuoted, reDollar]:
+			var re : RegEx = each
+			var pos : int = 0
+			while true:
+				var m : RegExMatch = re.search(line, pos)
+				if m == null:
+					break
+				out[String(m.get_string(1))] = true
+				pos = m.get_start() + 1
+	return out
+
+# Nós que uma cena INSTANCIA de outra cena e, no próprio bloco, redeclaram um script
+# DIFERENTE do que a cena instanciada declara na raiz. É o dispositivo que esvazia E1
+# no produto: `res://presets/gui/Game.tscn` fazia exatamente isso com o log de missões,
+# e por isso o painel funcionava enquanto o arquivo estava errado.
+#
+# O que NÃO é acusado, e por quê:
+#  - redundância (`script` igual ao da cena instanciada): 28 blocos assim em
+#    `presets/maps/layers/` — o editor reimprime o script quando o nó filho muda de
+#    nome/tipo. Mesmo dono, nenhuma máscara.
+#  - cena filha sem script na raiz, script vindo do pai: é a saída legítima do repo
+#    para "container genérico" (ButtonTip, CellSelection, HealthBar, Window).
+func _sceneOverrides(scenePath : String) -> Array[String]:
+	var out : Array[String] = []
+	var text : String = _read(scenePath)
+	var scripts : Dictionary = _extResources(text, "Script")
+	var packs : Dictionary = _extResources(text, "PackedScene")
+	var inNode : bool = false
+	var instanceId : String = ""
+	var blockScript : String = ""
+	var header : String = ""
+	var lines : PackedStringArray = text.split("\n")
+	for i in lines.size():
+		var line : String = String(lines[i])
+		var newHeader : String = ""
+		if line.begins_with("[node "):
+			newHeader = line
+		if inNode and (newHeader != "" or i == lines.size() - 1):
+			for verdict in _overrideVerdict(scenePath, header, instanceId, blockScript, scripts, packs):
+				out.append(String(verdict))
+		if line.begins_with("[") and newHeader == "":
+			inNode = false
+			instanceId = ""
+			blockScript = ""
+		if newHeader != "":
+			inNode = true
+			header = newHeader
+			instanceId = _extRefId(newHeader, "instance=ExtResource(")
+			blockScript = ""
+			continue
+		if line.begins_with("script = ExtResource("):
+			blockScript = _extRefId(line, "script = ExtResource(")
+	return out
+
+func _overrideVerdict(scenePath : String, header : String, instanceId : String, blockScript : String, scripts : Dictionary, packs : Dictionary) -> Array[String]:
+	if instanceId == "" or blockScript == "" or not packs.has(instanceId):
+		return []
+	var childScene : String = String(packs[instanceId])
+	var imposed : String = String(scripts.get(blockScript, ""))
+	if imposed.is_empty():
+		return []
+	var native : String = _rootSceneScript(childScene)
+	if native.is_empty() or native == imposed:
+		return []
+	return ["%s/%s veste %s mas a cena que ele instancia (%s) declara %s" % [scenePath, header, imposed, childScene, native]]
+
+# Mapa id -> path dos `ext_resource` de um tipo.
+func _extResources(sceneText : String, wantType : String) -> Dictionary:
+	var out : Dictionary = {}
+	var re : RegEx = RegEx.create_from_string("\\[ext_resource type=\"" + wantType + "\"[^\n]*?path=\"([^\"]+)\"[^\n]*?id=\"([^\"]+)\"")
+	var pos : int = 0
+	while true:
+		var m : RegExMatch = re.search(sceneText, pos)
+		if m == null:
+			break
+		out[String(m.get_string(2))] = String(m.get_string(1))
+		pos = m.get_start() + 1
+	return out
+
+# Planta uma cena no `user://` com o gesto exato do defeito: um nó que instancia uma
+# cena filha e redeclara o script dela. Só `scriptPath` muda entre os dois controles —
+# imposta (deve morder) e redundante (não pode morder).
+func _writeOverride(path : String, scriptPath : String, scriptId : String) -> bool:
+	var f : FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string("[gd_scene load_steps=3 format=3]\n\n"
+		+ "[ext_resource type=\"PackedScene\" path=\"res://presets/effects/ambient/Lighting.tscn\" id=\"1_child\"]\n"
+		+ "[ext_resource type=\"Script\" path=\"" + scriptPath + "\" id=\"" + scriptId + "\"]\n\n"
+		+ "[node name=\"Holder\" type=\"Node2D\"]\n\n"
+		+ "[node name=\"Lighting\" type=\"CanvasLayer\" parent=\".\" instance=ExtResource(\"1_child\")]\n"
+		+ "script = ExtResource(\"" + scriptId + "\")\n")
+	f.close()
+	return true
+
+func _extRefId(line : String, prefix : String) -> String:
+	var at : int = line.find(prefix)
+	if at < 0:
+		return ""
+	var rest : String = line.substr(at + prefix.length())
+	var open : int = rest.find("\"")
+	if open < 0:
+		return ""
+	var close : int = rest.find("\"", open + 1)
+	return "" if close < 0 else rest.substr(open + 1, close - open - 1)
+
+# Script que a RAIZ de uma cena declara, resolvido pelo id do próprio arquivo.
+func _rootSceneScript(scenePath : String) -> String:
+	if _rootScriptCache.has(scenePath):
+		return String(_rootScriptCache[scenePath])
+	var answer : String = ""
+	var text : String = _read(scenePath)
+	if text != "":
+		var scripts : Dictionary = _extResources(text, "Script")
+		var started : bool = false
+		for rawLine in text.split("\n"):
+			var line : String = String(rawLine)
+			if line.begins_with("[node "):
+				if started:
+					break
+				started = true
+				continue
+			if started and line.begins_with("["):
+				break
+			if started and line.begins_with("script = ExtResource("):
+				answer = String(scripts.get(_extRefId(line, "script = ExtResource("), ""))
+				break
+	_rootScriptCache[scenePath] = answer
+	return answer
+
+# Os cinco controles, cada um com a direção certa. Dois plantados que PRECISAM morder
+# (as duas formas duras de caminho, e a máscara de script), dois que NÃO podem morder
+# (a forma tolerada `get_node_or_null`, e a redundância que o editor reimprime) e um
+# positivo verdadeiro (o texto de `TitleBar.gd`, que tem de resolver inteiro) — sem os
+# que não mordem, uma extração que acusasse tudo passaria nos que mordem.
+func _sceneControls() -> int:
+	var bitten : int = 0
+	var planted : int = 5
+	var packed : PackedScene = load("res://presets/gui/TitleBar.tscn") as PackedScene
+	if packed == null:
+		return 1
+	var node : Node = packed.instantiate()
+	if node == null:
+		return 1
+	var ghost : Dictionary = _declaredNodePaths("extends Control\n@onready var a : Control\t= $NoSuchChild/Ghost\n@onready var b : Label\t= get_node(\"AlsoNoSuch\")\n@onready var c : Timer\t= get_node_or_null(\"StillNoSuch\")\n")
+	if ghost.size() == 2 and not ghost.has("StillNoSuch") and node.get_node_or_null(NodePath("NoSuchChild/Ghost")) == null:
+		bitten += 1
+	# Forma com aspas (`$"Com Espaço"`) também tem de ser lida, senão o buraco continua.
+	var quoted : Dictionary = _declaredNodePaths("@onready var q : Control\t= $\"Um Dois\"")
+	if quoted.size() == 1 and quoted.has("Um Dois"):
+		bitten += 1
+	# A máscara, montada em arquivo de verdade no `user://`: um nó que instancia
+	# `Lighting.tscn` (cuja raiz veste `res://sources/effects/Lighting.gd`) e redeclara
+	# `Settings.gd`. É o gesto do `Game.tscn` sobre o Progress, sem tocar no repo.
+	var maskPath : String = "user://repo_layout_mask.tscn"
+	var redundPath : String = "user://repo_layout_redundant.tscn"
+	var maskOK := _writeOverride(maskPath, "res://sources/gui/Settings.gd", "2_mask")
+	var redundOK := _writeOverride(redundPath, "res://sources/effects/Lighting.gd", "2_same")
+	if maskOK and redundOK:
+		var masked : Array[String] = _sceneOverrides(maskPath)
+		var redundant : Array[String] = _sceneOverrides(redundPath)
+		if masked.size() == 1 and masked[0].contains("Settings.gd") and masked[0].contains("Lighting.gd"):
+			bitten += 1
+		# Sentido inverso: reimpressão do MESMO script não pode ser acusada, senão a
+		# régua passa a gritar sobre os 28 blocos de mapa que sempre estiveram certos.
+		if redundant.is_empty():
+			bitten += 1
+		var d : DirAccess = DirAccess.open("user://")
+		if d != null:
+			d.remove(maskPath.get_file())
+			d.remove(redundPath.get_file())
+	var honest : Dictionary = _declaredNodePaths(_read("res://sources/gui/TitleBar.gd"))
+	var honestMissing : int = 0
+	for nodePath in honest:
+		if node.get_node_or_null(NodePath(String(nodePath))) == null:
+			honestMissing += 1
+	if honest.size() > 0 and honestMissing == 0:
+		bitten += 1
+	node.free()
+	if bitten != planted:
+		print("  [FAIL] controles da suíte E: %d de %d mordendo (extração ou detecção está cega)" % [bitten, planted])
+		failures += 1
+	return planted - bitten
+
 func _run() -> void:
 	_suiteRoot()
 	_suiteProbeFacts()
 	_suiteReachability()
 	_suiteCeiling()
+	_suiteSceneScript()
 	# Guarda de integridade, descoberta no run deste mesmo arquivo: um SCRIPT ERROR
 	# no meio de uma suíte aborta a função, mas o CHAMADOR CONTINUA — o marcador
 	# verde foi impresso com a suíte D pela metade (37 checks em vez de 46). O
 	# `ci_gate_log.sh` pega isso pelo grep de SCRIPT ERROR no log; esta linha pega
 	# do lado de dentro, para o verde nunca depender de alguém reler o log.
-	CheckEq(suitesDone, 4, "as 4 suítes rodaram até o fim (aborto no meio não imprime verde)")
+	CheckEq(suitesDone, 5, "as 5 suítes rodaram até o fim (aborto no meio não imprime verde)")
 	print("== RESULT: %d checks, %d failures ==" % [checks, failures])
 	quit(failures)

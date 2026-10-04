@@ -1,7 +1,7 @@
 [gd_scene format=3 uid="uid://dolxuw03u60eo"]
 
 [ext_resource type="Theme" uid="uid://dhb6h35g1bk0x" path="res://data/themes/DefaultTheme.tres" id="1_q7m0j"]
-[ext_resource type="Script" uid="uid://ci85y60tfmp4o" path="res://sources/gui/Settings.gd" id="2_j3ryh"]
+[ext_resource type="Script" uid="uid://bkiorsk8ph1x8" path="res://sources/gui/Progress.gd" id="2_j3ryh"]
 [ext_resource type="PackedScene" uid="uid://da8nt01w5gjsp" path="res://presets/gui/TitleBar.tscn" id="tb_scene"]
 
 [node name="Progress" type="PanelContainer" unique_id=1241443839]

@@ -33,7 +33,6 @@
 [ext_resource type="PackedScene" uid="uid://lkl6f0td76mu" path="res://presets/gui/Notification.tscn" id="17_64u4l"]
 [ext_resource type="Script" uid="uid://c32qnr066pqrl" path="res://sources/gui/Sticks.gd" id="18_6nrx4"]
 [ext_resource type="Texture2D" uid="uid://dy3mdamfcvd4v" path="res://data/graphics/gui/mobile/background.png" id="18_lb78w"]
-[ext_resource type="Script" uid="uid://bkiorsk8ph1x8" path="res://sources/gui/Progress.gd" id="19_v8wo4"]
 [ext_resource type="Texture2D" uid="uid://cupywjqxb66ii" path="res://data/graphics/gui/mobile/button.png" id="20_1vdgt"]
 [ext_resource type="PackedScene" uid="uid://tqcjqyaicaol" path="res://presets/gui/contexts/ContextMenuV.tscn" id="20_px3po"]
 [ext_resource type="PackedScene" uid="uid://cppc7wshwpqof" path="res://presets/gui/PickUp.tscn" id="21_5ivxk"]
@@ -721,7 +720,6 @@ offset_left = 1027.0
 offset_top = 159.0
 offset_right = 1256.0
 offset_bottom = 468.0
-script = ExtResource("19_v8wo4")
 
 [node name="Respawn" parent="Windows/Floating" unique_id=1663296732 instance=ExtResource("44_7o5pa")]
 visible = false
