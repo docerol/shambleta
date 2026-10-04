@@ -18,8 +18,10 @@ extends SceneTree
 # De onde vem a lista de chaves (requisito da ordem: nunca uma lista escrita à
 # mão neste arquivo):
 #   1. `sources/**/*.gd`  -> literais de `tr("...")` e `TranslationServer.translate("...")`
-#   2. `sources/**/*.gd`  -> `text = "..."` de linha inteira (traduzido no runtime por Localizer.gd)
-#   3. `presets/**/*.tscn`-> `text = "..."` e `title = "..."` (fora de maps/sprites/particles)
+#   2. `sources/**/*.gd`  -> atribuição de linha inteira de um prop RASTREADO
+#      (a lista vem de `TrackedProps` (`sources/gui/Localizer.gd:@TrackedProps`), não
+#      deste arquivo) — é o que o runtime traduz
+#   3. `presets/**/*.tscn`-> os mesmos props (fora de maps/sprites/particles)
 #   4. `sources/scripts/**` -> `Mes|Msg|Say|Dialog|Option|Answer|Question("...")` = domínio conteúdo
 # Os quatro padrões são os mesmos de `tools/extract_i18n.py` e a régua R-SELF
 # confere a contagem dos dois lados, senão um scanner que parasse de andar
@@ -73,6 +75,7 @@ var _catalog : Dictionary = {}
 var _identity : Dictionary = {}
 var _locales : PackedStringArray = PackedStringArray()
 var _msgs : Dictionary = {}
+var _props : PackedStringArray = PackedStringArray()
 
 func _check(condition : bool, label : String) -> bool:
 	checks += 1
@@ -92,6 +95,8 @@ func _finish() -> void:
 
 func _initialize() -> void:
 	print("== I18N COVERAGE: chaves usadas x catálogos por idioma ==")
+	_props = _trackedProps()
+	print("  props traduzidos no runtime (%d): %s" % [_props.size(), ", ".join(_props)])
 	_scanGd()
 	_scanTscn()
 	var used : Dictionary = _unionUsed()
@@ -112,6 +117,11 @@ func _initialize() -> void:
 	var nTscn : int = _usedTscn.size()
 	var nCont : int = _usedContent.size()
 	print("  domínios: tr()=%d text=.gd=%d tscn=%d conteúdo(NPC)=%d" % [nTr, nText, nTscn, nCont])
+	# O piso abaixo é o número medido em 2026-10-04 (text/title/placeholder_text).
+	# Perder um prop é ato deliberado do produto, e a régua exige que ele apareça:
+	# se a leitura de `TrackedProps` voltasse vazia por mudança de forma, a varredura
+	# dos dois domínios iria a zero e o verde seria mudo.
+	_check(_props.size() >= 3, "a varredura recebeu do produto os props que o runtime traduz (%s)" % ", ".join(_props))
 	_check(nTr >= 80, "domínio tr()/TranslationServer varrido (%d chaves; medido 95)" % nTr)
 	_check(nText >= 50, "domínio text= de .gd varrido (%d; medido 64)" % nText)
 	_check(nTscn >= 150, "domínio text/title= de .tscn varrido (%d; medido 164)" % nTscn)
@@ -223,6 +233,38 @@ func _rx(pattern : String) -> RegEx:
 		push_error("regex inválida: " + pattern)
 	return r
 
+# Os props que o jogador vê traduzidos NO RUNTIME, lidos de `TrackedProps`
+# (`sources/gui/Localizer.gd:@TrackedProps`) — não uma lista escrita neste harness.
+# A régua varre exatamente o que o Localizer traduz: um quarto prop na tabela do
+# produto entra no censo no mesmo commit, e se as strings dele não tiverem linha na
+# tabela a régua as devolve como órfãs. É assim que o buraco de `placeholder_text`
+# (medido 2026-10-04: nove chaves atribuídas no fonte, nenhuma linha no CSV, o
+# jogador BR lendo inglês dentro da caixa onde ia digitar) fecha sozinho em vez de
+# ficar esperando alguém lembrar de ampliar a varredura.
+func _trackedProps() -> PackedStringArray:
+	var out : PackedStringArray = PackedStringArray()
+	var scr : GDScript = load("res://sources/gui/Localizer.gd") as GDScript
+	if scr == null:
+		return out
+	var table : Variant = scr.get_script_constant_map().get("TrackedProps")
+	if typeof(table) != TYPE_ARRAY:
+		return out
+	for pairV in (table as Array):
+		var pair : Array = pairV
+		if not pair.is_empty():
+			out.append(String(pair[0]))
+	out.sort()
+	return out
+
+func _alternatives(props : PackedStringArray) -> String:
+	# Mais longo primeiro: a alternação tem de tentar `placeholder_text` antes de
+	# `text`, senão o sufixo casaria no meio do nome e o prop fugiria da varredura.
+	var porTamanho : Array[String] = []
+	for p in props:
+		porTamanho.append(String(p))
+	porTamanho.sort_custom(func(a : String, b : String) -> bool: return a.length() > b.length())
+	return "|".join(porTamanho)
+
 func _literal(inner : String) -> String:
 	# O importador roda com unescape_keys/unescape_translations = true, então a
 	# forma comparável é a desescapada — mesma função do engine, não uma cópia.
@@ -234,7 +276,7 @@ func _scanGd() -> void:
 	var reTr : RegEx = _rx('tr\\("((?:[^"\\\\]|\\\\.)+)"\\)')
 	var reTs : RegEx = _rx('TranslationServer\\.translate\\("((?:[^"\\\\]|\\\\.)+)"\\)')
 	var reMes : RegEx = _rx('\\b(?:Mes|Msg|Say|Dialog|Option|Answer|Question)\\s*\\(\\s*"((?:[^"\\\\]|\\\\.)+)"')
-	var reText : RegEx = _rx('^\\s*(?:\\w+\\.)*text\\s*=\\s*"((?:[^"\\\\]|\\\\.)+)"\\s*$')
+	var reText : RegEx = _rx('^\\s*(?:\\w+\\.)*(?:' + _alternatives(_props) + ')\\s*=\\s*"((?:[^"\\\\]|\\\\.)+)"\\s*$')
 	for path in files:
 		var src : String = _readAll(path)
 		if src.is_empty():
@@ -268,15 +310,13 @@ func _scanGd() -> void:
 func _scanTscn() -> void:
 	var files : Array[String] = []
 	_walk("res://presets", ".tscn", files)
-	var reText : RegEx = _rx('\\btext\\s*=\\s*"((?:[^"\\\\]|\\\\.)+)"')
-	var reTitle : RegEx = _rx('\\btitle\\s*=\\s*"((?:[^"\\\\]|\\\\.)+)"')
+	var reProps : RegEx = _rx('\\b(?:' + _alternatives(_props) + ')\\s*=\\s*"((?:[^"\\\\]|\\\\.)+)"')
 	for path in files:
 		if path.contains("/maps/") or path.contains("/sprites/") or path.contains("/particles/"):
 			continue
 		var src : String = _readAll(path)
-		for re in [reText, reTitle]:
-			for m in (re as RegEx).search_all(src):
-				_usedTscn[_literal(m.get_string(1))] = true
+		for m in reProps.search_all(src):
+			_usedTscn[_literal(m.get_string(1))] = true
 
 func _unionUsed() -> Dictionary:
 	var used : Dictionary = {}

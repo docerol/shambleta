@@ -5,9 +5,15 @@ Varre as fontes de texto do jogo e compara com data/i18n/ui.csv:
   1. tr("...") literais nos *.gd            -> precisam de linha no CSV
      (e TranslationServer.translate("..."), same domain: é o `tr()` de quem está
       num contexto estático, onde o método do Object não existe)
-  2. text = "..." estaticos nos *.gd        -> traduzidos no runtime pelo Localizer
-  3. text/title = "..." nos *.tscn          -> idem (Godot 4 NAO auto-traduz; Localizer.gd)
+  2. atribuição literal de um prop rastreado nos *.gd   -> traduzidos no runtime
+  3. o mesmo prop nos *.tscn                            -> idem (Godot 4 NAO
+     auto-traduz: é Localizer.gd que traduz no runtime)
   4. Mes/Say(...) nos scripts de conteudo   -> dominio 'content' (fase 2)
+Os props dos itens 2 e 3 NAO sao uma lista escrita aqui: a unica fonte e a
+tabela `TrackedProps` do runtime, lida por tracked_props(). Em 2026-10-04 o
+censo varria apenas `text`, entao `placeholder_text = "Search by name"` (e mais
+oito) era traduzivel so no nome: invisivel aos dois leitores, sem linha no CSV,
+e o jogador BR via ingles dentro da caixa onde ia digitar.
 Escreve data/i18n/coverage_report.md (contagem + chaves faltantes por dominio).
 
 Uso:  python3 tools/extract_i18n.py [--write-gaps]   (--write-gaps adiciona as
@@ -24,11 +30,29 @@ RE_TR = re.compile(r'tr\("((?:[^"\\]|\\.)+)"\)')
 # singleton, e omiti-la do domínio deixava invisível toda chave traduzida num helper
 # estático de UI — foi o caso do rastro do cofre (`GuildVaultTrail.Render`).
 RE_TS = re.compile(r'TranslationServer\.translate\("((?:[^"\\]|\\.)+)"\)')
-RE_TEXT_GD = re.compile(r'^\s*(?:\w+\.)*text\s*=\s*"((?:[^"\\]|\\.)+)"\s*$')
-RE_TEXT_TSCN = re.compile(r'\btext\s*=\s*"((?:[^"\\]|\\.)+)"')
-RE_TITLE_TSCN = re.compile(r'\btitle\s*=\s*"((?:[^"\\]|\\.)+)"')
 RE_MES = re.compile(r'\b(?:Mes|Msg|Say|Dialog|Option|Answer|Question)\s*\(\s*"((?:[^"\\]|\\.)+)"')
 CONTENT_DIR = os.path.join(ROOT, 'sources', 'scripts')
+
+LOCALIZER = os.path.join(ROOT, 'sources', 'gui', 'Localizer.gd')
+RE_TRACKED = re.compile(r'^\s*\[\s*"(\w+)"', re.M)
+
+def tracked_props():
+    """Os props que o Localizer traduz no runtime, lidos do proprio fonte.
+
+    A lista nao e escrita aqui de proposito: `placeholder_text` e `title` sao
+    traduzidos pelo runtime e estavam invisiveis aos dois leitores do censo, que
+    varriam so `text`. Derivar do fonte faz o buraco fechar sozinho quando um
+    quarto prop entrar na tabela do Localizer.
+    """
+    with open(LOCALIZER, encoding='utf-8') as fh:
+        src = fh.read()
+    start = src.index('const TrackedProps')
+    bloco = src[start:start + src[start:].index('\n\n')]
+    return sorted(set(RE_TRACKED.findall(bloco)), key=len, reverse=True)
+
+PROPS = tracked_props()
+RE_TEXT_GD = re.compile(r'^\s*(?:\w+\.)*(?:%s)\s*=\s*"((?:[^"\\]|\\.)+)"\s*$' % '|'.join(PROPS))
+RE_TEXT_TSCN = re.compile(r'\b(?:%s)\s*=\s*"((?:[^"\\]|\\.)+)"' % '|'.join(PROPS))
 
 # Chaves de identidade deliberada: simbolos, numeros e loanwords que a comunidade
 # BR usa verbatim (Mana, PC, Slot, Gems:, Odds:, Drops:, VIP:, Artis proper noun).
@@ -78,9 +102,8 @@ def collect():
                   if '/maps/' not in f and '/sprites/' not in f and '/particles/' not in f]
     for f in tscn_files:
         src = open(f, encoding='utf-8').read()
-        for rx in (RE_TEXT_TSCN, RE_TITLE_TSCN):
-            for m in rx.finditer(src):
-                tscn_keys.add(unesc(m.group(1)))
+        for m in RE_TEXT_TSCN.finditer(src):
+            tscn_keys.add(unesc(m.group(1)))
     return tr_keys, textgd_keys, tscn_keys, content_keys
 
 def load_csv():
@@ -141,10 +164,13 @@ def main():
     with open(REPORT, 'w', encoding='utf-8') as fh:
         fh.write('# I18N Coverage Report — cliente Shambleta (pt_BR)\n\n')
         fh.write('Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, '
-                 '`text =` em .gd, `text/title =` em `presets/gui/**/*.tscn`. '
-                 'A tradução de cena acontece no runtime (`Localizer.gd`), não no engine.\n\n')
+                 'atribuição literal de %s (props lidos de `Localizer.TrackedProps`) em .gd e em '
+                 '`presets/gui/**/*.tscn`. '
+                 'A tradução de cena acontece no runtime (`Localizer.gd`), não no engine.\n\n'
+                 % ', '.join('`%s`' % p for p in PROPS))
         fh.write('| Domínio | Chaves | Cobertas pt_BR | Faltando |\n|---|---|---|---|\n')
-        domains = [("tr() código (UI)", tr_keys), ("text= .gd (UI, via Localizer)", textgd_keys),
+        domains = [("tr() código (UI)", tr_keys),
+                   ("text= .gd (UI, via Localizer; props %s)" % '/'.join(PROPS), textgd_keys),
                    ("cenas .tscn (via Localizer)", tscn_keys), ("conteúdo NPCs/quests (fase 2)", content_keys)]
         for name, s in domains:
             if name.startswith("conteúdo"):

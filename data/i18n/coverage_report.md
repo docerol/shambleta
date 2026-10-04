@@ -1,17 +1,17 @@
 # I18N Coverage Report — cliente Shambleta (pt_BR)
 
-Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, `text =` em .gd, `text/title =` em `presets/gui/**/*.tscn`. A tradução de cena acontece no runtime (`Localizer.gd`), não no engine.
+Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, atribuição literal de `placeholder_text`, `title`, `text` (props lidos de `Localizer.TrackedProps`) em .gd e em `presets/gui/**/*.tscn`. A tradução de cena acontece no runtime (`Localizer.gd`), não no engine.
 
 | Domínio | Chaves | Cobertas pt_BR | Faltando |
 |---|---|---|---|
 | tr() código (UI) | 95 | 95 | 0 |
-| text= .gd (UI, via Localizer) | 64 | 64 | 0 |
-| cenas .tscn (via Localizer) | 164 | 164 | 0 |
+| text= .gd (UI, via Localizer; props placeholder_text/title/text) | 72 | 72 | 0 |
+| cenas .tscn (via Localizer) | 167 | 167 | 0 |
 | conteúdo NPCs/quests (fase 2) | 732 | 732 | 0 |
 
-**UI total:** 309 chaves, 309 cobertas (100%), 0 faltando. **Conteúdo:** 0 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
+**UI total:** 319 chaves, 319 cobertas (100%), 0 faltando. **Conteúdo:** 0 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
 
-Das cobertas, **18** contam-se por a fonte já estar em português (o `tr()` devolve a chave; a coluna `en` dessas linhas é que carrega a tradução) — listadas ao final, uma a uma.
+Das cobertas, **19** contam-se por a fonte já estar em português (o `tr()` devolve a chave; a coluna `en` dessas linhas é que carrega a tradução) — listadas ao final, uma a uma.
 
 ## Cobertas por fonte em português (UI)
 
@@ -32,6 +32,7 @@ Linhas onde o texto-fonte já é português: o jogador BR vê a chave, e o que e
 - Iniciar rush (1 key) → en: Start rush (1 key)
 - Leilão → en: Auction
 - Leilão — Grand Exchange → en: Auction — Grand Exchange
+- Nome do item → en: Item name
 - Reler catálogo → en: Re-read the catalog
 - Submeter à forja → en: Submit to the forge
 - ⚡ INTERRUPTAR → en: ⚡ INTERRUPT
