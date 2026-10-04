@@ -166,6 +166,12 @@ func _lastGoldBalanceAfter(charID : int) -> int:
 		[charID, "gold"])
 	return int(rows[0].get("balance_after", 0)) if not rows.is_empty() else -1
 
+func _lastGoldReason(charID : int) -> String:
+	var rows : Array = _sql.QueryBindings(
+		"SELECT reason FROM ledger_transaction WHERE char_id = ? AND kind = ? ORDER BY id DESC LIMIT 1;",
+		[charID, "gold"])
+	return str(rows[0].get("reason", "")) if not rows.is_empty() else ""
+
 func _gpMatchesLedger(charID : int) -> bool:
 	# A invariante do loop: a carteira no banco == o que o ledger atesta por última.
 	# Falsa se um débito mexeu em stat.gp sem linha de ledger (o vendor revertido
@@ -589,7 +595,14 @@ func _suiteStreakOnline() -> void:
 	stat.gpFlushed = int(stat.gp) - reward
 	_check(bool(_sql.FlushGoldDelta(charID, stat)), "controle (d): com lastro velho o flush roda (devolve true)")
 	_checkEq(_charGold(charID), reward * 2, "controle (d): lastro velho faz o snapshot CREDITAR O DEGRAU DE NOVO (%d -> %d)" % [reward, reward * 2])
-	_check(not _gpMatchesLedger(charID), "controle (d): a segunda escrita nao tem ledger — a invariante gp<->ledger acusa o gold em dobro")
+	# WorkOrder #185 INVERTEU a asserção que morava aqui, de propósito. Antes do
+	# espelho, este re-crédito mintava ouro mudo: carteira acima do atestado, invisível
+	# ao `ReconcileWalletDaily` (que só enxerga carteira ABAIXO) e ao censo de família
+	# (que não via linha nenhuma). O mint continua acontecendo — a linha de cima é a
+	# prova — e o que passou a existir é a trilha: `SQLGrants.FlushGoldDelta` escreve a
+	# família que `ActorStats.AddGP` bookou, então o ouro falso é AUDITÁVEL por nome.
+	_check(_gpMatchesLedger(charID), "controle (d): o re-crédito agora tem linha de ledger — a invariante gp<->ledger fecha (#185)")
+	_checkEq(_lastGoldReason(charID), "farm:" + str(charID), "controle (d): a última linha gold é a família bookada na memória (%s)" % _lastGoldReason(charID))
 	_checkEq(int(stat.gpFlushed), int(stat.gp), "controle (d): depois do re-credito o lastro se recompoe (o dano e de uma vez so)")
 
 	var dup : Dictionary = _streak.RecordLogin(charID, accountID, stat)

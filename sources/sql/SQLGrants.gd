@@ -29,16 +29,114 @@ class_name SQLGrants
 # `-1` = agente nunca carregado do banco, e aí não se credita nada às cegas. O
 # piso 0 é o único teto: um lastro errado nunca pode mintar ouro, e quem gasta
 # passa pelo kernel, que recusa carteira negativa.
+#
+# ------------------------------------------------------------------ WorkOrder #185
+# O delta acima descreve QUANTO o banco ganhou; nada dele dizia se o ganho era
+# AUDITÁVEL. Enquanto este funil gravava `stat.gp` mudo, toda outra origem de ouro
+# do jogo escrevia a linha de ledger junto (`EconomyKernel._MoveGoldLocked`, o ramo
+# online de `StreakService.RecordLogin`, `GrantItem`): o faucet do farm — a torneira
+# que mais enche, `Formula.AddGP` por kill de zona — existia no banco e na memória e
+# não existia no único lugar que audita dinheiro. Consequência medida, não temida:
+# `EconomyKernel.CensusSupply` atesta a carteira pelo ÚLTIMO `balance_after` do
+# ledger, então cada jogador online que coletava ouro ficava `unattested` no censo,
+# e `ReconcileWalletDaily` (que só enxerga carteira ABAIXO do atestado) nunca via o
+# contrário porque ouro sem linha de ledger só empurra a carteira para CIMA.
+#
+# Agora as duas pernas nascem na MESMA transação, com a família de `reason` vinda de
+# `ActorStats.gpPending` — o censo somar `farm`, `quest` e `boss` separados é o que
+# faz "quanto dinheiro entrou no jogo" continuar sendo uma conta depois daqui. As
+# três regras de fechamento, cada uma com controle plantado em
+# `tests/faucet_census_test.gd`:
+#   1. as linhas somam EXATAMENTE o que o banco moveu (`landed`), nunca o delta
+#      pedido: se o `MAX(0, …)` de um débito cortou o movimento, a linha conta o
+#      corte, senão o ledger atestaria ouro que ninguém tem;
+#   2. pending maior que o delta não é re-emitido — o excedente é ouro que outro
+#      writer já comitou e já atestou (é o ramo online do streak, que soma em
+#      `gp` e avança o lastro na mesma transação), e re-emitir seria dar duas
+#      linhas ao mesmo grant;
+#   3. delta maior que o pending vira linha `flush_untracked`, a família cuja
+#      existência no censo grita "há um writer de ouro que ninguém enumerou" — o
+#      silêncio aqui é que era o defeito.
 static func FlushGoldDelta(sql : Object, charID : int, stats : ActorStats) -> bool:
 	if stats == null or stats.gpFlushed < 0:
 		return true
 	var delta : int = stats.gp - stats.gpFlushed
 	if delta == 0:
 		return true
-	if not sql.ExecuteBindings("UPDATE stat SET gp = MAX(0, gp + ?) WHERE char_id = ?;", [delta, charID]):
+	var pending : Dictionary = stats.gpPending
+	var committed : bool = sql.Transaction(func() -> bool:
+		# `ExecNoLockQuery`, não `QueryBindings`: dentro de `Transaction()` a leitura
+		# com lock pode ser atendida pelo pool (`query_only=1`), que em WAL não vê o
+		# que este mesmo handle ainda não comitou. `SELECT` cru no handle do writer é
+		# a leitura sancionada do estado dentro da transação.
+		var bank : Array[Dictionary] = sql.ExecNoLockQuery(
+			"SELECT s.gp AS gp, c.account_id AS account_id FROM stat s"
+			+ " INNER JOIN character c ON c.char_id = s.char_id WHERE s.char_id = ?;", [charID])
+		if bank.size() != 1:
+			push_error("SQLGrants.FlushGoldDelta: char %d sem linha de stat+character; flush abortado" % charID)
+			return false
+		var current : int = int(bank[0]["gp"])
+		var accountID : int = int(bank[0]["account_id"])
+		var next : int = maxi(0, current + delta)
+		var landed : int = next - current
+		if landed == 0:
+			return true
+		if not sql.ExecNoLock("UPDATE stat SET gp = ? WHERE char_id = ?;", [next, charID]):
+			return false
+		var rows : Array = _FlushRows(landed, pending)
+		var stampedAt : int = SQLCommons.Timestamp()
+		var running : int = current
+		for rec in rows:
+			var amount : int = int(rec["amount"])
+			running += amount
+			if not sql.ExecNoLock(
+					"INSERT INTO ledger_transaction (account_id, char_id, kind, amount, balance_after, reason, created_at)"
+					+ " VALUES (?, ?, ?, ?, ?, ?, ?);",
+					[accountID, charID, EconomyCatalog.LedgerKindGold, amount, running,
+						"%s:%d" % [String(rec["family"]), charID], stampedAt]):
+				return false
+		return true)
+	if not committed:
 		return false
 	stats.gpFlushed = stats.gp
+	stats.gpPending.clear()
 	return true
+
+# O fechamento das linhas, puro para poder ser plantado: `landed` é o que o banco
+# moveu DE FATO, e a conta tem que fechar com ele em todas as saídas. Débito
+# (landed < 0) é uma linha só, porque pendência de ganho não explica um débito — a
+# família `flush_correction` nomeia exatamente isso. Crédito come o pending em ordem
+# de chegada até o teto do que foi movido, e o que sobrar de `landed` sem explicação
+# sai como `flush_untracked`.
+#
+# O que esta função NÃO pode saber, dito em vez de fingir: ela vê `gp`, `gpFlushed`
+# e `gpPending`, e nada nela sabe qual pendente já foi atestado por outra linha. O
+# que ela sabe é a ORDEM: `gpPending` é fila de chegada, e o writer que credita
+# memória E grava o banco atestando na mesma transação (o ramo online de
+# `StreakService.RecordLogin`) avança o lastro junto — o pendente dele fica mais
+# velho que qualquer ganho que ainda não desceu. Por isso o excedente cai pelo fim
+# velho da fila e o que é cobrado é o mais novo: com `landed` menor que o pending, a
+# família que sobra é a do grant novo, não a do grant que já tem linha. O total fecha
+# em qualquer ordem; o que a ordem compra é a veracidade do censo por família.
+static func _FlushRows(landed : int, pending : Dictionary) -> Array:
+	if landed <= 0:
+		return [{"family" = "flush_correction", "amount" = landed}]
+	var rows : Array = []
+	var budget : int = landed
+	var ids : Array = pending.keys()
+	for i in range(ids.size() - 1, -1, -1):
+		if budget <= 0:
+			break
+		var family : String = String(ids[i])
+		var owed : int = int(pending[family])
+		if owed <= 0:
+			continue
+		var take : int = mini(budget, owed)
+		rows.append({"family" = family, "amount" = take})
+		budget -= take
+	if budget > 0:
+		rows.append({"family" = "flush_untracked", "amount" = budget})
+	return rows
 
 # ------------------------------------------------------------------ WorkOrder #109
 # O settle offline concedia drop por drop em `AddItemToCharacter`, que são QUATRO

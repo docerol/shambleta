@@ -108,8 +108,8 @@ func Spawn(map : WorldMap, agent : BaseAgent, instanceID : int = 0):
 		# aqui ele NÃO valia: `Spawn` pegava `map.instances[instanceID]` e empurrava
 		# o player na lista fosse qual fosse a lotação. Como todo warp de NPC/porta
 		# cai em `NpcCommons.Warp` com instanceID 0
-		# (sources/actor/agent/NpcCommons.gd:@Warp) — e `PlayerAgent.WarpTo` passa
-		# `dest.instance` (sources/actor/agent/variants/PlayerAgent.gd:280), campo que
+		# (sources/actor/agent/NpcCommons.gd:@Warp) — e o `WarpTo` de
+		# `sources/actor/agent/variants/PlayerAgent.gd:@WarpTo` passa `dest.instance`, campo que
 		# `GetDestinationFromData` (`sources/actor/agent/variants/PlayerAgent.gd:@GetDestinationFromData`)
 		# nunca preenche: só o caminho de login respeitava o teto. Mesma busca do
 		# `CreateAgent`, então os dois caminhos concordam por construção e não por cópia.

@@ -71,6 +71,39 @@ groups:
           summary: "fila de revisão anti-fraude acumulando"
           description: "{{ $value }} flags abertas. Referral hold e chargeback shortfall ficam presos nela."
 
+      # WorkOrder #185 — o censo de oferta. O `< 0` vai junto do `> 90000` porque
+      # `-1` é "nunca rodou": uma regra só de idade deixa o job morto em silêncio, que
+      # é o estado em que `unattested` nunca foi medido no produto.
+      - alert: CensoDeOfertaParado
+        expr: shambleta_supply_census_age_seconds < 0 or shambleta_supply_census_age_seconds > 90000
+        labels:
+          severity: page
+        annotations:
+          summary: "censo de oferta nunca rodou neste processo ou não roda há mais de 25 h"
+          description: "Idade do último censo: {{ $value }} s (-1 = nunca rodou). Sem censo, os gauges de atesto abaixo são ausência de medida, não saúde."
+
+      # Assinado de propósito: positivo é ouro em carteira que nenhum ledger atesta
+      # (faucet sem espelho — mint), negativo é ledger atestando ouro que a carteira
+      # não tem (débito cru). Os dois são incidentes de dinheiro diferentes e a regra
+      # acorda para qualquer um.
+      - alert: CarteiraSemAtesto
+        expr: abs(shambleta_supply_census_gold_unattested) > 0 or abs(shambleta_supply_census_gems_unattested) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "carteira divergente do próprio atesto de ledger no último censo"
+          description: "{{ $value }} é a soma banco−ledger. Ver `ledger_transaction` da família que apareceu em `shambleta_supply_census_untracked_gold` e o rodapé [censo de oferta] no log."
+
+      # O flush de memória que desceu para o banco sem família conhecida: existe ouro
+      # criado que o censo não sabe nomear, ou seja um escritor novo entrou sem cadastro.
+      - alert: FlushSemFamilia
+        expr: shambleta_supply_census_untracked_gold > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "ouro desceu do agente para o banco sem família de ledger declarada"
+          description: "{{ $value }} gp no dia atrás de `flush_untracked`. Um writer de `stat.gp` novo entrou sem se declarar em `EconomyKernel.CensusFaucetFamilies`."
+
   - name: shambleta-processo
     rules:
       # O contrato do compose: `web` só sobe com `game` healthy. Se o probe sumiu,

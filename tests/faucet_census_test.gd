@@ -27,6 +27,15 @@ extends SceneTree
 #        `ReconcileWalletDaily` dizendo 0 nele), pia crua sem ledger (sinal
 #        trocado) e faucet cru de gemas. Todos mordem pelo mesmo predicado que C1
 #        usa, e a sonda é reparada no fim para não deixar envenenamento no sandbox.
+#   C5 — o faucet de MEMÓRIA (WorkOrder #185): ouro ganho em `ActorStats.AddGP` e
+#        descido ao banco por `SQLGrants.FlushGoldDelta` nasce com linha de ledger e
+#        com a família bookada. É a perna que deixava `unattested` crescer sem
+#        ninguém acordar, e é medida no agente real, não num dicionário montado à mão.
+#   C6 — o censo tem DONO no produto: chamado de produção lido do diretório (não de
+#        uma lista escrita), na cadência diária, com o job rodando de fato e o
+#        `/metrics` emitindo a IDADE dele. Um censo que só existe para o harness não
+#        mede nada entre execuções — foi exatamente o que os juízes chamaram de
+#        "economia não vê a própria oferta".
 
 const ProbeGoldFaucetNoLedger : int = 7000
 const ProbeGoldFaucetWithLedger : int = 4000
@@ -42,6 +51,14 @@ const FixtureFamilies : PackedStringArray = ["fc_mint", "fc_gems_mint"]
 # aberto, não régua.
 const NamedSinks : PackedStringArray = [
 	"vendor", "boss_key_buy", "guild_create", "tournament_entry", "craft_submit_fee", "ah_list_fee"]
+# C5 — as quantias do faucet de MEMÓRIA são escolhas de cenho, não medidas: o que
+# importa é que cada uma FECHA com o banco e com o ledger. O último valor é o do
+# débito que o `MAX(0, …)` do funil corta de propósito.
+const FlushFarmGold : int = 1500
+const FlushStalePendingGold : int = 700
+const FlushBossGold : int = 300
+const FlushUntrackedGold : int = 900
+const FlushImpossibleDebit : int = 999999
 
 var checks : int = 0
 var failures : int = 0
@@ -107,6 +124,8 @@ func _initialize():
 	_readCensus()
 	_suiteCleanFunnel()
 	_suiteCensusNotEmpty()
+	_suiteMemoryFaucet()
+	_suiteCensusHasOwner()
 	_suiteClosedWorld()
 	_suitePlantedControls()
 	print("== RESULT: %d checks, %d failures ==" % [checks, failures])
@@ -494,3 +513,243 @@ func _lastBalance(owner : int, kind : String) -> int:
 		"SELECT balance_after AS b FROM ledger_transaction WHERE %s = ? AND kind = ? ORDER BY id DESC LIMIT 1;" % col,
 		[owner, kind])
 	return 0 if rows.is_empty() else int((rows[0] as Dictionary).get("b", 0))
+
+# ------------------------------------------------------------------ C5 (WorkOrder #185)
+
+# Agente real, criado à mão: o faucet de memória é `ActorStats.AddGP`, e nada aqui
+# mede o que ele faz se eu montar o dicionário `gpPending` numa mesa. O
+# `Actor.@_init` sem `data` sai antes do `stat.Init`, então `stat.actor` fica nulo
+# — sem ele `ActorCommons.IsAlive` é falso, `AddGP` volta no-op, e a régua mediria
+# zero chamando de verde. O laço é o que um agente vivo tem.
+#
+# O agente entra por `load()` e é manuseado por `get`/`set`/`call`, nunca por um tipo
+# estático: um harness que escreve `var a : Actor` puxa `sources/actor/Actor.gd` — e
+# dali a cadeia de GUI que fala com o autoload `Launcher` — para o grafo de
+# compilação do `godot -s`, que roda ANTES de os autoloads serem registrados. O
+# sintoma medido neste repo em 2026-10-04 foi o boot inteiro caindo com
+# `Identifier not found: Launcher` em arquivos que nada têm com a régua, e nenhuma
+# check impressão. É a mesma razão pela qual todo harness daqui carrega
+# `ActorCommons` com `load()`.
+func _mkBareAgent() -> Object:
+	var agent : Object = load("res://sources/actor/Actor.gd").new()
+	_stat(agent).set("actor", agent)
+	return agent
+
+func _stat(agent : Object) -> Object:
+	return agent.get("stat")
+
+func _stGP(st : Object) -> int:
+	return int(st.get("gp"))
+
+func _stFlushed(st : Object) -> int:
+	return int(st.get("gpFlushed"))
+
+func _stPending(st : Object) -> Dictionary:
+	return st.get("gpPending") as Dictionary
+
+# A sonda começa com o lastro do banco: `gpFlushed` é o que o banco já tem e
+# `gpPending` é o que a memória deve ao banco. Fora daqui cada caso escreve a
+# memória por um caminho que NÃO é `MoveGold`, que é exatamente o que se quer medir.
+func _seedLastro(st : Object) -> void:
+	st.set("gp", _gp(_probeChar))
+	st.set("gpFlushed", _stGP(st))
+	_stPending(st).clear()
+
+func _maxLedgerID() -> int:
+	return int(_sql.call("QueryBindings", "SELECT COALESCE(MAX(id),0) AS m FROM ledger_transaction;", [])[0].get("m", 0))
+
+func _lastGoldRow(charID : int) -> Dictionary:
+	var rows : Array = _sql.call("QueryBindings",
+		"SELECT amount, balance_after, reason FROM ledger_transaction WHERE char_id = ? AND kind = 'gold' ORDER BY id DESC LIMIT 1;",
+		[charID])
+	return {} if rows.is_empty() else (rows[0] as Dictionary)
+
+func _sumGoldAmount(charID : int) -> int:
+	return int(_sql.call("QueryBindings",
+		"SELECT COALESCE(SUM(amount),0) AS s FROM ledger_transaction WHERE char_id = ? AND kind = 'gold';",
+		[charID])[0].get("s", 0))
+
+# O predicado de C1 aplicado a um dono só, e é ele que o `FlushGoldDelta` tem que
+# manter: um flush que mexe em `stat.gp` e deixa a linha fora dessa igualdade mente
+# para o atesto para sempre, e o `ReconcileWalletDaily` nem vê, porque só enxerga
+# carteira ABAIXO do último `balance_after`.
+func _conserved(charID : int) -> bool:
+	return _sumGoldAmount(charID) == _lastBalance(charID, "gold") \
+		and _lastBalance(charID, "gold") == _gp(charID)
+
+func _dayGoldFamilies() -> Dictionary:
+	var gold : Dictionary = _census().get("gold", {}) as Dictionary
+	return (gold.get("day", {}) as Dictionary).get("families", {}) as Dictionary
+
+# C5 — as três regras de fechamento do flush, medidas com um agente de verdade na
+# mesa. O que estava plantado aqui em 2026-10-04 era a ausência delas: `AddGP` somava
+# em memória, `SQL.@UpdateStat` escrevia `stat.gp` como delta e nenhuma linha de
+# ledger nascia, então todo jogador online que coletava ouro ficava `unattested`.
+func _suiteMemoryFaucet() -> void:
+	if _probeChar <= 0:
+		_check(false, "C5 sonda ausente — o faucet de memória não foi medido")
+		return
+	var agent : Object = _mkBareAgent()
+	var st : Object = _stat(agent)
+	var bank : int = _gp(_probeChar)
+	var ids : int = _maxLedgerID()
+	_seedLastro(st)
+	# (1) A torneira que mais enche no jogo: kill de zona, família `farm`.
+	st.call("AddGP", FlushFarmGold, false, "farm")
+	_check(int(_stPending(st).get("farm", 0)) == FlushFarmGold, "C5 a memória booka a família ANTES de descer (%d)" % int(_stPending(st).get("farm", 0)))
+	_check(bool(_sql.call("FlushGoldDelta", _probeChar, st)), "C5 o flush do farm comitou")
+	_check(_maxLedgerID() == ids + 1, "C5 um farm de %d nasce EXATAMENTE uma linha de ledger (%d -> %d)" % [FlushFarmGold, ids, _maxLedgerID()])
+	_check(_gp(_probeChar) == bank + FlushFarmGold, "C5 a carteira subiu o que o agente ganhou (%d -> %d)" % [bank, _gp(_probeChar)])
+	var row : Dictionary = _lastGoldRow(_probeChar)
+	_check(int(row.get("amount", 0)) == FlushFarmGold, "C5 a linha tem o valor ganho (%s)" % str(row.get("amount", 0)))
+	_check(str(row.get("reason", "")) == "farm:%d" % _probeChar, "C5 a linha tem a FAMÍLIA bookada na memória, não um reason inventado (%s)" % str(row.get("reason", "")))
+	_check(int(row.get("balance_after", -1)) == _gp(_probeChar), "C5 a linha atesta a carteira que acabou de escrever (%s vs %d)" % [str(row.get("balance_after", -1)), _gp(_probeChar)])
+	_check(_conserved(_probeChar), "C5 depois do flush vale para a sonda o predicado de C1: Σ ledger == último atesto == carteira")
+	_check(_stFlushed(st) == _stGP(st) and _stPending(st).is_empty(), "C5 o lastro avança no commit e a pendência esvazia (lastro %d, gp %d, pending %d)" % [_stFlushed(st), _stGP(st), _stPending(st).size()])
+	var day : Dictionary = _dayGoldFamilies()
+	_check(int((day.get("farm", {}) as Dictionary).get("created", 0)) == FlushFarmGold, "C5 o censo do dia conta a torneira pela família real (%d)" % int((day.get("farm", {}) as Dictionary).get("created", 0)))
+	_check(_deltaCensusGold() == 0, "C5 o flush não deixa carteira acima do atesto (%d)" % _deltaCensusGold())
+	_check(not day.has("flush_untracked"), "C5 controle (não pode morder): ouro com família bookada não vira flush sem família (%s)" % str(day.keys()))
+	# (2) Outro sentido, também não mordido: lastro `-1` é carga de banco que nunca
+	# foi feita e por isso não pode creditar nada às cegas.
+	bank = _gp(_probeChar)
+	ids = _maxLedgerID()
+	st.set("gp", bank + FlushFarmGold)
+	st.set("gpFlushed", -1)
+	st.set("gpPending", {"farm": FlushFarmGold})
+	_check(bool(_sql.call("FlushGoldDelta", _probeChar, st)), "C5 controle: flush com lastro não carregado responde true")
+	_check(_gp(_probeChar) == bank and _maxLedgerID() == ids, "C5 controle (não pode morder): sem carga de banco o flush não mintar ouro nem linha (%d vs %d, ids %d vs %d)" % [_gp(_probeChar), bank, _maxLedgerID(), ids])
+	# (3) Pendência VELHA já atestada por outra linha (é o ramo online do streak, que
+	# credita memória e grava banco na mesma transação): o excedente não pode ser
+	# re-emitido, e cobrar o mais recente é o que mantém a FAMÍLIA verdadeira.
+	_seedLastro(st)
+	st.set("gpPending", {"farm": FlushStalePendingGold})
+	st.call("AddGP", FlushBossGold, false, "boss")
+	_check(bool(_sql.call("FlushGoldDelta", _probeChar, st)), "C5 o flush do boss comitou")
+	row = _lastGoldRow(_probeChar)
+	_check(str(row.get("reason", "")) == "boss:%d" % _probeChar and int(row.get("amount", 0)) == FlushBossGold,
+		"C5 os %d de delta foram cobrados da família mais recente, não re-emitados da pendência velha de %d (%s / %s)" % [
+			FlushBossGold, FlushStalePendingGold, str(row.get("reason", "")), str(row.get("amount", 0))])
+	_check(_conserved(_probeChar), "C5 cobrar o mais recente conserva a invariante: a soma fecha com a carteira em qualquer ordem")
+	_check(not _dayGoldFamilies().has("flush_untracked"), "C5 controle (não pode morder): corte de pendência velha não deixa rastro sem família (%s)" % str(_dayGoldFamilies().keys()))
+	# (4) Writer cru por baixo do agente: `gp` mexido sem `AddGP`, portanto sem
+	# família. O dinheiro desce e o censo tem que dizer a verdade dos dois lados —
+	# a carteira fecha, e o NOME é o alarme.
+	_seedLastro(st)
+	st.set("gp", _stGP(st) + FlushUntrackedGold)
+	_check(bool(_sql.call("FlushGoldDelta", _probeChar, st)), "C5 o flush do writer cru comitou")
+	row = _lastGoldRow(_probeChar)
+	_check(str(row.get("reason", "")) == "flush_untracked:%d" % _probeChar and int(row.get("amount", 0)) == FlushUntrackedGold,
+		"C5 o gold que desceu sem que nenhum `AddGP` o nomeasse ganha a família que grita (%s / %s)" % [str(row.get("reason", "")), str(row.get("amount", 0))])
+	_check(_conserved(_probeChar) and _deltaCensusGold() == 0,
+		"C5 mesmo sem família a carteira fecha com o ledger: o alarme é o nome, não o número (unattested %d)" % _deltaCensusGold())
+	_check(int((_dayGoldFamilies().get("flush_untracked", {}) as Dictionary).get("created", 0)) == FlushUntrackedGold,
+		"C5 o censo do dia mede o flush sem família (%d)" % int((_dayGoldFamilies().get("flush_untracked", {}) as Dictionary).get("created", 0)))
+	# Reparo honesto numa ledger apenas-anexar: não há DELETE sancionado — o trigger
+	# recusa (`row is not covered by a durable rollup`), e a régua nem deveria querer
+	# um, porque apagar a linha é exatamente o que um desvio faria para não ser pego.
+	# Repara-se a CARTEIRA, levada ao atesto (`_repairProbe`), e afirma-se que o
+	# alarme sobrevive ao reparo: a família continua legível no censo do dia.
+	_repairProbe()
+	_check(_conserved(_probeChar), "C5 sonda levada ao atesto depois do writer cru (carteira %d, atesto %d)" % [_gp(_probeChar), _lastBalance(_probeChar, "gold")])
+	_check(_dayGoldFamilies().has("flush_untracked"),
+		"C5 uma ledger apenas-anexar não esquece o flush sem família (%s)" % str(_dayGoldFamilies().keys()))
+	# (5) Regra 1 do funil, medida: a linha conta o que o BANCO moveu, não o delta
+	# pedido. Um débito maior que a carteira é cortado pelo `MAX(0, …)`, e linha do
+	# tamanho do pedido atestaria ouro que ninguém tem.
+	bank = _gp(_probeChar)
+	_seedLastro(st)
+	st.set("gpFlushed", bank + FlushImpossibleDebit)
+	st.set("gp", 0)
+	_check(bool(_sql.call("FlushGoldDelta", _probeChar, st)), "C5 o flush do débito comitou")
+	row = _lastGoldRow(_probeChar)
+	_check(int(row.get("amount", 0)) == -bank,
+		"C5 a linha do débito conta o CORTE, não o pedido (esperado %d, medido %s para um pedido de -%d)" % [-bank, str(row.get("amount", 0)), FlushImpossibleDebit])
+	_check(str(row.get("reason", "")).begins_with("flush_correction:"),
+		"C5 um débito de memória tem família própria, não `flush_untracked` (%s)" % str(row.get("reason", "")))
+	_check(_conserved(_probeChar), "C5 carteira cortada a zero fecha com atesto zero — linha maior mintaria ouro para o ledger")
+	# E aqui o reparo é mais honesto ainda: a carteira cortada a ZERO é o estado que
+	# o ledger atesta, e não se desfaz apagando a linha — move-se a carteira ao
+	# atesto. O que fica é o que ops precisa que fique: a correção contada como
+	# destruição do dia pelo valor do CORTE.
+	_repairProbe()
+	_check(_conserved(_probeChar) and _gp(_probeChar) == _lastBalance(_probeChar, "gold"),
+		"C5 sonda levada ao atesto depois do débito plantado (%d vs atesto %d)" % [_gp(_probeChar), _lastBalance(_probeChar, "gold")])
+	var fam : Dictionary = _dayGoldFamilies()
+	_check(int((fam.get("flush_correction", {}) as Dictionary).get("destroyed", 0)) == bank,
+		"C5 o censo do dia carrega a `flush_correction` como destruição do valor cortado (%d vs %d)" % [
+			int((fam.get("flush_correction", {}) as Dictionary).get("destroyed", 0)), bank])
+	agent.free()
+
+# ------------------------------------------------------------------ C6 (WorkOrder #185)
+
+# Chamados de produção de um símbolo, LIDOS do diretório. O que a régua precisa é
+# exatamente o que o judge chamou de falta: um censo que só existe porque um harness
+# o chama não mede nada entre execuções. Uma lista escrita de arquivos não prova
+# nada — quem move o chamada para um boot one-shot continuaria "no catálogo".
+func _productionCallers(symbol : String) -> Array:
+	var hits : Array = []
+	for path in _gdFilesUnder("res://sources"):
+		# Definição e fachada do kernel não são dono: o que se procura é quem chama.
+		if path.ends_with("/EconomyKernel.gd"):
+			continue
+		for line in FileAccess.get_file_as_string(path).split("\n"):
+			var code : String = str(line).split("#")[0]
+			var at : int = code.find(symbol)
+			if at < 0 or code.strip_edges().begins_with("func "):
+				continue
+			var end : int = at + len(symbol)
+			if _identChar(code[at - 1] if at > 0 else " ") or (end < len(code) and _identChar(code[end])):
+				continue
+			hits.append(path)
+			break
+	return hits
+
+func _suiteCensusHasOwner() -> void:
+	var callers : Array = _productionCallers("RunSupplyCensusJob")
+	_check(not callers.is_empty(), "C6 o censo de oferta tem chamado de produção lido do diretório (%s)" % str(callers))
+	var cadenciado : bool = false
+	for path in callers:
+		if FileAccess.get_file_as_string(str(path)).contains("MetaJobIntervalSec"):
+			cadenciado = true
+	_check(cadenciado, "C6 o dono do censo está na cadência diária do mesmo seam do reconcile, não num disparo de boot (%s)" % str(callers))
+	# Controle do extrator nas duas direções: um vizinho conhecido tem de ser
+	# encontrado nos mesmos arquivos (senão a régua é um no-op verde para sempre) e
+	# um símbolo que não existe não pode aparecer.
+	var reconcileCallers : Array = _productionCallers("RunReconcileJob")
+	var orphans : Array = []
+	for path in callers:
+		if not reconcileCallers.has(path):
+			orphans.append(path)
+	_check(not reconcileCallers.is_empty() and orphans.is_empty(),
+		"C6 controle: o extrator acha o reconcile em TODO arquivo em que acha o censo (reconcile %s, órfãos %s)" % [str(reconcileCallers), str(orphans)])
+	_check(_productionCallers("RunSupplyCensusJobZZZ").is_empty(), "C6 controle: o extrator não alucina chamado de um símbolo que não existe")
+	# O job roda de fato e os contadores que o `/metrics` expõe são a MESMA conta do
+	# censo que ele acabou de fazer. Uma métrica que não bate com a medição que ela
+	# resume é uma régua nova mentindo sobre a velha — foi assim que o rodapé do
+	# `RunReconcileJob` divergiu do seu próprio diagnóstico.
+	var before : Dictionary = _kernel().call("CensusJobStats")
+	var res : Dictionary = _eco.call("RunSupplyCensusJob")
+	_check(bool(res.get("ok", false)), "C6 o job do censo responde no processo bootado (%s)" % str(res.get("reason", "")))
+	var after : Dictionary = _kernel().call("CensusJobStats")
+	_check(int(after.get("runs", 0)) == int(before.get("runs", 0)) + 1, "C6 rodar o censo pelo dono conta uma passada (%d -> %d)" % [int(before.get("runs", 0)), int(after.get("runs", 0))])
+	_check(int(after.get("age", -99)) >= 0, "C6 censo que rodou tem idade mensurável; -1 é a assinatura do job que nunca rodou (%d)" % int(after.get("age", -99)))
+	var rg : Dictionary = res.get("gold", {}) as Dictionary
+	var rAll : Dictionary = rg.get("all", {}) as Dictionary
+	var rFam : Dictionary = (rg.get("day", {}) as Dictionary).get("families", {}) as Dictionary
+	var rgems : Dictionary = res.get("gems", {}) as Dictionary
+	var expectedUntracked : int = int((rFam.get("flush_untracked", {}) as Dictionary).get("created", 0)) \
+		+ int((rFam.get("flush_correction", {}) as Dictionary).get("destroyed", 0))
+	_check(int(after.get("goldUnattested", -1)) == int(rg.get("unattested", -2)), "C6 fidelidade: `goldUnattested` == censo direto (%d vs %d)" % [int(after.get("goldUnattested", -1)), int(rg.get("unattested", -2))])
+	_check(int(after.get("gemsUnattested", -1)) == int(rgems.get("unattested", -2)), "C6 fidelidade: `gemsUnattested` == censo direto (%d vs %d)" % [int(after.get("gemsUnattested", -1)), int(rgems.get("unattested", -2))])
+	_check(int(after.get("divergentOwners", -1)) == int(rg.get("divergent", 0)) + int(rgems.get("divergent", 0)), "C6 fidelidade: `divergentOwners` == as duas moedas somadas (%d vs %d + %d)" % [int(after.get("divergentOwners", -1)), int(rg.get("divergent", 0)), int(rgems.get("divergent", 0))])
+	_check(int(after.get("untrackedGold", -1)) == expectedUntracked, "C6 fidelidade: `untrackedGold` == flush sem família/correção do dia (%d vs %d)" % [int(after.get("untrackedGold", -1)), expectedUntracked])
+	_check(int(after.get("createdGold", -1)) == int(rAll.get("created", -2)), "C6 fidelidade: `createdGold` == total criado do censo (%d vs %d)" % [int(after.get("createdGold", -1)), int(rAll.get("created", -2))])
+	_check(int(after.get("destroyedGold", -1)) == int(rAll.get("destroyed", -2)), "C6 fidelidade: `destroyedGold` == total destruído do censo (%d vs %d)" % [int(after.get("destroyedGold", -1)), int(rAll.get("destroyed", -2))])
+	# O dono só serve se alguém acorda: as séries que as regras de alerta lêem têm de
+	# estar no corpo do `/metrics`, escritas como literal emitido (mesma régua de
+	# `tests/deploy_ops_test.gd`, aqui pelo lado do censo).
+	var metricsText : String = FileAccess.get_file_as_string("res://sources/system/MetricsServer.gd")
+	for metricName in ["shambleta_supply_census_runs_total", "shambleta_supply_census_age_seconds",
+			"shambleta_supply_census_gold_unattested", "shambleta_supply_census_untracked_gold"]:
+		_check(metricsText.contains("body += \"" + str(metricName) + " "), "C6 o censo é emitido no /metrics: %s" % str(metricName))

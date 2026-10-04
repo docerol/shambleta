@@ -234,14 +234,26 @@ func ReconcileWalletDaily(nowSec : int = 0) -> Dictionary:
 # `stat.gp`/`wallet`) somada à perna `unattested` deste censo, que pega o resto.
 const CensusFaucetFamilies : PackedStringArray = [
 	"offline_settle", "login_streak", "quest", "salvage", "grant", "achievement",
-	"pass_reward", "tournament_prize", "referral_bonus", "referral_welcome"]
+	"pass_reward", "tournament_prize", "referral_bonus", "referral_welcome",
+	# WorkOrder #185: as duas torneiras que o flush do snapshot entrega. `farm` é o
+	# ouro de kill de zona (`Formula.AddGP`), `boss` é a recompensa de vitória
+	# (`BossProgressionService`); as duas somam em memória, descem para o banco em
+	# `SQLGrants.FlushGoldDelta` e é lá que ganham a linha de ledger. `flush_untracked`
+	# não é torneira nenhuma — é o alarme com família: gold que desceu para o banco sem
+	# que nenhum `AddGP` o tenha nomeado. Enumerá-lo aqui é o que faz o censo dizer a
+	# verdade (a origem existe no código); o número dele é que tem de ser zero, e
+	# `RunSupplyCensusJob` acusa pelo nome quando sobe.
+	"farm", "boss", "flush_untracked"]
 const CensusSinkFamilies : PackedStringArray = [
 	"vendor", "craft_submit_fee", "craft_approve", "cube_upcycle", "corrupt_fee",
 	"boss_key_buy", "guild_create", "guild_level", "guild_level_fast",
 	"guild_vault_slots", "tournament_entry", "chest_buy", "daily_offer",
 	"daily_reroll", "trade_fee", "pass_skip", "cosmetic", "vip1_purchase",
 	"vip2_purchase", "vip3_purchase", "ah_list_fee", "ah_slot", "ah_highlight_fee",
-	"salvage_burn", "rebirth_upgrade", "clawback", "refund", "revoke"]
+	"salvage_burn", "rebirth_upgrade", "clawback", "refund", "revoke",
+	# Mesma regra do `flush_untracked` acima: um débito de memória (agente abaixo do
+	# próprio lastro) existe e é escrito; fingir que ele é `unattributed` não o apaga.
+	"flush_correction"]
 const CensusTransferFamilies : PackedStringArray = [
 	"ah_buy", "ah_sell", "ah_creator_fee", "ah_bid_escrow", "ah_bid_release",
 	"vault_deposit"]
@@ -390,6 +402,76 @@ func _CensusSumKey(buckets : Dictionary, field : String) -> int:
 	for k in buckets:
 		total += int((buckets[k] as Dictionary).get(field, 0))
 	return total
+
+# ------------------------------------------------------------------ job do censo (WorkOrder #185)
+# `CensusSupply` media o banco só quando um harness puxava a alavanca: medido em
+# 2026-10-04, o repo tinha UM chamado dela, e ele vivia em
+# `tests/faucet_census_test.gd`. "Quanto dinheiro entrou no jogo" era uma conta que o
+# produto nunca fazia, então o número que ela protege — `unattested`, a carteira acima
+# do que o ledger atesta — podia crescer para sempre sem ninguém acordar, e a pia que
+# ele nomeia podia sumir sem que o total de oferta mudasse de forma visível.
+#
+# Aqui o censo vira trabalho periódico do mesmo seam diário que já roda o
+# `RunReconcileJob` (`SQLBackups.@Run`, com `SQLCommons.MetaJobIntervalSec`), e o
+# resultado fica lível no `/metrics` com IDADE: `age = -1` é a assinatura do job que
+# nunca rodou, o mesmo formato que `shambleta_reconcile_age_seconds` usa. O counter de
+# oferta é o total do `all` (uma pia que só rodou uma vez por semana não pode sumir do
+# número); o alarme de `flush_untracked`/`flush_correction` é a janela do dia, porque
+# um susto histórico não pode ficar ladando o painel para sempre.
+var _censusRuns : int = 0
+var _censusAtSec : int = 0
+var _censusGoldUnattested : int = 0
+var _censusGemsUnattested : int = 0
+var _censusDivergentOwners : int = 0
+var _censusUntrackedGold : int = 0
+var _censusCreatedGold : int = 0
+var _censusDestroyedGold : int = 0
+
+func RunSupplyCensusJob(windowSec : int = 86400) -> Dictionary:
+	var census : Dictionary = CensusSupply(windowSec)
+	_censusRuns += 1
+	if not bool(census.get("ok", false)):
+		push_error("EconomyKernel.RunSupplyCensusJob: censo não respondeu (%s)" % str(census.get("reason", "")))
+		return census
+	var gold : Dictionary = census.get("gold", {}) as Dictionary
+	var gems : Dictionary = census.get("gems", {}) as Dictionary
+	var goldAll : Dictionary = gold.get("all", {}) as Dictionary
+	var goldDay : Dictionary = gold.get("day", {}) as Dictionary
+	var dayFamilies : Dictionary = goldDay.get("families", {}) as Dictionary
+	_censusAtSec = SQLCommons.Timestamp()
+	_censusGoldUnattested = int(gold.get("unattested", 0))
+	_censusGemsUnattested = int(gems.get("unattested", 0))
+	_censusDivergentOwners = int(gold.get("divergent", 0)) + int(gems.get("divergent", 0))
+	_censusUntrackedGold = int((dayFamilies.get("flush_untracked", {}) as Dictionary).get("created", 0)) \
+		+ int((dayFamilies.get("flush_correction", {}) as Dictionary).get("destroyed", 0))
+	_censusCreatedGold = int(goldAll.get("created", 0))
+	_censusDestroyedGold = int(goldAll.get("destroyed", 0))
+	# Nomear é o que faz o número servir para alguém: o `/metrics` expõe o contador, e
+	# sem os donos quem abre o incidente não tem para onde olhar. Mesma disciplina do
+	# rodapé de `EconomyService.RunReconcileJob`, e o mesmo teto de três nomes.
+	if _censusGoldUnattested != 0 or _censusGemsUnattested != 0 or _censusDivergentOwners > 0 or _censusUntrackedGold > 0:
+		print("  [censo de oferta] gold sem atesto %d | gems sem atesto %d | donos divergentes %d | flush sem família %d" % [
+			_censusGoldUnattested, _censusGemsUnattested, _censusDivergentOwners, _censusUntrackedGold])
+		var named : int = 0
+		for offender in (gold.get("diverging", []) as Array):
+			if named >= 3:
+				break
+			named += 1
+			var rec : Dictionary = offender as Dictionary
+			print("    char %d: carteira %d, ledger atesta %d" % [int(rec.get("owner", 0)), int(rec.get("observed", 0)), int(rec.get("attested", 0))])
+	return census
+
+# O par do job: o `/metrics` lê daqui. Sem idade, um censo que nunca rodou é
+# indistinguível de um censo que rodou e não achou nada — que é exatamente a
+# diferença entre "a economia está limpa" e "a economia não olhou para si mesma".
+func CensusJobStats() -> Dictionary:
+	var age : int = -1
+	if _censusAtSec > 0:
+		age = maxi(0, SQLCommons.Timestamp() - _censusAtSec)
+	return {"runs" = _censusRuns, "age" = age, "goldUnattested" = _censusGoldUnattested,
+		"gemsUnattested" = _censusGemsUnattested, "divergentOwners" = _censusDivergentOwners,
+		"untrackedGold" = _censusUntrackedGold, "createdGold" = _censusCreatedGold,
+		"destroyedGold" = _censusDestroyedGold}
 
 # Diagnóstico das DUAS pernas de carteira: quem está abaixo do atestado e por
 # quanto. `/metrics` só expõe o contador; quem abre o incidente precisa do par

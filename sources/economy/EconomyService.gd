@@ -740,6 +740,17 @@ func RunReconcileJob() -> int:
 			Util.PrintLog("Economy", "Reconcile offender: " + JSON.stringify(offender))
 	return arenaDivergences + walletDivergences
 
+# ------------------------------------------------------------------ censo de oferta (WorkOrder #185)
+# O reconcile acima responde "a carteira bate com o ledger DESDE o último atesto";
+# o censo responde a pergunta que ele não pode fazer — "quanto dinheiro existe e
+# quem o criou". A fachada existe porque o contrato do seam diário é
+# `Launcher.Economy` (`SQLBackups.@Run`), e o kernel é quem sabe montar o censo.
+func RunSupplyCensusJob() -> Dictionary:
+	return kernel.RunSupplyCensusJob()
+
+func SupplyCensusStats() -> Dictionary:
+	return kernel.CensusJobStats()
+
 # ------------------------------------------------------------------ conquistas + R1 referral (Fatia 10 -> CommunityService.gd)
 func AchievementProgress(accountID : int, entry : Dictionary) -> int:
 	return communityService.AchievementProgress(accountID, entry)

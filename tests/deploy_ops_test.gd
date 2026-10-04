@@ -184,6 +184,16 @@ func _initialize() -> void:
 		"a divergência do reconcile é citada por uma regra (não mora só em coluna de tabela)")
 	Check(referenced.has("shambleta_reconcile_age_seconds"),
 		"há regra sobre a IDADE do reconcile — sem ela, \"0 divergências\" de um job parado lê-se verde")
+	# WorkOrder #185: o censo de oferta entrou no `/metrics` com as duas pernas que a
+	# auditoria do reconcile já exigia — o número E a idade dele. As duas checks abaixo
+	# mordem na ausência da regra correspondente: métrica sem regra é dashboard que
+	# ninguém abre às 3h, e métrica com idade sem regra é job morto lendo verde.
+	Check(referenced.has("shambleta_supply_census_gold_unattested"),
+		"a carteira acima do atesto de ledger é citada por uma regra (#185)")
+	Check(referenced.has("shambleta_supply_census_age_seconds"),
+		"há regra sobre a IDADE do censo de oferta — sem ela, zeros de um job que nunca rodou lê-se verde")
+	Check(referenced.has("shambleta_supply_census_untracked_gold"),
+		"o flush que desceu sem família declarada é citado por uma regra (#185)")
 	for name in referenced:
 		Check(emitted.has(name),
 			"a regra cita %s, e o server emite %s" % [name, "sim" if emitted.has(name) else "NÃO"])

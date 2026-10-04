@@ -259,7 +259,7 @@ func SettleBossResult(charID : int, player, index : int, win : bool) -> Dictiona
 	var goldGrant : int = 0
 	if win:
 		goldGrant = roundi(float(BossService.VictoryGold(zoneXp)) * nb * vipMult * float(reb.get("gold", 1.0)) * tormentMult)
-		player.stat.AddGP(goldGrant, false)
+		player.stat.AddGP(goldGrant, false, "boss")
 
 	var chestsGranted : int = 0
 	if win:

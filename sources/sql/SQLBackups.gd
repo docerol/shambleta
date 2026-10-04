@@ -127,6 +127,14 @@ func Run():
 				and Launcher.Economy != null and Launcher.Economy.isInitialized:
 			lastMetaJobTimestamp = timestamp
 			Launcher.Economy.RunReconcileJob()
+			# WorkOrder #185: o censo de oferta entra neste mesmo seam porque é aqui que
+			# mora o único cadenciador diário do processo, e porque a pergunta que ele
+			# responde ("quanto dinheiro existe e quem o criou") é a que o reconcile de
+			# cima NÃO pode responder: o reconcile só vê carteira ABAIXO do último
+			# atesto, então um faucet que escreve ouro sem linha de ledger é invisível
+			# para ele e é exatamente o que `unattested` mede. Depois, não antes: o
+			# censo lê a mesma `queryMutex` e quer ver o estado já reconciliado do dia.
+			Launcher.Economy.RunSupplyCensusJob()
 
 		# G1: relógio da espinha sazonal — cadência própria (`SeasonClockIntervalSec`,
 		# minutos) e não o intervalo diário do reconcile, porque o placar da

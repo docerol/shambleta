@@ -11,6 +11,17 @@ var gp : int							= 0
 # loja, forja, guilda, copa, boss, streak, checkout, leilão). -1 = carga de
 # banco nunca feita, e aí o snapshot não credita nada às cegas.
 var gpFlushed : int						= -1
+# WorkOrder #185: o lastro acima diz QUANTO desceu para o banco; este dicionário
+# diz DE ONDE veio. `gpPending` soma, por família de `reason`, o ouro ganho em
+# memória desde o último flush, e é o que permite a `SQLGrants.FlushGoldDelta`
+# espelhar no ledger a mesma linha que o funil espelha em toda outra origem de
+# ouro (`EconomyKernel._MoveGoldLocked`, `StreakService`): sem ela o faucet do
+# farm existia no banco e no agente e não existia no único lugar que audita
+# dinheiro, e o censo de oferta (`EconomyKernel.CensusSupply`) media a carteira
+# ACIMA do que o ledger atesta. `-1` no lastro não protege disto: pending é
+# zerado na carga do personagem (`PlayerAgent.SetCharacterInfo`), porque o que o
+# banco tem já está atestado pelas linhas dele.
+var gpPending : Dictionary				= {}
 var health : int						= ActorCommons.MaxStatValue
 var mana : int							= ActorCommons.MaxStatValue
 var stamina : int						= ActorCommons.MaxStatValue
@@ -251,10 +262,17 @@ func AddExperience(value : int, hasFeedback : bool = true):
 	if actor is PlayerAgent:
 		Network.TargetAlteration(actor.get_rid().get_id(), actor.get_rid().get_id(), value, ActorCommons.Alteration.EXP, DB.UnknownHash, hasFeedback, actor.peerID)
 
-func AddGP(value : int, hasFeedback : bool = true):
+func AddGP(value : int, hasFeedback : bool = true, family : String = "farm"):
 	if not ActorCommons.IsAlive(actor) or value <= 0:
 		return
 	gp += value
+	# WorkOrder #185: a soma em memória é o faucet; a linha de ledger nasce no
+	# flush, então a família precisa ser lembrada até lá. Default "farm" é o ouro
+	# de kill de zona (`Formula.AddGP`); quem tem outra origem nomeia a sua —
+	# `NpcCommons.AddGP` (recompensa de NPC/quest) e `BossProgressionService`
+	# (chefes) passam a família, e `flush_untracked` aparece se alguém somar em
+	# `gp` por fora daqui, que é exatamente o writer que ninguém enumerou.
+	gpPending[family] = int(gpPending.get(family, 0)) + value
 	vital_stats_updated.emit()
 	if actor is PlayerAgent:
 		Network.TargetAlteration(actor.get_rid().get_id(), actor.get_rid().get_id(), value, ActorCommons.Alteration.GP, DB.UnknownHash, hasFeedback, actor.peerID)

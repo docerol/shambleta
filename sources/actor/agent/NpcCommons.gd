@@ -367,6 +367,9 @@ static func AddExp(caller : BaseAgent, value : int):
 	if caller is PlayerAgent and caller.stat and value > 0:
 		caller.stat.AddExperience(value)
 
-static func AddGP(caller : BaseAgent, value : int):
+static func AddGP(caller : BaseAgent, value : int, family : String = "quest"):
 	if caller is PlayerAgent and caller.stat and value > 0:
-		caller.stat.AddGP(value)
+		# WorkOrder #185: ouro dado por NPC é recompensa de quest, não farm de zona.
+		# Nomear a família aqui é o que faz o censo de oferta separar a torneira que
+		# o jogador planta da que ele colhe em conversa.
+		caller.stat.AddGP(value, true, family)

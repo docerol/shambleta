@@ -450,6 +450,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the measured thing instead of the intended thing.
 
 ### Fixed
+- The memory faucet moved gold with no ledger row, and the supply census had no owner outside a harness (#185, measured 2026-10-04).
+  The gold faucet `AddGP` of `sources/actor/Stats.gd:@AddGP` credits gold in memory: a zone kill by default, a quest turn-in through the `AddGP` wrapper
+  of `sources/actor/agent/NpcCommons.gd:@AddGP`, a boss step through `SettleBossResult` of `sources/economy/BossProgressionService.gd:@SettleBossResult`.
+  Until now the flush `FlushGoldDelta` in `sources/sql/SQLGrants.gd:@FlushGoldDelta` landed that number on `stat.gp` and said nothing to
+  `ledger_transaction`. The census attests a wallet by its LAST `balance_after`, so every online player collecting gold sat `unattested`, and the daily
+  reconcile was blind to it by construction: `ReconcileWalletDaily` only looks at wallets BELOW the last attestation, and gold without rows pushes a wallet
+  UP. The second half is what made the first half survivable — the supply census `CensusSupply` of
+  `sources/economy/EconomyKernel.gd:@CensusSupply` was called by exactly one thing, a harness, so "how much gold entered the game today" was a question
+  nobody asked between runs.
+  Fix, both legs in ONE transaction: memory books the family in `gpPending` of `sources/actor/Stats.gd:@gpPending`, and the flush emits rows that close
+  against what the database actually moved. `_FlushRows` in `sources/sql/SQLGrants.gd:@_FlushRows` charges the NEWEST family first (the oldest pending is
+  the one another writer already attested in the same transaction), names any leftover `flush_untracked` — the family whose existence in the census means
+  "there is a gold writer nobody enumerated" — and answers a memory debit with a `flush_correction` of the CUT, never of the request. The census got a
+  production owner: the daily seam `Run` of `sources/sql/SQLBackups.gd:@Run` calls `RunSupplyCensusJob` of
+  `sources/economy/EconomyService.gd:@RunSupplyCensusJob` on `SQLCommons.MetaJobIntervalSec` in the same seam as the reconcile (after it, because the census
+  reads the same `queryMutex` and wants the day already reconciled), `MetricsBody` in `sources/system/MetricsServer.gd:@MetricsBody` serves eight census
+  series including the job's own age, and three alerts can now page — `CensoDeOfertaParado`, `CarteiraSemAtesto`, `FlushSemFamilia`.
+  Numbers from this box: `_suiteMemoryFaucet` in `tests/faucet_census_test.gd:@_suiteMemoryFaucet` drives a real agent and the whole gate reads 110 checks,
+  0 failures (`[censo gold] dia: criado 460000 destruído 45150 | banco 414850 ledger 414850 diferença 0`, `[censo de oferta] … flush sem família 207200` —
+  the 207200 is the harness's own planted untracked flushes and planted cut debits accumulated across its cases, which is exactly the shape the alert is for);
+  `_suiteCensusHasOwner` of `tests/faucet_census_test.gd:@_suiteCensusHasOwner` reads production callers out of the directory instead of a written list,
+  controls the extractor in both directions, runs the job and compares its six counters against the census it just made; `_lastGoldReason` in
+  `tests/core_loop_cycle_test.gd:@_lastGoldReason` keeps the stale-anchor control (d) biting — the snapshot re-credits the step once, and that re-credit
+  now has a row naming the family (72 checks, 0 failures);
+  `tests/deploy_ops_test.gd` holds the names the alerts cite against what the server emits (47 checks, 0 failures). Judgeability by mutation, each reverted
+  in the same session: replacing `_FlushRows` with an empty row list turns C5 red on 17 checks, deleting the seam call turns C6 red on the cadence check and
+  prints the one caller left (`res://sources/economy/EconomyService.gd`), and renaming the served `shambleta_supply_census_untracked_gold` turns
+  `deploy_ops_test` red with "a regra cita …, e o server emite NÃO". Product files were byte-compared against their pre-mutation copies afterwards: no residue.
+  Two facts this ruler learned by being broken and now writes down. `ledger_transaction` is append-only at the DATABASE level (a raw `DELETE` is refused:
+  `row is not covered by a durable rollup`), so C5 repairs the WALLET to the attestation and asserts the planted family STAYS in the census — a ruler that
+  erased its own evidence would measure nothing. And a `-s` harness that names an autoload-dependent `class_name` statically (`var a : Actor`) drags that
+  script, and from it the GUI chain that reads `Launcher`, into the compile graph, which runs before autoload singletons exist: the measured symptom was
+  `SCRIPT ERROR: Compile Error: Identifier not found: Launcher` in files unrelated to the ruler, `exit=124` and zero check lines printed. The house pattern
+  is what every harness here does — `load()` the script, drive it with `get`/`set`/`call`.
 - The quest log was running the Settings script, and no ruler could see it (#195, measured 2026-10-03).
   `presets/gui/Progress.tscn` carries a quest-log node tree but declared `res://sources/gui/Settings.gd` at its root, so the six
   `@onready` accessors of `sources/gui/Progress.gd` had nothing to resolve against in the file — every path the quest log names is absent

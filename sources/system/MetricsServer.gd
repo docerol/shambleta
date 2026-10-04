@@ -141,6 +141,17 @@ func MetricsBody() -> String:
 	var ckBusy : int = 0
 	var ckFrames : int = 0
 	var ckMaxMicros : int = 0
+	# WorkOrder #185: o censo de oferta com IDADE. `-1` é "nunca rodou neste processo",
+	# e é o valor que separa "a economia está limpa" de "a economia não olhou para si
+	# mesma" — sem ele, um `unattested` parado em zero vale tanto quanto um job morto.
+	var censusRuns : int = 0
+	var censusAge : int = -1
+	var censusGoldUnattested : int = 0
+	var censusGemsUnattested : int = 0
+	var censusDivergentOwners : int = 0
+	var censusUntrackedGold : int = 0
+	var censusCreatedGold : int = 0
+	var censusDestroyedGold : int = 0
 	var schemaVersion : int = 0
 	var migrationPatches : int = 0
 	var migrationFailures : int = 0
@@ -202,6 +213,18 @@ func MetricsBody() -> String:
 		migrationFailures = int(mig.get("failures", 0))
 		migrationFailedPatch = int(mig.get("failedPatch", -1))
 		migrationStalled = 1 if bool(mig.get("stalled", false)) else 0
+	# #185: o censo mora no kernel (economia), não no SQL, então o gate dele é o do
+	# autoload econômico — o mesmo par que `SQLBackups.@Run` exige para disparar o job.
+	if Launcher.Economy != null and Launcher.Economy.isInitialized:
+		var cc : Dictionary = Launcher.Economy.SupplyCensusStats()
+		censusRuns = int(cc.get("runs", 0))
+		censusAge = int(cc.get("age", -1))
+		censusGoldUnattested = int(cc.get("goldUnattested", 0))
+		censusGemsUnattested = int(cc.get("gemsUnattested", 0))
+		censusDivergentOwners = int(cc.get("divergentOwners", 0))
+		censusUntrackedGold = int(cc.get("untrackedGold", 0))
+		censusCreatedGold = int(cc.get("createdGold", 0))
+		censusDestroyedGold = int(cc.get("destroyedGold", 0))
 	var body : String = ""
 	body += "# HELP shambleta_up 1 quando o processo do server está servindo.\n"
 	body += "# TYPE shambleta_up gauge\n"
@@ -270,6 +293,36 @@ func MetricsBody() -> String:
 	body += "# HELP shambleta_sql_checkpoint_max_seconds dreno individual mais longo do dono desde o boot.\n"
 	body += "# TYPE shambleta_sql_checkpoint_max_seconds gauge\n"
 	body += "shambleta_sql_checkpoint_max_seconds %.6f\n" % (float(ckMaxMicros) / 1000000.0)
+	# WorkOrder #185 — o censo de oferta. Os dois `*_unattested` são ASSINADOS de
+	# propósito: `carteira − atestado`, então positivo é dinheiro que entrou sem linha
+	# de ledger (mint) e negativo é ledger que atesta o que a carteira não tem (débito
+	# cru). Cobrir com `abs()` ou por-family esconderia qual das duas pernas quebrou, e
+	# é a primeira que um faucet sem espelho produz. `age_seconds = -1` é o job morto:
+	# sem ele, zeros queriam dizer "economia limpa" mesmo quando ninguém mediu.
+	body += "# HELP shambleta_supply_census_runs_total censos de oferta rodados neste processo.\n"
+	body += "# TYPE shambleta_supply_census_runs_total counter\n"
+	body += "shambleta_supply_census_runs_total %d\n" % censusRuns
+	body += "# HELP shambleta_supply_census_age_seconds segundos desde o último censo de oferta; -1 = nunca rodou.\n"
+	body += "# TYPE shambleta_supply_census_age_seconds gauge\n"
+	body += "shambleta_supply_census_age_seconds %d\n" % censusAge
+	body += "# HELP shambleta_supply_census_gold_unattested ouro em carteira menos o que o ledger atesta (positivo = faucet sem espelho).\n"
+	body += "# TYPE shambleta_supply_census_gold_unattested gauge\n"
+	body += "shambleta_supply_census_gold_unattested %d\n" % censusGoldUnattested
+	body += "# HELP shambleta_supply_census_gems_unattested gemas em carteira menos o que o ledger atesta.\n"
+	body += "# TYPE shambleta_supply_census_gems_unattested gauge\n"
+	body += "shambleta_supply_census_gems_unattested %d\n" % censusGemsUnattested
+	body += "# HELP shambleta_supply_census_divergent_owners donos (personagem+conta) cuja carteira não bate com o próprio atesto.\n"
+	body += "# TYPE shambleta_supply_census_divergent_owners gauge\n"
+	body += "shambleta_supply_census_divergent_owners %d\n" % censusDivergentOwners
+	body += "# HELP shambleta_supply_census_untracked_gold ouro do dia que o flush desceu sem família de ledger conhecida.\n"
+	body += "# TYPE shambleta_supply_census_untracked_gold gauge\n"
+	body += "shambleta_supply_census_untracked_gold %d\n" % censusUntrackedGold
+	body += "# HELP shambleta_supply_census_gold_created_total ouro criado no banco inteiro segundo o último censo.\n"
+	body += "# TYPE shambleta_supply_census_gold_created_total counter\n"
+	body += "shambleta_supply_census_gold_created_total %d\n" % censusCreatedGold
+	body += "# HELP shambleta_supply_census_gold_destroyed_total ouro destruído no banco inteiro segundo o último censo.\n"
+	body += "# TYPE shambleta_supply_census_gold_destroyed_total counter\n"
+	body += "shambleta_supply_census_gold_destroyed_total %d\n" % censusDestroyedGold
 	# P0-STAMP: saúde das migrations. O par que o alerta lê é
 	# `shambleta_schema_version` contra `shambleta_migration_patches_visible` — a
 	# diferença entre elas é "o binário tem patch que a base não tem", que é o

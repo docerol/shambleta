@@ -295,7 +295,7 @@ bash scripts/test.sh one shard_capacity_test
   em `sources/system/MetricsServer.gd:@MetricsBody`, lidos de `QueryMutexWaitStats()`
   (`sources/sql/SQL.gd:@QueryMutexWaitStats`). A regra de alerta que esperava esse sinal também já
   existe, no `QueryMutexTravando` cuja expressão alarma em
-  `increase(shambleta_sql_query_mutex_wait_over_100ms[10m]) > 0` (`deploy/alerts.rules.yml:102`). O snippet que estava
+  `increase(shambleta_sql_query_mutex_wait_over_100ms[10m]) > 0` (`deploy/alerts.rules.yml:135`). O snippet que estava
   aqui chamava `QueryMutexWaitSeconds()`, função que ninguém definiu — era pedido
   escrito depois de o trabalho ter sido feito, do mesmo tipo de ficção que faz um
   operador re-inventar uma linha que já roda.
@@ -363,8 +363,30 @@ O que **NÃO** mudou, declarado porque é exatamente o que este número não pro
   pela primeira: débito do vendor que volta a existir com o item no bolso, crédito
   de grant que desaparece. Desde a WorkOrder #88 o `gp` saiu do dicionário absoluto
   de `SQL.UpdateStat` e é gravado como DELTA por `SQL.FlushGoldDelta` — as duas
-  origens compõem. O §12 da auditoria falava de presença *compartilhada*, não de
-  shard com dois escritores. A régua de presença está no harness:
+  origens compõem. Compor o número, porém, não contava a origem: o passe de 600 s
+  escrevia o `gp` no banco sem escrever nada em `ledger_transaction`, então o ouro
+  de farm existia na carteira e no agente e não existia no único lugar que audita
+  dinheiro. Desde a WorkOrder #185 o delta desce com as linhas:
+  o funil de ouro do agente `FlushGoldDelta` de
+  `sources/sql/SQLGrants.gd:@FlushGoldDelta` grava na MESMA `Transaction()` uma
+  linha por família do lastro `gpPending` de
+  `sources/actor/Stats.gd:@gpPending`, e `_FlushRows` em
+  `sources/sql/SQLGrants.gd:@_FlushRows` é quem decide o formato — cobra a família mais
+  nova primeiro, joga o resto numa linha `flush_untracked` (o número que a régua
+  quer ver em zero) e fecha um débito com uma `flush_correction` do valor
+  efetivamente movido, não do pedido. Nenhuma outra régua veria isso: o
+  `ReconcileWalletDaily` só enxerga carteira ABAIXO do último `balance_after`, e um
+  faucet sem ledger empurra a carteira ACIMA do atestado. O censo que mede essa
+  direção — `CensusSupply` de
+  `sources/economy/EconomyKernel.gd:@CensusSupply` — deixou de ser alavanca
+  de harness: o job `RunSupplyCensusJob` de
+  `sources/economy/EconomyKernel.gd:@RunSupplyCensusJob` é chamado pela
+  costura diária `Run` de `sources/sql/SQLBackups.gd:@Run` e o `/metrics` publica a idade do
+  último censo junto da oferta não atestada pelo corpo `MetricsBody` de
+  `sources/system/MetricsServer.gd:@MetricsBody`, com as três regras de página
+  `CensoDeOfertaParado`, `CarteiraSemAtesto` e `FlushSemFamilia` no
+  `deploy/alerts.rules.yml`. O §12 da auditoria falava de presença *compartilhada*,
+  não de shard com dois escritores. A régua de presença está no harness:
   `presence_session` só pode aparecer em frases SQL de
   `sources/network/server/Presence.gd`, e os ganchos são contados nos fontes
   (`Server.gd` reporta 2× e esquece 1×, `World.gd` faz o tick, `SQL.gd` reclama o

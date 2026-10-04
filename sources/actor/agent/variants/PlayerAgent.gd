@@ -69,6 +69,11 @@ func SetCharacterInfo(charData : Dictionary, charID : int):
 	# (`SQL.UpdateStat`), então o que chegou aqui já está persistido — creditar de
 	# novo no próximo passe de 600 s seria mintar a própria carteira.
 	stat.gpFlushed = stat.gp
+	# WorkOrder #185: com o lastro re-ancorado no valor do banco, o que sobrasse de
+	# `gpPending` de uma vida anterior seria atribuído a um flush cujo delta não
+	# existe mais — linha de ledger sem dinheiro movido. Pending novo só a partir
+	# daqui.
+	stat.gpPending.clear()
 	stat.ResetAttributesIfOverBudget()
 	# Inventory
 	var inventoryData : Array[Dictionary] = Launcher.SQL.GetStorage(charID, 0)
