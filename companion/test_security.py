@@ -14,13 +14,19 @@ Parte A — webhook Mercado Pago fail-closed (8 casos):
   7. valor pago != preço do catálogo → 400 amount_mismatch, nada concede;
   8. assinatura inválida → 401, nada concede.
 
-Parte B — checkout com binding de sessão (6 casos):
+Parte B — checkout com binding de sessão (9 casos):
   1. usuário A cria checkout p/ A (token válido) → 200, preço do catálogo;
   2. usuário A tenta checkout p/ B → 403, sem chamar a API do MP;
   3. sem token → 401;
   4. SKU válido → preço exclusivamente do catálogo/server;
   5. preço enviado pelo cliente é ignorado (não altera a preferência);
-  6. external_reference permanece vinculado à conta dona do token.
+  6. external_reference permanece vinculado à conta dona do token;
+  7. sessão HMAC do game (forma nova, AUTH-P0) → 200 — é a perna que faltava
+     no P0-1: sem ela todo cliente com sessão recém-emitida tomava 401;
+  8. mesmo HMAC com account_id divergente → 403 (cross-account);
+  9. token sem linha em nenhuma das duas formas (forjado) → 401.
+  B1-B6 mantêm viva a perna legada sha256 da migração: é ela que morre sozinha
+  com a expiração de 30 dias, não com um corte de deploy.
 
 Parte C — gate de idade/LGPD (Lei 15.211/2025) na porta do dinheiro (6 checagens):
   aceite desatualizado recusa preferência e intent sem chegar ao gateway; conta
@@ -65,6 +71,12 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import server  # noqa: E402
+
+# P0-1 (auditoria 2026-10-04): a signing key é FIXADA aqui, antes do fixture
+# montar as linhas e antes do servidor subir — os dois lados (quem grava o
+# HMAC no make_db, quem confere em verify_session_token) leem a mesma env no
+# mesmo processo, e o valor não depende do shell que roda a suíte.
+os.environ[server.TOKEN_SIGNING_KEY_ENV] = "shambleta-test-signing-key"
 
 FAILS = []
 CHECKS = 0
@@ -132,6 +144,13 @@ def make_db():
                 (hashlib.sha256(b"tok-Carol").hexdigest(), NOW + 30 * 86400))
     con.execute("INSERT INTO auth_token VALUES (1, ?, '127.0.0.1', ?);",
                 (hashlib.sha256(b"tok-expired").hexdigest(), NOW - 10))
+    # P0-1: linha NOVA no formato que o game grava desde a onda AUTH-P0 —
+    # HMAC-SHA256 do token com a signing key, não sha256 cru. O checkout
+    # aceitava só a forma antiga e morria para toda sessão recém-emitida.
+    tok_hmac = hmac.new(os.environ[server.TOKEN_SIGNING_KEY_ENV].encode("utf-8"),
+                        b"tok-HMAC", hashlib.sha256).hexdigest()
+    con.execute("INSERT INTO auth_token VALUES (1, ?, '127.0.0.1', ?);",
+                (tok_hmac, NOW + 30 * 86400))
     con.commit()
     con.close()
     return path
@@ -354,6 +373,24 @@ try:
                      {"auth_token": "tok-expired", "account_id": 1,
                       "sku": "gems.550"})
     ok(code == 401, "token expirado → 401")
+
+    # P0-1 (auditoria 2026-10-04): a perna que faltava. A sessão que o game
+    # emite HOJE é HMAC-SHA256 com a signing key (AUTH-P0); B1..B6 acima provam
+    # a perna legada (sha256, linhas anteriores à onda) e estas três provam a
+    # nova forma, o cross-account dela e o negativo (forjado sem linha).
+    code, res = post("/checkout/preference",
+                     {"auth_token": "tok-HMAC", "account_id": 1,
+                      "sku": "gems.550"})
+    ok(code == 200 and res.get("external_reference") == "1:gems.550",
+       "B7 sessão HMAC do game é aceita no checkout (P0-1)")
+    code, res = post("/checkout/preference",
+                     {"auth_token": "tok-HMAC", "account_id": 2,
+                      "sku": "gems.550"})
+    ok(code == 403, "B8 HMAC cross-account → 403")
+    code, res = post("/checkout/preference",
+                     {"auth_token": "tok-forged", "account_id": 1,
+                      "sku": "gems.550"})
+    ok(code == 401, "B9 token forjado (sem linha em nenhuma das duas formas) → 401")
 
     # ===== Parte C — gate de idade/LGPD (Lei 15.211/2025) na porta do dinheiro =====
     # Carol tem token de sessão válido e aceite de antes do bump: o game server a

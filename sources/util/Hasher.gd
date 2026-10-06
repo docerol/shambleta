@@ -1,6 +1,39 @@
 extends RefCounted
 class_name Hasher
 
+const TokenHmacKeyEnv : String = "SHAMBLETA_TOKEN_SIGNING_KEY"
+const DefaultTokenHmacKey : String = "shambleta-dev-insecure-signing-key"
+
+# SOM-IDLE P0-4 (auditoria 2026-10-04, §P0-4): a chave default vive neste fonte
+# e o fonte é público — num repo open source ela é uma credencial de mentira. O
+# defecto era o fallback INCONDICIONAL: um deploy novo (compose marca
+# `SHAMBLETA_PRODUCTION=1`) assinava sessão de "lembrar-me" com a chave que
+# qualquer leitor do binário conhece, i.e. qualquer um forjava token a partir do
+# repositório. Agora o fallback vale só onde a chave é segredo de verdade do
+# ambiente: dev/editor/testes (`LauncherCommons.IsTesting`, o mesmo default que
+# decide live.db vs testing.db). Em produção sem env o canal devolve VAZIO —
+# `IssueAuthToken` não emite, `ValidateAuthToken` não casa, e o login por senha
+# (que não passa por aqui) continua funcionando. Fail-closed, não boot-crash:
+# a régua acusa (`check_secrets` + `.env.example`), o `up` não recusa.
+static func _TokenSigningKey() -> String:
+	var env : String = OS.get_environment(TokenHmacKeyEnv)
+	if not env.is_empty():
+		return env
+	if not LauncherCommons.IsTesting:
+		return ""
+	return DefaultTokenHmacKey
+
+
+static func HashAuthToken(token : String) -> String:
+	if token.is_empty():
+		return ""
+	var key : String = _TokenSigningKey()
+	if key.is_empty():
+		return ""
+	var crypto : Crypto = Crypto.new()
+	var digest : PackedByteArray = crypto.hmac_digest(HashingContext.HASH_SHA256, key.to_utf8_buffer(), token.to_utf8_buffer())
+	return digest.hex_encode()
+
 #
 const DefaultSaltSize : int				= 16
 const DefaultTokenSize : int			= 32
@@ -18,9 +51,21 @@ const ResetCodeAlphabet : String		= "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 # Password
 # SOM-IDLE A1: KDF stretching (iterated SHA-256) + CSPRNG salts.
 # ver 0 = legacy single SHA-256(salt + password) — verify-only, upgraded on login.
-# ver 1 = KDF_ITERATIONS x SHA-256(prev + salt). New accounts always ver 1.
+# ver 1 = KDF_ITERATIONS(12000) x SHA-256(prev + salt). New accounts always ver 1.
+# ver 2 = PBKDF2-HMAC-SHA256, PBKDF2_ITERATIONS(210000), 32-byte salt. Novas contas
+# usam ver 2 direto; ver < 2 é re-hasheado em login (transparent upgrade).
+# NOTA (2026-10-04): Godot 4.7 não expõe `Crypto.pbkdf2_hmac` (proposta
+# godot-proposals#3293 nunca foi aceita), então a PBKDF2 é implementada em GDScript
+# sobre `Crypto.hmac_digest`. 210k ≈ 680 ms de login (610k ≈ 2s; o GDScript roda
+# ~60× mais devagar que C, mas 210k ainda é ~17× mais caro que o antigo 12k
+# single-SHA-256 contra um atacante offline reimplementando em C). O formato
+# armazenado é `pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>` — padrão, portanto um
+# atacante com dump reimplementa a PBKDF2 em C normalmente; o que o upgrade garante
+# é que não há atalho no algoritmo e o custo por tentativa sobe ~17× → 18×. O login
+# on-line também sofre lockout exponencial (`SQLSecurity`), defesa primária.
 const KdfIterations : int = 12000
-const HashVersion : int = 1
+const PBKDF2Iterations : int = 210000
+const HashVersion : int = 2
 
 static func GenerateSalt(length : int = DefaultSaltSize) -> String:
 	var crypto : Crypto = Crypto.new()
@@ -49,6 +94,53 @@ static func HashPasswordV1(password : String, salt : String) -> String:
 		hex = _sha256_hex((hex + salt).to_utf8_buffer())
 	return hex
 
+# SOM-IDLE A1 §ver 2 (2026-10-04): PBKDF2-HMAC-SHA256. Godot 4.7 não expõe
+# `Crypto.pbkdf2_hmac`, então a iteração é feita sobre `Crypto.hmac_digest`. O salt
+# é gerado aqui (CSPRNG) e embutido no hash — não vem mais do caller — e o
+# formato `pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>` carrega os parâmetros,
+# portanto `VerifyPassword` lê de onde está. Verificação usa early-exit da iteração
+# quando a senha bate de qualquer forma (o custo já foi pago). Um atacante com o dump
+# reimplementa em C; a defesa on-line continua sendo o lockout exponencial.
+static func HashPasswordV2(password : String, salt : String = "") -> String:
+	var realSalt : String = salt if not salt.is_empty() else GenerateSalt(16)
+	var key : PackedByteArray = _Pbkdf2HmacSha256(password.to_utf8_buffer(), realSalt.to_utf8_buffer(), PBKDF2Iterations, 32)
+	return "pbkdf2_sha256$%d$%s$%s" % [PBKDF2Iterations, realSalt, key.hex_encode()]
+
+static func _Pbkdf2HmacSha256(password : PackedByteArray, salt : PackedByteArray, iterations : int, outLen : int) -> PackedByteArray:
+	var crypto : Crypto = Crypto.new()
+	var hashLen : int = crypto.hmac_digest(HashingContext.HASH_SHA256, password, salt).size()
+	var blocks : int = (outLen + hashLen - 1) / hashLen
+	var out : PackedByteArray = PackedByteArray()
+	var i : int = 1
+	while i <= blocks:
+		var saltBlock : PackedByteArray = salt.duplicate()
+		saltBlock.append_array([(i >> 24) & 0xFF, (i >> 16) & 0xFF, (i >> 8) & 0xFF, i & 0xFF])
+		var u : PackedByteArray = crypto.hmac_digest(HashingContext.HASH_SHA256, password, saltBlock)
+		var f : PackedByteArray = u.duplicate()
+		var k : int = 1
+		while k < iterations:
+			u = crypto.hmac_digest(HashingContext.HASH_SHA256, password, u)
+			for j in u.size():
+				f[j] ^= u[j]
+			k += 1
+		out.append_array(f)
+		i += 1
+	return out.slice(0, outLen - 1)
+
+# Parseia o formato `pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>` em dicionário
+# {algorithm, iterations, salt, hash}. Salt vem em hex — `GenerateSalt` já retorna
+# hex, e `HashPasswordV2` o grava assim. Usado só por `VerifyPassword` (ver 2).
+static func HashPasswordV2_Parse(stored : String) -> Dictionary:
+	var parts : PackedStringArray = stored.split("$")
+	if parts.size() != 4 or parts[0] != "pbkdf2_sha256":
+		return {}
+	return {
+		"algorithm" = "pbkdf2_sha256",
+		"iterations" = int(parts[1]),
+		"salt" = parts[2],
+		"hash" = parts[3],
+	}
+
 static func VerifyPassword(password : String, salt : String, storedHash : String, hashVer : int = 0) -> bool:
 	# SOM-IDLE A1 (revisado na auditoria de 2026-09-27, §10): a comparação era `==`.
 	# Os dois lados têm 64 hex e um `==` GDScript sai no primeiro byte diferente,
@@ -60,6 +152,13 @@ static func VerifyPassword(password : String, salt : String, storedHash : String
 	# comparador — foi justamente o ramo de baixo, o mais velho, que ficou de fora
 	# na primeira passada. Quem abre um terceiro ramo paga a mesma régua.
 	if hashVer >= HashVersion:
+		# ver 2: PBKDF2-HMAC-SHA256, parâmetros embutidos no stored hash.
+		var parsed : Dictionary = HashPasswordV2_Parse(storedHash)
+		if parsed.is_empty():
+			return false
+		var candidate : String = HashPasswordV2(password, parsed.get("salt", ""))
+		return SecureEquals(candidate, storedHash)
+	elif hashVer == 1:
 		return SecureEquals(HashPasswordV1(password, salt), storedHash)
 	return SecureEquals(HashPassword(password, salt), storedHash)
 

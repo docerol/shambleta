@@ -309,6 +309,8 @@ enum AuthError {
 	ERR_EMAIL_TAKEN,
 	# SOM-IDLE S4: 2FA required for admin/GM accounts.
 	ERR_2FA_REQUIRED,
+	# SOM-IDLE AUTH-P0 (2026-10-04, frente 2): rate limit de criação de conta por IP.
+	ERR_CREATE_ACCOUNT_BLOCKED,
 }
 
 # SOM-IDLE LGPD: status da conta para o direito ao esquecimento (art. 18).

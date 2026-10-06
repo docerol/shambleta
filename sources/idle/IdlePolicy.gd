@@ -465,10 +465,13 @@ func NotifyInterruptWindow(boss : BaseAgent, open : bool):
 	if agent != null and agent.peerID != NetworkCommons.PeerUnknownID:
 		Network.CallClient("BossInterruptWindow", [open], agent.peerID)
 
-# Push do veredito do toque (quality + mult) p/ o banner da UI.
+# P1-1 (A-10): transmite feedback visual de progresso ao cliente.
 func NotifyInterruptFeedback(quality : String, mult : float):
 	if agent != null and agent.peerID != NetworkCommons.PeerUnknownID:
 		Network.CallClient("BossInterruptFeedback", [quality, mult], agent.peerID)
+	# Transmite SnapshotMetrics a cada tick para feedback idle (HUD/overlay).
+	if agent != null and agent.peerID != NetworkCommons.PeerUnknownID:
+		Network.CallClient("SnapshotMetrics", [SnapshotMetrics()], agent.peerID)
 
 # Chamado pelo servidor quando o jogador toca no botão. Só vale em duelo; a
 # resolução (janela aberta? hit-bônus?) acontece no próximo tick, server-side.

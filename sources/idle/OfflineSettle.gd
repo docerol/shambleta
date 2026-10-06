@@ -166,16 +166,26 @@ static func SettlePending(charID : int) -> Dictionary:
 	report.zoneID = zoneID
 	report.lastSettledAt = now
 	report.anchorTs = lastSettled
+	# (tier, janela) de VIP pago UMA vez por settle: CapHoursForAccount,
+	# _LootMult e GetModsForAccount compartilham o par em vez de cada um abrir
+	# sua própria SELECT (eram 3-5 por liquidação).
+	var _vipTier : int = -1
+	var _vipUntil : int = -1
+	if report.accountID > 0:
+		var _vipState : Dictionary = sql.GetVipState(report.accountID)
+		_vipTier = int(_vipState.get("tier", 0))
+		_vipUntil = int(_vipState.get("until", 0))
 	# O corte das horas compradas é o anchor VELHO (lastSettled), não
 	# report.lastSettledAt: este já é `now` e filtraria toda view da própria
 	# janela que estamos liquidando.
-	report.capHours = CapHoursForCharacter(charID, report.accountID, lastSettled, now)
+	report.capHours = CapHoursForCharacter(charID, report.accountID, lastSettled, now, _vipTier, _vipUntil)
 	report.hours = minf(float(now - lastSettled) / 3600.0, report.capHours)
 	report.efficiency = clampf(float(char.get("session_efficiency", 1.0) if char.get("session_efficiency", 1.0) != null else 1.0), MinEfficiency, 1.0)
 	# NOTE: session deaths are already baked into session_efficiency on disconnect
 	# (NetServer SOM-IDLE hook); the spike does not track a separate death count.
 
-	_ApplyFormula(sql, report, _LootMult(report.accountID, now))
+	var _adMult : int = _LootMult(report.accountID, now, _vipTier, _vipUntil)
+	_ApplyFormula(sql, report, _adMult, _vipUntil)
 	if not _Apply(sql, report):
 		return {}
 	return report.to_dictionary()
@@ -183,14 +193,21 @@ static func SettlePending(charID : int) -> Dictionary:
 # Multiplicador de loot da liquidação (1 ou 2). Desde a regra de 2026-09-25 o
 # único ×2 é o perk permanente do VIP tier 2: anúncio não entra aqui, anúncio
 # compra HORA (CapHoursForCharacter). Só XP/ouro/drops escalam.
-static func _LootMult(accountID : int, now : int = 0) -> int:
+# `vipTier`/`vipUntil` entram prontos quando o chamador já pagou a leitura de
+# (tier, janela) uma única vez; -1 = "leia você mesmo" (seam pura continua
+# funcionando sem argumento nenhum).
+static func _LootMult(accountID : int, now : int = 0, vipTier : int = -1, vipUntil : int = -1) -> int:
 	if accountID <= 0:
 		return 1
 	var sql : SQLService = _sql()
 	var t : int = now if now > 0 else _now()
-	if sql.GetVIPTier(accountID) == 2 and sql.GetVIPUntil(accountID) > t:
-		return 2
-	return 1
+	if vipTier < 0:
+		vipTier = sql.GetVIPTier(accountID)
+	if vipTier != 2:
+		return 1
+	if vipUntil < 0:
+		vipUntil = sql.GetVIPUntil(accountID)
+	return 2 if vipUntil > t else 1
 
 # ------------------------------------------------------------------ formula
 
@@ -199,14 +216,18 @@ static func _LootMult(accountID : int, now : int = 0) -> int:
 # com janela ativa; expirado volta ao base). É a metade que não depende de
 # anúncio — a outra metade (horas assistidas) entra em CapHoursForCharacter.
 # Pura p/ seams.
-static func CapHoursForAccount(accountID : int, now : int = 0) -> float:
+static func CapHoursForAccount(accountID : int, now : int = 0, vipTier : int = -1, vipUntil : int = -1) -> float:
 	if accountID <= 0:
 		return BaseCapHours
 	var t : int = now if now > 0 else _now()
 	var sql : SQLService = _sql()
-	if sql.GetVIPUntil(accountID) <= t:
+	if vipUntil < 0:
+		vipUntil = sql.GetVIPUntil(accountID)
+	if vipUntil <= t:
 		return BaseCapHours
-	match sql.GetVIPTier(accountID):
+	if vipTier < 0:
+		vipTier = sql.GetVIPTier(accountID)
+	match vipTier:
 		1:
 			return CapHoursVIP1
 		2:
@@ -224,16 +245,17 @@ static func AdHoursEarned(accountID : int, charID : int, anchorTs : int) -> floa
 # Teto liquidável do PERSONAGEM = o que a conta comprou (F2P/VIP) + o que o
 # personagem assistiu e ainda não coletou. A leitura é por personagem porque o
 # anchor é character.last_settled_at e a view carrega char_id.
-static func CapHoursForCharacter(charID : int, accountID : int, anchorTs : int, now : int = 0) -> float:
-	return CapHoursForAccount(accountID, now) + AdHoursEarned(accountID, charID, anchorTs)
+static func CapHoursForCharacter(charID : int, accountID : int, anchorTs : int, now : int = 0, vipTier : int = -1, vipUntil : int = -1) -> float:
+	return CapHoursForAccount(accountID, now, vipTier, vipUntil) + AdHoursEarned(accountID, charID, anchorTs)
 
 # SOM-IDLE: F3 — settle mods by account: VIP window (+20% idle faucet),
 # guild hook reserved (F4). Kept as a pure function for test seams.
-static func GetModsForAccount(accountID : int, now : int = 0) -> float:
+static func GetModsForAccount(accountID : int, now : int = 0, vipUntil : int = -1) -> float:
 	var mods : float = GuildHookFactor
 	if accountID > 0 and now > 0:
 		var sql : SQLService = _sql()
-		var vipUntil : int = sql.GetVIPUntil(accountID)
+		if vipUntil < 0:
+			vipUntil = sql.GetVIPUntil(accountID)
 		if vipUntil > now:
 			mods *= VIPModFactor
 		# SOM-IDLE E1: buff de guild (2%/nível a partir do 2) no faucet idle.
@@ -298,7 +320,7 @@ static func RollDrops(zoneID : int, seedBase : int, dropCount : int) -> Dictiona
 		rolled[itemHash] = int(rolled.get(itemHash, 0)) + 1
 	return rolled
 
-static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int = 1):
+static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int = 1, vipUntil : int = -1):
 	var zone : FarmZoneData = FarmZoneData.GetZone(report.zoneID)
 	if zone == null:
 		return
@@ -313,7 +335,7 @@ static func _ApplyFormula(sql : SQLService, report : SettleReport, adMult : int 
 	var rebGold : float = RebirthData.GoldMult(int(rebInfo.get("favor_gold", 0)))
 	var offFactor : float = RebirthData.OfflineFactorWithBonus(OfflineFactor, int(rebInfo.get("attune_offline", 0)))
 
-	report.mods = GetModsForAccount(report.accountID, _now())
+	report.mods = GetModsForAccount(report.accountID, _now(), vipUntil)
 	# Tormento (D2): recompensa offline escala com a dificuldade do char.
 	report.mods *= Formula.TormentRewardMult(sql.GetTormentLevel(report.charID))
 	# SOM-IDLE newbie boost: até level 10 rendem 5× de XP offline — só XP,

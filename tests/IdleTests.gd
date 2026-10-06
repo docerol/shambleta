@@ -2872,19 +2872,43 @@ func SuiteCraftFee(sql : SQLService, charSeller : int, accountSeller : int) -> v
 	Check(listing > 0, "middleman lists crafted item (#%d, price 1000)" % listing)
 	CheckEq(_CountItem(sql, charMid, piouSlayerHash), 0, "item escrowed from middleman")
 
-	# Buyer purchases — triggers 1% creator fee (10 gold to creator)
+	# P0-2 (auditoria 2026-10-04): o fee é QUEIMADO, e a queima tem que ser um
+	# movimento de carteira com linha de ledger espelhada (I11) — a forma
+	# anterior gravava só a linha (`char_id=0`) com a carteira intacta, e a soma
+	# do ledger do vendedor ficava 10 abaixo do saldo. Snapshot antes da venda
+	# para cobrar o delta, e não o saldo absoluto (o criador também recebe o
+	# seed de craft).
+	var creatorGoldBefore : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charCreator])[0]["gp"])
+	var midLedgerBefore : int = int(sql.QueryBindings(
+		"SELECT COALESCE(SUM(amount),0) AS s FROM ledger_transaction WHERE account_id = ? AND kind = 'gold';",
+		[accountMid])[0]["s"])
+
+	# Buyer purchases — triggers 1% creator fee (burned, not credited)
 	Check(economy.BuyListing(charBuyer, listing), "buyer purchased crafted listing")
 
-	var feeRows : Array = sql.QueryBindings(
-		"SELECT amount, balance_after FROM ledger_transaction WHERE reason = ? ORDER BY id DESC LIMIT 1;", ["ah_creator_fee:%d" % listing])
-	Check(not feeRows.is_empty(), "creator fee ledger row present")
-	if not feeRows.is_empty():
-		CheckEq(int(feeRows[0]["amount"]), 10, "creator fee = 1% of 1000 = 10 gold")
+	var burnRows : Array = sql.QueryBindings(
+		"SELECT amount, balance_after FROM ledger_transaction WHERE account_id = ? AND reason = 'ah_burn' ORDER BY id DESC LIMIT 1;",
+		[accountMid])
+	Check(not burnRows.is_empty(), "ah_burn row on the seller account (gold sink recorded as wallet movement)")
+	if not burnRows.is_empty():
+		CheckEq(int(burnRows[0]["amount"]), -10, "burn = 1% of 1000 = 10 gold leaves the seller wallet")
+		var midWalletNow : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charMid])[0]["gp"])
+		CheckEq(int(burnRows[0]["balance_after"]), midWalletNow, "balance_after of the burn is the real wallet (P0-2)")
+
+	var creatorCredit : Array = sql.QueryBindings(
+		"SELECT amount FROM ledger_transaction WHERE account_id = ? AND reason LIKE 'ah_creator_fee%';",
+		[accountCreator])
+	Check(creatorCredit.is_empty(), "creator received no gold row — the fee is burned, not credited")
 
 	var creatorGold : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charCreator])[0]["gp"])
-	Check(creatorGold >= 10, "creator stat.gp has fee (%d)" % creatorGold)
+	CheckEq(creatorGold, creatorGoldBefore, "creator wallet untouched by the purchase")
 
+	var midLedger : int = int(sql.QueryBindings(
+		"SELECT COALESCE(SUM(amount),0) AS s FROM ledger_transaction WHERE account_id = ? AND kind = 'gold';",
+		[accountMid])[0]["s"])
 	var midGold : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charMid])[0]["gp"])
+	CheckEq(midLedger, midLedgerBefore + 990, "seller net = 1000 price - 10 burned fee (P0-2)")
+	CheckEq(midLedger, midGold, "I11 seller gold ledger == seller wallet after the burn")
 	CheckEq(midGold, 5000 + 5000 + 990, "middleman received 990 net (fixture 5k + grant 5k + 990 sale)")
 
 	var buyerStat : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charBuyer])

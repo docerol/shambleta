@@ -16,7 +16,7 @@ extends SceneTree
 #  2. "tentativa com senha errada" e "tentativa em conta que não existe" têm de
 #     percorrer o MESMO caminho de custo. A conta inexistente sai de
 #     `ValidateAuthPassword` com `null` antes de qualquer KDF, e a rota de login
-#     compensa com `SQLSecurity.BurnKdfTime` — que é um `HashPasswordV1` cujo
+#     compensa com `SQLSecurity.BurnKdfTime` — que é um `HashPasswordV2` cujo
 #     resultado é jogado fora. Isto MEDe os dois lados em `Time.get_ticks_usec()`
 #     interleirados e exige que a razão fique numa banda estreita, com uma calibração
 #     que prova que o relógio tem resolução para distinguir os dois (se o
@@ -132,7 +132,7 @@ func _suiteSourceContract() -> void:
 	Check(vp.length() > 0, "func VerifyPassword encontrada")
 	var re : RegEx = RegEx.create_from_string("==\\s*storedHash|storedHash\\s*==")
 	Check(not (re.search(vp) != null), "VerifyPassword não compara com `== storedHash`")
-	CheckEq(vp.count("SecureEquals("), 2, "os DOIS ramos de versão (legado e KDF) usam o comparador constante")
+	CheckEq(vp.count("SecureEquals("), 3, "os três ramos de versão (ver 0, 1 e 2) usam o comparador constante")
 	var se : String = _fnBody(src, "SecureEquals")
 	Check(se.length() > 0, "func SecureEquals encontrada")
 	Check(not se.contains("return false"), "SecureEquals não tem saída antecipada (percorre o comparando inteiro)")
@@ -146,8 +146,8 @@ func _suiteSourceContract() -> void:
 	# E o igualador de timing é o MESMO KDF, não um `pass` decorado.
 	var secsrc : String = FileAccess.get_file_as_string("res://sources/sql/SQLSecurity.gd")
 	var burn : String = _fnBody(secsrc, "BurnKdfTime")
-	Check(burn.contains("HashPasswordV1"), "BurnKdfTime chama o mesmo KDF do login (12.000 iterações, não um `pass`)")
-	Check(not burn.contains("KdfIterations"), "BurnKdfTime não escolhe iterações por fora: usa o mesmo HashPasswordV1 do login, com o mesmo teto")
+	Check(burn.contains("HashPasswordV2"), "BurnKdfTime chama o mesmo KDF do login (PBKDF2 210.000 iterações, não um `pass`)")
+	Check(not burn.contains("KdfIterations"), "BurnKdfTime não escolhe iterações por fora: usa o mesmo HashPasswordV2 do login, com o mesmo teto")
 	# A rota de login chama o igualador no ramo "conta inexistente" (as duas rotas).
 	var srv : String = FileAccess.get_file_as_string("res://sources/network/server/Server.gd")
 	CheckEq(srv.count("SQLSecurity.BurnKdfTime(password)"), 2, "as duas rotas de credencial (login e consentimento) queimam o KDF na conta inexistente")
@@ -166,7 +166,7 @@ func _timeOf(fn : Callable) -> int:
 func _suiteSameCost() -> void:
 	print("-- C) conta existente com senha errada vs conta inexistente: MESMO custo")
 	var salt : String = "0F1E2D3C4B5A69788796A5B4C3D2E1F0"
-	var stored : String = str(_hasher("HashPasswordV1", ["SenhaBoa!2026", salt]))
+	var stored : String = str(_hasher("HashPasswordV2", ["SenhaBoa!2026"]))
 	var wrong : String = "SenhaErrada!2026"
 	var samples : int = 7
 	var existBest : int = 1 << 60
@@ -175,12 +175,12 @@ func _suiteSameCost() -> void:
 	for s in samples:
 		# interleirado: o host está rodando outros gates, e amostras em bloco
 		# pegariam janelas de carga diferentes nos dois lados.
-		var a : int = _timeOf(func(): _hasher("VerifyPassword", [wrong, salt, stored, 1]))
+		var a : int = _timeOf(func(): _hasher("VerifyPassword", [wrong, salt, stored, 2]))
 		var b : int = _timeOf(func(): sec.call("BurnKdfTime", wrong))
 		existBest = mini(existBest, a)
 		ghostBest = mini(ghostBest, b)
 		ghostResult = sec.call("BurnKdfTime", wrong)
-	Check(bool(_hasher("VerifyPassword", [wrong, salt, stored, 1])) == false, "lado A: senha errada recusada")
+	Check(bool(_hasher("VerifyPassword", [wrong, salt, stored, 2])) == false, "lado A: senha errada recusada")
 	CheckEq(ghostResult, null, "lado B: BurnKdfTime devolve void (não vira oracle de booleano)")
 	print("       medido (mínimo de %d amostras interleiradas): A=%d us  B=%d us" % [samples, existBest, ghostBest])
 	# Calibração: sem ela, "razão ~= 1" pode ser só um relógio que não resolve nada.

@@ -564,9 +564,10 @@ func _suiteBuyOrders() -> void:
 		_sql.call("UpdateRowsRaw", "auction_listing", "id = %d" % craftedListing, {"creator_account_id" = creatorAccount})
 		_check(int(_eco.call("PlaceBuyOrder", buyer, _itemBid, 1, 700)) > 0, "bid cobrindo o anúncio com criador colocada")
 		var fee : int = int(round(float(700) * float(feePct) / 100.0))
-		_checkEq(_gold(creator), fee, "o criador recebeu o fee também no fill por bid (%d%% de 700)" % feePct)
+		_checkEq(_gold(creator), 0, "o fee do criador é QUEIMADO, não creditado — sink de ouro (got %d, want 0)" % _gold(creator))
 		_checkEq(_gold(seller), 1650 + 700 - fee, "e o vendedor recebeu o líquido do fee (%d)" % _gold(seller))
-		_checkEq(_ledgerRows(creatorAccount, "ah_creator_fee:"), 1, "o fee tem linha de ledger como no caminho ask")
+		_checkEq(_ledgerRows(sellerAccount, "ah_burn"), 1, "o fee queimado tem linha de ledger ah_burn (sink registrado, não transferência)")
+		_checkEq(_ledgerRows(creatorAccount, "ah_creator_fee:"), 0, "o criador não recebe linha de transferência alguma — o fee não foi creditado a ninguém")
 		_checkEq(_riches(buyer, buyerAccount), rich0 - 1650 - 700, "o comprador pagou o preço do anúncio, não preço + fee")
 
 	# A vitrine não mostra mais o que a demanda comeu.

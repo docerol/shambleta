@@ -90,15 +90,31 @@ RATCHET_SLACK=200
 # arquivo": é que a banda é função de (item, preço por unidade) mais LEITURA de
 # `ah_price_history`, sem mutex, escrow nem ledger, então ela pode ser estática e o
 # `settleMutex` continua todo na fachada, que é quem a chama.
+# Exceção registrada (2026-10-05): quatro arquivos subiram numa só onda — a de P0
+# do trabalho de auditoria (2026-10-04) — e cada teto foi posto em "medido + 150",
+# a mesma banda da passada de 2026-09-27. A linha nova de cada um é guard ou duto
+# de uma decisão já coberta por teste, não crescimento silencioso:
+#   `sources/sql/SQL.gd` subiu de 1821 para 1912 — P0-3/P0-4: HMAC do auth-token
+#       (o legado em sha256 continua legível até expirar) + signing key do
+#       remember-me.
+#   `sources/network/server/Server.gd` subiu de 1971 para 1995 — P0-5: rate-limit
+#       de criação de conta por IP em `CreateAccount` (AUTH-P0), guard de uma linha.
+#   `companion/server.py` subiu de 2222 para 2347 — P0-1/P0-4 espelhado (chave de
+#       assinatura + verificação em duas pernas) e P0-9: `metrics_prometheus`, a
+#       exposition própria de `/metrics/prometheus`.
+#   `sources/economy/AuctionHouseService.gd` subiu de 1155 para 1168 — P0-7/P0-2:
+#       o creator fee vira sink (`ah_burn`) como movimento de carteira, o que é I11.
+# Nenhum dos quatro encolheu: por isso o teto não desce, e o próximo a crescer
+# sobe aqui com o motivo escrito, como no resto desta lista.
 declare -A RATCHET=(
-  ["sources/network/server/Server.gd"]=1971
+  ["sources/network/server/Server.gd"]=2145
   ["sources/world/WorldCommands.gd"]=1925
-  ["sources/sql/SQL.gd"]=1821
-  ["sources/economy/AuctionHouseService.gd"]=1155
+  ["sources/sql/SQL.gd"]=2062
+  ["sources/economy/AuctionHouseService.gd"]=1318
   ["sources/economy/CheckoutService.gd"]=923
   ["sources/network/client/Client.gd"]=1139
   ["sources/network/Network.gd"]=1277
-  ["companion/server.py"]=2222
+  ["companion/server.py"]=2497
 )
 fail=0
 measured=0

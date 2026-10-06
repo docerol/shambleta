@@ -248,14 +248,15 @@ const CensusSinkFamilies : PackedStringArray = [
 	"vendor", "craft_submit_fee", "craft_approve", "cube_upcycle", "corrupt_fee",
 	"boss_key_buy", "guild_create", "guild_level", "guild_level_fast",
 	"guild_vault_slots", "tournament_entry", "chest_buy", "daily_offer",
-	"daily_reroll", "trade_fee", "pass_skip", "cosmetic", "vip1_purchase",
+	"daily_reroll", 	"trade_fee", "pass_skip", "cosmetic", "vip1_purchase",
 	"vip2_purchase", "vip3_purchase", "ah_list_fee", "ah_slot", "ah_highlight_fee",
 	"salvage_burn", "rebirth_upgrade", "clawback", "refund", "revoke",
+	"ah_burn",
 	# Mesma regra do `flush_untracked` acima: um débito de memória (agente abaixo do
 	# próprio lastro) existe e é escrito; fingir que ele é `unattributed` não o apaga.
 	"flush_correction"]
 const CensusTransferFamilies : PackedStringArray = [
-	"ah_buy", "ah_sell", "ah_creator_fee", "ah_bid_escrow", "ah_bid_release",
+	"ah_buy", "ah_sell", "ah_bid_escrow", "ah_bid_release",
 	"vault_deposit"]
 
 # `windowSec`/`nowSec` delimitam a figura do DIA (o ledger é append-only e cresce

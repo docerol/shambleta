@@ -575,7 +575,8 @@ func _run_benchmarks():
         # caiba no teto, "p50 estourou" é medida do arquivo, não do código. As réguas de
         # taxa continuam correndo, e o run continua VERMELHO até alguém mudar o root do
         # sandbox — que é exatamente o que `scripts/test.sh` já faz quando `/dev/shm` é
-        # utilizável, e o root é decidido num só lugar: `_sandbox_root` (scripts/test.sh:@_sandbox_root).
+        # utilizável, e o root do sandbox é o `home` que `_reap_interrupted_sandbox` limpa
+        # (scripts/test.sh:@_reap_interrupted_sandbox).
         print("FAIL: settle NÃO MENSURÁVEL — %s. Nada foi afrouxado: tetos, baseline e folga seguem os mesmos, e este é o preço de medir onde não dá para medir." % motivoDispositivo)
         failures += 1
     elif p50AdjUs > BaselineSettleP50Us * RegressionHeadroom:

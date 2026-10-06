@@ -78,6 +78,8 @@ func FillWarningLabel(err : NetworkCommons.AuthError):
 		NetworkCommons.AuthError.ERR_2FA_REQUIRED:
 			warn = "Two-factor authentication required."
 			OpenTwoFactorDialog.call_deferred()
+		NetworkCommons.AuthError.ERR_CREATE_ACCOUNT_BLOCKED:
+			warn = "Too many account creations from this network. Try again in 1 hour to protect against botting."
 		NetworkCommons.AuthError.ERR_PASSWORD_VALID:
 			warn = "Password should only include alpha-numeric characters and symbols."
 			RequestFocus(passwordTextControl)

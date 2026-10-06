@@ -635,3 +635,15 @@ func OpenCraft() -> void:
 
 func _on_craft_pressed() -> void:
 	OpenCraft()
+
+# P1-1 (A-10): recebe SnapshotMetrics do servidor para feedback visual no HUD.
+var snapshotMetrics : Dictionary = {}
+func UpdateSnapshotMetrics(metrics : Dictionary) -> void:
+	snapshotMetrics = metrics
+	# Atualiza o HUD com feedback visual básico (ex.: kills/hora, gold/hora).
+	# Expansível para labels/progress bars no futuro.
+	if not metrics.is_empty():
+		var killsPerHour : float = float(metrics.get("kills_per_hour", 0.0))
+		var goldEarned : int = int(metrics.get("gold_earned", 0))
+		if notificationLabel:
+			notificationLabel.AddNotification("Idle: %.1f kills/h | +%d GP" % [killsPerHour, goldEarned], 3.0)

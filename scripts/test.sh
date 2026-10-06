@@ -529,6 +529,7 @@ companion_gates() {
 	gate_py /tmp/shambleta-push-vapid.log "== PUSH VAPID:" test_push_vapid
 	gate_py /tmp/shambleta-retention.log "== RETENTION:" test_retention
 	gate_py /tmp/shambleta-season-offer.log "== SEASON OFFER:" test_season_offer
+	gate_py /tmp/shambleta-metrics.log "== METRICS:" test_metrics
 }
 
 # Gate de estrutura em shell, pelo mesmo quádruplo de §24-8. Existe porque a CI roda
@@ -646,6 +647,16 @@ harness_timeout() {
 		" test_e2e_implementation ") echo 120 ;;
 		" test_backup_restore ") echo 120 ;;
 		" benchmarks ") echo 120 ;;
+		# Entrada que faltava: o orçamento de 900 s é o que `deploy/SCALING.md`
+		# sanciona (duas vezes, na seção do bracket e na da cauda por passo) para o
+		# `one multi_instance_tick_test 900`, e sem ela este harness caía no default
+		# 300. Medido em 2026-10-05 nesta árvore com o orçamento explícito: fechou em
+		# 356,9 s de relógio, `== RESULT: 249 checks, 0 failures ==` — o 300 mataba o
+		# run no meio da última etapa da escada (godot exit=124, sem a linha de
+		# resultado, e o portão cobrava o marcador que o run não tinha chance de
+		# imprimir). 900 é 2,5× a medida, a mesma folga do 1200 sobre os 950 do
+		# agregador. Quem encolher este teste baixa a entrada com a nova medida.
+		" multi_instance_tick_test ") echo 900 ;;
 		*) echo 300 ;;
 	esac
 }

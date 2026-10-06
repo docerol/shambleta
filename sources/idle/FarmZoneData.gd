@@ -521,12 +521,8 @@ static func GetDropForRoll(zoneID : int, roll : int) -> int:
 		# isso encher faixa não move o 0,7 drop/kill medido (`SuiteIdleLootPipeline`
 		# amarra os dois em tests/IdleTestsFrontier.gd).
 		return DefaultDropItemHash
-	var weights : Array = GetDropWeights(zoneID)
-	var cumulative : Array[int] = []
-	var totalWeight : int = 0
-	for w in weights:
-		totalWeight += int(w)
-		cumulative.append(totalWeight)
+	var cumulative : PackedInt32Array = _DropCumulative(zoneID)
+	var totalWeight : int = 0 if cumulative.is_empty() else cumulative[cumulative.size() - 1]
 	# SOM-IDLE launch gaps: o passo multiplicativo anterior
 	# (roll * 2654435761 % total) caía num lattice defeituoso para certos
 	# totais — com o template Incomum (total 5660) os 200 rolls visitavam ~12
@@ -534,11 +530,31 @@ static func GetDropForRoll(zoneID : int, roll : int) -> int:
 	# Espada, determinístico). Spread via hash (mesmo roll → mesmo item,
 	# determinístico; uniforme no espaço de peso).
 	var target : int = absi(hash([roll, totalWeight])) % maxi(1, totalWeight)
-	for i in range(cumulative.size()):
+	for i in cumulative.size():
 		if target < cumulative[i]:
 			return int(pool[i])
 	return int(pool[0])
 
+# Prefixo-soma dos pesos da faixa, calculado uma vez por zona. GetDropForRoll
+# roda uma vez por drop liquidado e pagava a reconstrução deste array em cada
+# rolagem; o que sai daqui é o mesmo array de sempre (mesmo roll responde o
+# mesmo item), só que montado uma vez e jogado fora junto dos vizinhos em
+# InvalidateDropPools.
+static var _dropCumCache : Dictionary[int, PackedInt32Array] = {}
+
+static func _DropCumulative(zoneID : int) -> PackedInt32Array:
+	var cached : PackedInt32Array = _dropCumCache.get(zoneID, PackedInt32Array())
+	if not cached.is_empty():
+		return cached
+	var cumulative : PackedInt32Array = PackedInt32Array()
+	var totalWeight : int = 0
+	for w in GetDropWeights(zoneID):
+		totalWeight += int(w)
+		cumulative.append(totalWeight)
+	_dropCumCache[zoneID] = cumulative
+	return cumulative
+
 static func InvalidateDropPools():
 	_dropPoolCache.clear()
 	_dropWeightCache.clear()
+	_dropCumCache.clear()

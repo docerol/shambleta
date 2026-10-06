@@ -157,8 +157,17 @@ vivas **16 → 16** (0,00 por instância — `WorldInstance` é objeto no thread
 thread), contra `RLIMIT_NOFILE` soft/hard = **1048576/1048576** e `RLIMIT_NPROC` soft =
 **63024** lidos de `/proc/self/limits` nesta máquina. Nem fd nem thread são o funil: o
 funil é o orçamento de tick. Memória: RSS 579 → 846 MB na escada, inclinação medida de
-**0,671 MB por player**, o que daria ~1.428 players antes dos `mem_limit: 1536M` do
-compose — 5× acima do teto de tick, então quem vincula primeiro é o tick.
+**0,671 MB por player**, o que daria ~1.428 players antes dos `mem_limit: 1536M`
+do compose — 5× acima do teto de tick. **Mas o teto de conexões ativo é
+`NetworkCommons.MaxPlayerCount` = 128 (`ConnectionCeiling()` em
+`sources/network/NetworkCommons.gd:66`, bindado em `Admission.OpenTransport`
+via `peer.create_server`), e 128 < 200: quem vincula primeiro é o teto de
+conexões, não o tick. O fence de 200 players da §3 é o teto de *tick* — é o
+limite que importa para dimensionamento horizontal (sharding por instância),
+mas um processo nunca chega perto disso porque o `create_server` recusa a 129ª
+conexão antes de qualquer tick ser pago. Para subir o teto medido, subir
+`MaxPlayerCount` e refazer a escada — o número da doc (200) é o teto de tick
+congelado, não o de conexões.
 
 Dois custos que a própria medição confessa: (i) o self-report da engine captura 68–85%
 da queima injetada de 4 ms/passo (por isso a fence de calibração é 60%, não 90%);

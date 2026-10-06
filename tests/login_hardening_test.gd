@@ -461,6 +461,12 @@ func _suiteResetDiscipline() -> void:
 		return
 	var uname : String = _newAccount("DonoDoCofre123!")
 	var accountID : int = int(sql.call("GetAccountID", uname))
+	# SOM-IDLE AUTH-P0 (2026-10-04): o suite de disciplina de reset só deve tocar
+	# contas com e-mail VERIFICADO — o gate de verificação é novo e testado à parte
+	# (abaixo). Sem isso, todas as requests caem no ramo `EventResetOnUnverified`
+	# e o ledger de `password_reset_request` ficaria vazio, quebrando a asserção de
+	# budget que este suite existe para validar.
+	sql.call("SetEmailVerified", accountID, true)
 	email.set("apiKey", "harness-fake-key")
 	email.set("senderEmail", "nobody@shambleta.invalid")
 	email.set("senderName", "harness")
@@ -475,6 +481,20 @@ func _suiteResetDiscipline() -> void:
 	CheckEq(_eventCount(str(_secConst("EventResetRequestLimit"))), limitEvents + 1, "6ª solicitação da janela → sec_reset_request_limit")
 	var ledger : Array = sql.callv("QueryBindings", ["SELECT COUNT(*) AS n FROM password_reset_request WHERE account_id = ?;", [accountID]])
 	CheckEq(int(ledger[0].get("n", 0)), requestMax, "ledger durável do reset (050, dono: AUTH-P0) registrou só as aceitas")
+
+	# SOM-IDLE AUTH-P0 (2026-10-04, frente 2): conta com e-mail NÃO verificado não
+	# recebe pending de reset, e a tentativa vira métrica distinta (não confunde
+	# com esgotamento de budget). Cadastro de conta "sujo" para não poluir o ledger
+	# do DonoDoCofre acima.
+	var unverified : String = _newAccount("UnverifiedReset1!")
+	var unverifiedID : int = int(sql.call("GetAccountID", unverified))
+	var preEvents : int = _eventCount(str(_secConst("EventResetOnUnverified")))
+	server.call("RequestPasswordReset", unverified, 0)
+	await create_timer(0.2).timeout
+	CheckEq(_eventCount(str(_secConst("EventResetOnUnverified"))), preEvents + 1, "reset em conta não-verificada emite EventResetOnUnverified (não sec_reset_request_limit)")
+	var dirtyLedger : Array = sql.callv("QueryBindings", ["SELECT COUNT(*) AS n FROM password_reset_request WHERE account_id = ?;", [unverifiedID]])
+	CheckEq(int(dirtyLedger[0].get("n", 0)), 0, "conta não-verificada não tem pending de reset no ledger (não entrega código a ninguém)")
+	CheckEq(int(_row(unverified).get("email_verified", 0)), 0, "conta de teste continua não-verificada (invariante do fixture)")
 
 	# Pending plantado por fora com hash conhecido; 5 códigos errados pela ROTA →
 	# a 5ª consome o pending (EmailService) e a rota emite sec_reset_exhausted.
@@ -515,6 +535,10 @@ func _suiteSourceContracts() -> void:
 	var secsrc : String = FileAccess.get_file_as_string("res://sources/sql/SQLSecurity.gd")
 	Check(not secsrc.contains("\nvar ") and not secsrc.contains("static var"), "SQLSecurity não guarda estado em memória (tudo na base → restart-safe)")
 	Check(srv.contains("DeleteAccount"), "sanidade: Server.gd não foi truncado pelas edições")
+	var createBody : String = _fnBody(srv, "CreateAccount")
+	Check(createBody.contains("SQLSecurity.KindCreateAccountIP") and createBody.contains("IsBlocked"), "cadastro: gate de IP antes de validar (rate-limit por frente 2)")
+	Check(createBody.contains("ERR_CREATE_ACCOUNT_BLOCKED"), "cadastro: erro específico de bloqueio de criação (não vaza via ERR_AUTH genérico)")
+	Check(createBody.contains("NoteFailure") and createBody.contains("CreateAccountIPMaxFailures"), "cadastro: falha registrada no eixo compartilhado (colisão conta como tentativa)")
 
 func _fnBody(source : String, fnDecl : String) -> String:
 	var start : int = source.find("func " + fnDecl.split("(")[0] + "(")

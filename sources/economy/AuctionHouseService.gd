@@ -768,20 +768,33 @@ func _SettleListingLocked(sql : SQLService, listing : Dictionary, buyerChar : in
 	# vendedor, e sai do preço: o comprador nunca paga duas vezes.
 	var creatorAccount : int = int(listing.get("creator_account_id", 0))
 	var creatorFee : int = 0
-	var sellerNet : int = price
+	# SOM-IDLE Fase H §7 (P0-7): o creator fee 1% é QUEIMADO, não creditado ao
+	# criador — sem sink o AH era faucet de uma ponta (ouro entra pelo farm e
+	# nunca sai → hyperinflação anti-RMT), e creditar o criador não destruía
+	# nada. O fee só fire se há um criador distinto do seller; listings sem
+	# creator (bot/normal) mantêm 0 fee. Fail-closed: um burn que falhar aborta
+	# o settle todo (nada pela metade), como `trade_fee` já faz.
 	if creatorAccount != 0 and creatorAccount != sellerAccount:
 		creatorFee = maxi(0, roundi(float(price) * float(CraftCatalog.CREATOR_FEE_PCT) / 100.0))
-		sellerNet = price - creatorFee
-		# Credit the creator's gold (stat.gp on their first char)
-		var creatorChars : PackedInt64Array = sql.GetCharacters(creatorAccount)
-		if creatorChars.is_empty():
-			return false
-		if not _eco.kernel._MoveGoldLocked(sql, int(creatorChars[0]), creatorAccount, creatorFee, "ah_creator_fee:%d" % listingID, goldMoves):
-			return false
+	# buyer: paga o preço integral (o fee é o sink implícito — não volta a ninguém)
 	if not _eco.kernel._MoveGoldLocked(sql, buyerChar, buyerAccount, -price, "ah_buy:%d" % listingID, goldMoves):
 		return false
-	if not _eco.kernel._MoveGoldLocked(sql, sellerChar, sellerAccount, sellerNet, "ah_sell:%d" % listingID, goldMoves):
+	# seller: recebe o preço INTEGRAL — o fee queima logo abaixo, em segunda
+	# movimentação da MESMA carteira.
+	if not _eco.kernel._MoveGoldLocked(sql, sellerChar, sellerAccount, price, "ah_sell:%d" % listingID, goldMoves):
 		return false
+	# P0-2 (auditoria 2026-10-04): a queima é um MOVIMENTO DE CARTEIRA pelo
+	# mesmo caminho de todo ouro (`_MoveGoldLocked`), não uma linha de ledger
+	# solta. A forma anterior gravava `char_id=0` com a carteira intacta: a soma
+	# do ledger do vendedor ficava `fee` abaixo do saldo dele (I11 quebrado — o
+	# ledger deixa de ser espelho auditável) e a própria linha escrevia um
+	# `balance_after` que mentia. Agora carteira, ledger e espelho de memória
+	# (`goldMoves`) andam juntos — delta líquido do vendedor = price − fee — e a
+	# linha `ah_burn` continua na família de pia do censo
+	# (`EconomyKernel.CensusSinkFamilies`), contada como ouro destruído.
+	if creatorFee > 0:
+		if not _eco.kernel._MoveGoldLocked(sql, sellerChar, sellerAccount, -creatorFee, "ah_burn", goldMoves):
+			return false
 	# #93.3: teto de compras por conta/dia. Está AQUI, e não em `BuyListing`, porque
 	# este é o funil único: ask aceito, bid cruzada por anúncio novo e bid cruzada
 	# pelo sweep do boot passam todas por esta função. Uma ordem que encosta no teto

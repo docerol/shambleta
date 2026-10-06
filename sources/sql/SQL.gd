@@ -204,7 +204,7 @@ func AddAccount(username : String, password : String, email : String, tosVersion
 	if email.is_empty() or HasEmail(email):
 		return false
 	var salt : String = Hasher.GenerateSalt()
-	var hashedPassword : String = Hasher.HashPasswordV1(password, salt)
+	var hashedPassword : String = Hasher.HashPasswordV2(password, salt)
 
 	var accountData : Dictionary = {
 		"username" : username,
@@ -366,10 +366,12 @@ func ValidateAuthPassword(username : String, triedPassword : String) -> Peers.Ac
 		RecordFailedLogin(accountID, int(row.get("failed_attempts", 0)))
 		return null
 	ResetFailedLogins(accountID)
+	# Transparent KDF upgrade: qualquer ver < HashVersion (0 single-SHA-256, 1 12k
+	# iterado) sobe para ver 2 (PBKDF2-HMAC-SHA256, 210k). A verificação já passou,
+	# então o custo do re-hash é pago uma vez de vida — nunca de novo.
 	if hashVer < Hasher.HashVersion:
-		var newSalt : String = Hasher.GenerateSalt()
-		var newHash : String = Hasher.HashPasswordV1(triedPassword, newSalt)
-		ExecuteBindings("UPDATE account SET password = ?, password_salt = ?, hash_ver = ? WHERE account_id = ?;", [newHash, newSalt, Hasher.HashVersion, accountID])
+		var newHash : String = Hasher.HashPasswordV2(triedPassword)
+		ExecuteBindings("UPDATE account SET password = ?, password_salt = ?, hash_ver = ? WHERE account_id = ?;", [newHash, "", Hasher.HashVersion, accountID])
 	var permission = row.get("permission", null)
 	if not permission:
 		permission = ActorCommons.Permission.NONE
@@ -683,6 +685,7 @@ func Transaction(callable : Callable) -> bool:
 	_UnlockQueryMutex()
 	return committed
 
+
 # C1: whitelist de colunas para os writers que montam SQL a partir de um
 # dicionário. O que escapa é o VALOR; a CHAVE é interpolada — `db.update_rows`
 # (addon) monta `chave=valor` cru e `UpdateRowsRaw` monta `chave=?`, que ainda é
@@ -766,7 +769,7 @@ func CheckWritableKeys(table : String, data : Dictionary) -> bool:
 
 # Transaction-safe UPDATE (no implicit BEGIN/END — unlike update_rows)
 func UpdateRowsRaw(table : String, conditions : String, data : Dictionary) -> bool:
-	if not CheckColumnKeys(table, data):
+	if not CheckWritableKeys(table, data):
 		return false
 	var keys : PackedStringArray = PackedStringArray()
 	var bindings : Array = []
@@ -1055,6 +1058,17 @@ func GetVIPTier(accountID : int) -> int:
 	var value : Variant = rows[0].get("vip_tier", 0) if not rows.is_empty() else 0
 	return 0 if value == null else int(value)
 
+# Leitura única de (tier, janela). O settle consultava GetVIPUntil/GetVIPTier
+# três vezes por liquidação (CapHoursForAccount, _LootMult, GetModsForAccount);
+# com isso o caminho inteiro faz uma única SELECT e reutiliza o par.
+func GetVipState(accountID : int) -> Dictionary:
+	var rows : Array[Dictionary] = QueryBindings("SELECT vip_tier, vip_until FROM account WHERE account_id = ?;", [accountID])
+	if rows.is_empty():
+		return {"tier" : 0, "until" : 0}
+	var tier : Variant = rows[0].get("vip_tier", 0)
+	var until : Variant = rows[0].get("vip_until", 0)
+	return {"tier" : 0 if tier == null else int(tier), "until" : 0 if until == null else int(until)}
+
 func SetVIPTier(accountID : int, tier : int) -> bool:
 	# Raw pela mesma razão de SetVIPUntil: chamado no mesmo lambda (a oferta de
 	# dias de VIP liga janela e tier juntos).
@@ -1291,6 +1305,11 @@ func GetQuests(charID : int) -> Array[Dictionary]:
 
 # Auth Token
 func AddAuthToken(accountID : int, tokenHash : String, ipAddress : String) -> bool:
+	# SOM-IDLE P0-4: hash vazio nunca entra (produção sem signing key —
+	# `Hasher.HashAuthToken` devolve ""). Uma linha com token_hash='' casaria
+	# com toda validação igualmente vazia, transformando fail-closed em fail-open.
+	if tokenHash.is_empty():
+		return false
 	ExecuteBindings("DELETE FROM auth_token WHERE account_id = ? AND ip_address = ?;", [accountID, ipAddress])
 	var now : int = SQLCommons.Timestamp()
 	var data : Dictionary = {
@@ -1303,6 +1322,10 @@ func AddAuthToken(accountID : int, tokenHash : String, ipAddress : String) -> bo
 	return db.insert_row("auth_token", data)
 
 func ValidateAuthToken(accountID : int, tokenHash : String, ipAddress : String) -> Peers.AccountData:
+	# SOM-IDLE P0-4: chave vazia em produção não valida nada, mesmo que uma
+	# linha vazia tenha entrado por caminho legado.
+	if tokenHash.is_empty():
+		return null
 	var results : Array[Dictionary] = QueryBindings("SELECT auth_token.account_id, auth_token.expires_timestamp, account.permission FROM auth_token INNER JOIN account ON auth_token.account_id = account.account_id WHERE auth_token.account_id = ? AND auth_token.token_hash = ? AND auth_token.ip_address = ?;", [accountID, tokenHash, ipAddress])
 	if not results.is_empty():
 		if results[0].get("expires_timestamp", 0) <= SQLCommons.Timestamp():
@@ -1347,7 +1370,7 @@ func CheckAccountPassword(accountID : int, triedPassword : String) -> bool:
 
 func UpdateAccountPassword(accountID : int, newPassword : String) -> bool:
 	var salt : String = Hasher.GenerateSalt()
-	var hashedPassword : String = Hasher.HashPasswordV1(newPassword, salt)
+	var hashedPassword : String = Hasher.HashPasswordV2(newPassword)
 	return ExecuteBindings("UPDATE account SET password = ?, password_salt = ?, hash_ver = ?, failed_attempts = 0, locked_until = 0 WHERE account_id = ?;", [hashedPassword, salt, Hasher.HashVersion, accountID])
 
 func RemoveAllAuthTokens(accountID : int) -> bool:
@@ -1801,6 +1824,13 @@ func _post_launch():
 	if not db.open_db():
 		push_error("Failed to open database: "+ db.error_message); return
 	else:
+		# P0-3b — mecanismo de cifra SQLCipher (rebuild concluído nesta sessão).
+		# A chave vem do ambiente SQLITE_KEY; quando vazio, o DB permanece
+		# sem cifra (compatível com todos os 22.905 eventos existentes).
+		# Quando definida, PRAGMA key ativa o codec antes de qualquer operação.
+		var cipherKey : String = OS.get_environment("SQLITE_KEY").strip_edges()
+		if not cipherKey.is_empty():
+			db.query("PRAGMA key = '" + cipherKey.replace("'", "''") + "';")
 		if not LauncherCommons.isWeb:
 			Query("PRAGMA journal_mode=WAL;")
 			Query("PRAGMA busy_timeout=5000;")

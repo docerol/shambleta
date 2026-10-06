@@ -696,26 +696,67 @@ def check_payment_amount(catalog, sku, payment):
     return abs(paid - expected) < 0.005
 
 
+# SOM-IDLE P0-4/P0-1 (auditoria 2026-10-04): signing key dos tokens de
+# "lembrar-me". O game server assina o token com HMAC-SHA256 desta chave
+# (`Hasher.TokenHmacKeyEnv`, GDScript, onda AUTH-P0); este espelho precisa da
+# MESMA chave, e os dois serviços recebem o mesmo valor pelo compose (serviço
+# `game` e serviço `companion` em deploy/docker-compose.yml). Vazia no template
+# por regra do gate de segredos (o nome contém TOKEN).
+#
+# Ao contrário do `Hasher.DefaultTokenHmacKey` do game, AQUI não há default em
+# código, e a diferença não é cosmética: o game decide "modo teste" com
+# `LauncherCommons.IsTesting` e o fallback dele vale só no editor/suíte, enquanto
+# este processo não tem como saber se é teste — um default aqui seria credencial
+# de mentira num fonte público, marcado com razão pelo B2 de `check_secrets`. Sem
+# env não existe perna (1): só o sha256 legado é conferido, a linha nova gravada
+# em HMAC não casa e o checkout falha fechado (login por senha não passa por
+# aqui). `companion/test_security.py` fixa a env antes do fixture, então a suíte
+# não depende do shell que a roda.
+TOKEN_SIGNING_KEY_ENV = "SHAMBLETA_TOKEN_SIGNING_KEY"
+
+
 def verify_session_token(con, account_id, auth_token, now=None):
     """Prova de sessão p/ checkout (beta fechado, sem migração): o client
     apresenta o auth_token recebido no login (remember-me); o companion
-    confere sha256(token) contra a tabela auth_token do game server
-    (account_id + expiração). Retorna o account_id DONO do token ou None.
+    confere o token contra a tabela auth_token do game server (account_id +
+    expiração) e devolve o account_id DONO ou None.
+
+    P0-1 (auditoria 2026-10-04): a conferência era só `sha256(token)`, mas o
+    game passou a gravar HMAC-SHA256 na onda AUTH-P0 — o checkout estava morto
+    para TODO cliente com sessão nova (hash que o servidor grava nunca é o que
+    a rota confere). São DUAS pernas, de propósito:
+      (1) HMAC com a signing key — a forma que o game grava hoje;
+      (2) sha256(token) — a forma das linhas anteriores à onda, que expiram
+          sozinhas (TokenExpirySec = 30 dias) sem janela de corte: sem ela,
+          sessão emitida ontem não compra hoje.
+    Um dump do banco sem a chave continua sem forjar sessão: forjar exige a
+    linha certa, e preimage de sha256 sobre um token de 128 bits CSPRNG é
+    inviável.
 
     Regras: sem token → None; token inválido/expirado → None; account_id do
     cliente divergindo do dono do token → None (bloqueia cross-account).
-    Tabela ausente (schema antigo) → None (fail-closed)."""
-    import hashlib as _hl
+    Tabela ausente (schema antigo) → None (fail-closed). Sem signing key no
+    ambiente → só a perna sha256 é conferida, e a linha nova gravada em HMAC não
+    casa (fail-closed, ver `TOKEN_SIGNING_KEY_ENV` acima)."""
     if not auth_token:
         return None
     if now is None:
         now = int(time.time())
-    digest = _hl.sha256(str(auth_token).encode()).hexdigest()
+    token = str(auth_token)
+    legacy_hex = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    # Perna (1) só existe com chave: sem env não há com o que calcular o HMAC, e a
+    # perna (2) sha256 continua cobrindo as linhas anteriores à onda AUTH-P0.
+    hashes = [legacy_hex]
+    key = os.environ.get(TOKEN_SIGNING_KEY_ENV) or ""
+    if key:
+        hashes.insert(0, hmac.new(key.encode("utf-8"), token.encode("utf-8"),
+                                  hashlib.sha256).hexdigest())
+    marks = ", ".join("?" for _ in hashes)
     try:
         row = con.execute(
-            "SELECT account_id FROM auth_token WHERE token_hash = ? "
-            "AND expires_timestamp > ?;",
-            (digest, now)).fetchone()
+            "SELECT account_id FROM auth_token WHERE token_hash IN (%s) "
+            "AND expires_timestamp > ?;" % marks,
+            (*hashes, now)).fetchone()
     except Exception:
         return None
     if row is None:
@@ -1394,7 +1435,106 @@ class Store:
             "multi_account_suspicions": self.multi_account_suspicions(con),
         }
 
-
+    def metrics_prometheus(self, con):
+        """SOM-IDLE D2 (2026-10-04, P0-9): exposition em Prometheus text format
+        (v0.0.4). O JSON em `/metrics` continua como antes; o Prometheus scrapeia
+        `/metrics/prometheus`. Tudo vem da mesma `metrics()` — uma fonte só, para
+        o censo (fase H) e para o Grafana terem número idêntico."""
+        m = self.metrics(con)
+        lines = []
+        lines.append("# HELP shambleta_uptime_seconds Timestamp do último reconcile (proxy de uptime).")
+        lines.append("# TYPE shambleta_uptime_seconds gauge")
+        recon = m.get("reconcile")
+        lines.append("shambleta_uptime_seconds %s" % (recon.get("at", 0) if recon else 0))
+        lines.append("")
+        lines.append("# HELP shambleta_gem_balance Stock de gems no wallet.")
+        lines.append("# TYPE shambleta_gem_balance gauge")
+        lines.append("shambleta_gem_balance{dir=\"stock\"} %d" % m["gems"]["stock"])
+        lines.append("shambleta_gem_balance{dir=\"mint\"} %d" % m["gems"]["mint"])
+        lines.append("shambleta_gem_balance{dir=\"burn\"} %d" % m["gems"]["burn"])
+        lines.append("")
+        lines.append("# HELP shambleta_gold_faucet_7d Gold emitido em 7 dias (faucet).")
+        lines.append("# TYPE shambleta_gold_faucet_7d gauge")
+        lines.append("shambleta_gold_faucet_7d %d" % m["gold_7d"]["faucet"])
+        lines.append("")
+        lines.append("# HELP shambleta_trades_7d Trades no AH em 7 dias.")
+        lines.append("# TYPE shambleta_trades_7d gauge")
+        lines.append("shambleta_trades_7d{count=\"trades\"} %d" % m["trades_7d"]["count"])
+        lines.append("shambleta_trades_7d{count=\"fees_burned\"} %d" % m["trades_7d"]["fees_burned"])
+        lines.append("")
+        lines.append("# HELP shambleta_vip_active Conta VIP ativa.")
+        lines.append("# TYPE shambleta_vip_active gauge")
+        lines.append("shambleta_vip_active %d" % m["vip_active"])
+        lines.append("")
+        lines.append("# HELP shambleta_accounts Total e ativo 24h.")
+        lines.append("# TYPE shambleta_accounts gauge")
+        lines.append("shambleta_accounts{state=\"total\"} %d" % m["accounts"]["total"])
+        lines.append("shambleta_accounts{state=\"active_24h\"} %d" % m["accounts"]["active_24h"])
+        lines.append("")
+        lines.append("# HELP shambleta_retention_d1 Retenção D1 (contas do cohort fechado).")
+        lines.append("# TYPE shambleta_retention_d1 gauge")
+        if m["retention_d1"] is None:
+            lines.append("shambleta_retention_d1 0")
+        else:
+            rd1 = m["retention_d1"]
+            lines.append("shambleta_retention_d1_cohort %d" % rd1["cohort"])
+            lines.append("shambleta_retention_d1_retained %d" % rd1["retained"])
+            lines.append("shambleta_retention_d1_window_closed %s" % ("1" if rd1["window_closed"] else "0"))
+        lines.append("")
+        lines.append("# HELP shambleta_retention_cohort D1/D7/D30 da coorte.")
+        lines.append("# TYPE shambleta_retention_cohort gauge")
+        rc = m["retention_cohort"]
+        lines.append("shambleta_retention_cohort{day=\"d1\"} %d" % rc["d1"])
+        lines.append("shambleta_retention_cohort{day=\"d7\"} %d" % rc["d7"])
+        lines.append("shambleta_retention_cohort{day=\"d30\"} %d" % rc["d30"])
+        lines.append("")
+        lines.append("# HELP shambleta_settles_24h Conquistas de settle em 24h.")
+        lines.append("# TYPE shambleta_settles_24h gauge")
+        lines.append("shambleta_settles_24h_count %d" % m["settles_24h"]["count"])
+        lines.append("shambleta_settles_24h_avg_eff %.3f" % m["settles_24h"]["avg_eff"])
+        lines.append("")
+        lines.append("# HELP shambleta_logins_24h Logins em 24h.")
+        lines.append("# TYPE shambleta_logins_24h gauge")
+        lines.append("shambleta_logins_24h %d" % m["logins_24h"])
+        lines.append("")
+        lines.append("# HELP shambleta_grants_pending Pendentes no grant_queue.")
+        lines.append("# TYPE shambleta_grants_pending gauge")
+        lines.append("shambleta_grants_pending %d" % m["grants_pending"])
+        lines.append("")
+        lines.append("# HELP shambleta_guilds_total Guildas ativas.")
+        lines.append("# TYPE shambleta_guilds_total gauge")
+        lines.append("shambleta_guilds_total %d" % m["guilds"])
+        lines.append("")
+        lines.append("# HELP shambleta_ah_open Listings abertos no AH.")
+        lines.append("# TYPE shambleta_ah_open gauge")
+        lines.append("shambleta_ah_open %d" % m["ah_open"])
+        season = m.get("season_active")
+        lines.append("# HELP shambleta_season_active Temporada ativa.")
+        lines.append("# TYPE shambleta_season_active gauge")
+        lines.append("shambleta_season_active %s" % (season if season is not None else "0"))
+        lines.append("")
+        lines.append("# HELP shambleta_revenue_gross_minor Receita bruta por moeda (minor units).")
+        lines.append("# TYPE shambleta_revenue_gross_minor gauge")
+        for cur, rev in m["revenue_by_currency"].items():
+            lines.append('shambleta_revenue_gross_minor{currency="%s"} %d' % (cur, rev["gross_minor"]))
+            lines.append('shambleta_revenue_payers{currency="%s"} %d' % (cur, rev["payers"]))
+        lines.append("")
+        lines.append("# HELP shambleta_sales_grants_units Vendas processadas por SKU.")
+        lines.append("# TYPE shambleta_sales_grants_units gauge")
+        for sku, s in m["sales_by_sku"].items():
+            lines.append('shambleta_sales_grants{sku="%s"} %d' % (sku, s["grants"]))
+            lines.append('shambleta_sales_units{sku="%s"} %d' % (sku, s["units"]))
+        lines.append("")
+        fun = m["starter_funnel"]
+        lines.append("# HELP shambleta_starter_funnel Funil de entrada (claimed/eligible).")
+        lines.append("# TYPE shambleta_starter_funnel gauge")
+        lines.append("shambleta_starter_funnel{state=\"claimed\"} %d" % fun["starter_claimed"])
+        lines.append("shambleta_starter_funnel{state=\"eligible\"} %d" % fun["starter_eligible"])
+        lines.append("")
+        for entry in m["multi_account_suspicions"]:
+            lines.append("# multi-account suspicion")
+            lines.append('shambleta_multi_account_suspicions{fingerprint="%s"} %d' % (entry.get("fingerprint", ""), entry.get("account_count", 0)))
+        return "\n".join(lines) + "\n"
 class Handler(BaseHTTPRequestHandler):
     server_version = "ShambletaCompanion/0.1"
 
@@ -1433,6 +1573,18 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 with self.server.store.connect() as con:
                     self._send(200, self.server.store.metrics(con))
+            except sqlite3.Error as e:
+                self._send(500, {"error": "db_error", "detail": str(e)})
+            return
+        if path == "/metrics/prometheus":
+            try:
+                with self.server.store.connect() as con:
+                    body = self.server.store.metrics_prometheus(con)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                self.send_header("Content-Length", str(len(body.encode())))
+                self.end_headers()
+                self.wfile.write(body.encode())
             except sqlite3.Error as e:
                 self._send(500, {"error": "db_error", "detail": str(e)})
             return

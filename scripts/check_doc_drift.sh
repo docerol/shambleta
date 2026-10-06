@@ -936,7 +936,7 @@ fi
 # Régua que precisa do autor do doc para decidir quem mente é ruído, e ruído em gate
 # de doc é o que mata o gate. As três mentiras reais que o experimento achou
 # (`SCALING.md` com faixa de mutex apontando para players, `STAGING.md` com
-# `BindAddress`/`DefaultPort` dois linhas acima, `SQL.gd:1463` que é `UnmuteAccount`)
+# `BindAddress`/`DefaultPort` dois linhas acima, `SQL.gd` com `UnmuteAccount` fora da linha citada)
 # foram corrigidas na mesma passada; o que ficou de fora é coberto pela convenção de
 # nome ANTES do número, que é o formato em que toda a varredura abaixo acontece.
 # ---------------------------------------------------------------------------

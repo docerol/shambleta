@@ -582,7 +582,7 @@ func _suiteAHWashPair() -> void:
 	_ahCleanFixture(item, [a, b, supplier, client])
 	# Régua do FIXTURE, não do produto: quem compra no leilão paga com OURO do próprio
 	# personagem e `BuyListing` recusa ANTES de abrir a transação quando a carteira é
-	# menor que `price_gold` (`AuctionHouseService.gd:880`,
+	# menor que `price_gold` (`AuctionHouseService.gd:893`,
 	# `_CharGoldRaw(buyerChar) < listing.price_gold`). Sem esta linha o fixture sem
 	# ouro se apresentava como "o detector não vê o ciclo" — as 20 falhas desta suíte
 	# eram uma régua sem mercadoria. Cortar o endowment deixa esta VERMELHA.

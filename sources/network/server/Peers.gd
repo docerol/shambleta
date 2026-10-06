@@ -333,6 +333,18 @@ static func FinalizeLogin(peer : Peer, accountName : String, accountData : Accou
 static func IssueAuthToken(peer : Peer, accountName : String) -> void:
 	var ipAddress : String = GetPeerIP(peer.peerID)
 	var token : String = Hasher.GenerateSalt(Hasher.DefaultTokenSize)
-	var tokenHash : String = Hasher.HashPassword(token)
+	# SOM-IDLE AUTH-P0 (2026-10-04): o token é HMAC-SHA256 do signing key do
+	# servidor, não um SHA-256 saltless. O token bruto (128-bit CSPRNG) continua
+	# indo ao cliente; o que é gravado no DB é o HMAC — portanto um dump do banco
+	# SEM o env `SHAMBLETA_TOKEN_SIGNING_KEY` não pode validar nem forjar tokens.
+	# SOM-IDLE P0-4: hash vazio = produção sem chave (`Hasher._TokenSigningKey`
+	# fail-closed) — não grava linha vazia (casaria com validação igualmente
+	# vazia) e não manda `AuthTokenResult` para o cliente persistir credencial
+	# que o próprio servidor não validaria. O login JÁ terminou (`FinalizeLogin`
+	# chama isto antes de devolver ERR_OK): só o remember-me não é emitido.
+	var tokenHash : String = Hasher.HashAuthToken(token)
+	if tokenHash.is_empty():
+		Util.PrintLog("Auth", "remember-me não emitido (SHAMBLETA_TOKEN_SIGNING_KEY ausente em produção): conta %s" % accountName)
+		return
 	Launcher.SQL.AddAuthToken(peer.accountID, tokenHash, ipAddress)
 	Network.AuthTokenResult(accountName, token, peer.peerID)

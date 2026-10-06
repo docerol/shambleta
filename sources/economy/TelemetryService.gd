@@ -384,7 +384,7 @@ func FunnelWindowAccounts(sinceSec : int) -> Dictionary:
 # pela mesma razão, medidos pelo censo e não por memória.
 const OperationalKinds : Array[String] = ["login", "settle", "levelup", "shop_visit", "ad_view",
 	"flag_change", "fraud_metrics", "sec_login_lockout", "sec_login_ip_block", "sec_totp_throttle",
-	"sec_totp_replay", "sec_reset_exhausted", "sec_reset_request_limit", "ah_list", "ah_list_reject",
+	"sec_totp_replay", "sec_reset_exhausted", "sec_reset_request_limit", "sec_reset_on_unverified", "ah_list", "ah_list_reject",
 	"ah_buy", "ah_cancel", "ah_bid", "ah_bid_fill", "ah_bid_cancel", "ah_expire",
 	"pass_claim", "rebirth"]
 

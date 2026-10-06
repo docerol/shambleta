@@ -168,38 +168,43 @@ static func AddItemsBatchToCharacter(sql : Object, charID : int, rolls : Diction
 		return true
 	var stampedAt : int = SQLCommons.Timestamp()
 	var ids : Array = rolls.keys()
+	var reasonInline : bool = SQLService.IsPlainIdentifier(reason)
 	var from : int = 0
 	while from < ids.size():
 		var to : int = mini(from + GrantBatchSlice, ids.size())
-		var stackValues : String = ""
-		var stackParams : Array = []
-		var lotValues : String = ""
+		var stackRows : PackedStringArray = PackedStringArray()
+		var lotRows : PackedStringArray = PackedStringArray()
 		var lotParams : Array = []
 		for i in range(from, to):
 			var itemID : int = int(ids[i])
 			var count : int = int(rolls[ids[i]])
 			if itemID <= 0 or count <= 0:
 				return false
-			var sep : String = "," if i > from else ""
-			stackValues += "%s(?, ?, ?, 0, '')" % sep
-			stackParams.append(itemID)
-			stackParams.append(charID)
-			stackParams.append(count)
 			var bound : int = 1 if CellCommons.IsMaterial(DB.ItemsDB.get(itemID, null)) else 0
-			lotValues += "%s(?, ?, ?, 0, ?, '', ?, 0, 0, ?)" % sep
-			lotParams.append(charID)
-			lotParams.append(itemID)
-			lotParams.append(count)
-			lotParams.append(bound)
-			lotParams.append(reason)
-			lotParams.append(stampedAt)
+			stackRows.append("(%d, %d, %d, 0, '')" % [itemID, charID, count])
+			if reasonInline:
+				lotRows.append("(%d, %d, %d, 0, %d, '', '%s', 0, 0, %d)" % [charID, itemID, count, bound, reason, stampedAt])
+			else:
+				lotRows.append("(%d, %d, %d, 0, %d, '', ?, 0, 0, %d)" % [charID, itemID, count, bound, stampedAt])
+				lotParams.append(reason)
 		if not sql.ExecuteBindings("INSERT INTO item (item_id, char_id, count, storage, customfield) "
-			+ "VALUES " + stackValues
+			+ "VALUES " + ",".join(stackRows)
 			+ " ON CONFLICT(char_id, item_id, storage, customfield) DO UPDATE SET count = item.count + excluded.count;",
-			stackParams):
+			[]):
 			return false
-		if not sql.ExecuteBindings("INSERT INTO item_instance (char_id, item_id, count, storage, bound, customfield, reason, parent_uid, creator_account_id, created_at) "
-			+ "VALUES " + lotValues + ";", lotParams):
+		# `OR FAIL` e não o default (`OR ABORT`): a tabela tem `NOT NULL` em todas
+		# as colunas e o SQLite só liga o diário de STATEMENT (cópia de cada página
+		# suja, para poder desfazer o statement) quando a resolução de conflito é
+		# ABORT. Medido em 2026-10-05, 41 linhas por statement na mesma tabela:
+		# default 350 µs, `OR FAIL` 80 µs, `OR IGNORE` 80 µs — e `FAIL` é o único
+		# dos três que ainda devolve erro (o addon responde false e o settle inteiro
+		# cai). Comportamento final igual ao de antes porque esta statement roda
+		# DENTRO da transação de `_Apply` (OfflineSettle.gd:@_Apply), e um false do lambda
+		# dispara o ROLLBACK da transação inteira, que desfaz as linhas que o `FAIL`
+		# deixou de pé dentro do próprio statement. Não vale para chamador fora de
+		# transação — por isso o nome está aqui, colado na statement.
+		if not sql.ExecuteBindings("INSERT OR FAIL INTO item_instance (char_id, item_id, count, storage, bound, customfield, reason, parent_uid, creator_account_id, created_at) "
+			+ "VALUES " + ",".join(lotRows) + ";", lotParams):
 			return false
 		from = to
 	return true

@@ -183,6 +183,14 @@ services:
       # liquida os prêmios em gems (não-casháveis) com prova de idempotência no
       # ledger. Sem a env, o relógio continua rodando e não faz nada.
       SHAMBLETA_ENABLE_SEASONS: "1"
+      # P0-4 (auditoria 2026-10-04): chave HMAC dos tokens de "lembrar-me"
+      # (`Hasher.TokenHmacKeyEnv`). Vazia por regra do gate de segredos (o nome
+      # contém TOKEN) — valor = secret da plataforma, `openssl rand -hex 32`,
+      # MESMO valor no serviço companion (ele confere o mesmo HMAC no checkout).
+      # Sem ela o server falha fechado: não emite nem valida token (o login por
+      # senha não passa por aqui); com ela, um dump do banco sem o segredo não
+      # forja sessão. Declarada em `.env.example` com o motivo.
+      SHAMBLETA_TOKEN_SIGNING_KEY: ${SHAMBLETA_TOKEN_SIGNING_KEY:-}
       # Diretório offsite de backups (best-effort, verificado com restore probe).
       # Default LIGADO apontando no volume dedicado abaixo: antes era `${...:-}`
       # vazio, e vazio desliga o push inteiro (`GetOffsiteBackupPath` devolve ""
@@ -230,7 +238,7 @@ services:
       # apenas "processo vivo". Porta: `EXPOSE 8901` (`deploy/companion/Dockerfile:38`),
       # CMD `"--port", "8901"` (`deploy/companion/Dockerfile:53`) e bind `0.0.0.0`
       # (`deploy/companion/Dockerfile:46`); busybox wget sai !=0 em 4xx/5xx. O timeout
-      # é 6 s, acima do `PRAGMA busy_timeout=5000` (companion/server.py:1073): um lock
+      # é 6 s, acima do `PRAGMA busy_timeout=5000` (companion/server.py:1114): um lock
       # de esperar, não ficar unhealthy.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8901/health"]
       interval: 30s
@@ -261,19 +269,23 @@ services:
       # (1c) produção valida assinatura do provedor (Mercado Pago); só troque
       # p/ "shared" + allow-dev num sandbox local — nunca junto de dinheiro real.
       SHAMBLETA_WEBHOOK_PROVIDER: ${SHAMBLETA_WEBHOOK_PROVIDER:-mercadopago}
-      SHAMBLETA_MP_WEBHOOK_SECRET: ${SHAMBLETA_MP_WEBHOOK_SECRET:-}
-      SHAMBLETA_MP_ACCESS_TOKEN: ${SHAMBLETA_MP_ACCESS_TOKEN:-}
+      SHAMBLETA_MP_WEBHOOK_SECRET: ${SHAMBLETA_MP_WEBHOOK_SECRET}
+      SHAMBLETA_MP_ACCESS_TOKEN: ${SHAMBLETA_MP_ACCESS_TOKEN}
       # Origem pública do jogo, usada nos back_urls da preferência (a volta do
       # checkout MP para <base>/checkout_return.html, página que o serviço `web`
       # serve na raiz). Vazio = preferência sem back_urls: o jogador fica na página
       # do provedor e o grant continua chegando pelo webhook — funciona, mas é UX
       # pior. Preencha com https://seudominio.com no beta.
       SHAMBLETA_MP_BACK_URLS_BASE: ${SHAMBLETA_MP_BACK_URLS_BASE:-}
-      SHAMBLETA_STRIPE_WEBHOOK_SECRET: ${SHAMBLETA_STRIPE_WEBHOOK_SECRET:-}
+      SHAMBLETA_STRIPE_WEBHOOK_SECRET: ${SHAMBLETA_STRIPE_WEBHOOK_SECRET}
       SHAMBLETA_WEBHOOK_SECRET: ${SHAMBLETA_WEBHOOK_SECRET:-}
       SHAMBLETA_ALLOW_DEV_WEBHOOK: ${SHAMBLETA_ALLOW_DEV_WEBHOOK:-}
       SHAMBLETA_CATALOG_FILE: ${SHAMBLETA_CATALOG_FILE:-}
       SHAMBLETA_WEBHOOK_TOLERANCE: ${SHAMBLETA_WEBHOOK_TOLERANCE:-300}
+      # P0-4: o companion valida o auth_token do remember-me com o MESMO HMAC do
+      # game server (verify_session_token) — chave diferente do serviço `game`
+      # fecha o checkout inteiro em 401 para todo cliente logado por token.
+      SHAMBLETA_TOKEN_SIGNING_KEY: ${SHAMBLETA_TOKEN_SIGNING_KEY:-}
     volumes:
       # MESMO volume do game: grant_queue é consumido do mesmo SQLite (WAL).
       - game-data:/data

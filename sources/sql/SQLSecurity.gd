@@ -50,6 +50,7 @@ class_name SQLSecurity
 # Eixos de contagem (coluna `attempt_kind`)
 const KindLoginIP : String				= "login_ip"
 const KindTotp : String					= "totp_account"
+const KindCreateAccountIP : String		= "create_account_ip"
 
 # Política — IP (explicação no cabeçalho; generosa de propósito: NAT/proxy)
 const LoginIPWindowSec : int			= 900
@@ -59,6 +60,16 @@ const LoginIPBlockSec : int				= 1800
 # Política — tentativa errada de TOTP por conta
 const TotpWindowSec : int				= 900
 const TotpMaxFailures : int				= 10
+
+# SOM-IDLE AUTH-P0 (2026-10-04, frente 2): rate limit de criação de conta por IP.
+# 3 tentativas de cadastro por 1h, a 3ª esgota a janela e bloqueia 1h. O foco é
+# spray de registro (RMT botfarm) — colisão de nome/email conta como falha, e um
+# cadastro bem-sucedido NÃO zera o counter (o abuser pode ficar criando contas
+# válidas para depois usar; a limitação age sobre a TAXA de tentativa, não do
+# sucesso). Janela curta intencionalmente (1h) porque o burst é o sinal.
+const CreateAccountIPWindowSec : int	= 3600
+const CreateAccountIPMaxFailures : int	= 3
+const CreateAccountIPBlockSec : int		= 3600
 
 # Retenção da tabela de janelas: linhas mais velhas que isto são podadas pela
 # própria escrita (a tabela não pode crescer sem teto).
@@ -71,6 +82,7 @@ const EventTotpThrottle : String		= "sec_totp_throttle"
 const EventTotpReplay : String			= "sec_totp_replay"
 const EventResetExhausted : String		= "sec_reset_exhausted"
 const EventResetRequestLimit : String	= "sec_reset_request_limit"
+const EventResetOnUnverified : String	= "sec_reset_on_unverified"
 
 static func _Now(now : int) -> int:
 	return SQLCommons.Timestamp() if now <= 0 else now
@@ -179,8 +191,10 @@ static func ConsumeTwoFactorTokenSafe(sql : Object, accountID : int, token : Str
 # o KDF, conta existente pagava 12.000 iterações — a diferença de latência responde
 # "esse nome existe?" sem erro nenhum na tela. Queimar o MESMO custo num hash de
 # ninguém fecha o canal; o salt fixo não é segredo (o resultado é descartado).
+# Agora o login paga 210.000 iterações de PBKDF2 (ver 2), então o equalizador usa o
+# MESMO KDF — `HashPasswordV2` — para a latência bater. (2026-10-04, KDF upgrade.)
 static func BurnKdfTime(password : String) -> void:
-	var discarded : String = Hasher.HashPasswordV1(password, "shambleta-timing-equalizer")
+	var discarded : String = Hasher.HashPasswordV2(password, "shambleta-timing-equalizer")
 	if discarded.length() < 0:
 		push_error("unreachable")
 

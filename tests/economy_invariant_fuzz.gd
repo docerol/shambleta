@@ -125,6 +125,11 @@ var _ahAccounts : Array = []
 var _ahMinted : int = 0
 var _ahGranted : int = 0
 var _ahItem : int = 0
+# P0-2: conta criadora carregada por TODOS os anúncios do fatia — é o fixture
+# que faz o settle queimar 1% e põe I11 (espelho) e I8 (conservação com burn)
+# à prova com ouro de verdade. Quando o vendedor É esta conta, o fee não dispara
+# (creator == seller é o ramo legítimo) e os dois ramos entram no sorteio.
+var _ahCreatorAccount : int = 0
 var _listFeeGems : int = 5
 var _ahLists : int = 0
 var _ahBids : int = 0
@@ -377,6 +382,12 @@ func _idsSql() -> String:
 		parts.append(str(accountID))
 	return ",".join(parts)
 
+func _ahIdsSql() -> String:
+	var parts : Array = []
+	for accountID in _ahAccounts:
+		parts.append(str(accountID))
+	return ",".join(parts)
+
 # Cobertura: um fuzz que não mexeu em nada é verde por inércia, e isso não é
 # evidência de nada. Os números abaixo são lidos do banco no fim da trajetória —
 # são a diferença entre "passei 30 s rodando" e "300 grants entraram na fila,
@@ -449,9 +460,10 @@ func _reasonRowsFor(accountID : int, reason : String) -> int:
 # a sequência que alguém imaginou; aqui a sequência é sorteada e as invariantes são
 # conferidas DEPÓSITO A DEPÓSITO.
 #
-# Âncora: `_ahMinted` é o ouro que NÓS criamos nestas contas. Como o leilão não
-# queima gold (a taxa de anúncio é em GEMAS), a soma "carteira de todos + escrow
-# aberto de todos" tem que ser esse número em qualquer instante da trajetória.
+# Âncora: `_ahMinted` é o ouro que NÓS criamos nestas contas. A taxa de anúncio
+# é em GEMAS, mas o creator fee (1%) é ouro QUEIMADO da carteira do vendedor
+# (P0-2, reason `ah_burn`) — então a soma "carteira de todos + escrow aberto de
+# todos + total queimado" tem que ser esse número em qualquer instante.
 func _ahFuzz() -> void:
 	print("[ah] fatia de mercado (059c): %d personagens, %d ops sorteadas" % [AHChars, AHOps])
 	var tag : int = int(Time.get_unix_time_from_system())
@@ -483,6 +495,7 @@ func _ahFuzz() -> void:
 	if _ahChars.size() < 2:
 		_note(false, "a fatia de mercado precisa de pelo menos dois personagens (%d)" % _ahChars.size())
 		return
+	_ahCreatorAccount = int(_ahAccounts[0])
 	var rng : RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = FixSeed * 7 + 13
 	for step in range(AHOps):
@@ -519,6 +532,12 @@ func _ahOp(rng : RandomNumberGenerator, step : int) -> void:
 		var id : int = int(_eco.call("ListItemForSale", actor, _ahItem, count, price))
 		if id > 0:
 			_ahLists += 1
+			# P0-2: linagem de criador estampada direto no anúncio (mesmo fixture
+			# do marketplace_depth) — é o caminho que dispara a queima de 1% no
+			# settle e faz I11/I8 cobrarem a conta da carteira do vendedor.
+			if _ahCreatorAccount != 0:
+				_sql.call("UpdateRowsRaw", "auction_listing", "id = %d" % id,
+					{"creator_account_id" = _ahCreatorAccount})
 		else:
 			_ahRejected += 1
 	elif roll <= 6:
@@ -600,10 +619,16 @@ func _ahEscrowSum() -> int:
 func _ahSweep(at : String) -> void:
 	var wallets : int = _ahGoldSum()
 	var escrow : int = _ahEscrowSum()
-	# I8 — conservação. O leilão não cria nem destrói ouro: tudo que sai de uma
-	# carteira ou está na outra ou está no escrow de uma ordem em pé.
-	_note(wallets + escrow == _ahMinted,
-		"I8 ouro conservado (%s): carteiras %d + escrow %d != minted %d" % [at, wallets, escrow, _ahMinted])
+	# I8 — conservação. O leilão não CRIA ouro: tudo que sai de uma carteira ou
+	# está na outra, está no escrow de uma ordem em pé, ou foi QUEIMADO pelo
+	# creator fee (P0-2 — `ah_burn` destruição registrada no censo, não
+	# transferência). Sem o termo do burn a régua acusaria a própria pia.
+	var burnRows : Array = _sql.call("QueryBindings",
+		"SELECT COALESCE(SUM(-amount),0) AS s FROM ledger_transaction WHERE account_id IN (%s) AND kind = ? AND reason = 'ah_burn';" % _ahIdsSql(),
+		[_goldKind])
+	var burned : int = 0 if burnRows.is_empty() else int((burnRows[0] as Dictionary).get("s", 0))
+	_note(wallets + escrow + burned == _ahMinted,
+		"I8 ouro conservado+queimado (%s): carteiras %d + escrow %d + burn %d != minted %d" % [at, wallets, escrow, burned, _ahMinted])
 	# I9 — nenhuma carteira negativa. Ouro negativo é faucet infinito para o par.
 	for charID in _ahChars:
 		var gold : int = int(_eco.call("_CharGoldRaw", int(charID)))

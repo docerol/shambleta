@@ -560,8 +560,8 @@ func _finish(code : int) -> void:
 		# linha de `bulks` (sources/network/server/Server.gd:1807). Soltá-las por
 		# `DisconnectPeer` é o que a apaga (`bulks.erase` em
 		# sources/network/server/Server.gd:@DisconnectPeer), e o `FullyDisconnect` que ele chama solta o
-		# balde (`RateLimit.Forget` em sources/network/server/Server.gd:1826) e tira o agente do
-		# mundo (`WorldAgent.RemoveAgent` em sources/network/server/Server.gd:570) — antes de
+		# balde (`RateLimit.Forget` em sources/network/server/Server.gd:1855) e tira o agente do
+		# mundo (`WorldAgent.RemoveAgent` em sources/network/server/Server.gd:599) — antes de
 		# qualquer `queue_free`, para que quem remova o agente seja o caminho real, não o
 		# escombro.
 		for pid in (peersScript.peers as Dictionary).keys():

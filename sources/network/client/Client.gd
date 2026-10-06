@@ -361,22 +361,11 @@ func PushNotification(notif : String, _peerID : int):
 # SOM-IDLE: F2 idle-spike client handlers (TECH_SPEC_CORE §5)
 func AFKReport(report : Dictionary, _peerID : int):
 	LastAFKReport = report
-	if not Launcher.GUI:
-		return
-	if report.is_empty():
-		Launcher.GUI.notificationLabel.AddNotification("AFK: nothing to claim")
-		return
-	# SOM-IDLE onboarding: espelha na janela + abre para coletar.
-	if Launcher.GUI.afkWindow:
-		Launcher.GUI.afkWindow.ShowReport(report)
-		if not Launcher.GUI.afkWindow.is_visible():
-			Launcher.GUI.ToggleControl(Launcher.GUI.afkWindow)
 
-	var xp : int = int(report.get("xp_earned", 0))
-	var gold : int = int(report.get("gold_earned", 0))
-	var hours : float = float(report.get("hours", 0.0))
-	Launcher.GUI.notificationLabel.AddNotification("AFK %.1fh: +%s XP, +%s GP" % [hours, Util.FormatNumber(xp), Util.FormatNumber(gold)])
-	if Launcher.GUI.has_method("RefreshNotices"):
+# P1-1 (A-10): recebe feedback visual de progresso (SnapshotMetrics) do servidor.
+func SnapshotMetrics(metrics : Dictionary, _peerID : int):
+	if Launcher.GUI and Launcher.GUI.has_method("UpdateSnapshotMetrics"):
+		Launcher.GUI.UpdateSnapshotMetrics(metrics)
 		Launcher.GUI.RefreshNotices()
 
 func FarmZoneFeedback(zoneID : int, ok : bool, reason : String, _peerID : int):

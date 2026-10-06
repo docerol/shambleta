@@ -26,7 +26,7 @@ extends SceneTree
 #
 #  (3) O PREÇO DE ENCHER FAIXA É ZERO, e isto é régua, não promessa: a contagem
 #      de drop por kill não lê a pool — ela sai de `dropRatePPM`
-#      (`OfflineSettle.gd:356`) no offline e da soma das tabelas `_drops` do mob
+#      (`OfflineSettle.gd:378`) no offline e da soma das tabelas `_drops` do mob
 #      no farm vivo, que é o que a suíte `SuiteIdleLootPipeline`
 #      (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`) mede e costura ao mesmo ppm
 #      dentro de si. Três medidas aqui, nenhuma regravada em texto:
@@ -280,7 +280,7 @@ func _suiteAppleScope():
 
 # O que encher faixa NÃO muda: a expectativa de drop por kill. A contagem tem duas
 # origens e nenhuma delas lê a pool — offline `zone.dropRatePPM` × kills equivalentes
-# (`OfflineSettle.gd:356`), online a soma das probabilidades da mesa `_drops` do mob,
+# (`OfflineSettle.gd:378`), online a soma das probabilidades da mesa `_drops` do mob,
 # medida por `SuiteIdleLootPipeline` (`tests/IdleTestsFrontier.gd:@SuiteIdleLootPipeline`).
 # Daí três medidas:
 #   (a) nenhuma zona carrega taxa própria escondida: `FarmZoneData.gd:180` dá a

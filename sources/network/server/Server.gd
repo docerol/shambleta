@@ -8,33 +8,48 @@ func CreateAccount(accountName : String, password : String, email : String, reme
 	if not peer:
 		err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
 	else:
-		err = NetworkCommons.CheckAuthInformation(accountName, password)
-		if err == NetworkCommons.AuthError.ERR_OK:
-			err = NetworkCommons.CheckEmailInformation(email)
-		# SOM-IDLE LGPD: aceite afirmativo obrigatório antes de criar a conta. O
-		# booleano carrega as três cláusulas exibidas no painel (Termos, Privacidade
-		# e a declaração de idade do §24-11) — gravadas por versão em AddAccount.
-		if err == NetworkCommons.AuthError.ERR_OK and not consentAccepted:
-			err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
-		if err == NetworkCommons.AuthError.ERR_OK:
-			# SOM-IDLE F4 follow-up: name and email collisions get distinct errors —
-			# "account name not available" for a taken EMAIL was misleading QA.
-			# SOM-IDLE AUTH-P1 (frente 2): decisão registrada — os dois códigos ficam
-			# porque o `gui/Login.gd` RAMIFICA UX por eles (focar o campo e empurrar
-			# para a recuperação). Cadastro sem colisão não pode responder uniforme
-			# sem quebrar esse fluxo; o oráculo que importa (login/recuperação/2FA) é
-			# uniforme nas outras rotas desta classe.
-			if Launcher.SQL.HasAccount(accountName):
-				err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
-			elif Launcher.SQL.HasEmail(email):
-				err = NetworkCommons.AuthError.ERR_EMAIL_TAKEN
-			elif not Launcher.SQL.AddAccount(accountName, password, email, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, Peers.GetPeerIP(peerID)):
-				err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
-			else:
-				Network.accounts_list_update.emit()
-				var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
-				if accountData:
-					err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
+		# SOM-IDLE AUTH-P0 (2026-10-04, frente 2): rate limit de criação de conta
+		# por IP — 3 tentativas/h, a 3ª bloqueia 1h. Colisão de nome/email e
+		# falha de AddAccount contam como tentativa (o spray não ganha throughput
+		# de novo). Sucesso NÃO zera o counter: o abuser cria contas válidas para
+		# depois usar, e a taxa é o sinal.
+		var ipAddress : String = Peers.GetPeerIP(peerID)
+		if SQLSecurity.IsBlocked(Launcher.SQL, SQLSecurity.KindCreateAccountIP, ipAddress):
+			err = NetworkCommons.AuthError.ERR_CREATE_ACCOUNT_BLOCKED
+		else:
+			err = NetworkCommons.CheckAuthInformation(accountName, password)
+			if err == NetworkCommons.AuthError.ERR_OK:
+				err = NetworkCommons.CheckEmailInformation(email)
+			# SOM-IDLE LGPD: aceite afirmativo obrigatório antes de criar a conta. O
+			# booleano carrega as três cláusulas exibidas no painel (Termos, Privacidade
+			# e a declaração de idade do §24-11) — gravadas por versão em AddAccount.
+			if err == NetworkCommons.AuthError.ERR_OK and not consentAccepted:
+				err = NetworkCommons.AuthError.ERR_CONSENT_REQUIRED
+			if err == NetworkCommons.AuthError.ERR_OK:
+				# SOM-IDLE F4 follow-up: name and email collisions get distinct errors —
+				# "account name not available" for a taken EMAIL was misleading QA.
+				# SOM-IDLE AUTH-P1 (frente 2): decisão registrada — os dois códigos ficam
+				# porque o `gui/Login.gd` RAMIFICA UX por eles (focar o campo e empurrar
+				# para a recuperação). Cadastro sem colisão não pode responder uniforme
+				# sem quebrar esse fluxo; o oráculo que importa (login/recuperação/2FA) é
+				# uniforme nas outras rotas desta classe.
+				if Launcher.SQL.HasAccount(accountName):
+					err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
+				elif Launcher.SQL.HasEmail(email):
+					err = NetworkCommons.AuthError.ERR_EMAIL_TAKEN
+				elif not Launcher.SQL.AddAccount(accountName, password, email, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, Peers.GetPeerIP(peerID)):
+					err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
+				else:
+					Network.accounts_list_update.emit()
+					var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
+					if accountData:
+						err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
+			# Qualquer caminho de falha nesta janela conta como tentativa para o
+			# rate-limit de criação — inclusive colisão, que o cliente mostra como "nome
+			# indisponível" (não vaza existência: ERR_EMAIL_TAKEN vira ERR_NAME_AVAILABLE
+			# de propósito no cliente, e o IP pagou a tentativa de qualquer forma).
+			if err != NetworkCommons.AuthError.ERR_OK:
+				SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindCreateAccountIP, ipAddress, SQLSecurity.CreateAccountIPWindowSec, SQLSecurity.CreateAccountIPMaxFailures, SQLSecurity.CreateAccountIPBlockSec)
 	Network.AuthError(err, peerID)
 
 # SOM-IDLE LGPD art.18: o próprio jogador (logado) exercita o direito ao
@@ -130,6 +145,11 @@ func LoginWithTwoFactor(accountName : String, token : String, platform : int, pe
 		Network.AuthError(NetworkCommons.AuthError.ERR_AUTH, peerID)
 		return
 	var challengeAlive : bool = peer != null and not accountName.is_empty() and peer.pendingTwoFactorAccount == accountName
+	# P0-1 (C-01): rejeita se o peer já tem uma conta vinculada que diverge do desafio.
+	if peer != null and peer.accountID != NetworkCommons.PeerUnknownID and peer.accountID != accountID:
+		err = NetworkCommons.AuthError.ERR_AUTH
+		Network.AuthError(err, peerID)
+		return
 	# SOM-IDLE AUTH-P1 (frente 3): a decisão do desafio é feita AQUI, e não por
 	# `Peers.ValidateTwoFactorChallenge`, porque aquele helper decide frescor por
 	# `SQL.ConsumeTwoFactorToken` — cuja detecção `SELECT changes()` o pool de
@@ -258,7 +278,7 @@ func LoginWithToken(accountName : String, token : String, platform : int, peerID
 			err = NetworkCommons.AuthError.ERR_TOKEN
 		else:
 			var ipAddress : String = Peers.GetPeerIP(peerID)
-			var tokenHash : String = Hasher.HashPassword(token)
+			var tokenHash : String = Hasher.HashAuthToken(token)
 			var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthToken(accountID, tokenHash, ipAddress)
 			if not accountData:
 				err = NetworkCommons.AuthError.ERR_TOKEN
@@ -309,7 +329,7 @@ func AcceptConsent(accountName : String, password : String, token : String, reme
 						elif Launcher.SQL.IsLockedOut(accountID):
 							SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginLockout, accountID)
 		elif not token.is_empty():
-			accountData = Launcher.SQL.ValidateAuthToken(Launcher.SQL.GetAccountID(accountName), Hasher.HashPassword(token), ipAddress)
+			accountData = Launcher.SQL.ValidateAuthToken(Launcher.SQL.GetAccountID(accountName), Hasher.HashAuthToken(token), ipAddress)
 			if not accountData:
 				err = NetworkCommons.AuthError.ERR_TOKEN
 		else:
@@ -339,7 +359,16 @@ func RequestPasswordReset(accountName : String, peerID : int):
 
 	var accountID : int = Launcher.SQL.GetAccountID(accountName)
 	if accountID != NetworkCommons.PeerUnknownID:
-		if Launcher.Email.BeginResetRequest(accountID):
+		# SOM-IDLE AUTH-P0 (2026-10-04, frente 2): reset de senha só para contas
+		# com e-mail VERIFICADO. Um cadastro com e-mail não verificado não chegou
+		# ao inbox de ninguém com intenção de controle — atacar o reset dele é
+		# spray direto. A resposta ao client continua a mesma de sempre (não
+		# vaza "existe mas não verificado" nem "não existe"), e o log de tentativa
+		# em conta não-verificada usa um evento DISTINTO (EventResetOnUnverified)
+		# para não confundir com esgotamento real de budget.
+		if not Launcher.SQL.IsEmailVerified(accountID):
+			SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventResetOnUnverified, accountID)
+		elif Launcher.Email.BeginResetRequest(accountID):
 			var email : String = Launcher.SQL.GetAccountEmail(accountID)
 			if not email.is_empty():
 				var code : String = Hasher.NormalizeResetCode(Hasher.GenerateResetCode())
