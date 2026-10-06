@@ -28,7 +28,7 @@ const BufferCap : int = 500
 #
 # O censo achou mais quatro no MESMO estado, na mesma passada: `ah_expire`,
 # `ah_bid`, `ah_bid_cancel`, `ah_bid_fill` — todos anunciados por `_RecordAH`
-# (`sources/economy/AuctionHouseService.gd:298,1037,1061,1137`) e recusados por esta
+# (`sources/economy/AuctionHouseService.gd:323,1118,1142,1225`) e recusados por esta
 # lista, ou seja: o marketplace emitia quatro eventos que nunca caíram na tabela.
 # Entraram aqui e em `OperationalKinds` (aceito E lido), porque um evento de leilão
 # que o gate joga fora é indistinguível de um funil que nunca existiu.
@@ -384,7 +384,7 @@ func FunnelWindowAccounts(sinceSec : int) -> Dictionary:
 # pela mesma razão, medidos pelo censo e não por memória.
 const OperationalKinds : Array[String] = ["login", "settle", "levelup", "shop_visit", "ad_view",
 	"flag_change", "fraud_metrics", "sec_login_lockout", "sec_login_ip_block", "sec_totp_throttle",
-	"sec_totp_replay", "sec_reset_exhausted", "sec_reset_request_limit", "sec_reset_on_unverified", "ah_list", "ah_list_reject",
+	"sec_totp_replay", "sec_reset_exhausted", "sec_reset_request_limit", "sec_reset_on_unverified", "sec_ah_wash_hold", "ah_list", "ah_list_reject",
 	"ah_buy", "ah_cancel", "ah_bid", "ah_bid_fill", "ah_bid_cancel", "ah_expire",
 	"pass_claim", "rebirth"]
 

@@ -36,6 +36,11 @@ bad() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); printf '[FAIL] %s\n'
 #   economy/*.gd, idle/*.gd   — domínios que só chamam `db.*` dentro do lambda de um
 #                               `Launcher.SQL.Transaction()` próprio (mesmo mutex, mesmo
 #                               contador, mesmo commit do estado que o ledger espelha).
+#                               Exceção declarada: `economy/CheckoutReversal.gd` não abre
+#                               a própria transação — é o bloco de reversão que o
+#                               `CheckoutService` extraiu (2026-10-06) e que roda dentro
+#                               do `Transaction(func(` da chamada, com as ops cruas
+#                               espelhando o commit daquele lambda.
 WRITE_ALLOWLIST="
 sql/SQL.gd
 sql/SQLGrants.gd
@@ -43,6 +48,7 @@ sql/SQLRetention.gd
 economy/AuctionHouseService.gd
 economy/BossProgressionService.gd
 economy/CheckoutService.gd
+economy/CheckoutReversal.gd
 economy/EconomyKernel.gd
 economy/GuildService.gd
 economy/ItemForgeService.gd
@@ -238,6 +244,79 @@ if [ -n "$(grep -nE "$WRITE_RE" "$D/economy/ShopService.gd" 2>/dev/null)" ]; the
 else
 	ok "control: entrada de allowlist sem escrita crua e detectada"
 fi
+
+# --- C-5 (2026-10-06): a ordem dos dois locks do processo, declarada no header
+# da classe `EconomyKernel` (`sources/economy/EconomyKernel.gd:@EconomyKernel`) e
+# conferida AQUI. Forma proibida 1:
+# `settleMutex.lock()` dentro do lambda de `Transaction(func(` — pega o lock
+# externo segurando o interno, o par clasico de dead-lock. Forma proibida 2:
+# `ApplyGoldMoves(` dentro do lambda — o espelho e consequencia do COMMIT,
+# nunca uma operacao pre-commit. O escopo e por parentese balanceado, entao
+# lambda de uma linha e lambda aninhado caem no mesmo juizo.
+scan_locks() {
+python3 - "$1" <<'PY'
+import os, sys
+root = sys.argv[1]
+out = []
+def spans(src, opener):
+	i = 0
+	while True:
+		j = src.find(opener, i)
+		if j < 0: break
+		k = j + len(opener) - 1
+		depth = 0
+		while k < len(src):
+			c = src[k]
+			if c == '(': depth += 1
+			elif c == ')':
+				depth -= 1
+				if depth == 0:
+					yield (j, k); break
+			k += 1
+		i = k + 1
+for dirpath, _dn, files in os.walk(root):
+	for fn in files:
+		if not fn.endswith('.gd'): continue
+		p = os.path.join(dirpath, fn)
+		src = open(p, encoding='utf-8').read()
+		if 'settleMutex' not in src and 'ApplyGoldMoves' not in src: continue
+		for (s0, e0) in spans(src, 'Transaction('):
+			if 'func(' not in src[s0:e0]: continue
+			if src.find('settleMutex.lock()', s0, e0) >= 0:
+				out.append('ORDEM-INVERTIDA %s' % p)
+			if src.find('ApplyGoldMoves(', s0, e0) >= 0:
+				out.append('ESPELHO-PRE-COMMIT %s' % p)
+print('\n'.join(out))
+PY
+}
+LOCKHITS="$(scan_locks "$ROOT")"
+if [ -z "$LOCKHITS" ]; then
+	ok "C-5: ordem canonica (settleMutex fora, Transaction dentro, espelho depois do commit) sem violacao em sources/"
+else
+	bad "ordem de locks violada" "0 acusacoes" "$LOCKHITS"
+fi
+D5="$(mktemp -d)"; mkdir -p "$D5/bad" "$D5/good"
+cat > "$D5/bad/Bad.gd" <<'GDF'
+func Broken():
+	Launcher.SQL.Transaction(func() -> bool:
+		_eco.settleMutex.lock()
+		_eco.kernel.ApplyGoldMoves({})
+		return true)
+GDF
+cat > "$D5/good/Good.gd" <<'GDF'
+func HousePattern():
+	_eco.settleMutex.lock()
+	var okc : bool = Launcher.SQL.Transaction(func() -> bool:
+		return _eco.kernel._MoveGoldLocked(sql, charID, accountID, 1, "r", goldMoves))
+	_eco.settleMutex.unlock()
+	if okc:
+		_eco.kernel.ApplyGoldMoves(goldMoves)
+GDF
+n5a="$(scan_locks "$D5/bad" | grep -c . || true)"
+n5b="$(scan_locks "$D5/good" | grep -c . || true)"
+if [ "$n5a" -eq 2 ]; then ok "control: lock interno ao lambda e espelho pre-commit mordem as duas formas proibidas"; else bad "control: regua C-5 nao morde o plantado" "2 acusacoes" "$n5a"; fi
+if [ "$n5b" -eq 0 ]; then ok "control: o padrao da casa (lock fora, espelho depois do commit) e poupado"; else bad "control: C-5 acusa o formato correto" "0 acusacoes" "$n5b"; fi
+rm -rf "$D5"
 
 printf 'escopo: %s/*.gd; allowlist de %d writers sancionados; escrita = insert_row/update_rows/delete_rows/execute/query_with_bindings/query no handle db cru\n' "$ROOT" "$(printf '%s\n' $WRITE_ALLOWLIST | grep -c .)"
 echo "== WRITE FUNNEL GATE: $CHECKS checks, $FAILURES failures =="

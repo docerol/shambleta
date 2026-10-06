@@ -1037,6 +1037,44 @@ def push_drain(db_path, limit=20, sender=None):
         return store.push_drain(con, limit=limit, sender=sender)
 
 
+def push_season_close(db_path, lead_seconds=24 * 3600):
+    """Uma passada do gancho 'temporada fechando' (C-9). Retorna o número de
+    contas enfileiradas nesta passada (0 = sem temporada na janela, ou todos
+    já avisados)."""
+    store = Store(db_path)
+    with store.connect() as con:
+        return store.push_season_close(con, lead_seconds=lead_seconds)
+
+
+def push_scheduler_tick(db_path):
+    """Uma passada completa do heartbeat de push (C-9): enfileira os dois
+    ganchos do jogo e envia a fila em ritmo lento. Separado do laço porque o
+    TESTE aferiza a passada sem dormir; o laço é só o sono entre passadas."""
+    store = Store(db_path)
+    out = {}
+    with store.connect() as con:
+        out["sweep"] = store.push_sweep(con)
+        out["season"] = store.push_season_close(con)
+        out["drain"] = store.push_drain(con, limit=20)
+    return out
+
+
+def _push_scheduler_loop(db_path, interval):
+    """C-9 (2026-10-06): o push tinha mecânica completa e nenhum disparador —
+    'push não disparado' da auditoria. O flag SHAMBLETA_PUSH_SCHED=1 liga um
+    daemon que roda `push_scheduler_tick` a cada SHAMBLETA_PUSH_SCHED_SEC
+    (default 900). Sem sender configurado as linhas viram failed com marcador
+    estável — fila visível no /metrics é melhor que processo silencioso; e o
+    operador que prefere cron do host deixa o flag desligado (mesmo tick,
+    outro dono do relógio)."""
+    while True:
+        try:
+            push_scheduler_tick(db_path)
+        except (sqlite3.Error, OSError) as e:
+            sys.stderr.write("companion: push scheduler: %s\n" % e)
+        time.sleep(interval)
+
+
 def normalize_event(provider, data):
     """Reduz o corpo (formato do provedor OU flat sandbox) a um grant canônico:
     {idempotency_key, account_id, username, sku, price_paid, currency}.
@@ -1224,6 +1262,35 @@ class Store:
             (now - int(offline_seconds), now - int(quiet_seconds))).fetchall()
         for (acct,) in rows:
             self.push_enqueue(con, acct, title=title, body=body, now=now)
+        return len(rows)
+
+    def push_season_close(self, con, lead_seconds=24 * 3600, now=None):
+        """C-9 (2026-10-06): o segundo gancho do jogo — 'temporada fechando'.
+        Uma temporada `active` que termina dentro de `lead_seconds` notifica
+        TODO assinante UMA única vez por temporada: a chave de dedupe mora no
+        corpo da própria fila (`season:<id>`), não em memória — restart não
+        reabre a notificação, e spam de "fecha em breve" a cada 15 min era a
+        alternativa óbvia e errada. Sem temporada na janela: 0, silencioso."""
+        if now is None:
+            now = int(time.time())
+        row = con.execute(
+            "SELECT season_id, ends_at FROM season WHERE status = 'active' "
+            "AND ends_at > ? AND ends_at <= ? ORDER BY ends_at ASC LIMIT 1;",
+            (now, now + int(lead_seconds))).fetchone()
+        if not row:
+            return 0
+        season_id, ends_at = row
+        marker = "season:%d" % season_id
+        hours = max(1, int(round((int(ends_at) - now) / 3600.0)))
+        rows = con.execute(
+            "SELECT s.account_id FROM push_subscription s "
+            "WHERE NOT EXISTS (SELECT 1 FROM push_outbox o "
+            "                  WHERE o.account_id = s.account_id AND o.body LIKE ?);",
+            (marker + "%",)).fetchall()
+        for (acct,) in rows:
+            self.push_enqueue(con, acct,
+                              title="A temporada fecha em ~%dh" % hours,
+                              body=marker, now=now)
         return len(rows)
 
     def push_drain(self, con, limit=20, sender=None, now=None):
@@ -1537,6 +1604,28 @@ class Store:
         for cur, rev in m["revenue_by_currency"].items():
             lines.append('shambleta_revenue_gross_minor{currency="%s"} %d' % (cur, rev["gross_minor"]))
             lines.append('shambleta_revenue_payers{currency="%s"} %d' % (cur, rev["payers"]))
+        lines.append("")
+        # C-8 (2026-10-06): os RATIOS que o roadmap comercial cobra em Prometheus.
+        # Antes os componentes crus saíam aqui e arpu/arppu/conversão só existiam
+        # no JSON — alerta nenhum conseguia olhar ARPPU. A conta é a MESMA do
+        # JSON (mesma `revenue_by_currency`, mesmo denominador `accounts.total`);
+        # se os dois divergirem, a régua é o JSON.
+        accounts_total = int(m["accounts"]["total"])
+        lines.append("# HELP shambleta_kpi_arppu_minor Bruto por pagante único (minor units, por moeda).")
+        lines.append("# TYPE shambleta_kpi_arppu_minor gauge")
+        lines.append("# HELP shambleta_kpi_arpu_minor Bruto por conta registrada (minor units, por moeda).")
+        lines.append("# TYPE shambleta_kpi_arpu_minor gauge")
+        lines.append("# HELP shambleta_kpi_payer_conversion Contas pagantes / contas totais (0..1, por moeda).")
+        lines.append("# TYPE shambleta_kpi_payer_conversion gauge")
+        for cur, rev in m["revenue_by_currency"].items():
+            payers = int(rev["payers"])
+            gross = int(rev["gross_minor"])
+            arppu = int(rev.get("arppu_minor", 0))
+            arpu = int(round(gross / float(accounts_total))) if accounts_total else 0
+            conv = (float(payers) / float(accounts_total)) if accounts_total else 0.0
+            lines.append('shambleta_kpi_arppu_minor{currency="%s"} %d' % (cur, arppu))
+            lines.append('shambleta_kpi_arpu_minor{currency="%s"} %d' % (cur, arpu))
+            lines.append('shambleta_kpi_payer_conversion{currency="%s"} %.6f' % (cur, conv))
         lines.append("")
         lines.append("# HELP shambleta_sales_grants_units Vendas processadas por SKU.")
         lines.append("# TYPE shambleta_sales_grants_units gauge")
@@ -2365,6 +2454,15 @@ def main():
     server.allow_dev = bool(args.allow_dev)
     server.allow_dev_checkout = bool(args.allow_dev_checkout or args.allow_dev)
     server.push_admin_token = args.push_admin_token
+    # C-9: heartbeat opt-in do push. O default é DESLIGADO — ligar o scheduler
+    # é decisão do operador (o contêiner que roda cron do host não precisa de
+    # um segundo relógio dentro do processo).
+    if os.environ.get("SHAMBLETA_PUSH_SCHED", "") == "1":
+        import threading
+        sched_sec = max(60, int(os.environ.get("SHAMBLETA_PUSH_SCHED_SEC", "900") or 900))
+        threading.Thread(target=_push_scheduler_loop,
+                         args=(args.db, sched_sec), daemon=True).start()
+        print("companion: push scheduler ligado (passada a cada %ds)" % sched_sec, flush=True)
     print("companion: listening on %s:%d (db %s, provider %s, %d SKUs)"
           % (host, args.port, args.db, args.provider, len(catalog)), flush=True)
     try:

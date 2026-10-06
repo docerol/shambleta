@@ -349,7 +349,7 @@ func _suiteSource() -> void:
 	var srvRaw : String = _fileText("res://sources/network/server/Server.gd")
 	var ecoRaw : String = _fileText("res://sources/economy/EconomyService.gd")
 	var forgeRaw : String = _fileText("res://sources/economy/ItemForgeService.gd")
-	var cmdRaw : String = _fileText("res://sources/world/WorldCommands.gd")
+	var cmdRaw : String = _fileText("res://sources/world/WorldCommandsSupport.gd")	# C-4: o verbete /cs_* mudou de casa; a régua seguiu o corpo
 	Check(not panelRaw.is_empty() and not sceneRaw.is_empty() and not guiRaw.is_empty() and not barRaw.is_empty(),
 		"os quatro elos novos têm fonte legível (painel, cena, Gui, barra do HUD)")
 	var panel : String = _codeOnly(panelRaw)

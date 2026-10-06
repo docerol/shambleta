@@ -335,9 +335,18 @@ func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : 
 			return false
 	var vipDays : int = int(reward.get("vip_days", 0))
 	if vipDays > 0:
+		# C-7 (2026-10-06), regra de ORIGEM: tempo de VIP não sai da trilha
+		# free. O VIP é a linha QoL paga; grátis na trilha comum ele canibaliza
+		# a assinatura com faucet, que é exatamente o "farmável" do achado. A
+		# recusa é em três pontas (aqui, no validador do catálogo, no do
+		# `seasons.json`): dado que passou pelo validador não pode achar um
+		# aplicador sem porta.
+		if track == "free":
+			Util.PrintLog("Economy", "pass free track nível %d declara vip_days — grant recusado (C-7)" % level)
+			return false
 		var now : int = SQLCommons.Timestamp()
 		var cur : int = sql.GetVIPUntil(accountID)
-		if not sql.SetVIPUntil(accountID, maxi(now, cur) + vipDays * 86400):
+		if not sql.SetVIPUntil(accountID, VipPolicy.ClampGrant(cur, now, vipDays * 86400)):
 			return false
 		var curTier : int = sql.GetVIPTier(accountID)
 		if curTier < 1 or cur <= now:

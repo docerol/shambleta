@@ -22,7 +22,7 @@ extends SceneTree
 #   3. o mint: fechar quest com recompensa declarada credita exatamente o declarado
 #      na carteira e escreve UMA linha de ledger com kind/reason do catálogo — e o
 #      dupe clássico não paga de novo, nem depois de o estado da quest ser
-#      reaberto/apagado no banco (Elanore.gd:152, WorldCommands.gd:1414), porque a
+#      reaberto/apagado no banco (Elanore.gd:152, WorldCommands.gd:1208), porque a
 #      prova é o ledger append-only (data/conf/migrations/009_idle_economy.sql:32),
 #      não o estado; e o guard é POR QUEST, não por personagem;
 #   4. quest sem recompensa declarada: não paga, não erro, nenhuma linha, e a frase
@@ -337,7 +337,7 @@ func _suitePaysOnce():
 	# servidor (Progress.SetQuest → SQL.SetQuest, sources/actor/Progress.gd:@SetQuest e
 	# sources/sql/SQL.gd:1171), e
 	# aí o estado é apagado do banco — o caso de Elanore.gd:152, que devolve a quest
-	# a INACTIVE, e do `/quest <name> <state>` na mão de um GM (WorldCommands.gd:1414).
+	# a INACTIVE, e do `/quest <name> <state>` na mão de um GM (WorldCommands.gd:1208).
 	# Quem guardasse "já paguei" só no estado da quest pagaria de novo exatamente
 	# aqui; é esta asserção que o ledger tem de atravessar.
 	var done : int = int(_progressCommons.CompletedProgress)
@@ -431,7 +431,7 @@ func _suiteRewardLineFromNumbers() -> void:
 
 # O pagamento mora no funil por onde TODA quest passa: NpcCommons.SetQuest é
 # chamado pelos diálogos (NpcScript.gd:158) e pelo comando de GM
-# (WorldCommands.gd:1414). Verificar a costura na fonte é o que separa "existe
+# (WorldCommands.gd:1208). Verificar a costura na fonte é o que separa "existe
 # uma função que paga" de "fechar quest paga".
 func _suiteHookWiring() -> void:
 	print("[suite] 7: SetQuest paga pela transição, no funil que todo diálogo usa")

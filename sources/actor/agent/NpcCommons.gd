@@ -223,7 +223,7 @@ static func ShouldPayQuestReward(previousState : int, state : int) -> bool:
 # Prova DURÁVEL de que esta recompensa já saiu para este personagem. O guard de
 # transição acima não basta sozinho: script reabre quest (Elanore.gd:152 devolve
 # ELANORE_POTION a INACTIVE), `/quest <name> <state>` reseta o estado na mão de um
-# GM (WorldCommands.gd:1414) e o progresso é reimportado do banco — o ledger é
+# GM (WorldCommands.gd:1208) e o progresso é reimportado do banco — o ledger é
 # append-only (trigger de DELETE em data/conf/migrations/009_idle_economy.sql:32)
 # e nenhuma dessas rotas apaga linha. A poda de retenção (056) só libera linha cujo
 # reason está na lista fechada de corpo (SQLRetention.gd:42-43: settle/kill), então

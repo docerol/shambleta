@@ -582,7 +582,7 @@ func _suiteAHWashPair() -> void:
 	_ahCleanFixture(item, [a, b, supplier, client])
 	# Régua do FIXTURE, não do produto: quem compra no leilão paga com OURO do próprio
 	# personagem e `BuyListing` recusa ANTES de abrir a transação quando a carteira é
-	# menor que `price_gold` (`AuctionHouseService.gd:903`,
+	# menor que `price_gold` (`AuctionHouseService.gd:962`,
 	# `_CharGoldRaw(buyerChar) < listing.price_gold`). Sem esta linha o fixture sem
 	# ouro se apresentava como "o detector não vê o ciclo" — as 20 falhas desta suíte
 	# eram uma régua sem mercadoria. Cortar o endowment deixa esta VERMELHA.
@@ -594,23 +594,31 @@ func _suiteAHWashPair() -> void:
 	_checkEq(str(_fs.call("SeverityOfKinds", ["ah_wash_pair"])), "medium", "lavagem no leilão abre fila MÉDIA, nunca crítica")
 	_check(str(_fs.call("WhyOf", "ah_wash_pair")).to_lower().contains("leil"), "o porquê da fila nomeia o LEILÃO (não a troca direta)")
 
-	# (2) NEGATIVO do lado VERDE: duas rodadas do ciclo A->B->A no mesmo item.
-	# Uma unidade só circula: quem comprou é quem anuncia em seguida, e o estoque
-	# inicial é o único grant do fixture. Preço fixo em 1000/unidade — a segunda
-	# rodada é ancorada na primeira venda (mediana 1000 → banda 250..10000), então
-	# o ciclo também prova que a banda de #93.1 não cega o detector.
+	# (2) NEGATIVO do lado VERDE, agora com PORTÃO: o round trip A->B->A fecha
+	# (é comércio — devolução, revenda), e a perna que REPETE o ciclo do par no
+	# mesmo item é recusada no funil (C-2026-10-06: lavagem deixou de ser
+	# "review-only"; o detector ainda vê a volta que passou, a esteira é que
+	# acabou). Preço 1000/unidade ancora a banda da mesma forma de antes.
 	_sql.call("AddItemToCharacter", charA, item, 1, "frd_seed")
-	for round in 2:
-		var askA : int = int(_eco.call("ListItemForSale", charA, item, 1, 1000))
-		_check(askA > 0, "rodada %d: A anuncia (escreve ah_list:<item> na conta A)" % (round + 1))
-		_check(bool(_eco.call("BuyListing", charB, askA)), "rodada %d: B compra (escreve ah_in:<item>:lot na conta B)" % (round + 1))
-		var askB : int = int(_eco.call("ListItemForSale", charB, item, 1, 1000))
-		_check(askB > 0, "rodada %d: B anuncia o mesmo item de volta" % (round + 1))
-		_check(bool(_eco.call("BuyListing", charA, askB)), "rodada %d: A recompra — o ciclo fechou" % (round + 1))
-	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ? AND buyer_account = ?;", [item, a, b])[0]["n"]), 2,
-		"fluxo A->B registrado duas vezes no histórico de preço")
-	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ? AND buyer_account = ?;", [item, b, a])[0]["n"]), 2,
-		"e o fluxo de volta B->A também (é isto que faz ser PAR, não mercado)")
+	var askA : int = int(_eco.call("ListItemForSale", charA, item, 1, 1000))
+	_check(askA > 0, "A anuncia (escreve ah_list:<item> na conta A)")
+	_check(bool(_eco.call("BuyListing", charB, askA)), "B compra — ida do round trip (ah_in:<item>:lot na conta B)")
+	var askB : int = int(_eco.call("ListItemForSale", charB, item, 1, 1000))
+	_check(askB > 0, "B anuncia o mesmo item de volta")
+	_check(bool(_eco.call("BuyListing", charA, askB)), "A recompra — o round trip fechou: as DUAS direções no histórico são o que faz ser PAR")
+	# A terceira perna do MESMO par/item no vão é a esteira — e agora morre no portão.
+	var askA2 : int = int(_eco.call("ListItemForSale", charA, item, 1, 1000))
+	_check(askA2 > 0, "A tenta anunciar de novo (anunciar sempre pôde; o que fecha é o dinheiro)")
+	_check(not bool(_eco.call("BuyListing", charB, askA2)), "NEGATIVO C-6: B não recompra de A no vão — ciclo do par já fechado")
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM auction_listing WHERE id = ? AND status = 'open';", [askA2])[0]["n"]), 1,
+		"e a recusa não quebrou a mesa: o anúncio continua vendível (outro comprador pode)")
+	_check(bool(_eco.call("CancelListing", charA, askA2)), "fixture limpo: anúncio da tentativa cancelado")
+	_check(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM telemetry_event WHERE kind = 'sec_ah_wash_hold';", [])[0]["n"]) >= 1,
+		"a recusa deixou acusação durável (o evento é gravado FORA do rollback da transação)")
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ? AND buyer_account = ?;", [item, a, b])[0]["n"]), 1,
+		"fluxo A->B: UMA vez no histórico — a segunda foi cortada no funil")
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM ah_price_history WHERE item_id = ? AND seller_account = ? AND buyer_account = ?;", [item, b, a])[0]["n"]), 1,
+		"e o fluxo de volta B->A também uma — é isto que faz ser PAR, não mercado")
 
 	# (3) controle do falso-positivo histórico: fornecedor regular vende três vezes
 	# para o MESMO cliente e nunca recebe nada de volta. Volume igual, direção só.

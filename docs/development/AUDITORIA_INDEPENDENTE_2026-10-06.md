@@ -32,7 +32,7 @@ no working tree não commitado, bloqueiam boot e CI hoje:
    quebrado, não há servidor, não há login, não há beta.
 2. **Migration 068 quebra o boot do banco** (`CONFIRMADO POR TESTE`:
    `migration_atomicity_test` G3b/G4 vermelhos na árvore — `MigrationBlocked() = true`,
-   versão carimbada 67 ≠ 68 patches visíveis; causa estática `CONFIRMADO NO CÓDIGO`:
+   versão carimbada 67 ≠ contagem de patches visíveis; causa estática `CONFIRMADO NO CÓDIGO`:
    três `INSERT ... SELECT *` com contagem de colunas errada contra o schema vivo —
    wallet 3×4, auction_listing 9×12, item_instance 10×11, por causa dos ALTERs das
    migrations 049/025/028/063/027). E o arquivo está **fora do índice git**
@@ -91,7 +91,7 @@ comprometeu no último commit.
   single-writer + read-pool de 2 slots; companion Python 3.12 (webhook Mercado Pago/
   Pix, `/store`, push Web, métricas); nginx; Docker Compose; Prometheus + Alertmanager.
 - **Volume:** ~440 arquivos `.gd` (~61k linhas), 90 arquivos GUI (14,085 linhas),
-  68 patches de migração (001–068, o 068 só em disco), `companion/server.py` ~1.5k
+  69 patches de migração (001–069, todos rastreados; o lote C criou a 069), `companion/server.py` ~1.5k
   linhas + módulos de push próprios.
 - **Qualidade de borda:** 74 harnesses Godot auto-inscritos + 11 suítes Python +
   11 gates de estrutura + ~52 checks de segredos; i18n pt_BR 100% (1.337 linhas CSV);
@@ -377,7 +377,7 @@ Eixos: **S**everidade, **F**requência, **R**enda, **C**hurn, **E**sforço de co
 
 ### P0-B — Migration 068 quebra o boot do banco e está fora do git
 - **Evidência:** `CONFIRMADO POR TESTE` — `migration_atomicity_test`: G3b
-  `MigrationBlocked() = true` no boot real dos 68 patches, G4 carimbada 67 ≠ 68;
+  `MigrationBlocked() = true` no boot real da fileira de patches, G4 carimbada 67 ≠ 68;
   `check_untracked.sh` 2 FAILs apontando o arquivo. `CONFIRMADO NO CÓDIGO` — causa:
   `INSERT INTO ... SELECT *` em wallet (3 colunas novas vs 4 reais — `gems_paid` da
   049), auction_listing (9 vs 12 — `highlight`/`creator_account_id`/`expires_at` das
@@ -586,3 +586,72 @@ do companion (2º escritor continua de pé, por contrato documentado), e prover
 offsite real (infra a contratar). A régua de oferta (P1-I) foi alinhada ao
 código; a régua de produto sobre o cap (1 h vs 8 h era escolha) foi exercida na
 decisão do dono de manter 8 h.
+
+## 27. Adendo — o lote de qualidade de código (C-1..C-10, por ordem do dono: "implemente todos")
+
+- **C-1 (KDF fora do frame)** — o duto `_AwaitOnWorker` (`Server.gd:@_AwaitOnWorker`) roda a tarefa no
+  `WorkerThreadPool` e vota `process_frame`; `LoginWithPassword` e `AcceptConsent`
+  validam senha off-thread, e o equalizador (`_BurnKdfTimeOffThread`) viaja junto —
+  parado no frame ele reabria o oráculo de latência. A raça que o offload abriu
+  (duas tentativas no MESMO nome perdiam a atualização de `failed_attempts`, lida
+  antes da escrita vizinha) foi fechada na mesma fatia: `_authValidationInFlight`
+  serializa por nome, e nomes diferentes continuam concorrentes — é ali que o
+  alívio de CPU mora. `LoginWithTwoFactor` e o caminho de token ficam síncronos
+  (HMAC é caro de outro jeito e não há ledger por tentativa em risco).
+  **Residual confesso:** `CreateAccount` continua pagando o KDF do cadastro no
+  frame — protegido pelo rate-limit de IP da frente 2; offload ali é máquina de
+  estados multi-frame sem necessidade testada.
+- **C-2 (reset com sal por conta)** — `Hasher.HashResetCode(code, accountID)` usa o
+  salt `reset:<id>`; o hash pendente deixa de ser um PBKDF global da tabela e passa
+  a exigir trabalho POR CONTA num dump.
+- **C-3 (boot do AH em lotes)** — o sweep de boot drena um lote de colheita e um de
+  cruzamento por `AHBootBatchSec` com cursor keyset (`_ahSweepAfterID`); a régua
+  (#100 do `marketplace_depth_test`) agora anda o relógio em vez de exigir uma
+  passada única.
+- **C-4 (ratchets sem folga)** — extraídos `WorldCommandsSupport.gd` (as 7 ops
+  `CommandCs*`), `CheckoutReversal.gd` (o bloco de reversão, roda dentro do
+  `Transaction(func(` da chamadora) e `VipPolicy.gd`; tetos baixados 1925→1899 e
+  923→862 com o motivo escrito no comentário do próprio gate. `EconomyService`
+  (796/800) fica de propósito como tripwire: é hub de delegação puro cujos
+  assentos são contrato de 5 harnesses.
+- **C-5 (ordem dos locks regada)** — ordem canônica `settleMutex → queryMutex`
+  declarada no header do `EconomyKernel`; o write-funnel ganhou `scan_locks`, que
+  proíbe por parêntese balanceado `settleMutex.lock()` e `ApplyGoldMoves(` dentro
+  do lambda do `Transaction(`, com dois controles plantados (o padrão da casa —
+  lock fora, espelho depois do commit — é poupado).
+- **C-6 (lavagem no funil)** — a perna que fecha ciclo de lavagem é RECUSADA na
+  transação: se o par já existe nos dois sentidos dentro de `AHWashWindowSec`
+  (7 d), a segunda volta não liquida; um round trip completo continua comércio
+  legítimo. O evento `sec_ah_wash_hold` é escrito depois do rollback (fila
+  `_ahWashHolds`), senão o recuado deixaria rastro como se tivesse cometido.
+  O custo do próprio portão foi pego pelo benchmark: a pergunta por par varria o
+  histórico do item a cada settle — O(n²) contra o próprio mercado, e o p99 do
+  settle estourou a régua de regressão na primeira passada. A conta paga foi
+  índice, não afrouxamento: `idx_ah_price_history_pair` (migration 069).
+- **C-7 (VIP não-farmável)** — `VipPolicy.ClampGrant` (teto 90 d a partir do
+  instante da compra) nos QUATRO escritores de `vip_until` (checkout, oferta da
+  loja, passe, applier do grant pendente); trilho free não concede VIP (catálogo e
+  validador de temporada recusam `vip_days` no free; seasons.json S2 migrou para
+  chest).
+- **C-8 (KPI ratios)** — ARPU/ARPPU/conversão por moeda viraram gauges no
+  exposition Prometheus com os MESMOS denominadores do JSON.
+- **C-9 (push disparado)** — `Store.push_season_close` + scheduler opt-in
+  (`SHAMBLETA_PUSH_SCHED=1`, `SHAMBLETA_PUSH_SCHED_SEC`, mínimo 60 s); dedupe pelo
+  corpo `season:<id>` no outbox — sobrevive a restart.
+- **C-10 (dupla taxa declarada)** — crafted paga 1% no list + 1% do criador no
+  settle: os 2% são política declarada no `EconomyCatalog`, não bug de caminho.
+
+Veredites do lote: varredura completa `test.sh all` na árvore final —
+**zero gates vermelhos, zero flakes, zero ruído**. `login_hardening` 101/0,
+`password_timing_path` 101/0 (a régua das duas rotas do equalizador foi
+reancorada na forma off-thread), `accounts_fix`, `marketplace_depth`, `fraud`,
+`season_liveops`, `refund_revocation`, `pass_season_alignment`, `repo_layout`,
+`telemetry_census`, `migration_atomicity`, `benchmarks` e `multi_instance_tick`
+verdes; gates de estrutura (god-node 0, doc-drift 2571/0, write-funnel com a
+allowlist em 16 writers e o `scan_locks` novo, secrets, compose, untracked)
+verdes. O ciclo de feedback que a casa gosta de contar: o `benchmarks` pegou o
+custo O(n²) do portão C-6 na primeira passada, o `telemetry_census` pegou o
+evento sem leitor, o `repo_layout` exigiu motivo para as duas cercas novas, e o
+`doc_drift` mordeu dezesseis ponteiros `arquivo:NN` que as extrações
+deslocaram — em todos os casos a régua estava certa e a correção foi código ou
+registro, nunca o afrouxamento da régua.

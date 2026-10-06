@@ -224,7 +224,7 @@ func BuyDailyOffer(accountID : int, charID : int, offerID : String) -> Dictionar
 		else:
 			var now : int = SQLCommons.Timestamp()
 			var cur : int = sql.GetVIPUntil(accountID)
-			var until : int = maxi(now, cur) + count * 86400
+			var until : int = VipPolicy.ClampGrant(cur, now, count * 86400)	# C-7: teto único dos três writers
 			if not sql.SetVIPUntil(accountID, until):
 				return false
 			var curTier : int = sql.GetVIPTier(accountID)

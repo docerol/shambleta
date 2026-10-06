@@ -296,6 +296,11 @@ static func _ValidateReward(reward : Variant, idx : int, seasonID : String, labe
 	for field : String in ["gems", "chests", "vip_days"]:
 		if rewardDict.has(field) and (not _IsInteger(rewardDict[field]) or int(rewardDict[field]) < 0):
 			errors.append("seasons[%d/%s]: %s.%s precisa ser inteiro >= 0" % [idx, seasonID, label, field])
+	# C-7 (2026-10-06), ponta dos DADOS: a trilha free de uma temporada não pode
+	# declarar tempo de VIP — o mesmo veto do aplicador (`PassService`) e do
+	# catálogo (`ValidatePassTables`), três pontas para a mesma régua.
+	if label.begins_with("free") and int(rewardDict.get("vip_days", 0)) > 0:
+		errors.append("seasons[%d/%s]: %s declara vip_days na trilha free (C-7: VIP é pago, não grant de temporada)")
 	if not rewardDict.has("cosmetics"):
 		return
 	var cosmetics : Variant = rewardDict["cosmetics"]

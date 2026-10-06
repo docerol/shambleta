@@ -8,6 +8,14 @@ class_name EconomyKernel
 # EconomyService (_eco.settleMutex / _eco._get_settle_mutex), entao a semantica de
 # locking e identica a de antes da fatia e os 11 servicos seguem chamando pelos
 # wrappers do facade (hub-and-spoke inalterado).
+# C-5 (2026-10-06) — ORDEM CANÔNICA DECLARADA, os dois locks do processo:
+#   settleMutex (fora) → queryMutex (dentro, via SQL.Transaction ou portas de
+#   statement). Nada de `settleMutex.lock()` dentro de um lambda de
+#   `Transaction(func(` — isso pega o lock externo segurando o interno, o par
+#   clássico de dead-lock; e nada de `ApplyGoldMoves(` dentro do lambda — o
+#   espelho de gold é consequência do COMMIT, escrever agente antes do banco
+#   commitar é a metade invertida do defeito do snapshot de 600 s. A régua é o
+#   portão `scripts/check_write_funnel.sh` (seção C-5, com controles plantados).
 # Gold tem caminho unico desde o P0 do snapshot (ver _MoveGoldLocked): quem move
 # stat.gp usa _MoveGoldLocked dentro da transacao aberta e aplica o dicionario de
 # moves na memoria depois do commit — ou chama MoveGold, que ja faz os dois.

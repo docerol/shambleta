@@ -118,6 +118,19 @@ func _peer(ip : String) -> int:
 func _removePeer(pid : int) -> void:
 	peers.call("RemovePeer", pid)
 
+# C-1 (2026-10-06): a rota de login agora espera o KDF num worker — o efeito chega
+# ao banco no frame seguinte, não dentro do `server.call`. O pump fixo virou
+# wait-until com teto: acorda quando o predicado vale (não atrasa o verde) e só
+# estoura se o efeito não chegou.
+func _waitUntil(cond : Callable, maxSec : float = 20.0) -> bool:
+	var waited : float = 0.0
+	while not bool(cond.call()):
+		await create_timer(0.05).timeout
+		waited += 0.05
+		if waited >= maxSec:
+			return false
+	return true
+
 func _run():
 	print("== Login hardening harness (lockout multi-origem / anti-oraculo / 2FA / telemetria) ==")
 	var waited : int = 0
@@ -378,7 +391,7 @@ func _suiteLockoutMultiOrigem() -> void:
 	while i < maxAttempts:
 		i += 1
 		server.call("LoginWithPassword", uname, "senhaerrada%d" % i, false, 0, pid)
-	await create_timer(0.1).timeout
+	await _waitUntil(func() -> bool: return int(_row(uname).get("failed_attempts", 0)) >= maxAttempts)
 	var row : Dictionary = _row(uname)
 	var failedAttempts : int = int(row.get("failed_attempts", 0))
 	var lockedUntil : int = int(row.get("locked_until", 0))
@@ -393,7 +406,7 @@ func _suiteLockoutMultiOrigem() -> void:
 	var ipRowBefore : Dictionary = _windowRow(kindIP, "10.66.1.1")
 	var failuresBefore : int = int(ipRowBefore.get("failures", 0))
 	server.call("LoginWithPassword", uname, "S3nhadePagante!", false, 0, pid)
-	await create_timer(0.1).timeout
+	await _waitUntil(func() -> bool: return int(_windowRow(kindIP, "10.66.1.1").get("failures", 0)) >= failuresBefore + 1)
 	var ipRowAfter : Dictionary = _windowRow(kindIP, "10.66.1.1")
 	CheckEq(int(ipRowAfter.get("failures", -1)), failuresBefore + 1, " tentativa contra conta travada paga o IP (spray não é de graça)")
 	CheckEq(_eventCount(str(_secConst("EventLoginLockout"))), lockoutEvents + 1, "sem evento duplicado durante o lockout")
@@ -413,7 +426,7 @@ func _suiteLockoutMultiOrigem() -> void:
 	var blockEvents : int = _eventCount(str(_secConst("EventLoginIPBlock")))
 	for s in sprayMax:
 		server.call("LoginWithPassword", "lhghost" + str(s) + stamp, "x12345678", false, 0, pid2)
-	await create_timer(0.1).timeout
+	await _waitUntil(func() -> bool: return bool(_callSec("IsBlocked", [sql, kindIP, "10.66.2.2", 0])))
 	Check(bool(_callSec("IsBlocked", [sql, kindIP, "10.66.2.2", 0])), "spray em nomes inexistentes esgota o teto da ORIGEM")
 	CheckEq(_eventCount(str(_secConst("EventLoginIPBlock"))), blockEvents + 1, "sec_login_ip_block na transição (uma vez)")
 	# Origem queimada: nem a senha certa de uma conta real toca o ValidateAuthPassword
@@ -429,13 +442,13 @@ func _suiteLockoutMultiOrigem() -> void:
 	# Controle positivo: mesma credencial de origem limpa passa (desafio arma).
 	var pid3 : int = _peer("10.66.3.3")
 	server.call("LoginWithPassword", victim, "CorrectHorse123!", false, 0, pid3)
-	await create_timer(0.1).timeout
+	await _waitUntil(func() -> bool: return str(peers.call("GetPeer", pid3).get("pendingTwoFactorAccount")) == victim)
 	CheckEq(str(peers.call("GetPeer", pid3).get("pendingTwoFactorAccount")), victim, "origem limpa com a mesma senha segue o fluxo normal (2FA desafiado)")
 	# Transporte sem IP atribuível (web atrás de bridge): eixo IP fica de fora,
 	# só o eixo conta protege — precisa continuar VALIDANDO, não travando tudo.
 	var pid4 : int = _peer("")
 	server.call("LoginWithPassword", victim, "WrongPassword99!", false, 0, pid4)
-	await create_timer(0.1).timeout
+	await _waitUntil(func() -> bool: return int(_row(victim).get("failed_attempts", 0)) >= 1)
 	Check(int(_row(victim).get("failed_attempts", 0)) >= 1, "sem IP a tentativa ainda escala a conta (eixo autoritário) — sem falso bloqueio global")
 	Check(_windowRow(kindIP, "").is_empty(), "nenhum contador por IP vazio")
 	# Backoff finito no degrau alto também (a curva dobra até o teto, nunca além).
@@ -499,7 +512,10 @@ func _suiteResetDiscipline() -> void:
 	# Pending plantado por fora com hash conhecido; 5 códigos errados pela ROTA →
 	# a 5ª consome o pending (EmailService) e a rota emite sec_reset_exhausted.
 	var goodCode : String = "ABC234"
-	email.call("CreateReset", accountID, str(hasher.call("HashPassword", goodCode)))
+	# C-2 (2026-10-06): o plantado usa o MESMO hash da rota — código com sal de
+	# conta e derivação iterada; plantar `HashPassword` nu seria régua de um
+	# regime que não existe mais.
+	email.call("CreateReset", accountID, str(hasher.call("HashResetCode", goodCode, accountID)))
 	var exhaustedEvents : int = _eventCount(str(_secConst("EventResetExhausted")))
 	var maxTries : int = int(_const(commons, "ResetCodeMaxAttempts"))
 	for a in maxTries:

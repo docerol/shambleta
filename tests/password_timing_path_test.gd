@@ -170,8 +170,12 @@ func _suiteSourceContract() -> void:
 	Check(burn.contains("HashPasswordV2"), "BurnKdfTime chama o mesmo KDF do login (PBKDF2 210.000 iterações, não um `pass`)")
 	Check(not burn.contains("KdfIterations"), "BurnKdfTime não escolhe iterações por fora: usa o mesmo HashPasswordV2 do login, com o mesmo teto")
 	# A rota de login chama o igualador no ramo "conta inexistente" (as duas rotas).
+	# C-1 (2026-10-06): a queima viaja para o worker junto com a derivação — o que a
+	# régua prende é o MESMO par: duas rotas, um equalizador, custo real.
 	var srv : String = FileAccess.get_file_as_string("res://sources/network/server/Server.gd")
-	CheckEq(srv.count("SQLSecurity.BurnKdfTime(password)"), 2, "as duas rotas de credencial (login e consentimento) queimam o KDF na conta inexistente")
+	CheckEq(srv.count("await _BurnKdfTimeOffThread(password)"), 2, "as duas rotas de credencial (login e consentimento) queimam o KDF na conta inexistente")
+	var burnOff : String = _fnBody(srv, "_BurnKdfTimeOffThread")
+	Check(burnOff.contains("SQLSecurity.BurnKdfTime(password)"), "o contêiner off-thread chama o BurnKdfTime real (a mudança de thread não trocou o KDF)")
 	var sql : String = FileAccess.get_file_as_string("res://sources/sql/SQL.gd")
 	Check(sql.contains("Hasher.VerifyPassword("), "SQL.gd verifica pela porta do Hasher (comparação não reimplementada no SQL)")
 	Check(not sql.contains("password, salt) ==") and not sql.contains("storedHash =="), "SQL.gd não compara hash de senha com `==`")

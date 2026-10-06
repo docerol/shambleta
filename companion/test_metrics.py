@@ -82,6 +82,9 @@ if __name__ == "__main__":
     ok("shambleta_revenue_gross_minor{" in text, "expõe shambleta_revenue_gross_minor com rótulo currency")
     ok("shambleta_starter_funnel{" in text, "expõe shambleta_starter_funnel com rótulo state={claimed,eligible}")
     ok("shambleta_revenue_gross_minor{currency=\"USD\"} 9900" in text, "expõe shambleta_revenue_gross_minor com rótulo currency (receita do fixture)")
+    ok("shambleta_kpi_arppu_minor{currency=\"USD\"} 9900" in text, "C-8: ARPPU vira gauge Prometheus (bruto/pagante do fixture), não só número do JSON")
+    ok("shambleta_kpi_arpu_minor{currency=\"USD\"} " in text, "C-8: ARPU por conta registrada exposto com o mesmo denominador do JSON")
+    ok("shambleta_kpi_payer_conversion{currency=\"USD\"} " in text, "C-8: conversão de pagantes (0..1) exposta")
 
     # Validação leve de formato: cada linha de métrica é `name{labels} value` ou `name value`.
     for line in text.strip().split("\n"):

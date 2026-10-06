@@ -508,6 +508,14 @@ const NEAR_FENCE : Array = [
 		"path": "sources/economy/EconomyService.gd",
 		"reason": "odres/estagios de 2026-09-28-29 (#96-#104): o ciclo de temporada (CloseSeason congela placar, SnapshotSeasonSpend tem teto em `ends_at`, SettleSeasonPrizes liquida, EnsureSeasonS1 idempotente, _trySeedAuctionBots gated-off) e o ReconcileDaily moram nos braços do MESMO mutex de settle, cada um com a sua guarda de transação; mover orquestração para um colaborador no meio de uma rodada de hardening seria redesenho de economia, não arrumação de tamanho. Saída registrada: a próxima onda que tocar este arquivo baixa `SeasonS1Rules`/`EnsureSeasonS1` para um `SeasonRules` próprio e a banda volta a ter folga.",
 	},
+	{
+		"path": "sources/economy/EconomyCatalog.gd",
+		"reason": "lote C (2026-10-06): o catálogo é a fonte única das políticas de economia e cada fatia do lote pendurou a sua decisão aqui — janela de lavagem `AHWashWindowSec` (C-6), a política declarada da dupla taxa de craftado (C-10) e os validadores de passe/table do VIP (C-7); as 6 suites que leem catálogo juram pelo arquivo, não por extrato. Saída registrada: a próxima onda que acrescentar const aqui parte o AH (fees/banda/lifecycle) para um `AHPolicy` próprio, do mesmo jeito que `AuctionHousePricing` já saiu da fachada.",
+	},
+	{
+		"path": "companion/test_webhook.py",
+		"reason": "lote C-9 (2026-10-06): a régua do push de temporada tem de morar com as rotas do Store que ela exercita — janela de antecedência, dedupe pelo corpo `season:<id>` (sobrevive a restart), temporada fechada silenciosa e os dois hooks do scheduler opt-in entraram nas 6 verificações novas; nada aqui é rede, é sqlite + função pura. Saída registrada: a próxima onda que crescer nesta fileira abre `test_push.py` espelhando o padrão de `test_metrics.py` (suite separada por assunto, mesma fixture).",
+	},
 ]
 
 func _suiteCeiling() -> void:

@@ -739,6 +739,28 @@ _w5.push_enqueue(_wc, 7, now=_noww + 3)  # conta sem subscription
 _s3 = _w5.push_drain(_wc, sender=server.stdout_webpush_send, now=_noww + 4)
 ok(_s3["failed"] == 1 and _s3["sent"] == 0,
    "W5 notificação sem subscription vira failed (fila não prende)")
+# C-9 (2026-10-06): o segundo gancho do jogo — "temporada fechando". A tabela é
+# criada na forma da migração 018 (o teste aferiza a primitiva, não o boot).
+_wc.execute("CREATE TABLE season (season_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL,"
+            " rules_frozen TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'active')")
+_wc.execute("INSERT INTO season (starts_at, ends_at, status) VALUES (?, ?, 'active')",
+            (_noww - 3 * 86400, _noww + 6 * 3600))
+_wc.commit()
+ok(_w5.push_season_close(_wc, lead_seconds=3600, now=_noww) == 0,
+   "C-9 janela que não alcança o fim (1h p/ temporada a 6h) não notifica")
+_q2 = _w5.push_season_close(_wc, lead_seconds=24 * 3600, now=_noww)
+ok(_q2 == 2, "C-9 fechamento na janela enfileira os dois assinantes")
+ok(_w5.push_season_close(_wc, lead_seconds=24 * 3600, now=_noww + 30) == 0,
+   "C-9 dedupe vive na fila: a MESMA temporada não avisa duas vezes (nem depois de restart)")
+_r2 = _wc.execute("SELECT body FROM push_outbox WHERE body LIKE 'season:%'").fetchall()
+ok(len(_r2) == 2 and str(_r2[0][0]).startswith("season:"),
+   "C-9 corpo carrega a chave da temporada — o marcador de dedupe é dado, não memória")
+_wc.execute("UPDATE season SET status = 'closed'")
+ok(_w5.push_season_close(_wc, lead_seconds=24 * 3600, now=_noww + 60) == 0,
+   "C-9 temporada fechada não anuncia nada novo")
+ok(hasattr(server, "push_scheduler_tick") and hasattr(server, "_push_scheduler_loop"),
+   "C-9 o heartbeat existe como função nomeada (o flag SHAMBLETA_PUSH_SCHED liga o laço)")
 raises(NotImplementedError,
        lambda: server.vapid_webpush_send(
            {"account_id": 1, "endpoint": "https://x", "p256dh": "k", "auth": "a"},

@@ -82,6 +82,47 @@ func RequestRefund(idempotencyKey : String, peerID : int):
 		Util.PrintLog("Economy", "LGPD/CDC: refund granted account %d key %s amount %d revoked %s" % [accountID, idempotencyKey, int(result.get("amount", 0)), str(result.get("revoked", []))])
 	Network.RefundResult(result, peerID)
 
+# C-1 (2026-10-06): a derivação de login — PBKDF2-HMAC-SHA256 de 210.000 iterações
+# (a constante `PBKDF2Iterations` em `Hasher.gd:@PBKDF2Iterations`) — saiu do frame
+# do servidor. O custo no main thread
+# era o DoS: um spray de senhas erradas comprimia o tick inteiro dos ~200 jogadores
+# num loop de CPU. A mudança é segura porque o funil transacional pega a `queryMutex`
+# por STATEMENT, nunca por cima da derivação — a verificação inteira pode viver numa
+# tarefa do `WorkerThreadPool` sem mover uma vírgula do que a mutex protege. O poll é
+# `process_frame`, então o resultado volta ao main thread na borda do frame, onde a
+# sessão, os sinais e o ledger vivem. O equalizador de nome-inexistente viaja no mesmo
+# contêiner: `BurnKdfTime` parado no frame reabriria o oráculo de latência — "esse
+# nome existe?" — de graça, sem nenhum CPU na vítima. O chamador precisa revalidar o
+# peer depois do await: entre a entrega e a volta o par pode ter caído.
+func _AwaitOnWorker(work : Callable) -> Variant:
+	var result : Array = [null]
+	var taskID : int = WorkerThreadPool.add_task(func() -> void:
+		result[0] = work.call())
+	while not WorkerThreadPool.is_task_completed(taskID):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(taskID)
+	return result[0]
+
+# C-1 (raça fechada na mesma fatia): o worker abriu um canal que o frame fechava
+# por construção — duas tentativas simultâneas no MESMO nome liam o row antes da
+# escrita vizinha e o `failed_attempts` perdia atualização (lockout atrasado é
+# exatamente o contador que nenhum offload pode enfraquecer). Mesmo nome espera a
+# vez; nomes diferentes continuam andando juntos — é ali que o alívio de CPU mora.
+var _authValidationInFlight : Dictionary = {}
+
+func _ValidateAuthPasswordOffThread(username : String, password : String) -> Peers.AccountData:
+	while _authValidationInFlight.has(username):
+		await get_tree().process_frame
+	_authValidationInFlight[username] = true
+	var data : Variant = await _AwaitOnWorker(func() -> Variant:
+		return Launcher.SQL.ValidateAuthPassword(username, password))
+	_authValidationInFlight.erase(username)
+	return data as Peers.AccountData
+
+func _BurnKdfTimeOffThread(password : String) -> void:
+	await _AwaitOnWorker(func() -> void:
+		SQLSecurity.BurnKdfTime(password))
+
 func LoginWithPassword(accountName : String, password : String, rememberMe : bool, platform : int, peerID : int):
 	var err : NetworkCommons.AuthError = NetworkCommons.AuthError.ERR_OK
 	var peer : Peers.Peer = Peers.GetPeer(peerID)
@@ -103,7 +144,12 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 				err = NetworkCommons.AuthError.ERR_AUTH
 				SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
 			else:
-				var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
+				var accountData : Peers.AccountData = await _ValidateAuthPasswordOffThread(accountName, password)
+				# C-1: o await atravessou o relógio do servidor — o par pode ter caído
+				# no meio da derivação. Sem sessão viva não há desafio 2FA nem
+				# FinalizeLogin: a tentativa desce no mesmo ramo da senha errada.
+				if not Peers.GetPeer(peerID):
+					accountData = null
 				if not accountData:
 					err = NetworkCommons.AuthError.ERR_AUTH
 					var noted : Dictionary = SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
@@ -113,7 +159,7 @@ func LoginWithPassword(accountName : String, password : String, rememberMe : boo
 						# Frente 2: sem esta linha, nome inexistente saía da verificação
 						# sem pagar o KDF que nome existente paga — latência respondia
 						# "esse nome existe?" sem erro nenhum na tela.
-						SQLSecurity.BurnKdfTime(password)
+						await _BurnKdfTimeOffThread(password)
 					elif Launcher.SQL.IsLockedOut(accountID):
 						# Este ramo só alcança uma conta NÃO travada antes da tentativa:
 						# travada agora = transição = um evento por episódio de lockout.
@@ -318,14 +364,14 @@ func AcceptConsent(accountName : String, password : String, token : String, reme
 					err = NetworkCommons.AuthError.ERR_AUTH
 					SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
 				else:
-					accountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
+					accountData = await _ValidateAuthPasswordOffThread(accountName, password)
 					if not accountData:
 						err = NetworkCommons.AuthError.ERR_AUTH
 						var noted : Dictionary = SQLSecurity.NoteFailure(Launcher.SQL, SQLSecurity.KindLoginIP, ipAddress, SQLSecurity.LoginIPWindowSec, SQLSecurity.LoginIPMaxFailures, SQLSecurity.LoginIPBlockSec)
 						if bool(noted.get("justBlocked", false)):
 							SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginIPBlock, accountID, JSON.stringify({"ip": ipAddress}))
 						if accountID == NetworkCommons.PeerUnknownID:
-							SQLSecurity.BurnKdfTime(password)
+							await _BurnKdfTimeOffThread(password)
 						elif Launcher.SQL.IsLockedOut(accountID):
 							SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventLoginLockout, accountID)
 		elif not token.is_empty():
@@ -334,6 +380,11 @@ func AcceptConsent(accountName : String, password : String, token : String, reme
 				err = NetworkCommons.AuthError.ERR_TOKEN
 		else:
 			err = NetworkCommons.AuthError.ERR_AUTH
+		# C-1: o caminho da senha atravessou o relógio (await do KDF off-thread);
+		# o par pode ter caído no meio. FinalizeLogin exige sessão viva.
+		if err == NetworkCommons.AuthError.ERR_OK and accountData and not Peers.GetPeer(peerID):
+			err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
+			accountData = null
 		if err == NetworkCommons.AuthError.ERR_OK and accountData:
 			if not Launcher.SQL.SetConsentAccepted(accountData.accountID, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, ipAddress):
 				err = NetworkCommons.AuthError.ERR_AUTH
@@ -372,7 +423,7 @@ func RequestPasswordReset(accountName : String, peerID : int):
 			var email : String = Launcher.SQL.GetAccountEmail(accountID)
 			if not email.is_empty():
 				var code : String = Hasher.NormalizeResetCode(Hasher.GenerateResetCode())
-				Launcher.Email.CreateReset(accountID, Hasher.HashPassword(code))
+				Launcher.Email.CreateReset(accountID, Hasher.HashResetCode(code, accountID))
 				Launcher.Email.SendPasswordResetEmail(email, code)
 		elif Launcher.SQL != null:
 			# Frente 4: budget da janela estourado é negação de serviço ao chamador —
@@ -393,7 +444,7 @@ func ConfirmPasswordReset(accountName : String, code : String, newPassword : Str
 	if passwordErr == NetworkCommons.AuthError.ERR_OK and NetworkCommons.CheckResetCode(normalized):
 		var accountID : int = Launcher.SQL.GetAccountID(accountName)
 		if accountID != NetworkCommons.PeerUnknownID:
-			var codeHash : String = Hasher.HashPassword(normalized)
+			var codeHash : String = Hasher.HashResetCode(normalized, accountID)
 			# `ValidateReset` conta a tentativa errada aqui em baixo (consumo em
 			# `EmailService`); o acerto não consome — quem apaga o pending é este
 			# handler, e só depois do commit.

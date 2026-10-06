@@ -501,7 +501,24 @@ const AHListFeeGems : int = 5
 # do roadmap e não destruía grão de ouro; sem custo em gold, listar é grátis e
 # o mercado vira calha de RMT. Bots são isentos por construção (sem carteira,
 # caminho de seed próprio).
+# C-10 (2026-10-06), política ESCRITA, não coincidência de duas ondas: item
+# CRAFTADO por terceiro paga as duas taxas na mesma venda — 1% de criador
+# (`CraftCatalog.CREATOR_FEE_PCT`, queimado no settle) + 1% de anúncio daqui
+# (queimado no list) = 2% do volume destruído por leilão. É decisão, e o
+# número da régua é esse: as duas morfam por motivos diferentes (patrocínio
+# do criador vs. custo de mesa), não são a mesma taxa escrita duas vezes.
+# Mudar qualquer uma das duas exige mexer NAQUIA e no censo `ah_burn`, e é o
+# `tests/IdleTests.gd` (rota do middleman) que mede a soma.
 const AHGoldFeePct : int = 1
+
+# C-6 (2026-10-06): vão do ciclo de lavagem. A lavagem precisa que o MESMO item
+# atravesse o MESMO par nos dois sentidos — o funil permite UM round trip
+# completo por par/item dentro do vão (devolver mercadoria, vender de volta ao
+# amigo é comércio legítimo) e recusa a PERNA SEGUINTE: a esteira que o
+# detector só via depois de rodar é cortada onde o dinheiro vira a mão. O vão
+# é o MESMO de `FraudeReview.AHWashWindowSec`: portão e detector julgam a
+# mesma janela; trocar um número sem o outro é decisão, não typo.
+const AHWashWindowSec : int = 7 * 86400
 
 # (de EconomyService.gd, antes da divisao)
 const AHMaxOpenPerAccount : int = 5
@@ -697,6 +714,11 @@ static func ValidatePassTables() -> PackedStringArray:
 		for cid in reward.get("cosmetics", []):
 			if not Storefront.IsRenderedCosmetic(str(cid)):
 				errors.append("pass.premium.%d: cosmético '%s' não tem renderizador" % [level, str(cid)])
+	# C-7 origem, ponta do catálogo: VIP é produto pago; a trilha free não pode
+	# carregar `vip_days` nem por edição futura deste arquivo.
+	for level : int in PASS_FREE:
+		if int((PASS_FREE[level] as Dictionary).get("vip_days", 0)) > 0:
+			errors.append("pass.free.%d: vip_days na trilha free (C-7: tempo de VIP não sai de graça)" % level)
 	return errors
 
 

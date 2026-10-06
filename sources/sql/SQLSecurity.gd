@@ -83,6 +83,8 @@ const EventTotpReplay : String			= "sec_totp_replay"
 const EventResetExhausted : String		= "sec_reset_exhausted"
 const EventResetRequestLimit : String	= "sec_reset_request_limit"
 const EventResetOnUnverified : String	= "sec_reset_on_unverified"
+# C-6: perna recusada no funil do leilão porque o par já fechou ciclo no vão.
+const EventAHWashHold : String			= "sec_ah_wash_hold"
 
 static func _Now(now : int) -> int:
 	return SQLCommons.Timestamp() if now <= 0 else now

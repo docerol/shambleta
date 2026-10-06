@@ -106,12 +106,23 @@ RATCHET_SLACK=200
 #       o creator fee vira sink (`ah_burn`) como movimento de carteira, o que é I11.
 # Nenhum dos quatro encolheu: por isso o teto não desce, e o próximo a crescer
 # sobe aqui com o motivo escrito, como no resto desta lista.
+# E desceram dois, 2026-10-06, por FATIAMENTO (C-4 da rodada de código):
+#   `sources/world/WorldCommands.gd` 1904 → 1699 — as sete operações `CommandCs*`
+#       (alquimia de comandos do servidor de comunidade) saíram para
+#       `sources/world/WorldCommandsSupport.gd`, que é um `RefCounted` ligável por
+#       `Command.Call` exatamente como a fachada era; a fachada só registra.
+#   `sources/economy/CheckoutService.gd` 923 → 662 — o bloco de reversão de SKU
+#       (9 funções, `CheckoutService.gd` histórico) saiu para
+#       `sources/economy/CheckoutReversal.gd` com o `_eco` injetado; roda dentro
+#       da `Transaction(` da fachada, que é onde o funil de escrita já a sanciona.
+# Tetos postos em medido + folga (a banda do gate): teto velho que sobra vira
+# mentira de capacidade, e a régua acima obriga a baixar quando o arquivo encolhe.
 declare -A RATCHET=(
   ["sources/network/server/Server.gd"]=2145
-  ["sources/world/WorldCommands.gd"]=1925
+  ["sources/world/WorldCommands.gd"]=1899
   ["sources/sql/SQL.gd"]=2062
   ["sources/economy/AuctionHouseService.gd"]=1318
-  ["sources/economy/CheckoutService.gd"]=923
+  ["sources/economy/CheckoutService.gd"]=862
   ["sources/network/client/Client.gd"]=1139
   ["sources/network/Network.gd"]=1277
   ["companion/server.py"]=2497

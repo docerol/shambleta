@@ -778,7 +778,7 @@ func _suitePriceBand() -> void:
 	_sql.call("AddItemToCharacter", seller, _itemWash, 8, "mdx_grant")
 	# Mercadoria da conta-capada: sem estoque a 51ª recusa seria `not_enough_items`
 	# em vez de `list_day_cap` (a porta de volume vem antes do consumo —
-	# `AuctionHouseService.gd:649` vs `:652`) e a liberação no dia limpo não
+	# `AuctionHouseService.gd:674` vs `:677`) e a liberação no dia limpo não
 	# aconteceria. Uma unidade: o passo (6) anuncia 1, é recusado pelo cap, limpa
 	# o contador e anuncia a MESMA unidade de novo.
 	_sql.call("AddItemToCharacter", capped, _itemWash, 1, "mdx_grant")
@@ -1043,12 +1043,24 @@ func _suiteReCrossBoot() -> void:
 		"NEGATIVO #100 (estado antes do conserto): nada cruzou, o comprador não tem o item")
 	# Um PROCESSO NOVO: instância nova do serviço tem `_ahLifecycleDone = false`, e o
 	# único chamado é o tick de ciclo de vida. Nenhum RPC, nenhum evento de client.
+	# C-3: o boot DRENA em batches (um por segundo de relógio) — o harness anda o
+	# `now` adiante, determinístico, sem dormir.
 	var fresh : RefCounted = _ahScript().new()
 	fresh.set("_eco", _eco)
 	var boot : Dictionary = fresh.call("TickAHLifecycle", now)
-	_check(bool(boot.get("boot", false)), "a instância nova se comporta como boot (passada única e completa)")
-	_checkEq(int(boot.get("matched", 0)), 1, "NEGATIVO #100: a varredura de boot cruzou exatamente o anúncio parado")
-	_check(int(boot.get("swept", 0)) >= 1, "e varreu a vitrine pelo cursor, não por OFFSET")
+	_check(bool(boot.get("boot", false)), "a instância nova se comporta como boot (passada em batches, não em evento de client)")
+	var drainTs : int = now
+	var totalMatched : int = int(boot.get("matched", 0))
+	var totalSwept : int = int(boot.get("swept", 0))
+	for i in range(64):
+		drainTs += 1
+		var step : Dictionary = fresh.call("TickAHLifecycle", drainTs)
+		totalSwept += int(step.get("swept", 0))
+		if int(step.get("matched", 0)) > 0:
+			totalMatched += int(step.get("matched", 0))
+			break
+	_checkEq(totalMatched, 1, "NEGATIVO #100: a varredura de boot cruzou exatamente o anúncio parado")
+	_check(totalSwept >= 1, "e varreu a vitrine pelo cursor, não por OFFSET")
 	_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = %d;" % listing).get("status", "")), "sold",
 		"o anúncio virou sold")
 	_checkStrEq(str(_one("SELECT status FROM ah_buy_order WHERE id = %d;" % order).get("status", "")), "filled",

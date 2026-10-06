@@ -37,12 +37,18 @@ var _ahBotsChecked : bool = false
 # lavagem BARATA, não apenas arriscada). `AHReapBatch`/`AHLifecycleBatch` são o
 # teto de linhas tocadas por passada: nenhuma varredura do leilão pode virar o
 # laço O(n²) sobre a vitrine no main thread do servidor. `AHLifecycleIntervalSec`
-# é o passo do relógio do processo (o sweep periódico), e `AHBootSweepBatches` é o
-# teto da passada de boot — o resto continua de onde parou no tick periódico.
+# é o passo do relógio do processo (o sweep periódico). C-3 (2026-10-06): a
+# passada de boot NÃO é mais "20 batches num frame" — um servidor maduro congelava
+# segundos na primeira tick (o achado de boot-time da auditoria). O boot agora
+# DRENA: um batch de colheita + um batch de cruzamento por `AHBootBatchSec`,
+# continuando de onde parou pelo cursor, até a volta fechar. `AHBootSweepBatches`
+# sobrevive como teto do clamp de `ReapExpiredListings` (a chamada explícita de
+# manutenção continua podendo pedir a passada grande).
 const AHListingTtlSec : int = 3 * 86400
 const AHLifecycleIntervalSec : int = 300
 const AHLifecycleBatch : int = 50
 const AHBootSweepBatches : int = 20
+const AHBootBatchSec : int = 1
 
 # Volume diário por conta no leilão (achado #93.3: a troca direta tem e-mail
 # verificado + cooldown de 60 s + teto diário; o leilão herdava zero disso). O
@@ -59,6 +65,11 @@ var _ahLifecycleDone : bool = false
 var _ahNextTickAt : int = 0
 # Cursor da varredura de re-cruzamento (keyset sobre `idx_auction_open(status,id)`).
 var _ahSweepAfterID : int = 0
+# C-6: pernas recusadas pelo portão de ciclo DO MÊS par/item. O evento de
+# telemetria não pode ser escrito dentro da transação que o veredito manda
+# rollback (o rollback apagaria a acusação junto com a recusa) — o settle só
+# anota aqui, e `_DrainWashHolds` grava depois do mutex liberado.
+var _ahWashHolds : Array = []
 
 # O gancho é o MESMO `_process` do servidor que já chama a semente dos bots: um
 # arquivo acima (`EconomyService._process`) chama `_trySeedAuctionBots()` a cada
@@ -71,17 +82,31 @@ func TickAHLifecycle(now : int = 0) -> Dictionary:
 	var ts : int = now if now > 0 else SQLCommons.Timestamp()
 	var out : Dictionary = {"reaped" = 0, "matched" = 0, "swept" = 0, "adopted" = 0, "boot" = false}
 	if not _ahLifecycleDone:
-		_ahLifecycleDone = true
+		# C-3: dreno de boot em batches. Colheita primeiro (50/tick); esvaziada a
+		# messe vencida, o cruzamento anda o cursor keyset de batch em batch até
+		# dar a volta completa (`swept == 0` numa passada = vitrine exausta).
+		# `failed > 0` repete a colheita no próximo tick — devolução de escrow é
+		# dívida com o jogador, não detalhe de agenda.
 		out["boot"] = true
-		var reaped : Dictionary = ReapExpiredListings(ts, AHLifecycleBatch * AHBootSweepBatches)
+		if ts < _ahNextTickAt:
+			return out
+		_ahNextTickAt = ts + AHBootBatchSec
+		var reaped : Dictionary = ReapExpiredListings(ts, AHLifecycleBatch)
 		out["reaped"] = int(reaped.get("reaped", 0))
 		out["adopted"] = int(reaped.get("adopted", 0))
-		var boot : Dictionary = ReCrossOpenListings(ts, AHLifecycleBatch, AHBootSweepBatches)
+		if int(out["reaped"]) > 0 or int(out["adopted"]) > 0:
+			return out
+		if int(reaped.get("failed", 0)) > 0:
+			Util.PrintLog("Economy", "AH boot: %d colheitas falharam (tento no próximo tick)" % int(reaped.get("failed", 0)))
+			return out
+		var boot : Dictionary = ReCrossOpenListings(ts, AHLifecycleBatch, 1)
 		out["matched"] = int(boot.get("matched", 0))
 		out["swept"] = int(boot.get("swept", 0))
-		_ahNextTickAt = ts + AHLifecycleIntervalSec
-		if int(out["reaped"]) > 0 or int(out["matched"]) > 0 or int(out["adopted"]) > 0:
-			Util.PrintLog("Economy", "AH boot: %d expirados, %d cruzados em %d anúncios, %d sem prazo adotados" % [int(out["reaped"]), int(out["matched"]), int(out["swept"]), int(out["adopted"])])
+		if int(out["matched"]) > 0:
+			Util.PrintLog("Economy", "AH boot: %d cruzados neste batch (%d anúncios varridos)" % [int(out["matched"]), int(out["swept"])])
+		if int(out["swept"]) == 0:
+			_ahLifecycleDone = true
+			_ahNextTickAt = ts + AHLifecycleIntervalSec
 		return out
 	if ts < _ahNextTickAt:
 		return out
@@ -761,6 +786,31 @@ func ListItemForSale(sellerChar : int, itemID : int, count : int, priceGold : in
 # mesmos nos dois lados: bifurcar isso é exatamente a classe de defeito que o
 # fuzzer de invariantes caça (duas operações legalmente individuais, um centavo
 # a mais ou a menos conforme o caminho).
+# C-6: o ciclo existe quando o histórico do vão já tem as DUAS direções deste
+# par neste item — a perna que fecha o round trip passa (é comércio), a que
+# REPETE o ciclo fechado é a esteira. Duas consultas keyset no índice do
+# histórico (059) dentro da mesma transação do settle: ler e decidir juntos.
+func _AHWashCycleLocked(sql : SQLService, itemID : int, sellerAccount : int, buyerAccount : int) -> bool:
+	var since : int = SQLCommons.Timestamp() - EconomyCatalog.AHWashWindowSec
+	# O portão pergunta EXISTÊNCIA do par em cada sentido, e é para isso que serve o
+	# índice `idx_ah_price_history_pair` (migration 069): sem ele a varredura do
+	# histórico do item a cada settle era O(n²) com o próprio mercado — o benchmark
+	# pegou (p99 do settle estourou a régua) e o índice é a conta paga, não a régua.
+	var back : Array = sql.db.select_rows("ah_price_history", "item_id = %d AND seller_account = %d AND buyer_account = %d AND sold_at >= %d" % [itemID, buyerAccount, sellerAccount, since], ["listing_id"])
+	if back.is_empty():
+		return false
+	var fwd : Array = sql.db.select_rows("ah_price_history", "item_id = %d AND seller_account = %d AND buyer_account = %d AND sold_at >= %d" % [itemID, sellerAccount, buyerAccount, since], ["listing_id"])
+	return not fwd.is_empty()
+
+
+# Grava as recusas do portão DEPOIS do rollback — dentro da transação o
+# INSERT seria apagado junto com a recusa que ele acusa.
+func _DrainWashHolds() -> void:
+	while not _ahWashHolds.is_empty():
+		var hold : Dictionary = _ahWashHolds.pop_front()
+		SQLSecurity.LogSecurityEvent(Launcher.SQL, SQLSecurity.EventAHWashHold, int(hold.get("account", 0)), JSON.stringify(hold))
+
+
 func _SettleListingLocked(sql : SQLService, listing : Dictionary, buyerChar : int, buyerAccount : int, via : String, goldMoves : Dictionary) -> bool:
 	var listingID : int = int(listing.get("id", 0))
 	var sellerChar : int = int(listing.get("seller_char", 0))
@@ -772,6 +822,15 @@ func _SettleListingLocked(sql : SQLService, listing : Dictionary, buyerChar : in
 		return false
 	# Nunca comprar de si mesmo — vale para o ask e para o bid cruzado.
 	if buyerAccount == NetworkCommons.PeerUnknownID or buyerAccount == sellerAccount or buyerChar == sellerChar:
+		return false
+	# C-6 (2026-10-06): o portão do ciclo mora no funil, não na revisão. A
+	# lavagem precisa que o item atravesse o par nos DOIS sentidos; um round
+	# trip por par/item no vão é comércio (devolução, revenda ao amigo) — a
+	# perna SEGUINTE do mesmo ciclo é o que se recusa, onde o dinheiro vira a
+	# mão, antes do ouro cruzar. O detector do fraude continua vendo o ciclo
+	# que passou (uma volta), e a esteira deixa de ser esteira.
+	if _AHWashCycleLocked(sql, itemID, sellerAccount, buyerAccount):
+		_ahWashHolds.append({"account": buyerAccount, "item": itemID, "pair": [sellerAccount, buyerAccount]})
 		return false
 	# SOM-IDLE Fase H §7: creator fee 1% — `creator_account_id` foi capturado no
 	# anúncio (os lotes consumidos já não existem). Só fire se o criador não é o
@@ -910,6 +969,9 @@ func BuyListing(buyerChar : int, listingID : int) -> bool:
 		# que é exatamente o que o snapshot de 600 s revertia).
 		bought = true
 	_eco.settleMutex.unlock()
+	# C-6: a recusa do portão não deixou transação (rollback apaga acusação
+	# escrita dentro dela) — o evento é gravado agora, com o mutex solto.
+	_DrainWashHolds()
 	if bought:
 		_eco.kernel.ApplyGoldMoves(goldMoves)
 		_RecordAH("ah_buy", buyerChar, {"listing" = listingID})
@@ -1159,6 +1221,7 @@ func _FillFromBuyOrder(orderID : int) -> int:
 			tally["char"] = buyerChar
 			return true)
 		_eco.settleMutex.unlock()
+		_DrainWashHolds()	# C-6: mesmo trato do caminho ask — evento fora do rollback
 		if not done:
 			break
 		_eco.kernel.ApplyGoldMoves(goldMoves)

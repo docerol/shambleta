@@ -248,6 +248,19 @@ static func IsValidResetCode(code : String) -> bool:
 			return false
 	return true
 
+# C-2 (2026-10-06): o hash do código de reset deixa de ser `sha256(code)` nu.
+# O espaço é só 32⁶ ≈ 1,07e9 — com a tabela em claro, um único pré-cômputo
+# valia para TODAS as contas ao mesmo tempo. Agora: sal = `account_id` (dado
+# do próprio banco; ele força o work a ser POR CONTA, nunca uma rainbow table
+# que serve a base inteira) e a derivação é a ver-1 iterada (12k SHA-256), que
+# multiplica o custo off-line por 12.000 com ~1 ms no caminho on-line. O
+# equalizador on-line continua sendo o teto de 5 tentativas por pending + a
+# janela de solicitações — isto aqui fecha o lado do dump. Códigos pendentes na
+# hora do deploy não validam mais e o dono simplesmente pede outro (janela de
+# minutos, sem migração).
+static func HashResetCode(code : String, accountID : int) -> String:
+	return HashPasswordV1(code, "reset:%d" % accountID)
+
 # SOM-IDLE AUTH-P2: comparação em tempo constante. `==` em GDScript curto-circuita
 # no primeiro byte diferente e devolve o hash de 64 hex; localmente isso é um canal
 # de timing (o auditório §10 lista `==` em hash de reset/senha/TOTP). Hoje os dois
