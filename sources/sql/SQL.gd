@@ -366,10 +366,12 @@ func ValidateAuthPassword(username : String, triedPassword : String) -> Peers.Ac
 		RecordFailedLogin(accountID, int(row.get("failed_attempts", 0)))
 		return null
 	ResetFailedLogins(accountID)
-	# Transparent KDF upgrade: qualquer ver < HashVersion (0 single-SHA-256, 1 12k
-	# iterado) sobe para ver 2 (PBKDF2-HMAC-SHA256, 210k). A verificação já passou,
-	# então o custo do re-hash é pago uma vez de vida — nunca de novo.
-	if hashVer < Hasher.HashVersion:
+	# Transparent KDF upgrade: `NeedsRehash` decide — qualquer ver < HashVersion
+	# (0 single-SHA-256, 1 12k iterado) sobe para ver 2, e uma linha ver-2 com
+	# custo divergente do corrente ou hash da primeira geração (62 hex) também
+	# sobe. A verificação já passou, então o custo do re-hash é pago uma vez de
+	# vida — nunca de novo.
+	if Hasher.NeedsRehash(correctPassword, hashVer):
 		var newHash : String = Hasher.HashPasswordV2(triedPassword)
 		ExecuteBindings("UPDATE account SET password = ?, password_salt = ?, hash_ver = ? WHERE account_id = ?;", [newHash, "", Hasher.HashVersion, accountID])
 	var permission = row.get("permission", null)

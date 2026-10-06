@@ -108,6 +108,27 @@ func _suiteSemantics() -> void:
 	Check(not bool(_hasher("VerifyPassword", [pw, salt, h0.substr(0, 63), 0])), "hash truncado em 1 recusado")
 	Check(not bool(_hasher("VerifyPassword", [pw, salt, h0 + "a", 0])), "hash alongado em 1 recusado")
 	Check(not bool(_hasher("VerifyPassword", ["senhaqualquer", "", "", 0])), "hash vazio recusado (o `storedHash` do dump nunca bate)")
+
+	# ver 2 (P1-H, auditoria 2026-10-06): o custo é lido do registro, o output é
+	# de 32 bytes cheios, e a primeira geração (62 hex, o slice truncado) continua
+	# logando — escolendo a rama pela FORMA do stored hash, não por um segundo
+	# PBKDF2. NeedsRehash é a ponte: quem casa pela rama velha sai do banco
+	# ver-2-correto no login seguinte.
+	var pw2 : String = "SenhaForte!2026v2"
+	var salt2 : String = str(_hasher("GenerateSalt", [16]))
+	var h2 : String = str(_hasher("HashPasswordV2", [pw2, salt2]))
+	CheckEq(str((_hasher("HashPasswordV2_Parse", [h2]) as Dictionary).get("hash", "")).length(), 64, "ver-2 novo grava 64 hex (32 bytes, sem o off-by-one)")
+	Check(bool(_hasher("VerifyPassword", [pw2, "", h2, 2])), "ver-2 certo aceita")
+	Check(not bool(_hasher("VerifyPassword", ["errada", "", h2, 2])), "ver-2 errado recusa")
+	var p2 : PackedStringArray = h2.split("$")
+	var legacy62 : String = "pbkdf2_sha256$%s$%s$%s" % [p2[1], p2[2], str(p2[3]).substr(0, 62)]
+	Check(bool(_hasher("VerifyPassword", [pw2, "", legacy62, 2])), "rama legada de 62 hex aceita pela mesma derivação truncada")
+	Check(bool(_hasher("NeedsRehash", [legacy62, 2])), "NeedsRehash marca a legada para upgrade transparente no login")
+	Check(not bool(_hasher("NeedsRehash", [h2, 2])), "linha corrente (210k, 64 hex) não pede re-hash")
+	var h2low : String = str(_hasher("HashPasswordV2", [pw2, salt2, 1000]))
+	Check(bool(_hasher("VerifyPassword", [pw2, "", h2low, 2])), "custo confesso no registro é o custo da verificação (210k não é lido do código)")
+	Check(bool(_hasher("NeedsRehash", [h2low, 2])), "e custo divergente do corrente pede re-hash para subir à política nova")
+	Check(not bool(_hasher("VerifyPassword", ["errada", "", h2low, 2])), "ver-2 barato confesso continua recusando senha errada")
 	# Identidade com `==` em 400 pares aleatórios (mesmo tamanho) — a comparação
 	# nova não pode discordar da antiga em NENHUM caso, senão é mudança de
 	# autenticação disfarçada de hardening.

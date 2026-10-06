@@ -126,8 +126,18 @@ func ArenaBoard(accountID : int, limit : int = 10) -> Dictionary:
 # ------------------------------------------------------------------ Fase F: torneios (MONETIZATION §1 item 11)
 #
 # Copas assíncronas de poder: inscrição em GOLD (sink), ranking por ganho de
-# power na janela, prêmios em gems + título de Campeão. Entrada NUNCA em
-# dinheiro (risco loteria/azar no BR). Rotação semanal automática no job diário.
+# power na janela, prêmios em GOLD pago pelo pool das inscrições + título de
+# Campeão. Entrada NUNCA em dinheiro (risco loteria/azar no BR). Rotação
+# semanal automática no job diário.
+#
+# P1-E (auditoria 2026-10-06): o prêmio era GEM, moeda premium, mintada do
+# nada contra uma inscrição de 1.000 gold — o torneio era a ponte que furava o
+# preço da gem (entry gold → 2.000-4.000 gems, e o `double_xp` do calendário
+# ainda multiplicava o faucet que paga o entry). O prêmio agora sai do pool
+# real: `entradas × entry_gold`, em gold, capado pela arrecadação. Pool curto
+# paga do 1º para baixo até exaurir — anunciava-se 4.800, com 2 inscrições
+# pagam-se 2.000; é a regra do "prêmio pago = prêmio anunciado" com o número
+# correto na vitrine, não a regra do mint silencioso.
 #
 # OPS-4 (Live Ops): o `tournament` do calendário declarativo é o único kind que
 # mexe num POOL DE PRÊMIOS, e o pool existe de verdade no servidor —
@@ -164,7 +174,10 @@ static func PrizePoolMod(endsAt : int) -> float:
 static func FormatPrizes(base : Array[int], mod : float) -> Array:
 	var out : Array = []
 	for prize in base:
-		out.append({"gems": roundi(float(int(prize)) * mod)})
+		# P1-E: a chave é `gold` — o número da régua é o mesmo, a MOEDA mudou.
+		# `ParsePrizePool` continua aceitando `gems` (linhas congeladas antes da
+		# onda) e o pagador lê os dois.
+		out.append({"gold": roundi(float(int(prize)) * mod)})
 	return out
 
 # Lê o `prizes_json` de uma copa. `null` = campo ausente/ilegível (o chamador cai
@@ -189,7 +202,11 @@ static func ParsePrizePool(raw : Variant) -> Variant:
 		for key in entry.keys():
 			if not PrizeKeys.has(str(key)):
 				return null
-		out.append({"gems": int(entry.get("gems", 0))})
+		# P1-E: `gold` é a forma nova; `gems` é linha pré-onda com o MESMO
+		# número. Os dois normalizam para `gold` porque a moeda de pagamento
+		# agora é uma só — manter a chave `gems` com valor 0 numa linha `gold`
+		# era pagar o piso do catálogo achando que pagava o turbinado.
+		out.append({"gold": int(entry.get("gold", entry.get("gems", 0)))})
 	# "[]" não é "sem prêmio": é lista ilegível para o pagamento. Cai no catálogo.
 	if out.is_empty():
 		return null
@@ -255,7 +272,7 @@ func GetTournaments(accountID : int) -> Dictionary:
 	var endsAt : int = int(t.get("ends_at", 0))
 	var prizeGems : Array[int] = []
 	for item in pool:
-		prizeGems.append(int((item as Dictionary).get("gems", 0)))
+		prizeGems.append(int((item as Dictionary).get("gold", (item as Dictionary).get("gems", 0))))
 	return {"ok": true, "active": {"id": tid, "name": str(t.get("name", "?")), "entry_gold": int(t.get("entry_gold", 0)),
 		"ends_at": endsAt, "players": int(entries[0]["n"]) if not entries.is_empty() else 0,
 		"prizes": prizeGems, "prize_pool": pool,
@@ -308,10 +325,11 @@ func EnterTournament(accountID : int, charID : int, tournamentID : int) -> Dicti
 # prêmios em gems + título ao campeão. Idempotente por status.
 func SettleTournament(tournamentID : int) -> Dictionary:
 	var out : Dictionary = {"ok": false, "reason": "rejected", "awarded": 0}
+	var goldMoves : Dictionary = {}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
-		var rows : Array = sql.db.select_rows("tournament", "tournament_id = %d" % tournamentID, ["status", "ends_at", "prizes_json"])
+		var rows : Array = sql.db.select_rows("tournament", "tournament_id = %d" % tournamentID, ["status", "ends_at", "prizes_json", "entry_gold"])
 		if rows.is_empty() or str(rows[0].get("status", "")) != "active":
 			out["reason"] = "not_active"
 			return false
@@ -336,27 +354,35 @@ func SettleTournament(tournamentID : int) -> Dictionary:
 				return int(a["gain"]) > int(b["gain"])
 			return int(a["char_id"]) < int(b["char_id"]))
 		var awarded : int = 0
+		# P1-E: o pool é a arrecadação da copa — cada inscrição queimou
+		# `entry_gold` na entrada; o prêmio sai daí, em gold, e não do nada.
+		var poolGold : int = entries.size() * int(rows[0].get("entry_gold", 0))
+		var remaining : int = poolGold
 		for rank in mini(ranked.size(), frozenPool.size()):
 			var frozen : Dictionary = frozenPool[rank]
-			var frozenGems : int = int(frozen.get("gems", 0))
-			# OPS-4: o que foi ANUNCIADO é o que é pago. O multiplicador da agenda
-			# já entrou na criação da copa (`EnsureWeeklyTournament` congela o pool
-			# turbinado em `prizes_json`, ancorado no `ends_at`), então relê-lo aqui
-			# e multiplicar de novo seria ×2 sobre ×2 = ×2,25 de gems — faucet
-			# inventado por um job. O único papel do instante aqui é o piso: nunca
-			# pagar MENOS do que o catálogo base da_rank, mesmo se a linha foi
-			# congelada com um pool zerado/estragado por edição manual.
-			var floorGems : int = int(EconomyCatalog.TOURNAMENT_PRIZES[rank]) if rank < EconomyCatalog.TOURNAMENT_PRIZES.size() else 0
-			var prize : int = maxi(frozenGems, floorGems)
+			# `gold` é a forma nova; `gems` é linha congelada pré-onda — mesmo
+			# número, e a moeda de pagamento agora é uma só.
+			var frozenValue : int = int(frozen.get("gold", frozen.get("gems", 0)))
+			# OPS-4: o que foi ANUNCIADO é o que é pago — com o teto do pool
+			# (P1-E) e o piso do catálogo (nunca pagar MENOS que a régua da rank
+			# se a linha veio zerada/estragada por edição manual). O
+			# multiplicador da agenda já entrou na criação da copa; relê-lo
+			# aqui seria ×2 sobre ×2 — faucet inventado por um job.
+			var floorValue : int = int(EconomyCatalog.TOURNAMENT_PRIZES[rank]) if rank < EconomyCatalog.TOURNAMENT_PRIZES.size() else 0
+			var want : int = maxi(frozenValue, floorValue)
+			var prize : int = mini(want, remaining)
+			if prize <= 0:
+				break
 			var acct : int = int(ranked[rank]["account_id"])
-			var balance : int = sql.GetGemsRaw(acct)
-			if not sql.SetGemsRaw(acct, balance + prize):
+			var charID : int = int(ranked[rank]["char_id"])
+			if not _eco.kernel._MoveGoldLocked(sql, charID, acct, prize, "tournament_prize:%d:%d" % [tournamentID, rank + 1], goldMoves):
 				return false
-			if not _eco._LedgerAppendLocked(acct, int(ranked[rank]["char_id"]), EconomyCatalog.LedgerKindGems, prize, balance + prize, "tournament_prize:%d:%d" % [tournamentID, rank + 1]):
-				return false
+			remaining -= prize
 			if rank == 0:
 				sql.ExecuteBindings("INSERT OR IGNORE INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [acct, EconomyCatalog.TOURNAMENT_CHAMPION_TITLE, "tournament:%d" % tournamentID, now])
 			awarded += 1
+			if prize < want:
+				break
 		if not sql.UpdateRowsRaw("tournament", "tournament_id = %d" % tournamentID, {"status" = "settled"}):
 			return false
 		out["ok"] = true
@@ -365,6 +391,8 @@ func SettleTournament(tournamentID : int) -> Dictionary:
 		return true):
 		pass
 	_eco.settleMutex.unlock()
+	if bool(out.get("ok", false)):
+		_eco.kernel.ApplyGoldMoves(goldMoves)
 	return out
 
 # Ciclo do job diário: liquida vencidos + garante a copa da semana.

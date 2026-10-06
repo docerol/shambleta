@@ -977,18 +977,6 @@ func GetGuildState(peerID : int):
 		return
 	Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
 
-func LevelUpGuildFast(peerID : int):
-	var charID : int = Peers.GetCharacter(peerID)
-	var accountID : int = Peers.GetAccount(peerID)
-	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
-		Network.GuildFeedback(false, "not_logged_in", peerID)
-		return
-	var result : Dictionary = Launcher.Economy.LevelUpGuildFast(accountID, charID)
-	Network.GuildFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
-	if bool(result.get("ok", false)):
-		Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
-		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
-
 func BuyVaultSlots(peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)
 	var accountID : int = Peers.GetAccount(peerID)

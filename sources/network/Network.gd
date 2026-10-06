@@ -834,10 +834,6 @@ func GuildFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.Pee
 	CallClient("GuildFeedback", [ok, reason], peerID)
 
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
-func LevelUpGuildFast(peerID : int = NetworkCommons.PeerAuthorityID):
-	CallServer("LevelUpGuildFast", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
-
-@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyVaultSlots(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyVaultSlots", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 

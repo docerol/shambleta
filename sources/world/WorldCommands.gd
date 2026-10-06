@@ -553,7 +553,7 @@ func CommandGuild(caller : PlayerAgent, arg : String = "") -> bool:
 		return false
 	var parts : PackedStringArray = arg.strip_edges().split(" ", false)
 	if parts.is_empty():
-		Network.CommandFeedback("Usage: /guild create <name> | join <id> | leave | info | deposit|withdraw <item> <n> | levelup | fastlevelup | buyslot | tag <TAG> | kick|promote|demote|invite <player> | top", caller.peerID)
+		Network.CommandFeedback("Usage: /guild create <name> | join <id> | leave | info | deposit|withdraw <item> <n> | levelup | buyslot | tag <TAG> | kick|promote|demote|invite <player> | top", caller.peerID)
 		return false
 	var accountID : int = Peers.GetAccount(caller.peerID)
 	var charID : int = caller.GetCharacterID()
@@ -603,10 +603,6 @@ func CommandGuild(caller : PlayerAgent, arg : String = "") -> bool:
 				return true
 			Network.CommandFeedback("Could not level up (officers+, check gold/gems)", caller.peerID)
 			return false
-		"fastlevelup":
-			var fast : Dictionary = Launcher.Economy.LevelUpGuildFast(accountID, charID)
-			Network.CommandFeedback("Guild leveled up (fast, %d gems)" % int(fast.get("cost", 0)) if bool(fast.get("ok", false)) else "Fast level-up failed (%s)" % str(fast.get("reason", "?")), caller.peerID)
-			return bool(fast.get("ok", false))
 		"buyslot":
 			var bs : Dictionary = Launcher.Economy.BuyVaultSlots(accountID, charID)
 			Network.CommandFeedback("Vault slots: %d" % int(bs.get("slots", 0)) if bool(bs.get("ok", false)) else "Vault slot failed (%s)" % str(bs.get("reason", "?")), caller.peerID)

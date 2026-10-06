@@ -2,7 +2,7 @@
 
 **Criado:** 2026-09-22 · **Origem:** avaliação comercial (média real 6.8/10) · **Bar:** OSRS
 **Relacionados:** `archive/ROADMAP.md` (F0–F5, base técnica) · `progress.md` (gauntlet) · `plano-ui-ux.md` (polimento)
-**Princípio:** jogo F2P-friendly, VIP = QoL (offline cap, velocidade), sem P2W, sem crypto. Moeda fechada, não-cashable. **Offline desde 2026-09-25:** F2P liquida 1 h e cada anúncio assistido soma +1 h até a coleta; o VIP dá as 24 h sem assistir nada.
+**Princípio:** jogo F2P-friendly, VIP = QoL (offline cap, velocidade), sem P2W, sem crypto. Moeda fechada, não-cashable. **Offline (alinado ao código em 2026-10-06 — P1-I):** F2P liquida até 8 h (a constante `BaseCapHours` em `OfflineSettle.gd:@BaseCapHours`) e cada anúncio assistido soma +1 h até a coleta (teto de 12 reservas); o VIP dá as 24 h sem assistir nada. A linha dizia "1 h" desde 2026-09-25 enquanto o código endurecia para 8 h — oferta e produto voltam a ser a mesma frase.
 
 > Este arquivo é o plano comercial executável. O `archive/ROADMAP.md` continua como referência técnica; o que está aqui tem gate de receita.
 

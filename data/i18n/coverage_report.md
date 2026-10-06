@@ -5,11 +5,11 @@ Gerado por `tools/extract_i18n.py`. Fontes: tr()/Mes() em `sources/`, atribuiç�
 | Domínio | Chaves | Cobertas pt_BR | Faltando |
 |---|---|---|---|
 | tr() código (UI) | 95 | 95 | 0 |
-| text= .gd (UI, via Localizer; props placeholder_text/title/text) | 72 | 72 | 0 |
+| text= .gd (UI, via Localizer; props placeholder_text/title/text) | 71 | 71 | 0 |
 | cenas .tscn (via Localizer) | 167 | 167 | 0 |
 | conteúdo NPCs/quests (fase 2) | 732 | 732 | 0 |
 
-**UI total:** 319 chaves, 319 cobertas (100%), 0 faltando. **Conteúdo:** 0 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
+**UI total:** 318 chaves, 318 cobertas (100%), 0 faltando. **Conteúdo:** 0 chaves pendentes (fase 2 — diálogos NPC em `sources/scripts/`).
 
 Das cobertas, **19** contam-se por a fonte já estar em português (o `tr()` devolve a chave; a coluna `en` dessas linhas é que carrega a tradução) — listadas ao final, uma a uma.
 

@@ -39,6 +39,9 @@ extends SceneTree
 # 13. a rota de comando no runtime real (`/friend`, `/unfriend`, `/ignore`, `/unignore`,
 #     `/social`, inclusive via `CommandManager.Handle`, que é o caminho do botão): a conta
 #     de quem age sai do PEER, nunca do payload.
+# 14. a porta GM MEDIDA no despacho: recusa por permissão, execução para ADMIN, bypass por
+#     `SHAMBLETA_GM_MODE=1` e o retorno da recusa quando a env se apaga — `gm_gate_fix_test.gd`
+#     confere o fonte; este prova o comportamento na árvore viva.
 #
 # Uso: godot --headless --path . -s tests/social_graph_test.gd
 #       (XDG_DATA_HOME/XDG_CACHE_HOME próprios — ver scripts/test.sh.)
@@ -283,6 +286,7 @@ func _runTests() -> void:
 	_costBlock()
 	await _deliveryBlock()
 	await _commandBlock()
+	await _gmGateBlock()
 	_finish()
 
 # ------------------------------------------------------------------ 0. forma do módulo
@@ -1110,6 +1114,76 @@ func _commandBlock() -> void:
 	orphanAgent.free()
 	CheckB(_blocked(ridB, pidA), false, "estado final: sem sanção entre A e B")
 	CheckB(_blocked(ridA, pidB), false, "nem no outro sentido")
+
+# ------------------------------------------------------------------ 14. porta GM medida
+func _gmGateBlock() -> void:
+	print("== bloco 14: a gate de permissão do CommandManager, conferida no despacho real ==")
+	if probe == null or not is_instance_valid(probe):
+		Check(false, "probe instalado (sem ele o feedback de recusa não é legível)")
+		return
+	var agentA : Node = _agentByNick("SocGraphA")
+	if not Check(agentA != null, "agente real do bloco 13 vivo para o despacho"):
+		return
+	var pidA : int = int(agentA.get("peerID"))
+	var peerA : Object = peersScript.call("GetPeer", pidA)
+	if not Check(peerA != null, "o peer do agente está vivo (a permissão sai dele, não do payload)"):
+		return
+	# NONE/ADMIN lidos do enum vivo — um literal dedado aqui seria exatamente a
+	# confusão que a auditoria cobrou: a gate compara números que ninguém provou serem a escada.
+	var actorCommons : GDScript = load("res://sources/actor/ActorCommons.gd")
+	var perms : Dictionary = actorCommons.get_script_constant_map().get("Permission", {}) as Dictionary
+	var permNone : int = int(perms.get("NONE", -1))
+	var permAdmin : int = int(perms.get("ADMIN", -2))
+	if not Check(permNone >= 0 and permAdmin > permNone, "Permission.NONE/ADMIN legíveis do enum (%d/%d)" % [permNone, permAdmin]):
+		return
+	var sink : Dictionary = {"n": 0}
+	var probeCallable : Callable = func(_caller, _arg := "") -> bool:
+		sink["n"] = int(sink["n"]) + 1
+		return true
+	var commands : Dictionary = cmdScript.get("commands")
+	Check(not commands.has(StringName("gmprobe")), "'gmprobe' é nome do harness, livre no registro vivo")
+	cmdScript.call("Register", StringName("gmprobe"), probeCallable, permAdmin, "gmprobe (harness)")
+	if not Check(commands.has(StringName("gmprobe")), "comando ADMIN de teste registrado"):
+		return
+	OS.set_environment("SHAMBLETA_GM_MODE", "")
+	peerA.set("permission", permNone)
+	# (a) player comum, comando ADMIN, env desligada: NADA roda, e a resposta é a frase.
+	_probeClear()
+	cmdScript.call("Handle", agentA, "gmprobe")
+	await create_timer(0.25).timeout
+	CheckEq(int(sink["n"]), 0, "recusa medida no despacho: comum chamando ADMIN não executa (0 hits)")
+	Check(_hasFeedback(pidA, "unmet permissions"), "a recusa responde 'unmet permissions' (%s)" % _lastFeedback(pidA))
+	# (b) cmd desconhecido recusa como desconhecido, não como permissão.
+	_probeClear()
+	cmdScript.call("Handle", agentA, "gmnosuch")
+	await create_timer(0.25).timeout
+	Check(_hasFeedback(pidA, "is not registered"), "cmd inexistente responde 'not registered' (a gate não engole o ramo)")
+	# (c) ADMIN de verdade executa: a gate compara permissão, não recusa tudo.
+	_probeClear()
+	peerA.set("permission", permAdmin)
+	cmdScript.call("Handle", agentA, "gmprobe")
+	await create_timer(0.25).timeout
+	CheckEq(int(sink["n"]), 1, "ADMIN no peer executa o mesmo comando (1 hit)")
+	CheckEq(_feedbackCount(pidA), 0, "sucesso não dispara feedback (o caminho é execução, não recusa)")
+	# (d) o bypass existe e é lido por chamada: env=1 abre para comum…
+	_probeClear()
+	peerA.set("permission", permNone)
+	OS.set_environment("SHAMBLETA_GM_MODE", "1")
+	cmdScript.call("Handle", agentA, "gmprobe")
+	await create_timer(0.25).timeout
+	CheckEq(int(sink["n"]), 2, "SHAMBLETA_GM_MODE=1 abre a porta para player comum (bypass do operador, medido)")
+	# (e) …e não é pegajoso: desligada a env, a mesma chamada volta a ser recusada.
+	_probeClear()
+	OS.set_environment("SHAMBLETA_GM_MODE", "")
+	cmdScript.call("Handle", agentA, "gmprobe")
+	await create_timer(0.25).timeout
+	CheckEq(int(sink["n"]), 2, "env desligada volta a recusar na hora (2 hits: nenhum a mais que o bypass)")
+	Check(_hasFeedback(pidA, "unmet permissions"), "a frase de recusa volta integralmente com a env fora")
+	# teardown: registro, peer e env voltam como estavam.
+	cmdScript.call("Unregister", StringName("gmprobe"))
+	peerA.set("permission", permNone)
+	OS.set_environment("SHAMBLETA_GM_MODE", "")
+	Check(not commands.has(StringName("gmprobe")), "teardown: /gmprobe não existe fora do bloco")
 
 func globalChannelStatic() -> String:
 	return str(guiCommons.ChatChannel.GLOBAL)

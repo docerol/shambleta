@@ -41,6 +41,7 @@ global:
 # o conteúdo é byte-a-byte o `deploy/alerts.rules.yml` do repositório.
 rule_files:
   - /etc/prometheus/alerts.rules.yml
+  - /etc/prometheus/alerts_companion.rules.yml
 
 alerting:
   alertmanagers:

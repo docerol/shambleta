@@ -247,7 +247,7 @@ Três estados, três assinaturas:
   cinco linhas do laço acima. Tag diferente por serviço é o retrato do deploy
   interrompido (o `web` novo com o `game` velho é o caso provável, porque o `web`
   builda primeiro e o `game` é o que o `depends_on` espera —
-  `deploy/docker-compose.yml:84-94`). O que o jogador vê: página no ar e login
+  `deploy/docker-compose.yml:102-104`). O que o jogador vê: página no ar e login
   caindo, ou site inteiro fora se o `game` não chegou a `service_healthy`.
 * **Subiu, ficou verde, e o schema já migrou** — `ps` saudável, mas o log do boot traz uma linha `SQL:` (os estados que o runner anuncia) ou um `ERROR:`/`SCRIPT ERROR` de runtime,
   ou `migration.version` subiu e o erro apareceu depois. Este é o único dos três em

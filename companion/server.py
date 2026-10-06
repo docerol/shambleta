@@ -714,6 +714,18 @@ def check_payment_amount(catalog, sku, payment):
 # não depende do shell que a roda.
 TOKEN_SIGNING_KEY_ENV = "SHAMBLETA_TOKEN_SIGNING_KEY"
 
+# A perna legada sha256 é uma ponte com data de desmonte, não uma_feature.
+# O AUTH-P0 virou 2026-10-04; remember-me expira em 30 dias, logo a última
+# linha pré-onda morre sozinha por volta de 2026-11-03. A docstring prometia
+# "expiram sozinhas sem janela de corte" — sem régua, ponte que "morre sozinha"
+# é ponte para sempre. Depois deste unix a perna (2) nunca mais abre, e o
+# checkout passa a aceitar só HMAC. O bind de IP fica na outra porta (o servidor
+# valida `ip_address` na mesma consulta): aqui a string guardada vem do
+# transporte do jogo (host WS / endereço ENet), formato que este processo HTTP
+# atrás do proxy não tem como reproduzir — prometer igualdade seria matar todo
+# checkout de web, e isso não é segurança, é outage.
+LEGACY_SHA256_LEG_RETIRE_UNIX = 1793721600  # 2026-11-04T00:00Z
+
 
 def verify_session_token(con, account_id, auth_token, now=None):
     """Prova de sessão p/ checkout (beta fechado, sem migração): o client
@@ -726,9 +738,9 @@ def verify_session_token(con, account_id, auth_token, now=None):
     para TODO cliente com sessão nova (hash que o servidor grava nunca é o que
     a rota confere). São DUAS pernas, de propósito:
       (1) HMAC com a signing key — a forma que o game grava hoje;
-      (2) sha256(token) — a forma das linhas anteriores à onda, que expiram
-          sozinhas (TokenExpirySec = 30 dias) sem janela de corte: sem ela,
-          sessão emitida ontem não compra hoje.
+      (2) sha256(token) — a forma das linhas anteriores à onda, viva até
+          `LEGACY_SHA256_LEG_RETIRE_UNIX` (uma janela de expiração de 30 dias
+          depois do AUTH-P0), não para sempre.
     Um dump do banco sem a chave continua sem forjar sessão: forjar exige a
     linha certa, e preimage de sha256 sobre um token de 128 bits CSPRNG é
     inviável.
@@ -743,14 +755,18 @@ def verify_session_token(con, account_id, auth_token, now=None):
     if now is None:
         now = int(time.time())
     token = str(auth_token)
-    legacy_hex = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    # Perna (1) só existe com chave: sem env não há com o que calcular o HMAC, e a
-    # perna (2) sha256 continua cobrindo as linhas anteriores à onda AUTH-P0.
-    hashes = [legacy_hex]
     key = os.environ.get(TOKEN_SIGNING_KEY_ENV) or ""
+    hashes = []
     if key:
-        hashes.insert(0, hmac.new(key.encode("utf-8"), token.encode("utf-8"),
-                                  hashlib.sha256).hexdigest())
+        hashes.append(hmac.new(key.encode("utf-8"), token.encode("utf-8"),
+                               hashlib.sha256).hexdigest())
+    # Perna (2) só existe com chave? Não: ela existe até a data acima — linha
+    # pré-onda emitida ontem compra hoje, linha pré-onda emitida em novembro
+    # não compra em dezembro porque ela mesma já era.
+    if now < LEGACY_SHA256_LEG_RETIRE_UNIX:
+        hashes.append(hashlib.sha256(token.encode("utf-8")).hexdigest())
+    if not hashes:
+        return None
     marks = ", ".join("?" for _ in hashes)
     try:
         row = con.execute(
@@ -1471,11 +1487,14 @@ class Store:
         lines.append("shambleta_accounts{state=\"total\"} %d" % m["accounts"]["total"])
         lines.append("shambleta_accounts{state=\"active_24h\"} %d" % m["accounts"]["active_24h"])
         lines.append("")
-        lines.append("# HELP shambleta_retention_d1 Retenção D1 (contas do cohort fechado).")
+        lines.append("# HELP shambleta_retention_d1 Retenção D1 (contas do cohort fechado). Ausente = coorte indisponível; a ausência É o sinal.")
         lines.append("# TYPE shambleta_retention_d1 gauge")
-        if m["retention_d1"] is None:
-            lines.append("shambleta_retention_d1 0")
-        else:
+        # O None não é zero: a régua da vista JSON (cohorte fechada em que
+        # "indisponível não é zero") vale para o expositor também. Emitir
+        # `shambleta_retention_d1 0` de uma coorte ausente é o dashboard lendo
+        # churn total onde só há falta de dado — e `absent()` não dispara em
+        # série que existe com valor zero. Sem coorte, nenhuma amostra sai.
+        if m["retention_d1"] is not None:
             rd1 = m["retention_d1"]
             lines.append("shambleta_retention_d1_cohort %d" % rd1["cohort"])
             lines.append("shambleta_retention_d1_retained %d" % rd1["retained"])

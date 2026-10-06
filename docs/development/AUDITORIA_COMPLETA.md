@@ -95,7 +95,7 @@ Real remote config: JSON events calendar (15 entries), seasons, paid catalog, ba
 
 ### Gap crítico de analytics — verificado
 - `FeatureFlags.FUNNEL_DAILY: true` is the code default, and **`deploy/docker-compose.yml` does not override it OFF** → the funnel is ON in the shipped compose. (An upstream report claimed the funnel is "disabled by default in production"; **re-checked against `FeatureFlags.gd:45-50`**: it is not. Marking CORRIGIDO.)
-- **However:** `d1_return` is an *event*, and `IsD1Return()` is only used inside `RecordFunnel`. The GameAnalytics benchmark the roadmap cites (D1 22/27%, D7 3.4-3.9%/7%) needs D1/D7/D30 in Prometheus; D1 retention is a JSON cohort (`cohort_retention` view, `companion/server.py:1403-1415`) that the companion now also publishes as gauges (`companion/server.py:1474-1489`) — **CORRIGIDO na revisão live (2026-10-04).**
+- **However:** `d1_return` is an *event*, and `IsD1Return()` is only used inside `RecordFunnel`. The GameAnalytics benchmark the roadmap cites (D1 22/27%, D7 3.4-3.9%/7%) needs D1/D7/D30 in Prometheus; D1 retention is a JSON cohort (`cohort_retention` view, `companion/server.py:1419-1429`) that the companion now also publishes as gauges (`companion/server.py:1474-1489`) — **CORRIGIDO na revisão live (2026-10-04).**
 - **`server.py /metrics` returns JSON with `Content-Type: application/json`** (`server.py:1401-1404`), served at `/metrics` (`server.py:1558-1561`). **CORRIGIDO na revisão live (2026-10-04):** `deploy/prometheus.yml:69` scrapeia `companion:8901` em `/metrics/prometheus`, que serve exposition em texto (`companion/server.py:1424-1523`) — o scrape morto virou alvo alcançável, e os money KPIs (ARPU, ARPPU, sales_by_sku, revenue_by_currency, accounts, settles) saem como métrica. **Ainda aberto:** zero das 21 regras de alerta referencia uma métrica do companion (todas apontam métricas do game: `grant_queue`, `reconcile`, `fraud_flags`).
 - `ROrtedMetrics` exposes the **raw components** (`money_units`, `money_gross_minor_cents`) in Prometheus exposition, but the KPI *ratios* (ARPU, ARPPU, conversion) are only composed in the JSON. **No `shambleta_*_arpu` or `_conversion` family exists.**
 
@@ -209,7 +209,7 @@ Email/PII em log (`EmailService.gd:76`), token plaintext em client (`Login.gd:26
 - Tick: 4 Hz, `_findNearestMob()` é O(mobs) em cada SEEK substep (`IdlePolicy.gd:333-352`). Medido: 100 players = 7.76 ms, **200 = 21.19 ms** (crossover ~154), **400 = 99 ms** (broken). Reproduzido.
 - **`MaxPlayerCount = 128` (admission) liga antes do tick (200-300).** `deploy/SCALING.md:162-164` registra isso (corrigido na revisão live 2026-10-04; a doc dizia o oposto).
 - ⚠️ **Boot-time AH sweep no main-thread frame:** `AuctionHouseService._trySeedAuctionBots` → `TickAHLifecycle` faz `ReapExpiredListings` + `ReCrossOpenListings` em lotes de 50 × 20 = 1,000 + 1,000 transações serializadas dentro de um frame, na primeira tick. Não está no ladder de SCALING (que mede steady-state). Pode congelar por segundos no boot de um server maduro.
-- Auction buy-order fill: `idx_auction_expiring` indexa só `status` → scan O(open_listings) × 25 rounds dentro do mutex (`AuctionHouseService.gd:1109`).
+- Auction buy-order fill: `idx_auction_expiring` indexa só `status` → scan O(open_listings) × 25 rounds dentro do mutex (`AuctionHouseService.gd:1125`).
 - Client GUI: zero `_draw` overrides, 6 callbacks totais, assets 38 MB (26 MB música excluída do web). Forte.
 
 ### Escalabilidade

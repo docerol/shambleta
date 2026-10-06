@@ -237,16 +237,13 @@ func _run() -> void:
 
 	if guild != null:
 		CheckI(int(guild.call("PendingCount")), 0, "GuildPanel: nada armado antes do clique")
-		var fastBtn : Button = guild.get("fastButton") as Button
-		if Check(fastBtn != null, "GuildPanel: o botão de fast level-up existe"):
-			fastBtn.pressed.emit()
-			CheckI(int(guild.call("PendingCount")), 1, "GuildPanel: fast level-up ARM_a prévia no clique (não gasta gems)")
+		Check(guild.get("fastButton") == null, "GuildPanel: P1-C levou o botão de fast level-up junto com a cobrança")
+		var slotBtn : Button = guild.get("slotButton") as Button
+		if Check(slotBtn != null, "GuildPanel: o botão de vault slot existe"):
+			slotBtn.pressed.emit()
+			CheckI(int(guild.call("PendingCount")), 1, "GuildPanel: vault slot ARM_a prévia no clique (não gasta gems)")
 			Check(_ModalOpen(), "GuildPanel: quem pede o confirm é o modal da casa (UICommons.MessageBox)")
-			var slotBtn : Button = guild.get("slotButton") as Button
-			if Check(slotBtn != null, "GuildPanel: o botão de vault slot existe"):
-				slotBtn.pressed.emit()
-				CheckI(int(guild.call("PendingCount")), 1, "GuildPanel: vault slot também passa pelo portão")
-				Check(str(guild.call("PendingLine")).contains("200"), "GuildPanel: a prévia diz o preço em gems (%s)" % str(guild.call("PendingLine")))
+			Check(str(guild.call("PendingLine")).contains("200"), "GuildPanel: a prévia diz o preço em gems (%s)" % str(guild.call("PendingLine")))
 			guild.call("CancelPending")
 			_CloseModal()
 			CheckI(int(guild.call("PendingCount")), 0, "GuildPanel: CancelPending desarma sem emitir nada")
@@ -255,10 +252,9 @@ func _run() -> void:
 	if Check(social != null, "a janela Social legacy continua viva (lista de online + espelho)"):
 		Check(bool(social.has_method("ConfirmPending")), "Social.gd: o caminho de gasto tem confirm")
 		CheckI(int(social.call("PendingCount")), 0, "Social: nada armado antes do clique")
-		social.call("RequestLevelUpFast")
-		CheckI(int(social.call("PendingCount")), 1, "Social: fast level-up ARM_a prévia no clique (era um clique = 2x gems)")
+		Check(not social.has_method("RequestLevelUpFast"), "Social: P1-C levou o portão do fast junto com a cobrança")
 		social.call("RequestVaultSlot")
-		CheckI(int(social.call("PendingCount")), 1, "Social: vault slot também passa pelo portão (era um clique = 200 gems)")
+		CheckI(int(social.call("PendingCount")), 1, "Social: vault slot passa pelo portão (era um clique = 200 gems)")
 		social.call("CancelPending")
 		_CloseModal()
 		CheckI(int(social.call("PendingCount")), 0, "Social: CancelPending desarma")

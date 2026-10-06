@@ -9,7 +9,7 @@ class_name GuildPanel
 #
 # Arquitetura de chamada. O game é server-authoritative e a GUI só conversa com o
 # servidor pelo facade `Network` (@rpc). Para guild o facade expõe leitura
-# (`GetGuildState`), os dois gastos de gems (`LevelUpGuildFast`, `BuyVaultSlots`) e
+# (`GetGuildState`), o gasto de gems (`BuyVaultSlots`) e
 # as cinco ESCRITAS deste painel — `CreateGuild`, `JoinGuild`, `LeaveGuild`,
 # `DepositToVault`, `WithdrawFromVault` (`sources/network/Network.gd`), cada uma com
 # seu handler autoritativo em `sources/network/server/Server.gd`, onde conta e
@@ -35,7 +35,7 @@ class_name GuildPanel
 # junção, não a peça. O que já tinha frase própria no mapa do painel saiu para
 # `sources/gui/`, cada um testável sozinho:
 #   `GuildWithdrawGate`  — o portão anti-dreno de §14 (aritmética de janela),
-#   `GuildSlotShop`      — a loja dos dois gastos de gems (preço, prévia, cobrança),
+#   `GuildSlotShop`      — a loja dos gastos de gems (preço, prévia, cobrança),
 #   `GuildMemberRoster`  — as linhas de membro com presença e os cliques de roster,
 #   `GuildVaultShelves`  — as prateleiras do vault com o botão de saque,
 #   `GuildListings`      — resultado de busca e placa de ranking,
@@ -62,7 +62,6 @@ var depositCountEdit : LineEdit = null
 var depositButton : Button = null
 var actionRow : HBoxContainer = null
 var leaveButton : Button = null
-var fastButton : Button = null
 var slotButton : Button = null
 var chatEdit : LineEdit = null
 var chatButton : Button = null
@@ -294,12 +293,9 @@ func SearchGuildsByName(query : String) -> Array:
 
 # ------------------------------------------------------------------ a loja de gems
 
-# Os dois gastos do painel (level-up a 2x e o slot do vault) têm preço, prévia e
+# Os gastos do painel (slot do vault, criação) têm preço, prévia e
 # caminho de cobrança em `GuildSlotShop`; aqui sobra só o portão de confirmação e o
 # feedback, que são estado do painel.
-
-func LevelUpFast() -> Dictionary:
-	return _Charge(GuildSlotShop.KindLevelUp)
 
 func BuyVaultSlot() -> Dictionary:
 	return _Charge(GuildSlotShop.KindSlot)
@@ -327,19 +323,11 @@ func _FeedbackFor(result : Dictionary, what : String) -> String:
 
 # ------------------------------------------------------------------ gasto com confirmação
 
-# Os dois gastos de guilda (level-up a 2x e o slot do vault) saem do bolso do
+# Os gastos de guilda (slot do vault) saem do bolso do
 # jogador, então seguem o MESMO portão do leilão (`AuctionHousePanel._Arm`) e da
 # arena (`ArenaPanel.RequestAttack`): o clique arma a prévia e não fala com
 # ninguém; `ConfirmPending()` é o único caminho que gasta gems. Sem isto o botão
 # do painel recém-ligado ao HUD seria um clique = cobrança.
-
-func RequestLevelUpFast() -> bool:
-	var mine : Dictionary = _lastState.get("my_guild", {})
-	if mine.is_empty():
-		SetFeedback("Level-up: join a guild first")
-		return false
-	_Arm({"action": "levelup", "line": GuildSlotShop.FastLevelLine(mine)})
-	return true
 
 func RequestVaultSlot() -> bool:
 	var mine : Dictionary = _lastState.get("my_guild", {})
@@ -373,8 +361,6 @@ func ConfirmPending() -> void:
 	if _confirmRow:
 		_confirmRow.visible = false
 	match action:
-		"levelup":
-			LevelUpFast()
 		"slot":
 			BuyVaultSlot()
 		"withdraw":
@@ -536,11 +522,9 @@ func BuildUI() -> void:
 	# clique gastar, e um botão com o preço embutido era justamente a linha que
 	# estourava a largura da janela.
 	var actions : Dictionary = GuildPanelRows.ButtonRow(body, "ActionRow", [
-		["FastLevelButton", "Fast level-up", RequestLevelUpFast],
 		["BuySlotButton", "Buy vault slot", RequestVaultSlot]])
 	actionRow = actions["row"] as HBoxContainer
 	var actionButtons : Dictionary = actions["buttons"] as Dictionary
-	fastButton = actionButtons.get("FastLevelButton") as Button
 	slotButton = actionButtons.get("BuySlotButton") as Button
 	# Sair da guild é a ação destrutiva da fileira; um botão sozinho na linha não
 	# briga por largura com os dois de cima.
@@ -670,7 +654,6 @@ func RenderState(state : Dictionary) -> void:
 		_SetVisible(depositButton, true)
 		_SetVisible(actionRow, true)
 		_SetVisible(leaveButton, true)
-		_SetVisible(fastButton, canManage)
 		_SetVisible(slotButton, canManage)
 		GuildMemberRoster.Render(membersList, mine.get("members", []), _IsNickOnline,
 			isLeader, _OnRosterAction, int(LocalPlayerIDs().get("account", 0)))

@@ -2909,7 +2909,7 @@ func SuiteCraftFee(sql : SQLService, charSeller : int, accountSeller : int) -> v
 	var midGold : int = int(sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charMid])[0]["gp"])
 	CheckEq(midLedger, midLedgerBefore + 990, "seller net = 1000 price - 10 burned fee (P0-2)")
 	CheckEq(midLedger, midGold, "I11 seller gold ledger == seller wallet after the burn")
-	CheckEq(midGold, 5000 + 5000 + 990, "middleman received 990 net (fixture 5k + grant 5k + 990 sale)")
+	CheckEq(midGold, 5000 + 5000 + 990 - 10, "middleman received 990 net menos 1% de taxa de anúncio (P1-D): fixture 5k + grant 5k + 990 sale - 10 fee")
 
 	var buyerStat : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charBuyer])
 	if not buyerStat.is_empty():
@@ -3697,7 +3697,7 @@ func SuiteGuildPremium(sql : SQLService) -> void:
 	var st1 : Dictionary = economy.GetGuildState(accountID)
 	Check((st1.get("board", []) as Array).size() >= 1, "board lists guild")
 
-	# Membro junta-se (contagem) + fast level-up pula o gold
+	# Membro junta-se (contagem)
 	var memChar : int = CreateFixture(sql, "idle_fg_member", "IdleFGuildM")
 	if Check(memChar != 0, "member fixture created"):
 		var memAcct : int = sql.GetAccountIDForCharacter(memChar)
@@ -3705,9 +3705,12 @@ func SuiteGuildPremium(sql : SQLService) -> void:
 		CheckEq((economy.GetGuildState(accountID).get("my_guild", {}) as Dictionary).get("members", []) .size(), 2, "two members")
 		Check(str(economy.SetGuildTag(memAcct, "ZZ").get("reason", "")) == "not_leader", "member cannot tag")
 	var g0 : int = economy.GetGems(accountID)
-	var fast : Dictionary = economy.LevelUpGuildFast(accountID, charID)
-	Check(bool(fast.get("ok", false)) and int(fast.get("level", 0)) == 2, "fast level-up to 2")
-	CheckEq(economy.GetGems(accountID), g0 - 100, "fast costs 2× gems (no gold)")
+	# P1-C (auditoria 2026-10-06): o fast (2× gems, pula o gold) saiu da árvore;
+	# a escada gold+gems é o caminho único — o suite sobe a L2 por ela.
+	Check(not economy.has_method("LevelUpGuildFast"), "P1-C: LevelUpGuildFast não existe mais no fachade")
+	Check(_SetGold(charID, 5000), "fixture: ouro da escada L1->L2")
+	Check(economy.LevelUpGuild(accountID, charID), "level-up pela escada (gold + gems)")
+	CheckEq(economy.GetGems(accountID), g0 - 50, "escada cobra 1×, não o dobro do finado fast")
 	# Tag: líder define (normaliza p/ maiúscula), inválidas e membro rejeitados
 	Check(str(economy.SetGuildTag(accountID, "x").get("reason", "")) == "bad_tag", "1-char tag rejected")
 	Check(str(economy.SetGuildTag(accountID, "toolong").get("reason", "")) == "bad_tag", "6-char tag rejected")
@@ -3858,7 +3861,7 @@ func SuiteTournamentDonation(sql : SQLService) -> void:
 	var champ : Array[Dictionary] = sql.QueryBindings("SELECT id FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = 'title_campeao';", [acctA])
 	Check(champ.size() == 1, "champion title granted")
 	var w2 : Array[Dictionary] = sql.QueryBindings("SELECT id FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [acctB, "tournament_prize:%d:2" % t1])
-	Check(w2.size() == 1, "runner-up prize paid")
+	Check(w2.size() == 0, "pool capado: duas inscrições pagam o campeão e exaurem antes do vice (P1-E — prêmio sai da arrecadação, não do nada)")
 	Check(str(economy.SettleTournament(t1).get("reason", "")) == "not_active", "resettle rejected")
 
 	# Doação: grant cosmetic direto vira título (sem poder)
@@ -4953,7 +4956,7 @@ func SuiteSeasonAH(sql : SQLService) -> void:
 	Check(not buyLots.is_empty() and int(buyLots[0]["parent_uid"]) > 0, "buyer lot chained to escrow")
 	var gpS : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charS])
 	var gpU : Array = sql.QueryBindings("SELECT gp FROM stat WHERE char_id = ?;", [charU])
-	CheckEq(int(gpS[0]["gp"]), 5000 + 1000, "seller paid")
+	CheckEq(int(gpS[0]["gp"]), 5000 + 1000 - 10, "seller paid (net 1000 da venda, 1% da taxa de anúncio P1-D queimado no list)")
 	CheckEq(int(gpU[0]["gp"]), 5000 + 10000 - 1000, "buyer charged")
 	Check(not economy.BuyListing(charU, listing), "sold listing rejected")
 

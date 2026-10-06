@@ -40,7 +40,14 @@ extends SceneTree
 const FixAccounts : int = 4
 const FixOps : int = 1800
 const FixPayments : int = 40
-const FixSeed : int = 20260927
+# A régua do fuzz é explorar: semente fixa revara o mesmo mapa todo dia e bug
+# fora dele nunca é pego. A semente nasce do relógio, sai impressa na primeira
+# linha, e `SHAMBLETA_FUZZ_SEED=<n>` re-põe exatamente o run cobrado.
+static func _fuzzSeed() -> int:
+	var envSeed : int = int(OS.get_environment("SHAMBLETA_FUZZ_SEED"))
+	if envSeed > 0:
+		return envSeed
+	return maxi(1, int(Time.get_unix_time_from_system()))
 const FullSweepEvery : int = 25
 # Fatia 059 do fuzz: o escrow de gold de uma ordem de compra é a primeira vez no
 # leilão que um jogador tira ouro da carteira SEM comprar nada naquele instante.
@@ -104,6 +111,7 @@ var _launcher : Node
 var _sql : Node
 var _eco : Node
 var _rng : RandomNumberGenerator
+var _seed : int = 0
 var _gemsKind : String = "gems"
 var _goldKind : String = "gold"
 
@@ -170,7 +178,8 @@ func _note(condition : bool, label : String) -> bool:
 	return condition
 
 func _initialize():
-	print("== Economy invariant fuzz (seed %d, %d contas, %d ops) ==" % [FixSeed, FixAccounts, FixOps])
+	_seed = _fuzzSeed()
+	print("== Economy invariant fuzz (seed %d, %d contas, %d ops) ==" % [_seed, FixAccounts, FixOps])
 	_launcher = root.get_node_or_null(NodePath("Launcher"))
 	if _launcher == null:
 		print("FATAL: autoload Launcher ausente")
@@ -213,7 +222,7 @@ func _initialize():
 	_goldKind = str(catConsts.get("LedgerKindGold", "gold"))
 	_listFeeGems = int(catConsts.get("AHListFeeGems", 5))
 	_rng = RandomNumberGenerator.new()
-	_rng.seed = FixSeed
+	_rng.seed = _seed
 
 	_makeAccounts()
 	_runOps()
@@ -471,7 +480,7 @@ func _ahFuzz() -> void:
 	var nc : GDScript = load("res://sources/network/NetworkCommons.gd")
 	var consts : Dictionary = nc.get_script_constant_map()
 	var ac : GDScript = load("res://sources/actor/ActorCommons.gd")
-	_ahItem = absi(str("fuzzah_%d_%d" % [tag, FixSeed]).hash())
+	_ahItem = absi(str("fuzzah_%d_%d" % [tag, _seed]).hash())
 	for i in range(AHChars):
 		var name : String = "fuzah_%d_%d" % [tag, i]
 		if not bool(_sql.call("AddAccount", name, "senha-de-fuzz-123", name + "@fuzz.test.local",
@@ -497,7 +506,7 @@ func _ahFuzz() -> void:
 		return
 	_ahCreatorAccount = int(_ahAccounts[0])
 	var rng : RandomNumberGenerator = RandomNumberGenerator.new()
-	rng.seed = FixSeed * 7 + 13
+	rng.seed = _seed * 7 + 13
 	for step in range(AHOps):
 		_ahOp(rng, step)
 		_ahSweep("op %d" % step)

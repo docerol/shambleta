@@ -75,6 +75,8 @@ func _post_launch():
 	if "--server" in OS.get_cmdline_args():
 		for drift : String in EconomyCatalog.ValidatePaidCatalogFile():
 			push_error("catálogo pago divergente: %s" % drift)
+		for passErr : String in EconomyCatalog.ValidatePassTables():
+			push_error("passe premium com cosmético invisível: %s" % passErr)
 	isInitialized = true
 
 func Destroy():
@@ -457,9 +459,6 @@ func VaultSlotsForGuild(guildID : int) -> Dictionary:
 
 func GetGuildState(accountID : int) -> Dictionary:
 	return guildService.GetGuildState(accountID)
-
-func LevelUpGuildFast(accountID : int, charID : int) -> Dictionary:
-	return guildService.LevelUpGuildFast(accountID, charID)
 
 func BuyVaultSlots(accountID : int, charID : int) -> Dictionary:
 	return guildService.BuyVaultSlots(accountID, charID)

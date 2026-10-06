@@ -194,6 +194,12 @@ func _dropAll() -> void:
 	for user in _account:
 		_sql.db.delete_rows("account", "username = '%s'" % user)
 
+# A taxa de anúncio P1-D recalculada da MESMA constante do catálogo — a régua
+# acompanha a política sem ninguém digitar número.
+func _listFee(priceGold : int) -> int:
+	var pct : int = int(_catalog.get_script_constant_map().get("AHGoldFeePct", 0))
+	return maxi(1, int(round(float(priceGold) * float(pct) / 100.0))) if pct > 0 else 0
+
 func _gold(charID : int) -> int:
 	return int(_eco.call("_CharGoldRaw", charID))
 
@@ -348,7 +354,7 @@ func _suitePriceHistory() -> void:
 	print("[suite] 059(a): preço realizado escrito no commit que liquida a venda")
 	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d;" % _itemHist)
 	_sql.db.query("DELETE FROM ah_price_history WHERE item_id = %d;" % _itemHist)
-	var seller : int = _makeChar("h_seller", 0)
+	var seller : int = _makeChar("h_seller", 5000)
 	var buyer : int = _makeChar("h_buyer", 50000)
 	var other : int = _makeChar("h_other", 50000)
 	if not _check(seller != 0 and buyer != 0 and other != 0, "três fixtures da suíte (a) criadas"):
@@ -358,7 +364,7 @@ func _suitePriceHistory() -> void:
 	_eco.call("AddGems", sellerAccount, 500, "mdx_gems")
 	_sql.call("AddItemToCharacter", seller, _itemHist, 5, "mdx_grant")
 	var listing : int = int(_eco.call("ListItemForSale", seller, _itemHist, 1, 4000))
-	_check(listing > 0, "anúncio real criado pelo caminho de listagem (com fee de gem)")
+	_check(listing > 0, "anúncio real criado pelo caminho de listagem (fee de gem + 1% gold P1-D)")
 	if listing <= 0:
 		return
 	_checkEq(_count("SELECT COUNT(*) AS n FROM ah_price_history WHERE listing_id = ?;", [listing]), 0,
@@ -441,7 +447,7 @@ func _suiteBuyOrders() -> void:
 	print("[suite] 059(c): ordem de compra com escrow pelo kernel, cap, cancel e fill parcial")
 	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d;" % _itemBid)
 	var buyer : int = _makeChar("b_buyer", 30000)
-	var seller : int = _makeChar("b_seller", 0)
+	var seller : int = _makeChar("b_seller", 5000)
 	var creator : int = _makeChar("b_creator", 0)
 	if not _check(buyer != 0 and seller != 0 and creator != 0, "fixtures da suíte (c) criadas"):
 		return
@@ -521,7 +527,7 @@ func _suiteBuyOrders() -> void:
 	_checkStrEq(str(filled.get("status", "")), "open", "e a ordem continua em pé para o resto")
 	_checkEq(int(_eco.call("_ItemCountRaw", buyer, _itemBid)), 2, "o comprador recebeu as 2 unidades")
 	_checkEq(_riches(buyer, buyerAccount), rich0 - 800, "pagou o ASK do lote, não o teto do bid (800 e não 3×900)")
-	_checkEq(_gold(seller), 800, "o vendedor recebeu o ask inteiro (item sem criador → sem fee)")
+	_checkEq(_gold(seller), 5000 + 800 - _listFee(800), "o vendedor recebeu o ask MENOS a taxa de anúncio P1-D (item sem criador → sem creator fee)")
 	_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = ?;", [listing]).get("status", "")), "sold",
 		"o anúncio morreu liquidado pela demanda")
 	var bidHistory : Dictionary = _one("SELECT via, unit_price, price_gold FROM ah_price_history WHERE listing_id = ?;", [listing])
@@ -539,7 +545,7 @@ func _suiteBuyOrders() -> void:
 	_checkStrEq(str(done.get("status", "")), "filled", "ordem preenchida fecha como filled")
 	_checkEq(int(done.get("escrow_gold", -1)), 0, "nada fica escrowed numa ordem fechada")
 	_checkEq(_riches(buyer, buyerAccount), rich0 - 1650, "total pago = 800 (lote) + 850, sem sobra presa")
-	_checkEq(_gold(seller), 1650, "e o vendedor recebeu os dois (%d)" % _gold(seller))
+	_checkEq(_gold(seller), 5000 + 1650 - _listFee(800) - _listFee(850), "e o vendedor recebeu os dois líquidos da taxa de cada listagem (P1-D) (%d)" % _gold(seller))
 	if listing2 > 0:
 		_checkStrEq(str(_one("SELECT status FROM auction_listing WHERE id = ?;", [listing2]).get("status", "")), "sold",
 			"a segunda perna liquidou o anúncio")
@@ -565,8 +571,8 @@ func _suiteBuyOrders() -> void:
 		_check(int(_eco.call("PlaceBuyOrder", buyer, _itemBid, 1, 700)) > 0, "bid cobrindo o anúncio com criador colocada")
 		var fee : int = int(round(float(700) * float(feePct) / 100.0))
 		_checkEq(_gold(creator), 0, "o fee do criador é QUEIMADO, não creditado — sink de ouro (got %d, want 0)" % _gold(creator))
-		_checkEq(_gold(seller), 1650 + 700 - fee, "e o vendedor recebeu o líquido do fee (%d)" % _gold(seller))
-		_checkEq(_ledgerRows(sellerAccount, "ah_burn"), 1, "o fee queimado tem linha de ledger ah_burn (sink registrado, não transferência)")
+		_checkEq(_gold(seller), 5000 + 1650 + 700 - fee - _listFee(800) - _listFee(850) - _listFee(300) - _listFee(700), "e o vendedor recebeu o líquido do creator fee e das taxas de listagem P1-D (%d)" % _gold(seller))
+		_checkEq(_ledgerRows(sellerAccount, "ah_burn"), 5, "creator fee queimado + uma taxa de listagem P1-D por anúncio (800, 850, 300, 700) = 5 linhas ah_burn")
 		_checkEq(_ledgerRows(creatorAccount, "ah_creator_fee:"), 0, "o criador não recebe linha de transferência alguma — o fee não foi creditado a ninguém")
 		_checkEq(_riches(buyer, buyerAccount), rich0 - 1650 - 700, "o comprador pagou o preço do anúncio, não preço + fee")
 
@@ -615,7 +621,7 @@ func _suiteSettlementInvariants() -> void:
 	_sql.db.query("DELETE FROM auction_listing WHERE item_id = %d;" % _itemInv)
 	_sql.db.query("DELETE FROM ah_price_history WHERE item_id = %d;" % _itemInv)
 	var buyer : int = _makeChar("i_buyer", 100000)
-	var seller : int = _makeChar("i_seller", 0)
+	var seller : int = _makeChar("i_seller", 5000)
 	if not _check(buyer != 0 and seller != 0, "fixtures da suíte de invariantes criadas"):
 		return
 	var buyerAccount : int = int(_sql.call("GetAccountIDForCharacter", buyer))
@@ -638,7 +644,7 @@ func _suiteSettlementInvariants() -> void:
 		vias[str(r["via"])] = true
 	_checkEq(unitSum, 333, "o histórico guarda o PREÇO PEDIDO realizado nas duas portas (111 + 222)")
 	_check(bool(vias.get("ask", false)) and bool(vias.get("bid", false)), "as duas origens aparecem no histórico")
-	_checkEq(_gold(seller), 333, "o vendedor recebeu as duas vendas pelo mesmo líquido")
+	_checkEq(_gold(seller), 5000 + 333 - _listFee(111) - _listFee(222), "o vendedor recebeu as duas vendas pelo mesmo líquido, menos a taxa de cada listagem (P1-D)")
 	_checkEq(_riches(buyer, buyerAccount), start - 333, "o comprador pagou exatamente o que o vendedor recebeu")
 	_checkEq(_ledgerRows(buyerAccount, "ah_buy:"), 2, "cada venda debitou o comprador uma vez")
 	_checkEq(_ledgerRows(sellerAccount, "ah_sell:"), 2, "e creditou o vendedor uma vez")
@@ -759,7 +765,7 @@ func _suitePriceBand() -> void:
 	# (linhas 425-427); reusar aqui devolvia 0, "fixtures da banda criadas"
 	# morria no `_check` e a suíte inteira (#93.1 e #93.3) não rodava um só
 	# passo. Nome por suíte, não por hábito.
-	var seller : int = _makeChar("p_seller", 0)
+	var seller : int = _makeChar("p_seller", 200000)
 	var buyer : int = _makeChar("p_buyer", 200000)
 	var capped : int = _makeChar("p_capped", 200000)
 	if not _check(seller != 0 and buyer != 0 and capped != 0, "fixtures da banda criadas"):
@@ -772,7 +778,7 @@ func _suitePriceBand() -> void:
 	_sql.call("AddItemToCharacter", seller, _itemWash, 8, "mdx_grant")
 	# Mercadoria da conta-capada: sem estoque a 51ª recusa seria `not_enough_items`
 	# em vez de `list_day_cap` (a porta de volume vem antes do consumo —
-	# `AuctionHouseService.gd:648` vs `:651`) e a liberação no dia limpo não
+	# `AuctionHouseService.gd:649` vs `:652`) e a liberação no dia limpo não
 	# aconteceria. Uma unidade: o passo (6) anuncia 1, é recusado pelo cap, limpa
 	# o contador e anuncia a MESMA unidade de novo.
 	_sql.call("AddItemToCharacter", capped, _itemWash, 1, "mdx_grant")
@@ -863,7 +869,7 @@ func _suiteEscrowLineage() -> void:
 	print("[suite] #94: escrow com identidade — pais por uid e cancelamento que devolve o MESMO lote")
 	var ah : Object = _eco.get("ahService")
 	_clearItem(_itemLine)
-	var seller : int = _makeChar("l_seller", 0)
+	var seller : int = _makeChar("l_seller", 5000)
 	var buyer : int = _makeChar("l_buyer", 200000)
 	if not _check(seller != 0 and buyer != 0, "fixtures de linhagem criadas"):
 		return
@@ -953,7 +959,7 @@ func _listingExpiry() -> void:
 	_clearItem(_itemAge)
 	var now : int = int(Time.get_unix_time_from_system())
 	var ttl : int = _ahConst("AHListingTtlSec")
-	var seller : int = _makeChar("a_seller", 0)
+	var seller : int = _makeChar("a_seller", 5000)
 	if not _check(seller != 0, "fixture de expiração criada"):
 		return
 	var sellerAccount : int = int(_sql.call("GetAccountIDForCharacter", seller))

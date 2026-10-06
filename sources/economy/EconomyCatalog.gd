@@ -463,12 +463,12 @@ const PASS_FREE : Dictionary = {
 # (de EconomyService.gd, antes da divisao)
 const PASS_PREMIUM : Dictionary = {
 	1: {"cosmetics": ["skin_manto"]}, 3: {"gems": 25}, 5: {"vip_days": 3},
-	6: {"gems": 25}, 8: {"cosmetics": ["fx_faisca"]}, 9: {"gems": 25},
-	11: {"chests": 2}, 12: {"gems": 25}, 14: {"cosmetics": ["frame_sazonal"]},
+	6: {"gems": 25}, 8: {"gems": 25}, 9: {"gems": 25},
+	11: {"chests": 2}, 12: {"gems": 25}, 14: {"chests": 2},
 	15: {"gems": 50}, 17: {"cosmetics": ["skin_mascara"]}, 18: {"gems": 25},
-	21: {"chests": 3}, 22: {"gems": 25}, 24: {"cosmetics": ["emote_guilda"]},
+	21: {"chests": 3}, 22: {"gems": 25}, 24: {"gems": 25},
 	26: {"gems": 25}, 28: {"gems": 50},
-	30: {"gems": 100, "cosmetics": ["title_veterano", "banner_guilda"]},
+	30: {"gems": 100, "cosmetics": ["title_veterano"]},
 }
 
 # (de EconomyService.gd, antes da divisao)
@@ -495,6 +495,13 @@ const PASS_WEEKLY_POOL : Array = [
 
 # (de EconomyService.gd, antes da divisao)
 const AHListFeeGems : int = 5
+
+# P1-D (auditoria 2026-10-06): a listagem também queima gold — 1% do preço,
+# mínimo 1, afundado no commit do anúncio. O AH era o "sink primário" alegado
+# do roadmap e não destruía grão de ouro; sem custo em gold, listar é grátis e
+# o mercado vira calha de RMT. Bots são isentos por construção (sem carteira,
+# caminho de seed próprio).
+const AHGoldFeePct : int = 1
 
 # (de EconomyService.gd, antes da divisao)
 const AHMaxOpenPerAccount : int = 5
@@ -675,6 +682,22 @@ static func ValidatePaidCatalog(raw : String) -> PackedStringArray:
 
 static func ValidatePaidCatalogFile() -> PackedStringArray:
 	return EconomyBaseCatalog.ValidatePaidCatalogFile(COSMETIC_CATALOG, SHOP_CATALOG)
+
+
+# A trilha premium COBRA por cosmético; cosmético sem renderizador é cobrar por
+# produto que o jogo não mostra (o critério está declarado em `Storefront`). A
+# trilha grátis não entra: sem dinheiro na ponta, o grant cruft é registro, não
+# fraude. Régua de boot (fail-closed no log pelo regime dos outros validadores)
+# e dupla no grant (`PassService._GrantPassRewardRaw`) — a do grant não deveria
+# jamais morder, e se morder é o boot que deixou passar.
+static func ValidatePassTables() -> PackedStringArray:
+	var errors : PackedStringArray = PackedStringArray()
+	for level : int in PASS_PREMIUM:
+		var reward : Dictionary = PASS_PREMIUM[level]
+		for cid in reward.get("cosmetics", []):
+			if not Storefront.IsRenderedCosmetic(str(cid)):
+				errors.append("pass.premium.%d: cosmético '%s' não tem renderizador" % [level, str(cid)])
+	return errors
 
 
 # ------------------------------------------------------------------ catálogo base (fonte única)

@@ -165,10 +165,6 @@ func ShowGuildState(state : Dictionary):
 		guildList.add_child(header)
 		var rank : String = str(mine.get("my_rank", ""))
 		if rank == "leader" or rank == "officer":
-			var fast := Button.new()
-			fast.text = "Fast level-up (2× gems, no gold)"
-			fast.pressed.connect(RequestLevelUpFast)
-			guildList.add_child(fast)
 			var slots := Button.new()
 			slots.text = "Buy vault slot — %d gems" % int(state.get("vault_slot_cost", EconomyCatalog.GUILD_VAULT_SLOT_COST))
 			slots.pressed.connect(RequestVaultSlot)
@@ -197,10 +193,6 @@ func ShowGuildState(state : Dictionary):
 # casa é o caminho normal — a linha própria dentro da aba só aparece quando ele não
 # está disponível, porque dois botões "Confirm" simultâneos seriam uma UI mentirosa.
 
-func RequestLevelUpFast() -> bool:
-	_Arm({"action": "levelup", "line": "Fast level-up costs 2× the gold price in gems and is not refunded. Spend now?"})
-	return true
-
 func RequestVaultSlot() -> bool:
 	_Arm({"action": "slot", "line": "Buy one guild vault slot for %d gems? The slot is permanent. Spend now?" % int(NetClient.LastGuildState.get("vault_slot_cost", EconomyCatalog.GUILD_VAULT_SLOT_COST))})
 	return true
@@ -217,8 +209,6 @@ func ConfirmPending() -> void:
 	var action : String = str(_pending.get("action", ""))
 	_pending = {}
 	match action:
-		"levelup":
-			Network.LevelUpGuildFast()
 		"slot":
 			Network.BuyVaultSlots()
 		_:

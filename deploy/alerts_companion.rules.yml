@@ -1,0 +1,49 @@
+# Regras de alerta do COMPANION (`companion:8901/metrics/prometheus`).
+#
+# Por que arquivo separado: `tests/deploy_ops_test.gd` amarra cada `shambleta_*`
+# citado em `deploy/alerts.rules.yml` ao corpo que o `/metrics` do JOGO emite —
+# as métricas daqui nascem no expositor Python, não no GDScript, e misturar as
+# duas fontes num arquivo só faria a régua acusar ausência onde há verdade.
+# A perna companion é conferida pela MESMA disciplina: `tests/deploy_ops_test.gd`
+# lê este arquivo e contra-emite a lista de nomes do `server.py`.
+#
+# O que isto aqui fecha (auditoria 2026-10-06 §18/§Obs): 21 regras apontavam
+# só para o game enquanto o funil de dinheiro inteiro vivia no companion —
+# scrape morto do lado da receita era indistinguível de receita saudável, e
+# coorte D1 ausente passou a ser LIDA como zero até esta revisão.
+
+groups:
+  - name: shambleta-companion
+    rules:
+      # A vista do dinheiro sumiu (companion abaixo, scrape morto, rota nova
+      # quebrada). Sem esta regra, "sem números" e "números bons" são o mesmo
+      # silêncio no Alertmanager.
+      - alert: CompanionSemVista
+        expr: absent(shambleta_accounts)
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "companion não expõe /metrics/prometheus há 15 min — a ponta do dinheiro está cega"
+
+      # Fila de grants vista pelo companion: é A MESMA tabela que o jogo alerta
+      # por dentro; a perna daqui pega o enviesamento oposto (jogo embaixo e
+      # leitura zero no jogo, companion vivo vendo a fila crescer).
+      - alert: CompanionGrantFilaPresa
+        expr: shambleta_grants_pending > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "grants pendentes vistos pelo companion há mais de 10 min (dinheiro pago sem crédito)"
+
+      # Coorte D1 ausente ≠ D1 zero: é a régua que substitui o falso-zero do
+      # expositor antigo. 60 min de ausência = painel de retenção sem dado com
+      # alerta ligado, não dashboard mentindo 0%.
+      - alert: RetentionD1SemCoorte
+        expr: absent(shambleta_retention_d1_cohort)
+        for: 60m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "D1 sem coorte fechada há 1 h — ausente é indisponível, não zero"

@@ -1489,6 +1489,36 @@ check(not broken, "as citações arquivo:linha desta posse resolvem",
       "todo `arquivo:N` citado é um arquivo existente e o intervalo cai em linha com texto",
       "; ".join(broken) if broken else "%d citações conferidas" % cited)
 
+# --- hardening (auditoria 2026-10-06 §20/P1-DevOps): o que entrou no compose fica ---
+# Regra que ninguém cobra é linha que morre no refactor de outro dono. Cada
+# serviço declara no-new-privileges e cap_drop ALL; `web` é a única exceção de
+# cap_add — nginx nasce root, binda a porta do container e descafeina os
+# workers por setuid, e cada um desses atos exige o privilégio nominal
+# correspondente. `user:` (rootless de verdade) é dívida pós-beta declarada:
+# exige re-chown dos volumes nameados, e volume sem dono não é segurança.
+HARD_SERVICES = sorted(raw_services.keys())
+check(len(HARD_SERVICES) >= 6, "hardening: o gate vê %d serviços" % len(HARD_SERVICES),
+      "a stack de hoje tem 6 (web game companion cloudflared prometheus alertmanager)",
+      "%d" % len(HARD_SERVICES))
+for svc in HARD_SERVICES:
+    spec = raw_services.get(svc) or {}
+    so = [str(x) for x in (spec.get("security_opt") or [])]
+    check("no-new-privileges:true" in so,
+          "hardening/%s: no-new-privileges declarado" % svc,
+          "security_opt contém no-new-privileges:true",
+          "security_opt=%r" % (so,))
+    cd = [str(x) for x in (spec.get("cap_drop") or [])]
+    check("ALL" in cd, "hardening/%s: cap_drop ALL declarado" % svc,
+          "cap_drop: [ALL]", "cap_drop=%r" % (cd,))
+    ca = [str(x) for x in (spec.get("cap_add") or [])]
+    if svc == "web":
+        for c in ("NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"):
+            check(c in ca, "hardening/web: %s devolvido (nginx faz este ato de verdade)" % c,
+                  "cap_add contém %s" % c, "cap_add=%r" % (ca,))
+    else:
+        check(not ca, "hardening/%s: sem cap_add (nada aqui porta privilegiada nem setuid)" % svc,
+              "nenhum cap_add", "cap_add=%r" % (ca,))
+
 print("== COMPOSE GATE: %d checks, %d failures == (validação: %s; fumaça: %d rodaram, "
       "%d falharam, %d pulados)" % (checks, failures, mode, smoke_ran, smoke_failed, smoke_skipped))
 sys.exit(failures)

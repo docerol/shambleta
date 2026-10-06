@@ -345,6 +345,13 @@ func _GrantPassRewardRaw(accountID : int, charID : int, seasonID : int, level : 
 				return false
 	var cosmetics : Array = reward.get("cosmetics", [])
 	for cid in cosmetics:
+		if track == "premium" and not Storefront.IsRenderedCosmetic(str(cid)):
+			# Dupla do `ValidatePassTables` do boot: cosmético invisível não sai
+			# para quem pagou. O motivo do refusal morre no log do serviço — o
+			# caller só vê `rejected`, porque a resposta honesta aqui é bug de
+			# catálogo, não estado do jogador.
+			Util.PrintLog("Pass", "premium grant bloqueado: nível %d cosmético '%s' sem renderizador" % [level, str(cid)])
+			return false
 		if not sql.ExecuteBindings("INSERT INTO cosmetic_grant (account_id, cosmetic_id, source, granted_at) VALUES (?, ?, ?, ?);", [accountID, str(cid), _PassCosmeticSource(entry, track, level), SQLCommons.Timestamp()]):
 			return false
 	return true

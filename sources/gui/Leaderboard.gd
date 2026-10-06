@@ -96,7 +96,7 @@ func ShowTournaments(data : Dictionary):
 	tournamentLabel.text = "%s — %d players, ends in %dd" % [str(active.get("name", "?")), int(active.get("players", 0)), maxi(left, 0)]
 	if (data.get("my_entry", {}) as Dictionary).is_empty():
 		var enter := Button.new()
-		enter.text = "Enter — %d gold (prizes in gems + Champion title)" % int(active.get("entry_gold", 0))
+		enter.text = "Enter — %d gold (prizes in gold from the entry pool + Champion title)" % int(active.get("entry_gold", 0))
 		# Primitivos no bind (idom da casa pós-auditoria): nada de lambda fechando
 		# sobre `active` — a confirmação cita o torneio e a taxa que ela cobra.
 		enter.pressed.connect(_on_enter_tournament_pressed.bind(int(active.get("id", 0)), str(active.get("name", "?")), int(active.get("entry_gold", 0))))

@@ -38,7 +38,10 @@ bad() { CHECKS=$((CHECKS + 1)); FAILURES=$((FAILURES + 1)); printf '[FAIL] %s\n'
 #                               contador, mesmo commit do estado que o ledger espelha).
 WRITE_ALLOWLIST="
 sql/SQL.gd
+sql/SQLGrants.gd
+sql/SQLRetention.gd
 economy/AuctionHouseService.gd
+economy/BossProgressionService.gd
 economy/CheckoutService.gd
 economy/EconomyKernel.gd
 economy/GuildService.gd
@@ -46,6 +49,8 @@ economy/ItemForgeService.gd
 economy/SeasonService.gd
 economy/ShopService.gd
 economy/TelemetryService.gd
+economy/TournamentArenaService.gd
+economy/TradeChestService.gd
 idle/StreakService.gd
 "
 
@@ -93,6 +98,34 @@ else
 	bad "escrita crua vazando do funil" "0 acusacoes" "$(printf '%s\n' "$HITS" | head -12)"
 fi
 
+# Buraco coberto pela auditoria 2026-10-06 (§Qualidade): o `WRITE_RE` so conhecia
+# o handle `db` — quem escreve PELA API crua do proprio funil (`UpdateRowsRaw`,
+# `DeleteRowsRaw`, `ExecNoLock`) nunca foi varrido aqui, e a porta e justamente
+# a que o comentario do SQL.gd chama de "dentro de Transaction() so ops raw".
+# A heuristica e a mesma do bloco acima, com a mesma limitacao declarada: um
+# arquivo que chama op crua tem que abrir transacao — quem garante o par
+# atomo+espelhamento e o `Transaction()`, nunca a boa vontade do caller.
+RAW_API_RE='\.(UpdateRowsRaw|DeleteRowsRaw|ExecNoLock)\('
+RAWHITS=""
+for hit in $(grep -rnE "$RAW_API_RE" "$ROOT" --include='*.gd' 2>/dev/null | cut -d: -f1 | sort -u); do
+	rel="${hit#"$ROOT/"}"
+	case "$ALLOW_FLAT" in
+		*" $rel "*) ;;
+		*) RAWHITS="$RAWHITS fora-da-allowlist:$rel" ;;
+	esac
+	if ! grep -q 'Transaction(' "$hit"; then
+		RAWHITS="$RAWHITS sem-transacao:$rel"
+	fi
+done
+RAWCOUNT="$(grep -rE "$RAW_API_RE" "$ROOT" --include='*.gd' 2>/dev/null | grep -c . || true)"
+if [ -z "$RAWHITS" ]; then
+	ok "toda chamada de API crua (Update/DeleteRowsRaw, ExecNoLock) mora em arquivo transacional ($RAWCOUNT chamadas conferidas)"
+else
+	bad "API crua fora do funil transacional" "0 acusacoes" "$RAWHITS"
+fi
+
+RAW_API_RE='\.(UpdateRowsRaw|DeleteRowsRaw|ExecNoLock)\('
+
 # A allowlist também tem que ser VERDADE: entrada sem escrita crua no arquivo
 # listado é autorização sobrando (e arquivo que sumiu é régua lendo o vazio).
 ENTRY_STALE=""
@@ -101,7 +134,7 @@ for entry in $WRITE_ALLOWLIST; do
 		ENTRY_STALE="$ENTRY_STALE arquivo-ausente:$entry"
 		continue
 	fi
-	if [ -z "$(grep -nE "$WRITE_RE" "$ROOT/$entry" 2>/dev/null)" ]; then
+	if [ -z "$(grep -nE "$WRITE_RE|$RAW_API_RE" "$ROOT/$entry" 2>/dev/null)" ]; then
 		ENTRY_STALE="$ENTRY_STALE sem-escrita:$entry"
 	fi
 done

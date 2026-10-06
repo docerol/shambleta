@@ -34,6 +34,21 @@ static func HashAuthToken(token : String) -> String:
 	var digest : PackedByteArray = crypto.hmac_digest(HashingContext.HASH_SHA256, key.to_utf8_buffer(), token.to_utf8_buffer())
 	return digest.hex_encode()
 
+# P1-F (auditoria 2026-10-06): o provably-fair do baú precisa de segredo do
+# servidor na semente. `id:created_at:shambleta` era recomputável por quem
+# lesse duas colunas públicas da própria tabela — salt fixo não é segredo, e
+# o jogador abria o baú sabendo o resultado. O seal herdado do MESMO regime
+# da chave de sessão (env em produção, dev fallback só em teste), com
+# separação de domínio pelo prefixo; sem chave não há seal, e quem abre recusa
+# o baú — roll previsível custa mais que uma abertura negada.
+static func ChestSeal(chestID : int, createdAt : int) -> String:
+	var key : String = _TokenSigningKey()
+	if key.is_empty():
+		return ""
+	var crypto : Crypto = Crypto.new()
+	var digest : PackedByteArray = crypto.hmac_digest(HashingContext.HASH_SHA256, key.to_utf8_buffer(), ("chest-seal:%d:%d" % [chestID, createdAt]).to_utf8_buffer())
+	return digest.hex_encode()
+
 #
 const DefaultSaltSize : int				= 16
 const DefaultTokenSize : int			= 32
@@ -101,10 +116,10 @@ static func HashPasswordV1(password : String, salt : String) -> String:
 # portanto `VerifyPassword` lê de onde está. Verificação usa early-exit da iteração
 # quando a senha bate de qualquer forma (o custo já foi pago). Um atacante com o dump
 # reimplementa em C; a defesa on-line continua sendo o lockout exponencial.
-static func HashPasswordV2(password : String, salt : String = "") -> String:
+static func HashPasswordV2(password : String, salt : String = "", iterations : int = PBKDF2Iterations) -> String:
 	var realSalt : String = salt if not salt.is_empty() else GenerateSalt(16)
-	var key : PackedByteArray = _Pbkdf2HmacSha256(password.to_utf8_buffer(), realSalt.to_utf8_buffer(), PBKDF2Iterations, 32)
-	return "pbkdf2_sha256$%d$%s$%s" % [PBKDF2Iterations, realSalt, key.hex_encode()]
+	var key : PackedByteArray = _Pbkdf2HmacSha256(password.to_utf8_buffer(), realSalt.to_utf8_buffer(), iterations, 32)
+	return "pbkdf2_sha256$%d$%s$%s" % [iterations, realSalt, key.hex_encode()]
 
 static func _Pbkdf2HmacSha256(password : PackedByteArray, salt : PackedByteArray, iterations : int, outLen : int) -> PackedByteArray:
 	var crypto : Crypto = Crypto.new()
@@ -125,7 +140,7 @@ static func _Pbkdf2HmacSha256(password : PackedByteArray, salt : PackedByteArray
 			k += 1
 		out.append_array(f)
 		i += 1
-	return out.slice(0, outLen - 1)
+	return out.slice(0, outLen)
 
 # Parseia o formato `pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>` em dicionário
 # {algorithm, iterations, salt, hash}. Salt vem em hex — `GenerateSalt` já retorna
@@ -152,15 +167,52 @@ static func VerifyPassword(password : String, salt : String, storedHash : String
 	# comparador — foi justamente o ramo de baixo, o mais velho, que ficou de fora
 	# na primeira passada. Quem abre um terceiro ramo paga a mesma régua.
 	if hashVer >= HashVersion:
-		# ver 2: PBKDF2-HMAC-SHA256, parâmetros embutidos no stored hash.
+		# ver 2: PBKDF2-HMAC-SHA256. O custo é LIDO do registro (a promessa da
+		# linha 100 deste arquivo — "VerifyPassword lê de onde está"), não da
+		# constante: subir `PBKDF2Iterations` no código deixaria toda conta
+		# ver-2 presa para sempre se a verificação recalcular no número novo.
 		var parsed : Dictionary = HashPasswordV2_Parse(storedHash)
 		if parsed.is_empty():
 			return false
-		var candidate : String = HashPasswordV2(password, parsed.get("salt", ""))
+		var iters : int = int(parsed.get("iterations", 0))
+		if iters <= 0:
+			return false
+		var storedSalt : String = str(parsed.get("salt", ""))
+		var storedHex : String = str(parsed.get("hash", ""))
+		var key : PackedByteArray = _Pbkdf2HmacSha256(password.to_utf8_buffer(), storedSalt.to_utf8_buffer(), iters, 32)
+		# Rama de comprimento: a primeira geração do ver-2 guardava 62 hex — o
+		# `slice(0, outLen - 1)` que devolvia 31 bytes. A derivação é a MESMA;
+		# o que mudou é quanto do output entrava no registro. Escolher pela
+		# forma do stored hash (dado do banco, não segredo) custa um PBKDF2 só,
+		# em vez de dois — e os três ramos do veredito seguem no MESMO
+		# SecureEquals, um por ramo, que é a régua de `password_timing_path_test`.
+		var candidate : String = ""
+		if storedHex.length() == 62:
+			candidate = "pbkdf2_sha256$%d$%s$%s" % [iters, storedSalt, key.slice(0, 31).hex_encode()]
+		else:
+			candidate = "pbkdf2_sha256$%d$%s$%s" % [iters, storedSalt, key.hex_encode()]
 		return SecureEquals(candidate, storedHash)
 	elif hashVer == 1:
 		return SecureEquals(HashPasswordV1(password, salt), storedHash)
 	return SecureEquals(HashPassword(password, salt), storedHash)
+
+# A conta pede hash novo quando: a versão é antiga (0/1 sobem para a corrente),
+# o registro ver-2 confessa um custo diferente do corrente, ou o hash é da
+# primeira geração de 62 hex (o slice truncado). `SQL.ValidateAuthPassword`
+# chama isto DEPOIS de a verificação passar — o re-hash é pago uma vez de vida,
+# nunca de novo, e é o único caminho pelo qual a rama legada do ver-2 some do
+# banco sem migração e sem lockdown.
+static func NeedsRehash(storedHash : String, hashVer : int) -> bool:
+	if hashVer < HashVersion:
+		return true
+	if hashVer > HashVersion:
+		return false
+	var parsed : Dictionary = HashPasswordV2_Parse(storedHash)
+	if parsed.is_empty():
+		return true
+	if int(parsed.get("iterations", 0)) != PBKDF2Iterations:
+		return true
+	return str(parsed.get("hash", "")).length() != 64
 
 # Reset Code
 # Alta entropia: um símbolo por byte criptográfico do `Crypto` do engine (AES-CTR

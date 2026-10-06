@@ -197,7 +197,8 @@ justamente aqui — e está quebrada.
 
 Catálogo coerente e preço calibrado ao Brasil (R$19,90–79,90, Pix — padrão do
 mercado, §22). Três defeitos de linha-dura CONFIRMADOS: (a) **P2W à venda**
-(`LevelUpGuildFast` (`GuildService.gd:@LevelUpGuildFast`): skip da escada de gold a 2× ouro por nível; 92.340 gems ≈
+(a perna `LevelUpGuildFast`, que a rodada P1-C deste mesmo dia removeu de
+`GuildService.gd`: skip da escada de gold a 2× ouro por nível; 92.340 gems ≈
 R$ 2.459 por ×1.18 permanente), contra `ROADMAP_COMERCIAL.md (princípio da seção 1)`; (b) **passe premium
 entrega cosmético que não renderiza** (4 de 7; `_GrantPassRewardRaw` (`PassService.gd:@_GrantPassRewardRaw`) concede sem
 gate `IsRenderedCosmetic`) — dinheiro real por item invisível; (c) **VIP farmável**
@@ -226,12 +227,16 @@ Furos CONFIRMADOS, em ordem de perigo:
    (`RequestPasswordReset` (`Server.gd:@RequestPasswordReset`) + `DefaultResetCodeLength` e `ResetCodeAlphabet` (`DefaultResetCodeLength` (`Hasher.gd:@DefaultResetCodeLength`))). Um dump de `live.db` → takeover de conta +
    porta de checkout, em 30 dias de janela. (CONFIRMADO NO CÓDIGO; o dump em si é
    pré-condição, não alegado.)
-2. **Armadilhas do KDF novo:** `_Pbkdf2HmacSha256` retorna
-   `out.slice(0, outLen - 1)` = **31 bytes** (`_Pbkdf2HmacSha256` (`Hasher.gd:@_Pbkdf2HmacSha256`)) — o stored formato
-   `pbkdf2_sha256$<iters>$...` embute as iterações mas a verificação as **ignora**
-   (`VerifyPassword` chama `HashPasswordV2` com a constante; `Hasher.gd:@VerifyPassword`):
-   subir o custo no futuro invalida todas as contas ver-2 de uma vez. (CONFIRMADO NO
-   CÓDIGO; a truncagem é consistente entre escrita e leitura, hoje não quebra login.)
+2. **Armadilhas do KDF novo:** a primeira geração devolvia 31 bytes e a
+   verificação recalculava o custo pela constante do código, não pelo registro —
+   subir `PBKDF2Iterations` invalidaria toda conta ver-2 de uma vez. (CONFIRMADO
+   NO CÓDIGO na data da auditoria; a truncagem era consistente entre escrita e
+   leitura, hoje não quebrava login.) **RESOLVIDO pelo lote P1-H (2026-10-06):**
+   `VerifyPassword` (`Hasher.gd:@VerifyPassword`) agora lê iterações, sal e
+   comprimento do registro `pbkdf2_sha256$<iters>$<salt_hex>$<hash_hex>`, e a
+   linha cujo custo difere do regime atual é flagada por `NeedsRehash`
+   (`Hasher.gd:@NeedsRehash`) e re-deriva no próximo login bem-sucedido. O
+   comportamento é medido em `tests/password_timing_path_test.gd`.
 3. **Criptografia hand-rolled** para Web Push (`push_aesgcm.py` AES/GCM do zero,
    `push_p256.py` P-256/ECDH/ECDSA do zero) — escopo confirmado é só payload de
    notificação, dinheiro usa stdlib. Débito de manutenção, não de cofre. (CONFIRMADO.)
@@ -407,7 +412,7 @@ Eixos: **S**everidade, **F**requência, **R**enda, **C**hurn, **E**sforço de co
   não-renderizável → recusa/flag. **OS = (9+9+8)×9÷3 = 78.**
 
 ### P1-C — P2W de guildas à venda contra o princípio do produto
-- **Evidência:** `CONFIRMADO NO CÓDIGO` — `LevelUpGuildFast` (`GuildService.gd:@LevelUpGuildFast`) (2× gold em gems);
+- **Evidência:** `CONFIRMADO NO CÓDIGO` (à época do achado) — a perna `LevelUpGuildFast` vivia em `GuildService.gd` (2× gold em gems); **RESOLVIDO no lote P1-C (2026-10-06): função, RPC, fachada, botões e comando removidos**;
   EVIDÊNCIA DA COMUNIDADE — padrão Evony/Idle Champions/D3-RMAH pune exatamente
   isso. **Impacto:** R$ 2.459, permanentes, em multiplicador ×1.18 de faucet — em
   PvP/guilda, o churn composto é documentado. **Correção:** remover o skip ou
@@ -515,3 +520,69 @@ aquisição de usuários.
 
 *Nada foi implementado por esta auditoria (Regra 30). Todos os comandos citados como
 evidência foram executados na árvore auditada e são reproduzíveis.*
+
+---
+
+## 26. Adendo — o lote de implementação (mesma data, por ordem do dono)
+
+A Regra 30 valeu até o relatório fechar; depois dele o dono ordenou "resolva tudo
+sequencialmente". O que virou código, e o que NÃO virou (dito sem maquiagem):
+
+**P0 (lote 1, commitado e no remote):** indentação mista que impedia o boot
+(`Server.gd`) e a migration 068 reescrita — o `DROP TABLE` dela mata trigger
+dependente que mora em outra tabela (`trg_character_delete`), então a dance agora
+dropa, recria e preserva os seis índices do leilão; régua: harness `backup` verde.
+
+**P1 (lote 2, este adendo):**
+- **P1-B** — grant de passe premium agora passa por `IsRenderedCosmetic`; a
+  validação de boot (`ValidatePassTables`) recusa cosmético não-renderizável na
+  trilha paga, e `seasons.json` S1/S2 foram corrigidos para o espelho legal.
+- **P1-A** — a perna legada `sha256(token)` do companion ganhou data de morte
+  (`LEGACY_SHA256_LEG_RETIRE_UNIX`, 2026-11-04 — uma `TokenExpirySec` depois da
+  onda HMAC). O bind de IP documentado no achado É estruturalmente impossível no
+  companion (ele vê o proxy, o game vê o transporte) — em vez de bind falso,
+  janela curta e medida.
+- **P1-H** — `VerifyPassword` lê iterações/sal/comprimento DO REGISTRO, o slice
+  de 31 bytes virou 32, e `NeedsRehash` + re-hash transparente no login sobem o
+  custo sem prender ninguém. Medido em `tests/password_timing_path_test.gd`.
+- **P1-F** — seed de baú de troca agora é HMAC do servidor (`ChestSeal`, chave de
+  signing da sessão); sem chave, `OpenChest` fecha — cliente não escolhe sorte.
+- **P1-D** — tax de 1% do preço em ouro, mínimo 1, QUEIMADA no list (`ah_burn`,
+  census-family que o fraud já conhecia); o matcher de buy-order comparava teto
+  por unidade com preço total — corrigido nas duas pontas (`price_gold <=
+  unit * count`, `unitAsk = ceil(preço/count)`).
+- **P1-E** — prêmio de torneio saiu da ponte gold→gems: paga em OURO, capped
+  pelo pool (`entradas × fee`), `prizes_json` aceita as duas chaves para o que
+  já está congelado em banco.
+- **P1-C** — o skip P2W de guilda saiu do produto: RPC, handler, loja, painel e
+  atalho de GM removidos (contagem de RPC 224→223; régua de comportamento no
+  `IdleTests`, não só grep).
+- **P1-I** — `ROADMAP_COMERCIAL.md` voltou a dizer as 8 h do F2P, ancorado na
+  constante viva (`BaseCapHours`).
+- **Observabilidade** — coorte D1 ausente deixou de ser zero: sem dados, o
+  exposition não emite amostra, e `absent()` nos três alertas novos
+  (`alerts_companion.rules.yml`) vira o sinal. `deploy_ops_test` cruza o nome de
+  cada regra com a série emitida — regra que aponta para métrica inexistente
+  morre no gate.
+- **DevOps** — `no-new-privileges` nos seis serviços, `cap_drop: ALL` geral,
+  `cap_add` só no web (7 caps nomeadas). Rootless (`run_as_user`) declarado
+  dívida pós-beta no próprio compose: exige re-chown dos volumes, que é
+  operação, não PR. Backup off-host e RTO documentados em `SCALING.md` —
+  prover o bucket é decisão de infra/dinheiro do dono.
+
+**Qualidade de gates:** fuzz tem seed (`SHAMBLETA_FUZZ_SEED`, impressa no
+resultado, item hash do seed — reproduction sem sorteio); write-funnel varre o
+API CRU (`.UpdateRowsRaw/.DeleteRowsRaw/.ExecNoLock` fora de `Transaction()` não
+passa mais — 66 chamadas, 15 writers allowlistados com nome de arquivo); e a
+porta GM deixou de ser só grep de fonte: o bloco 14 do `social_graph_test` mede
+no despacho real — comum chamando ADMIN não executa, ADMIN executa,
+`SHAMBLETA_GM_MODE=1` abre para comum e desligado recusa na hora (não é
+pegajoso).
+
+**O que este lote NÃO fecha, e não finge fechar:** P1-G/P1-J (cadência de
+conteúdo de 4–6 semanas de produção — não existe commit que faça conteúdo),
+sharding horizontal do SQLite (mudança de arquitetura pós-beta), split read/write
+do companion (2º escritor continua de pé, por contrato documentado), e prover
+offsite real (infra a contratar). A régua de oferta (P1-I) foi alinhada ao
+código; a régua de produto sobre o cap (1 h vs 8 h era escolha) foi exercida na
+decisão do dono de manter 8 h.

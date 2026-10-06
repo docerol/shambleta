@@ -392,6 +392,20 @@ try:
                       "sku": "gems.550"})
     ok(code == 401, "B9 token forjado (sem linha em nenhuma das duas formas) → 401")
 
+    # P1-A (auditoria 2026-10-06): a perna legada tem data de desmonte. Direto
+    # na função — a rota HTTP usa o relógio real e a data é outra coisa; aqui
+    # `now` é parâmetro. O fixture grava expiração relativa ao run, então as
+    # três linhas valem em qualquer dia: o que muda é a perna, não a janela.
+    con_leg = sqlite3.connect(DB_PATH)
+    DEADLINE = server.LEGACY_SHA256_LEG_RETIRE_UNIX
+    ok(server.verify_session_token(con_leg, 1, "tok-Alice", now=DEADLINE - 60) == 1,
+       "B10 antes do desmonte, linha legada ainda compra (janela de expiração natural)")
+    ok(server.verify_session_token(con_leg, 1, "tok-Alice", now=DEADLINE) is None,
+       "B11 no dia do desmonte a perna legada está morta (ninguém compra com sha256 cru)")
+    ok(server.verify_session_token(con_leg, 1, "tok-HMAC", now=DEADLINE + 3600) == 1,
+       "B12 HMAC sobrevive ao desmonte da perna (a TTL continua cobrada no SQL)")
+    con_leg.close()
+
     # ===== Parte C — gate de idade/LGPD (Lei 15.211/2025) na porta do dinheiro =====
     # Carol tem token de sessão válido e aceite de antes do bump: o game server a
     # barra no login, então a outra porta não pode abrir checkout para ela.

@@ -471,44 +471,11 @@ func GetGuildState(accountID : int) -> Dictionary:
 	return {"ok": true, "my_guild": mine, "board": board,
 		"vault_slot_cost": EconomyCatalog.GUILD_VAULT_SLOT_COST}
 
-# Level-up fast (leader/officer): pula o gold pagando 2× gems.
-func LevelUpGuildFast(accountID : int, charID : int) -> Dictionary:
-	var guildID : int = GetGuildForAccount(accountID)
-	if guildID == 0:
-		return {"ok": false, "reason": "no_guild"}
-	var rank : String = GetMemberRank(accountID)
-	if rank != "leader" and rank != "officer":
-		return {"ok": false, "reason": "not_officer"}
-	var result : Dictionary = {"ok": false, "reason": "rejected"}
-	_eco.settleMutex.lock()
-	if Launcher.SQL.Transaction(func() -> bool:
-		var sql : SQLService = Launcher.SQL
-		var rows : Array = sql.db.select_rows("guild", "guild_id = %d" % guildID, ["level"])
-		if rows.is_empty():
-			return false
-		var level : int = int(rows[0]["level"])
-		if level < 1 or level >= EconomyCatalog.GuildMaxLevel:
-			result["reason"] = "max_level"
-			return false
-		var cost : int = EconomyCatalog.GuildLevelCostGems[level] * 2
-		var gems : int = sql.GetGemsRaw(accountID)
-		if gems < cost:
-			result["reason"] = "insufficient_gems"
-			return false
-		if not sql.SetGemsRaw(accountID, gems - cost):
-			return false
-		if not sql.UpdateRowsRaw("guild", "guild_id = %d" % guildID, {"level" = level + 1}):
-			return false
-		if not _eco._LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -cost, gems - cost, "guild_level_fast"):
-			return false
-		result["ok"] = true
-		result["reason"] = "ok"
-		result["cost"] = cost
-		result["level"] = level + 1
-		return true):
-		pass
-	_eco.settleMutex.unlock()
-	return result
+# P1-C (auditoria 2026-10-06): o `LevelUpGuildFast` (2× gems, pula a escada de
+# gold) foi REMOVIDO — era a perna que convertia dinheiro real em multiplicador
+# permanente de faucet (92.340 gems ≈ R$ 2.459 por ×1.18 em três torneiras),
+# cruzando a linha "sem P2W" que o próprio roadmap declara. A escada honesta
+# (`LevelUpGuild`, gold + gems) continua única.
 
 # Expansão do vault (leader/officer): +1 stack distinta por 200 gems (máx 20).
 func BuyVaultSlots(accountID : int, charID : int) -> Dictionary:

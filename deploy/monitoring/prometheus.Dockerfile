@@ -18,5 +18,6 @@ FROM prom/prometheus:v3.15.0-busybox
 # command do compose aponta para cá explicitamente, para não depender de default.
 COPY deploy/prometheus.yml /etc/prometheus/prometheus.yml
 COPY deploy/alerts.rules.yml /etc/prometheus/alerts.rules.yml
+COPY deploy/alerts_companion.rules.yml /etc/prometheus/alerts_companion.rules.yml
 
 # Sem ENTRYPOINT próprio: o command do compose decide escuta, config e retenção.

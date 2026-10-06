@@ -630,6 +630,7 @@ func ListItemForSaleChecked(sellerChar : int, itemID : int, count : int, priceGo
 			"max" = int(band.get("max", 0))})
 		return result
 	var out : Dictionary = {"id" = 0, "reason" = "rejected"}
+	var goldMoves : Dictionary = {}
 	_eco.settleMutex.lock()
 	if Launcher.SQL.Transaction(func() -> bool:
 		var sql : SQLService = Launcher.SQL
@@ -697,6 +698,12 @@ func ListItemForSaleChecked(sellerChar : int, itemID : int, count : int, priceGo
 		if not _eco._LedgerAppendLocked(accountID, sellerChar, EconomyCatalog.LedgerKindGems, -EconomyCatalog.AHListFeeGems, gems - EconomyCatalog.AHListFeeGems, "ah_list_fee"):
 			out["reason"] = "fee_ledger"
 			return false
+		# P1-D: taxa de anúncio em gold, queimada no mesmo commit (família
+		# `ah_burn` do censo). Sem saldo para a taxa o anúncio não nasce.
+		var goldFee : int = maxi(1, int(round(float(priceGold) * float(EconomyCatalog.AHGoldFeePct) / 100.0)))
+		if not _eco.kernel._MoveGoldLocked(sql, sellerChar, accountID, -goldFee, "ah_burn", goldMoves):
+			out["reason"] = "need_gold_fee"
+			return false
 		# #93.4: o anúncio nasce com prazo. `created_at + AHListingTtlSec`, no mesmo
 		# commit do escrow — um anúncio sem prazo é um item sequestrado. Uma leitura do
 		# relógio só: duas leituras davam `expires_at = created_at + ttl + 1` quando o
@@ -727,6 +734,9 @@ func ListItemForSaleChecked(sellerChar : int, itemID : int, count : int, priceGo
 		pass
 	_eco.settleMutex.unlock()
 	if int(out["id"]) > 0:
+		# O espelho de memória do ouro sai depois do commit, como no settle —
+		# transação abortada deixa a cache intacta.
+		_eco.kernel.ApplyGoldMoves(goldMoves)
 		# 059(c): anúncio novo cruza a melhor ordem de compra aberta ANTES de
 		# voltar para a vitrine — é assim que um mercado com demanda forma preço.
 		# Roda depois do commit do anúncio (com o lock já solto) de propósito: se
@@ -1106,7 +1116,13 @@ func _FillFromBuyOrder(orderID : int) -> int:
 			if held < need * unitCap:
 				return false
 			var itemID : int = int(order.get("item_id", 0))
-			var candidates : Array = sql.db.select_rows("auction_listing", "status = 'open' AND item_id = %d AND price_gold <= %d AND count <= %d AND seller_account != %d" % [itemID, unitCap, need, buyerAccount], ["*"])
+			# P1-D: o teto do bid é POR UNIDADE; `price_gold` do anúncio é o TOTAL
+			# da pilha (a banda de preço do anúncio já divide por `count` — ver
+			# `AHPriceBand`). Comparar total <= teto-unitário escondia do mercado
+			# qualquer pilha com preço justo acima de um centésimo do teto: o
+			# teste é `total <= unitCap * count`, o preço realizado continua sendo
+			# o ask.
+			var candidates : Array = sql.db.select_rows("auction_listing", "status = 'open' AND item_id = %d AND price_gold <= %d * count AND count <= %d AND seller_account != %d" % [itemID, unitCap, need, buyerAccount], ["*"])
 			var best : Dictionary = {}
 			for cand in candidates:
 				var c : Dictionary = cand
@@ -1157,7 +1173,14 @@ func _TryMatchListing(listingID : int) -> int:
 	if rows.is_empty():
 		return 0
 	var listing : Dictionary = rows[0]
-	var orders : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id FROM ah_buy_order WHERE status = 'open' AND item_id = ? AND unit_price >= ? AND quantity >= ? AND buyer_account != ? ORDER BY unit_price DESC, id ASC LIMIT 1;", [int(listing.get("item_id", 0)), int(listing.get("price_gold", 0)), int(listing.get("count", 1)), int(listing.get("seller_account", 0))])
+	# P1-D: mesma régua do outro lado do espelho — o teto do bid é por unidade,
+	# o preço do anúncio é o total da pilha. Exigir `unit_price >= total` só
+	# deixava cruzar pilha de 1 unidade: o mercado negava liquidez ao volume
+	# honesto. A unidade efetiva do ask é ceil(total/count); quem paga acima do
+	# teto unitário nunca passa, e o escrow (quantity × unit_price, invariant
+	# 059) cobre o total porque quantity ≥ count.
+	var unitAsk : int = maxi(1, int(ceil(float(int(listing.get("price_gold", 0))) / float(maxi(1, int(listing.get("count", 1)))))))
+	var orders : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT id FROM ah_buy_order WHERE status = 'open' AND item_id = ? AND unit_price >= ? AND quantity >= ? AND buyer_account != ? ORDER BY unit_price DESC, id ASC LIMIT 1;", [int(listing.get("item_id", 0)), unitAsk, int(listing.get("count", 1)), int(listing.get("seller_account", 0))])
 	if orders.is_empty():
 		return 0
 	if _FillFromBuyOrder(int(orders[0]["id"])) <= 0:

@@ -201,4 +201,24 @@ func _initialize() -> void:
 	for name in ["shambleta_reconcile_divergences", "shambleta_reconcile_age_seconds", "shambleta_fraud_flags_open"]:
 		Check(emitted.has(name), "o /metrics emite %s" % name)
 
+	# A metade companion (auditoria 2026-10-06): zero regras referenciavam o
+	# expositor do companion enquanto o funil de dinheiro vive nele. A mesma
+	# disciplina da perna do jogo vale aqui — cada `shambleta_*` citado em
+	# `deploy/alerts_companion.rules.yml` tem que nascer de um `lines.append`
+	# do `server.py`; fonte do expositor é verdade sobre o corpo.
+	var alertsC : String = _read("res://deploy/alerts_companion.rules.yml")
+	Check(not alertsC.is_empty(), "deploy/alerts_companion.rules.yml existe e foi lido")
+	var emittedC : Dictionary = {}
+	for e in RegEx.create_from_string(r'lines\.append\("(shambleta_[a-z0-9_]+)').search_all(_read("res://companion/server.py")):
+		emittedC[e.get_string(1)] = true
+	Check(emittedC.size() >= 8, "a exposição do companion emite %d séries nomeadas" % emittedC.size())
+	var referencedC : Dictionary = {}
+	for r in RegEx.create_from_string(r'(shambleta_[a-z0-9_]+)').search_all(alertsC):
+		referencedC[r.get_string(1)] = true
+	Check(referencedC.size() >= 3,
+		"há pelo menos 3 nomes de companion citados por regras (%d)" % referencedC.size())
+	for name in referencedC:
+		Check(emittedC.has(name),
+			"a regra do companion cita %s, e o expositor emite %s" % [name, "sim" if emittedC.has(name) else "NÃO"])
+
 	_Finish()

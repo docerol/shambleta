@@ -131,7 +131,9 @@ func OpenChest(charID : int, chestID : int) -> Dictionary:
 		# Nonce = open count for this character (pity timer input)
 		var nonceRows : Array[Dictionary] = sql.db.select_rows("chest_instance", "char_id = %d AND item_state = 'opened'" % charID, ["id"])
 		var nonce : int = nonceRows.size()
-		var serverSeed : String = str(chest["id"]) + ":" + str(chest["created_at"]) + ":shambleta"
+		var serverSeed : String = Hasher.ChestSeal(int(chest["id"]), int(chest["created_at"]))
+		if serverSeed.is_empty():
+			return false
 		var clientSeed : String = str(charID) + ":" + str(nonce)
 		var roll : int = Hasher.HashPassword(serverSeed, clientSeed).substr(0, 8).hex_to_int()
 

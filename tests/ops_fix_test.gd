@@ -574,7 +574,8 @@ func _suiteTournamentPool():
 	_contains(arenaSrc, "var frozenPool : Array = PrizePoolOfRow(rows[0])", "a liquidação paga o congelado na linha")
 	_checkEq(arenaSrc.count("PrizePoolMod(endsAt)"), 2, "o multiplicador é lido na CRIAÇÃO e no preview, e NUNCA de novo na liquidação (×2 sobre ×2 seria faucet inventado)")
 	_check(not arenaSrc.contains("roundi(float(baseGems) * endMod)"), "não há segunda multiplicação no SettleTournament")
-	_contains(arenaSrc, "var prize : int = maxi(frozenGems, floorGems)", "o papel do catálogo na liquidação é o PISO por posição")
+	_contains(arenaSrc, "var want : int = maxi(frozenValue, floorValue)", "o papel do catálogo na liquidação é o PISO por posição (P1-E)")
+	_contains(arenaSrc, "var prize : int = mini(want, remaining)", "e o prêmio tem o TETO do pool arrecadado — nada sai do nada (P1-E)")
 
 	var openTs : int = 1890000000
 	var endsAt : int = openTs + DaySeconds
@@ -585,7 +586,7 @@ func _suiteTournamentPool():
 	var frozen : Array = _arena.call("FormatPrizes", base, 1.5)
 	_checkEq(frozen.size(), base.size(), "o congelado tem o mesmo comprimento da régua do catálogo")
 	for rank in base.size():
-		_checkEq(int((frozen[rank] as Dictionary).get("gems", -1)), int(roundi(float(base[rank]) * 1.5)), "prêmio da posição %d turbinado item a item" % (rank + 1))
+		_checkEq(int((frozen[rank] as Dictionary).get("gold", -1)), int(roundi(float(base[rank]) * 1.5)), "prêmio da posição %d turbinado item a item (gold do pool, P1-E)" % (rank + 1))
 	# Banda fail-closed no CONSUMIDOR (kind de pool não é cheque no arquivo).
 	_cal.call("SetRawForTests", _eventsRaw([_event("tournament", "copa_fora_da_banda", openTs, openTs + 2 * DaySeconds, 99.0)]))
 	_checkEq(_cal.call("ValidateCalendar", _eventsRaw([_event("tournament", "copa_fora_da_banda", openTs, openTs + 2 * DaySeconds, 99.0)])).size(), 0, "value 99 de copa NÃO derruba a agenda (não é multiplicador de ganho)")
@@ -599,7 +600,7 @@ func _suiteTournamentPool():
 	_check(ints != null, "lista de inteiros (o JSON.stringify do catálogo de hoje) é aceita")
 	_checkEq((ints as Array).size(), base.size(), "e vira uma posição por prêmio")
 	var objs : Variant = _arena.call("ParsePrizePool", JSON.stringify(_arena.call("FormatPrizes", base, 2.0)))
-	_checkEq(int((objs as Array)[0].get("gems", 0)), base[0] * 2, "lista de objetos {gems:N} é aceita com o valor turbinado")
+	_checkEq(int((objs as Array)[0].get("gold", 0)), base[0] * 2, "lista de objetos {gems:N} é aceita e normaliza para gold com o valor turbinado (P1-E)")
 	_check(_arena.call("ParsePrizePool", "[]") == null, "\"[]\" não é lido como copa sem prêmio (cai no catálogo)")
 	_check(_arena.call("ParsePrizePool", "{\"gems\": 5}") == null, "topo que não é lista é rejeição, não prêmio zero")
 	_check(_arena.call("ParsePrizePool", JSON.stringify([{"glims": 5}])) == null, "chave de moeda desconhecida é rejeição")
@@ -608,7 +609,7 @@ func _suiteTournamentPool():
 	var poolFallback : Array = _arena.call("PrizePoolOfRow", {"name": "sem o campo"})
 	_checkEq(poolFallback.size(), base.size(), "linha sem prizes_json resolve o catálogo, não o vazio")
 	var poolFrozen : Array = _arena.call("PrizePoolOfRow", {"prizes_json": JSON.stringify(_arena.call("FormatPrizes", base, 1.5))})
-	_checkEq(int(poolFrozen[0].get("gems", 0)), int(roundi(float(base[0]) * 1.5)), "linha congelada resolve o pool turbinado")
+	_checkEq(int(poolFrozen[0].get("gold", 0)), int(roundi(float(base[0]) * 1.5)), "linha congelada resolve o pool turbinado")
 
 	# O copo REAL: a linha criada pelo job carrega o turbinado e o preview lê a
 	# MESMA linha (anunciado == pago). Usa o serviço montado do boot.
@@ -628,7 +629,7 @@ func _suiteTournamentPool():
 		return
 	var row : Dictionary = _query("SELECT prizes_json, ends_at FROM tournament WHERE tournament_id = ?;", [createdID])[0]
 	var rowPool : Array = _arena.call("PrizePoolOfRow", row)
-	_checkEq(int(rowPool[0].get("gems", 0)), base[0] * 2, "o pool CONGELADO na linha é o turbinado pela campanha que cobre o ends_at (não o catálogo)")
+	_checkEq(int(rowPool[0].get("gold", 0)), base[0] * 2, "o pool CONGELADO na linha é o turbinado pela campanha que cobre o ends_at (não o catálogo)")
 	_check(_gaugeValue(_metricsBody(), "shambleta_liveops_mod_tournament") != "<ausente>", "e o /metrics serve o modificador de copa")
 	var preview : Dictionary = arena.call("GetTournaments", 0)
 	var active : Dictionary = preview.get("active", {}) as Dictionary
