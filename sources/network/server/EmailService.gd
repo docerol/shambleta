@@ -73,10 +73,38 @@ func SendPasswordResetEmail(toEmail : String, code : String) -> void:
 		"htmlContent": FormatPasswordResetEmail(code)
 	}
 
-	Util.PrintLog("EmailService", "Sending password reset email to: %s" % toEmail)
+	# Q-3 (LGPD, auditoria 2026-10-06 §12 item 5): o log de aplicação não é cofre de
+	# dado pessoal — a trilha ia parar no journald com o e-mail claro. A máscara
+	# mantém o dígito útil para o plantão sem nomear ninguém: quem precisa do
+	# endereço real consulta a base, com autorização, não o syslog.
+	Util.PrintLog("EmailService", "Sending password reset email to: %s" % MaskEmail(toEmail))
 	var err : Error = httpRequest.request(SmtpApiUrl, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
 	if err != OK:
 		Util.PrintLog("EmailService", "Failed to initiate HTTP request (error: %d)" % err)
+
+# Q-3: máscara de e-mail para logs — primeira letra + domínio truncado. Vazio ou
+# sem @ vira `<invalido>`: o log não pode virar oracle do formato de cadastro.
+static func MaskEmail(email : String) -> String:
+	var norm : String = email.strip_edges().to_lower()
+	var at : int = norm.find("@")
+	if at <= 0 or at >= norm.length() - 1:
+		return "<invalido>"
+	var domain : String = norm.substr(at + 1)
+	return norm.substr(0, 1) + "***@" + domain.substr(0, mini(2, domain.length())) + "***"
+
+# Q-3: o corpo do erro do provedor pode ecoar o payload — inclusive o e-mail do
+# jogador. Redige qualquer token `x@y` antes de o log existir.
+static func RedactEmails(text : String) -> String:
+	var re : RegEx = RegEx.create_from_string("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}")
+	var out : String = ""
+	var last : int = 0
+	for m in re.search_all(text):
+		var hit : RegExMatch = m
+		out += text.substr(last, hit.get_start() - last)
+		out += MaskEmail(hit.get_string())
+		last = hit.get_start() + hit.get_string().length()
+	out += text.substr(last)
+	return out
 
 func FormatPasswordResetEmail(code : String) -> String:
 	if passwordResetTemplate.is_empty():
@@ -86,7 +114,7 @@ func FormatPasswordResetEmail(code : String) -> String:
 func RequestCompleted(result : int, responseCode : int, _headers : PackedStringArray, body : PackedByteArray):
 	if result != HTTPRequest.RESULT_SUCCESS or responseCode < 200 or responseCode >= 300:
 		var responseBody : String = body.get_string_from_utf8()
-		Util.PrintLog("EmailService", "Failed to send email (result: %d, code: %d, body: %s)" % [result, responseCode, responseBody])
+		Util.PrintLog("EmailService", "Failed to send email (result: %d, code: %d, body: %s)" % [result, responseCode, RedactEmails(responseBody)])
 	else:
 		Util.PrintLog("EmailService", "Email sent successfully (code: %d)" % responseCode)
 

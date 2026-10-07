@@ -96,6 +96,13 @@ func _run():
 	_craft = load("res://sources/economy/CraftCatalog.gd")
 	_catalog = load("res://sources/economy/EconomyCatalog.gd")
 	_streak = load("res://sources/idle/StreakService.gd")
+	# Q-7 (2026-10-07): pino do calendário nos eixos de bônus — as réguas de
+	# settle/golden daqui liquidam no tempo real e conferem os mods do fixture sem
+	# campanha; o eixo `tournament` (pool congelado) continua lendo o arquivo. Ver
+	# `LiveOpsCalendar.PinNeutral` e a nota `_cuidado_com_a_suite` do JSON.
+	var _opsCal = load("res://sources/ops/LiveOpsCalendar.gd")
+	if _opsCal != null:
+		_opsCal.callv("PinNeutral", [true])
 	_streakRows = load("res://sources/gui/StreakRows.gd")
 	_networkCommons = load("res://sources/network/NetworkCommons.gd")
 	_actorCommons = load("res://sources/actor/ActorCommons.gd")
@@ -412,6 +419,24 @@ func _suiteStreak():
 	var dup : Dictionary = _streak.RecordLogin(charID, accountID)
 	_check(str(dup.get("reason", "")) == "same_day" and int(dup.get("reward", -1)) == 0, "reentrada no MESMO dia não concede (idempotência por ShopDay do servidor)")
 	_checkEq(_gpOf(charID), 10000 + granted, "wallet = fixture + degrau pago")
+	# Q-5 (2026-10-07): banda de CONTA na escada. A idempotência era por
+	# personagem — dez personagens da mesma conta pagavam dez escadas por dia.
+	# Irmão no mesmo dia: a streak própria avança (continuidade visível por char),
+	# a reclamação de pagamento não — quem logou primeiro no dia da conta leva.
+	var char2ID : int = 0
+	if not _check(bool(_sql.AddCharacter(accountID, "BalStreakChar2", _actorCommons.DefaultStats, _actorCommons.DefaultTraits, _actorCommons.DefaultAttributes)), "segundo personagem da MESMA conta criado"):
+		return
+	char2ID = _sql.GetCharacterID(accountID, "BalStreakChar2")
+	if not _check(char2ID > 0, "irmão tem char_id"):
+		return
+	var second : Dictionary = _streak.RecordLogin(char2ID, accountID)
+	_check(bool(second.get("ok", false)), "irmao no mesmo dia registra (a rota não recusa o login)")
+	_checkEq(int(second.get("streak", 0)), 1, "continuidade por personagem preservada (o irmão começa em 1)")
+	_checkEq(int(second.get("reward", -1)), 0, "mesmo dia, mesma conta: o irmão NÃO reclama o degrau (a escada x10 morreu aqui)")
+	_check(str(second.get("reason", "")) == "account_day_taken", "a recusa tem motivo nomeado (ocupa a régua, não silencia)")
+	_checkEq(_gpOf(char2ID), 0, "nenhum ouro creditado no irmão bloqueado")
+	_sql.db.delete_rows("character", "nickname = 'BalStreakChar2';")
+	_sql.db.delete_rows("login_streak", "char_id = %d" % char2ID)
 	for day : int in range(2, 11):
 		ts += daySpan
 		_streak.nowOverride = ts

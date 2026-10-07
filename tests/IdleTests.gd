@@ -280,9 +280,12 @@ func SuiteSettleGolden(sql : SQLService, economy : EconomyService, charID : int,
 	Check(nb > 1.0, "golden: fixture é newbie (×%s) — a trava de gold sem boost é significativa" % str(nb))
 	var expectedGold : int = roundi(float(zone5.goldPerKill) * float(zone5.parKillsPerHour) * h * eff * OfflineSettle.OfflineFactor)
 	var expectedTax : int = roundi(float(expectedGold) * 0.05)	# 5% — eff < 1.0
-	# O fixture do golden não tem VIP, guild nem campanha no ar. `report.mods` entra
-	# no produto do drop e no das chaves; se ele sair de 1,0 a régua abaixo passa a
-	# conferir a fórmula contra o próprio multiplicador e deixa de ser régua. Trava.
+	# O fixture do golden não tem VIP, guild nem campanha no ar — e campanha nem
+	# poderia entrar: o runner pinou os eixos de bônus do calendário (Q-7,
+	# `LiveOpsCalendar.PinNeutral`), então esta trava voltou a ser só sobre o
+	# FIXTURE. `report.mods` entra no produto do drop e no das chaves; se ele sair
+	# de 1,0 a régua abaixo passa a conferir a fórmula contra o próprio
+	# multiplicador e deixa de ser régua. Trava.
 	CheckEq(roundi(float(report.get("mods", 0.0)) * 1000.0), 1000, "golden: mods == 1,0 no fixture (sem VIP/guild/campanha)")
 	# Drop de item tem a MESMA unidade da chave de boss: ppm de KILLS × kills
 	# equivalentes da janela. O settle tratava o ppm como partes-por-milhão de
@@ -3738,6 +3741,7 @@ func SuiteGuildPremium(sql : SQLService) -> void:
 	sql.ExecuteBindings("DELETE FROM guild_vault WHERE guild_id = ?;", [gid])
 	sql.ExecuteBindings("DELETE FROM guild_member WHERE guild_id = ?;", [gid])
 	sql.ExecuteBindings("DELETE FROM guild WHERE guild_id = ?;", [gid])
+	economy.guildService.InvalidateMembershipAll()	# Q-8: fixture escreveu por fora dos verbos — o memo não pode sobreviver à fileira apagada
 	sql.db.delete_rows("character", "nickname = 'IdleFGuild'")
 	sql.db.delete_rows("account", "username = 'idle_fg_account'")
 	sql.db.delete_rows("character", "nickname = 'IdleFGuildM'")
@@ -3822,6 +3826,7 @@ func SuiteSeasonRaces(sql : SQLService) -> void:
 
 	sql.ExecuteBindings("DELETE FROM guild_member WHERE guild_id = ?;", [gid])
 	sql.ExecuteBindings("DELETE FROM guild WHERE guild_id = ?;", [gid])
+	economy.guildService.InvalidateMembershipAll()	# Q-8: mesmo contrato da limpeza acima
 	sql.db.delete_rows("character", "nickname = 'IdleRaceTester'")
 	sql.db.delete_rows("account", "username = 'idle_race_account'")
 
@@ -4823,6 +4828,7 @@ func SuiteGuilds(sql : SQLService) -> void:
 	var apple : int = FarmZoneData.DefaultDropItemHash
 	# testing.db persiste: janitor de runs falhados (guild fantasma bloqueia UNIQUE).
 	sql.ExecuteBindings("DELETE FROM guild_member WHERE guild_id IN (SELECT guild_id FROM guild WHERE name = ?);", ["Idle E Guild"])
+	economy.guildService.InvalidateMembershipAll()	# Q-8: o janitor apaga fileiras que o memo pode ter visto no run inteiro anterior
 	sql.ExecuteBindings("DELETE FROM guild_vault WHERE guild_id IN (SELECT guild_id FROM guild WHERE name = ?);", ["Idle E Guild"])
 	sql.ExecuteBindings("DELETE FROM guild_vault_log WHERE guild_id IN (SELECT guild_id FROM guild WHERE name = ?);", ["Idle E Guild"])
 	sql.ExecuteBindings("DELETE FROM guild WHERE name = ?;", ["Idle E Guild"])
@@ -7624,6 +7630,26 @@ func SuiteRebirth(sql : SQLService, charID : int, economy : EconomyService) -> v
 	agent.stat.level = FarmZoneData.NewbieBoostMaxLevel + 5
 	var xpB : int = int(economy.SettleBossResult(charID, agent, 0, false).get("xp", 0))
 	CheckNear(float(xpB) / float(maxi(1, xpA)), 1.05, 1.0, "boss faucet scales with favor_xp (differential)")
+	# --- Q-6 (2026-10-07): favor tem teto DECLARADO, e a compra obedece o número -----
+	# O cap antigo era consequência aritmética da curva 1,7^n; com FavorMaxLevels a
+	# porta de entrada fecha por guarda, não por preço. A escrita direta aqui é
+	# fixture (o marketplace faz o mesmo com `ah_activity`): o que se testa é a
+	# GUARDA na porta, não a capacidade de farmer a essência até 1,7^50.
+	var pumpTo : int = RebirthData.FavorMaxLevels - int(sql.GetRebirthInfo(charID).get("favor_xp", 0))
+	for pumpStep in maxi(0, pumpTo):
+		sql.IncRebirthUpgrade(charID, RebirthData.UpgradeXp)
+	CheckEq(int(sql.GetRebirthInfo(charID).get("favor_xp", -1)), RebirthData.FavorMaxLevels, "q6: favor_xp estaciona no teto declarado")
+	var favorMaxed : Dictionary = economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeXp)
+	Check(not bool(favorMaxed.get("ok", true)), "q6: compra acima do teto de favor recusada")
+	Check(str(favorMaxed.get("reason", "")) == "maxed", "q6: recusa de favor tem o MESMO nome da de attune")
+	Check(RebirthData.XpMult(RebirthData.FavorMaxLevels) == RebirthData.XpMult(999999), "q6: XpMult respeita o teto mesmo com owned absurdo (clamp, não curva)")
+	Check(RebirthData.XpMult(2) > RebirthData.XpMult(1), "q6: abaixo do teto a curva continua 1.05^n")
+	var goldPump : Dictionary = sql.GetRebirthInfo(charID)
+	for goldStep in maxi(0, RebirthData.FavorMaxLevels - int(goldPump.get("favor_gold", 0))):
+		sql.IncRebirthUpgrade(charID, RebirthData.UpgradeGold)
+	Check(not bool(economy.BuyRebirthUpgrade(charID, RebirthData.UpgradeGold).get("ok", true)), "q6: favor_gold tem a mesma porta")
+	var rebState : Dictionary = economy.GetRebirthState(charID)
+	CheckEq(int(rebState.get("favor_max", -1)), RebirthData.FavorMaxLevels, "q6: o painel lê o teto (attune_max tinha precedente, favor não podia ser o único segredo)")
 	WorldAgent.RemoveAgent(agent)
 
 

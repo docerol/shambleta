@@ -55,8 +55,22 @@ def make_db():
     con.execute("CREATE TABLE cohort_retention (cohort_day INTEGER, d1 INTEGER, d7 INTEGER, d30 INTEGER);")
     con.execute("INSERT INTO grant_queue (account_id, kind, amount, payload, status, "
                 "created_at, price_paid, currency, sku) VALUES "
-                "(1, 'grant', 1, '{}', 'processed', ?, 9900, 'USD', 'starter.pack');",
+                "(1, 'grant', 1, '{\"sku\":\"starter.pack\"}', 'processed', ?, 9900, 'USD', 'starter.pack');",
                 (int(time.time()) - 100,))
+    # Q-8 (2026-10-07): o funil mudou de LIKE para parse de JSON, e o fixture agora
+    # TESTA as duas formas de serialização: a linha de cima está no formato do
+    # `JSON.stringify` do runtime Godot (sem espaço) — invisível ao LIKE antigo —
+    # e esta segunda, no formato do dump Python (com espaço). Uma terceira linha
+    # com OUTRO sku processada é o controle negativo: claimed tem de bater 2, nem
+    # 1 (serígrafo cego) nem 3 (funil que conta o que não é starter).
+    con.execute("INSERT INTO grant_queue (account_id, kind, amount, payload, status, "
+                "created_at, price_paid, currency, sku) VALUES "
+                "(2, 'bundle', 1, '{\"sku\": \"starter.pack\"}', 'processed', ?, 0, '', 'starter.pack');",
+                (int(time.time()) - 90,))
+    con.execute("INSERT INTO grant_queue (account_id, kind, amount, payload, status, "
+                "created_at, price_paid, currency, sku) VALUES "
+                "(3, 'grant', 30, '{\"sku\": \"vip.1mo\"}', 'processed', ?, 0, '', 'vip.1mo');",
+                (int(time.time()) - 80,))
     con.execute("INSERT INTO cohort_retention (cohort_day, d1, d7, d30) VALUES (0, 10, 7, 5);")
     con.commit()
     return path
@@ -81,6 +95,7 @@ if __name__ == "__main__":
     ok("shambleta_ah_open " in text, "expõe shambleta_ah_open")
     ok("shambleta_revenue_gross_minor{" in text, "expõe shambleta_revenue_gross_minor com rótulo currency")
     ok("shambleta_starter_funnel{" in text, "expõe shambleta_starter_funnel com rótulo state={claimed,eligible}")
+    ok('shambleta_starter_funnel{state="claimed"} 2' in text, "Q-8: claimed conta por PARSE do payload nas duas serializações (Godot sem espaço + Python com espaço), não por LIKE de forma")
     ok("shambleta_revenue_gross_minor{currency=\"USD\"} 9900" in text, "expõe shambleta_revenue_gross_minor com rótulo currency (receita do fixture)")
     ok("shambleta_kpi_arppu_minor{currency=\"USD\"} 9900" in text, "C-8: ARPPU vira gauge Prometheus (bruto/pagante do fixture), não só número do JSON")
     ok("shambleta_kpi_arpu_minor{currency=\"USD\"} " in text, "C-8: ARPU por conta registrada exposto com o mesmo denominador do JSON")

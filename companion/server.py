@@ -1472,11 +1472,25 @@ class Store:
             pass
         funnel = {}
         try:
+            # Q-8 (2026-10-07): o funil era decidido por FORMA de string —
+            # `payload LIKE '%"sku": "starter.pack"%'` enxergava só o JSON com
+            # espaço depois do dois-pontos (o dump do próprio Python) e era cego
+            # ao `JSON.stringify` do runtime Godot (`"sku":"starter.pack"`). Um
+            # funil de conversão que depende do serígrafo de quem escreveu a
+            # linha mente para o painel. O LIKE grosseiro abaixo é só corte de
+            # linhas; a decisão é `json.loads` campo a campo, formato a formato.
+            starterClaimed = 0
+            for (payload,) in con.execute(
+                    "SELECT payload FROM grant_queue WHERE status = 'processed' "
+                    "AND payload LIKE '%starter.pack%';").fetchall():
+                try:
+                    parsed = json.loads(payload)
+                except ValueError:
+                    continue
+                if isinstance(parsed, dict) and parsed.get("sku") == "starter.pack":
+                    starterClaimed += 1
             funnel = {
-                "starter_claimed": con.execute(
-                    "SELECT COUNT(*) FROM grant_queue WHERE payload LIKE ? "
-                    "AND status = 'processed';",
-                    ('%"sku": "starter.pack"%%',)).fetchone()[0],
+                "starter_claimed": starterClaimed,
                 "starter_eligible": con.execute(
                     "SELECT COUNT(*) FROM account WHERE created_timestamp > ?;",
                     (now - 3 * DAY,)).fetchone()[0],

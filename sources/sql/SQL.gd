@@ -1001,6 +1001,24 @@ func GetCharacterBossesBeaten(charID : int) -> int:
 func SetCharacterBossesBeaten(charID : int, count : int) -> bool:
 	return db.update_rows("character", "char_id = %d" % charID, {"bosses_beaten" = maxi(0, count)})
 
+# Q-1 (2026-10-07): cache do interrupt DEMONSTRADO na luta ao vivo (migration 070).
+# Guarda o MELHOR multiplicador da janela; a leitura exige re-demonstração periódica
+# porque o crédito expira com `EconomyCatalog.BossInterruptCacheSec`. O rush paga por
+# mecânica exercida, nunca por mecânica prometida.
+func CacheBossInterrupt(charID : int, mult : float) -> bool:
+	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["interrupt_mult"])
+	var cur : float = 0.0 if rows.is_empty() else float(rows[0].get("interrupt_mult", 0.0))
+	return db.update_rows("character", "char_id = %d" % charID, {"interrupt_mult" = maxf(cur, mult), "interrupt_at" = SQLCommons.Timestamp()})
+
+func GetCachedBossInterruptMult(charID : int) -> float:
+	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["interrupt_mult", "interrupt_at"])
+	if rows.is_empty():
+		return 1.0
+	var at : int = int(rows[0].get("interrupt_at", 0))
+	if SQLCommons.Timestamp() - at > EconomyCatalog.BossInterruptCacheSec:
+		return 1.0
+	return maxf(1.0, float(rows[0].get("interrupt_mult", 0.0)))
+
 # Tormento (migration 037): dificuldade opt-in por char (0 = normal).
 func GetTormentLevel(charID : int) -> int:
 	var rows : Array = db.select_rows("character", "char_id = %d" % charID, ["torment"])

@@ -1831,9 +1831,14 @@ func TriggerSkill(targetRID : int, skillID : int, peerID : int):
 
 func TriggerSelect(targetRID : int, peerID : int):
 	var target : BaseAgent = WorldAgent.GetAgent(targetRID)
-	if target:
-		Network.UpdatePublicStats(targetRID, target.stat.level, target.stat.health, target.stat.current.maxHealth, target.stat.hairstyle, target.stat.haircolor, target.stat.gender, target.stat.race, target.stat.skintone, target.stat.currentShape, peerID)
 	var player : PlayerAgent = Peers.GetAgent(peerID)
+	# Q-2 (S8, 2026-10-07): o stats público sai só para quem já VÊ o alvo.
+	# `visibleAgents` é o conjunto autoritativo que o próprio broadcast mantém
+	# (mapa + viewport + invisibilidade); sem este gate, um RID adivinhado
+	# respondia nível/vida/raça de qualquer agent do mundo — leak que o resto
+	# deste arquivo sempre evitou e a auditoria §10(S8) nomeou.
+	if target and player != null and player.visibleAgents.has(targetRID):
+		Network.UpdatePublicStats(targetRID, target.stat.level, target.stat.health, target.stat.current.maxHealth, target.stat.hairstyle, target.stat.haircolor, target.stat.gender, target.stat.race, target.stat.skintone, target.stat.currentShape, peerID)
 	if player:
 		player.target_selected.emit(player, target)
 

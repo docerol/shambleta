@@ -174,10 +174,22 @@ func _suiteConfigFiles():
 	_checkEq(int(_cfg.call("DurationDays", s1)), 30, "duração de 30 dias mantida")
 	_check(not bool(_cfg.call("IsScheduled", s1)), "S1 é de rotação (0/0), senão o beta abriria temporada vencida")
 	_contains(str(_cfg.call("RulesJSONForEntry", s1)), "\"S1\"", "rules_frozen ainda diz \"S1\" para quem lê o congelado")
-	# Perigo de agenda conhecido: nenhuma janela double_xp pode cobrir o instante
-	# em que `SuiteSettleGolden` roda (a expectativa dela é mods = 1.0).
-	var now : int = int(Time.get_unix_time_from_system())
-	_checkNear(float(_cal.call("ValueAtKind", _cal.get("KindDoubleXP"), now, 1.0)), 1.0, 0.000001, "nenhum double_xp no ar neste instante (SuiteSettleGolden continua em mods 1.0)")
+	# Q-7 (2026-10-07): a proteção do dourado mudou de dono. A régua antiga exigia
+	# "nenhum double_xp no ar NESTE instante" — que é a regra que condenava toda
+	# campanha de XP a morar em data distante (agenda viva em dia comum era
+	# proibida por teste, não por produto). O que se mede aqui é o PIN: com
+	# `PinNeutral(true)` o eixo de bônus fecha no neutro sobre o timestamp de uma
+	# janela declarada, e sem pino a mesma janela paga o value do arquivo. O eixo
+	# `tournament` é poupado do pino de propósito — pool congelado no `ends_at`,
+	# pode estar no ar sempre. Quem afere a economia do settle (`run_idle_tests`,
+	# `balance_test`) pina na inicialização; este harness, que TESTA o calendário,
+	# nunca deixa pino ligado entre as duas pernas.
+	var pinnedWindow : int = 1791600000	# dentro de `xp_double_sprint_out1026` E do fio da copa
+	_cal.callv("PinNeutral", [true])
+	_checkNear(float(_cal.call("ValueAtKind", _cal.get("KindDoubleXP"), pinnedWindow, 1.0)), 1.0, 0.000001, "pino: o eixo double_xp fecha no neutro mesmo com janela no ar (o golden não depende mais da data do run)")
+	_checkNear(float(_cal.call("ValueAtKind", _cal.get("KindTournament"), pinnedWindow, 1.0)), 1.25, 0.000001, "pino NÃO toca o eixo da copa: o pool congelado continua lendo o arquivo (o que as suítes de torneio esperam)")
+	_cal.callv("PinNeutral", [false])
+	_checkNear(float(_cal.call("ValueAtKind", _cal.get("KindDoubleXP"), pinnedWindow, 1.0)), 2.0, 0.000001, "sem pino: a mesma janela paga o ×2 declarado no arquivo")
 	# A trilha da S1 é dado do arquivo desde 2026-09-29. Comparada pelo LEITOR do
 	# produto (`PassTiers`, que normaliza a chave de nível para int), nível a nível e
 	# nos dois sentidos, contra o catálogo que o jogador recebia: sem esta perna o
@@ -674,9 +686,11 @@ func _suiteAgendaCoverage():
 	_check(gapSemCopa > cadence, "E6: sem a copa o vão vira %d dia(s) > %d — a régua morde o arquivo como ele estava, não a minha cópia" % [gapSemCopa, cadence])
 	_checkEq((_cal.call("ActiveEntriesAt", semCopa, now) as Array).size(), 0, "E6: e neste instante não sobre NADA no ar (é exatamente a linha que o arquivo de antes não passava)")
 	# E7 — a régua é sobre o arquivo, não sobre a minha boa vontade: o vão medido
-	# bate com a resolução do produto num instante do meio do deserto antigo
-	# (20/10/2026, 30 dias depois do fim da última campanha histórica).
-	var deadDay : int = 1792540800 - DaySeconds
+	# bate com a resolução do produto num instante do meio do deserto de bônus.
+	# Q-7 (2026-10-07): o deserto de 20/10 original virou CAMPANHA (Semana do baú,
+	# 15–20/10); o deserto de bônus agora começa depois do fim dela, e a sonda
+	# mudou para 25/10/2026 — sem `double_xp` nem `chest_bonus` no ar, copa à parte.
+	var deadDay : int = 1792886400
 	_check((_cal.call("ActiveEntriesAt", semCopa, deadDay) as Array).is_empty(), "E7: %d (deserto de outubro, arquivo sem a copa) está vazio de verdade, por `%s` no resolvedor" % [deadDay, "ActiveEntriesAt"])
 	_check((_cal.call("ActiveEntriesAt", entries, deadDay) as Array).size() >= 1, "E7: com a agenda do repo o mesmo instante tem %d kind(s) no ar" % (_cal.call("ActiveEntriesAt", entries, deadDay) as Array).size())
 

@@ -28,6 +28,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'develop'
     runs-on: ubuntu-latest
+    # Q-4 (auditoria 2026-10-06 §19): teto duro de job (régua em scripts/check_ci.sh).
+    timeout-minutes: 15
     steps:
       # Os dois valores entram por `env:`, não interpolados dentro do comando:
       # é o que mantém o token fora da linha de comando ecoada e a URL fora de

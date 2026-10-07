@@ -127,7 +127,7 @@ func _initialize() -> void:
 	var vivo : String = ""
 	for probe in [
 			"Welcome to Shambleta!\n\nThis is an idle RPG — your character fights on its own. Let's take a quick tour.",
-			"When you come back, your AFK earnings are ready to claim.\n\nOpen the Menu (F1) and tap the AFK icon to collect your offline progress.",
+			"When you come back, your AFK earnings are ready to claim.\n\nTap the Menu button at the top of the screen and tap the AFK icon to collect your offline progress.",
 			"I have read and accept the Terms of Use and Privacy Policy, and I am 18 years old or older"] :
 		var said : String = tr(StringName(probe))
 		if said == probe or said.is_empty():

@@ -319,10 +319,28 @@ static func ValueAtFrom(entries : Array, kind : String, ts : int, fallback : flo
 static func ActiveAt(kind : String, ts : int) -> Dictionary:
 	return ActiveAtFrom(Entries(), kind, ts)
 
+# Q-7 (2026-10-07): o pino do harness. A régua dourada liquida no tempo real e o
+# calendário entra no faucet por ESTA porta; enquanto a única defesa era "nenhuma
+# janela pode cobrir o dia do run" (a nota `_cuidado_com_a_suite` do JSON), a agenda
+# ficava proibida de existir no futuro próximo — live ops que só pode viver em data
+# distante é o Achado #98 de outra roupa. O pino fecha os DOIS eixos de bônus
+# (`double_xp`, `chest_bonus`) no neutro para o harness que AFERE a economia do
+# settle (`run_idle_tests`, `balance_test`); o eixo `tournament` fica de fora de
+# propósito: a âncora dele é o `ends_at` congelado na criação da copa, ele pode
+# ficar permanentemente no ar pela regra do próprio arquivo, e as suítes de copa
+# contam com isso. Quem TESTA o calendário (`season_liveops_test`, `doc_facts_test`)
+# não pinna nada.
+static var PinnedNeutral : bool = false
+
+static func PinNeutral(pinned : bool) -> void:
+	PinnedNeutral = pinned
+
 # O consultado pelo gameplay. Arquivo inválido → `Entries()` vazio → neutro: o
 # fail-closed aqui é "nenhum bônus não validado entra no ar", que é o sentido
 # seguro de um multiplicador de faucet.
 static func ValueAtKind(kind : String, ts : int, fallback : float = DefaultMod) -> float:
+	if PinnedNeutral and not PoolKinds.has(kind):
+		return fallback
 	return ValueAtFrom(Entries(), kind, ts, fallback)
 
 static func IsKindActive(kind : String, ts : int) -> bool:

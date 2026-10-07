@@ -32,6 +32,10 @@ func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
 	var charID : int = CreateFixture(sql, "idle_torment_account", "IdleTormentTester", 20000)
 	if not Check(charID != 0, "torment fixture created"):
 		return
+	# Q-6: `boss_rush_activity` é keyed por char_id e o sqlite REUSA o id quando o
+	# fixture apaga a última linha — sobra de run anterior no mesmo id entraria aqui
+	# como budget falso. Higiene de fixture, como a do `ah_activity` no marketplace.
+	sql.db.delete_rows("boss_rush_activity", "char_id = %d" % charID)
 	CheckEq(sql.GetTormentLevel(charID), 0, "torment default 0")
 	CheckEq(sql.GetTormentMax(charID), 0, "torment max default 0")
 	Check(sql.SetTormentMax(charID, 2) and sql.GetTormentMax(charID) == 2, "torment max stored")
@@ -66,8 +70,122 @@ func SuiteTormentRush(sql : SQLService, economy : EconomyService) -> void:
 			CheckEq(sql.GetCharacterBossesBeaten(charID), BossService.GetBossCount(), "rush advances ladder")
 			Check(sql.GetTormentMax(charID) >= 1, "clearing ladder unlocks T1")
 		IdlePolicyService.StopIdleSession(agent)
+	# Q-1 (2026-10-07): o interrupt demonstrado ao vivo paga o rush.
+	# (a) unidade do cache: melhor mult vence, fora da janela expira;
+	var qchar : int = CreateFixture(sql, "idle_q1_account", "IdleQ1Tester", 20000)
+	if Check(qchar != 0, "q1 fixture created"):
+		sql.db.delete_rows("boss_rush_activity", "char_id = %d" % qchar)
+		CheckEq(sql.GetCachedBossInterruptMult(qchar), 1.0, "sem demonstração: rush corre com 1.0 (comportamento antigo preservado)")
+		Check(sql.CacheBossInterrupt(qchar, 1.25), "cache grava good")
+		Check(sql.CacheBossInterrupt(qchar, 1.5), "cache grava perfect por cima")
+		Check(sql.CacheBossInterrupt(qchar, 1.25), "cache recusa degradar o melhor")
+		CheckEq(sql.GetCachedBossInterruptMult(qchar), 1.5, "leitura devolve o MELHOR mult da janela")
+		sql.ExecuteBindings("UPDATE character SET interrupt_at = ? WHERE char_id = ?;", [Time.get_unix_time_from_system() - 8 * 86400, qchar])
+		CheckEq(sql.GetCachedBossInterruptMult(qchar), 1.0, "crédito velho expira: a mecânica declara uso, não direito eterno")
+		# (b) fim-a-fim: personagem no fio da navalha perde sem crédito e VENCE com
+		# o perfect em cache — a mesma chave de teste que o rush da escada usa.
+		var qagent : PlayerAgent = await _SpawnSimAgent(qchar, 982, 1)
+		if Check(qagent != null, "q1 rush agent spawned"):
+			IdlePolicyService.StopIdleSession(qagent)
+			var bossLvl : int = BossService.GetBossLevel(qagent.stat.level, 0)
+			# Q-6 follow-up (2026-10-07): a navalha não pode depender da sorte do
+			# fixture. Com HP fixo (100000) ela SUMIA contra o boss fraco — o
+			# plantão mediu `plainWin@atk1=true` e o varrido inteiro virou verde ao
+			# defeito. Agora o HP é DERIVADO do boss do instante: o limiar de dano
+			# para vencer fica cravado em K=500, a banda `perfect vence / plain
+			# perde` é dmg ∈ [K/1.5, K), e em qualquer nível de boss ela cai dentro
+			# de 1..3999. Ciclo real do agente entra na conta — é a única entrada
+			# que o snapshot herda da ficha.
+			var snapCycle : Dictionary = BossService.PlayerFightSnapshot(qagent)
+			var cycleF : float = maxf(0.05, float(snapCycle.get("cycle", BossService.PlayerAttackCycle)))
+			var hpRazor : int = maxi(400, roundi(float(BossService.GetBossMaxHealth(bossLvl)) * cycleF * float(BossService.GetBossAttack(bossLvl)) / (1.5 * 500.0)))
+			var probeAttack : int = 1
+			var snap : Dictionary = {}
+			while probeAttack < 4000:
+				qagent.stat.current.attack = probeAttack
+				qagent.stat.current.defense = 0
+				qagent.stat.current.maxHealth = hpRazor
+				snap = BossService.PlayerFightSnapshot(qagent)
+				var winPlain : bool = bool(BossService.Resolve(snap, bossLvl, 1.0).get("win", false))
+				var winPerfect : bool = bool(BossService.Resolve(snap, bossLvl, BossService.InterruptPerfectMult).get("win", false))
+				if winPerfect and not winPlain:
+					break
+				probeAttack += 1
+			if not Check(probeAttack < 4000, "ataque no fio da navalha encontrado (perde sem interrupt, vence com perfect)"):
+				# Diagnóstico do plantão: a navalha é pura aritmética de TTK sobre o
+				# ciclo REAL do agente; quando ela desaparece, o que mudou é uma
+				# entrada, e a régua tem de dizer QUAL.
+				print("       q1 navalha: level=%d bossLvl=%d cycle=%.3f hpRazor=%d plainWin@atk1=%s perfectWin@atk4000=%s" % [qagent.stat.level, bossLvl, cycleF, hpRazor, str(bool(BossService.Resolve(snap, bossLvl, 1.0).get("win", false))), str(bool(BossService.Resolve(snap, bossLvl, BossService.InterruptPerfectMult).get("win", false)))])
+			if probeAttack < 4000:
+				Check(sql.GetCachedBossInterruptMult(qchar) <= 1.0, "cache expirado antes do rush (estado controlado)")
+				CheckEq(economy.GrantBossKey(qchar, 1, "q1 test"), 1, "q1 rush key 1")
+				var rushNoCredit : Dictionary = economy.RunBossRush(qchar, qagent)
+				CheckEq(int(rushNoCredit.get("wins", -1)), 0, "rush sem crédito: primeiro boss fecha a fileira (a navalha corta)")
+				Check(sql.CacheBossInterrupt(qchar, BossService.InterruptPerfectMult), "q1 interrupt demonstrado entra no cache")
+				CheckEq(economy.GrantBossKey(qchar, 1, "q1 test"), 1, "q1 rush key 2")
+				var rushCredit : Dictionary = economy.RunBossRush(qchar, qagent)
+				Check(int(rushCredit.get("wins", 0)) >= 1, "rush com crédito: o perfect demonstrado abre o primeiro boss — mecânica ativa paga no endgame")
+			IdlePolicyService.StopIdleSession(qagent)
+	# Q-6 (2026-10-07): budget diário do rush — `boss_rush_activity` (migração 071) no
+	# bucket `ShopDay`, durável pela mesma razão do `ah_activity` (063): cap em memória
+	# reseta com o boot, e o boot é o que um loop de key farm esperaria. Este char já
+	# rodou o overpower acima (1 run contabilizado). Cap = 2: o segundo run passa, o
+	# terceiro recusa com NOME e não cobra chave no caminho. O agente é NOVO (peer 983):
+	# o do overpower foi liberado pelo segundo StopIdleSession + o await do Q-1, e
+	# reusar referência morta aqui é o clássico "agente != null" que apodrece.
+	var q6agent : PlayerAgent = await _SpawnSimAgent(charID, 983, 1)
+	if Check(q6agent != null, "q6: agente de budget spawned"):
+		var booked : Array = sql.QueryBindings("SELECT runs FROM boss_rush_activity WHERE char_id = ?;", [charID])
+		CheckEq(booked.size(), 1, "q6: o overpower de cima DEIXOU LINHA no contador durável (gasto sem contabilização é a conta que o cap fecha)")
+		CheckEq(int(booked[0].get("runs", -1)) if booked.size() > 0 else -1, 1, "q6: primeiro run contabilizado")
+		# Contas RELATIVAS de chave: o `frontier_bonus` do overpower é uma faucet
+		# sorteada (30%/vitória de fronteira), e assert absoluto aqui seria o
+		# clássico flaky nascido de fixture que mintou mais do que o teste plantou.
+		var keysBase : int = sql.GetCharacterBossKeys(charID)
+		CheckEq(economy.GrantBossKey(charID, 1, "q6 test"), keysBase + 1, "q6: chave para o segundo run")
+		var rush2 : Dictionary = economy.RunBossRush(charID, q6agent)
+		Check(bool(rush2.get("ok", false)), "q6: segundo run do dia passa")
+		CheckEq(sql.GetCharacterBossKeys(charID), keysBase, "q6: segundo run gastou exatamente a chave do run")
+		var booked2 : Array = sql.QueryBindings("SELECT runs FROM boss_rush_activity WHERE char_id = ?;", [charID])
+		CheckEq(int(booked2[0].get("runs", -1)) if booked2.size() > 0 else -1, 2, "q6: dois runs na linha única do dia (ON CONFLICT soma, não duplica)")
+		CheckEq(economy.GrantBossKey(charID, 1, "q6 test"), keysBase + 1, "q6: chave para a terceira tentativa")
+		var rush3 : Dictionary = economy.RunBossRush(charID, q6agent)
+		Check(not bool(rush3.get("ok", true)), "q6: terceiro run do dia recusado")
+		Check(str(rush3.get("reason", "")) == "rush_day_cap", "q6: a recusa tem nome — o plantão sabe qual guarda bateu")
+		CheckEq(sql.GetCharacterBossKeys(charID), keysBase + 1, "q6: a recusa não cobra chave: o cap abre a porta ANTES do sink")
+		CheckEq(int(sql.QueryBindings("SELECT runs FROM boss_rush_activity WHERE char_id = ?;", [charID])[0].get("runs", -1)), 2, "q6: a tentativa recusada não contabiliza run")
+		IdlePolicyService.StopIdleSession(q6agent)
+	# (c) régua de fonte: o read do rush e o write da luta ao vivo não somem em silêncio.
+	# Q-2 (S8): o gate de visibilidade do TriggerSelect também é amarrado por fonte —
+	# a rota só existe com cliente real; o que dá para jurar aqui é a fiação.
+	var srvSrc : String = FileAccess.get_file_as_string("res://sources/network/server/Server.gd")
+	var tsFn : int = srvSrc.find("func TriggerSelect(")
+	var tsBody : String = srvSrc.substr(tsFn, mini(1400, srvSrc.length() - tsFn)) if tsFn >= 0 else ""
+	var gateAt : int = tsBody.find("visibleAgents.has(targetRID)")
+	var statsAt : int = tsBody.find("Network.UpdatePublicStats(")
+	if Check(gateAt >= 0, "q2: TriggerSelect confere o conjunto autoritativo visibleAgents (sem isto, RID adivinhado respondia stats do mundo inteiro)"):
+		Check(statsAt >= 0 and gateAt < statsAt, "q2: o gate vem ANTES do broadcast — inverter as duas linhas reabre o leak S8")
+		CheckEq(tsBody.count("Network.UpdatePublicStats("), 1, "q2: uma única saída de stats públicos na rota (sem segundo canal esquecido)")
+
+	var progSrc : String = FileAccess.get_file_as_string("res://sources/economy/BossProgressionService.gd")
+	Check(progSrc.contains("GetCachedBossInterruptMult(charID)"), "q1: RunBossRush lê o cache (não projeta generosidade)")
+	Check(progSrc.contains("BossService.Resolve(snapshot, level, interruptMult)"), "q1: o rush repassa o mult ao Resolve — cortar isto devolve o comportamento antigo")
+	Check(progSrc.contains("if not _SpendBossKeyAndBookRush(charID):"), "q6: o rush não tem mais perna de gasto sem contabilização — a porta é a transação única")
+	Check(progSrc.contains("INSERT INTO boss_rush_activity (char_id, day, runs) VALUES"), "q6: contabilização durável, colada no gasto da chave (cap em dicionário de processo não existe aqui)")
+	Check(progSrc.contains("EconomyCatalog.BossRushMaxPerDay"), "q6: o budget lê o número do catálogo, não um 2 de ocasião embutido no serviço")
+	Check(progSrc.contains("RebirthData.FavorMaxLevels"), "q6: a porta de compra do favor lê o teto declarado")
+	var polSrc : String = FileAccess.get_file_as_string("res://sources/idle/IdlePolicy.gd")
+	var polFn : int = polSrc.find("func _consumeBossInterrupt")
+	var polBody : String = polSrc.substr(polFn, mini(2000, polSrc.length() - polFn)) if polFn >= 0 else ""
+	Check(polBody.contains("Launcher.SQL.CacheBossInterrupt("), "q1: a luta ao vivo persiste o acerto pelo dono da identidade (peer→char)")
+	for nick in ["IdleQ1Tester"]:
+		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	sql.db.delete_rows("boss_rush_activity", "char_id = %d" % qchar)
+	for uname in ["idle_q1_account"]:
+		sql.db.delete_rows("account", "username = '%s'" % uname)
 	for nick in ["IdleTormentTester"]:
 		sql.db.delete_rows("character", "nickname = '%s'" % nick)
+	sql.db.delete_rows("boss_rush_activity", "char_id = %d" % charID)
 	for uname in ["idle_torment_account"]:
 		sql.db.delete_rows("account", "username = '%s'" % uname)
 

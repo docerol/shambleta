@@ -196,7 +196,18 @@ static func RecordLogin(charID : int, accountID : int, stat : ActorStats = null)
 			wrote = sql.UpdateRowsRaw("login_streak", "char_id = %d" % charID, data)
 		if not wrote:
 			return false
-		var reward : int = LadderReward(newStreak)
+		# Q-5 (2026-10-07): banda de CONTA na escada. O dia é idempotente por
+		# personagem, mas dez personagens pagavam a escada dez vezes por dia — o
+		# faucet não pode escalar com multiplicador de contas próprias. A progressão
+		# da streak (continuidade visível por char) segue; QUEM RECLAMA O PAGAMENTO
+		# primeiro do dia leva, os irmãos avançam em silêncio. A consulta é a mesma
+		# transação da escrita — o par claim+escrita é atômico por construção.
+		var took : bool = sql.db.query_with_bindings(
+			"SELECT ls.char_id FROM login_streak ls JOIN character c ON c.char_id = ls.char_id WHERE c.account_id = ? AND ls.last_day = ? AND ls.char_id != ?;",
+			[accountID, day, charID])
+		var claimedBy : Array = ((sql.db.query_result as Array).duplicate()) if took else []
+		var wouldPay : int = LadderReward(newStreak)
+		var reward : int = 0 if not claimedBy.is_empty() else wouldPay
 		if reward > 0:
 			var statRows : Array[Dictionary] = sql.db.select_rows("stat", "char_id = %d" % charID, ["gp"])
 			var gpRaw : Variant = statRows[0].get("gp", null) if not statRows.is_empty() else null
@@ -224,7 +235,7 @@ static func RecordLogin(charID : int, accountID : int, stat : ActorStats = null)
 		result["streak"] = newStreak
 		result["best"] = newBest
 		result["reward"] = reward
-		result["reason"] = "logged"
+		result["reason"] = "account_day_taken" if not claimedBy.is_empty() and wouldPay > 0 else "logged"
 		return true):
 		return result
 	return result

@@ -285,6 +285,17 @@ const BOSS_KEY_GOLD_PRICE : int = 10000
 # (de EconomyService.gd, antes da divisao)
 const BOSS_RUSH_ESCALATION : int = 2
 
+# Q-6 (2026-10-07): teto de runs do BossRush por dia UTC (mesmo bucket da loja,
+# durável na migration 071). O rush colhe a escada inteira por chave gasta; sem
+# budget a compra de chaves (10k ouro, sem cap próprio) era um faucet de ~434
+# chaves/dia/char. O cap é o sink declarado da mecânica de re-play.
+const BossRushMaxPerDay : int = 2
+
+# Q-1 (2026-10-07): janela do cache de interrupt demonstrado na luta ao vivo
+# (migration 070), consumido pelo BossRush. O cache expirar é a mecânica declarar
+# uso — quem quer crédito no rush re-acerta a janela, não acumula direito eterno.
+const BossInterruptCacheSec : int = 7 * 86400
+
 # (de EconomyService.gd, antes da divisao)
 const RefundWindowSeconds : int = 7 * 86400
 

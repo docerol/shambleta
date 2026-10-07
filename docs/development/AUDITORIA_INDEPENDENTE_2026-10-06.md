@@ -91,7 +91,7 @@ comprometeu no último commit.
   single-writer + read-pool de 2 slots; companion Python 3.12 (webhook Mercado Pago/
   Pix, `/store`, push Web, métricas); nginx; Docker Compose; Prometheus + Alertmanager.
 - **Volume:** ~440 arquivos `.gd` (~61k linhas), 90 arquivos GUI (14,085 linhas),
-  69 patches de migração (001–069, todos rastreados; o lote C criou a 069), `companion/server.py` ~1.5k
+  71 patches de migração (001–071, todos rastreados; o lote C criou a 069 e o lote Q criou 070–071), `companion/server.py` ~1.5k
   linhas + módulos de push próprios.
 - **Qualidade de borda:** 74 harnesses Godot auto-inscritos + 11 suítes Python +
   11 gates de estrutura + ~52 checks de segredos; i18n pt_BR 100% (1.337 linhas CSV);
@@ -682,3 +682,80 @@ Notas após o pacote: a média técnica fica ~7,3 — P-1/P-2/P-3 não compram n
 nova, fecham o que foi prometido no caminho registrado. O que continua aberto
 continua sendo o que não é commit: conteúdo (P1-J), endgame/sustentação (P1-G na
 leitura de produto), sharding horizontal, rootless de verdade e offsite real.
+
+## 29. Adendo — Lote Q (2026-10-07): oito peças pequenas, cada uma com régua nova
+
+- **Q-1 (interrupt pago no rush)** — o acerto de janela demonstrado na luta ao vivo
+  passa a valer no boss rush: `SQL.CacheBossInterrupt` grava o MELHOR mult da
+  janela em `character.interrupt_mult` (migração 070, expira em 7 dias — crédito
+  declara uso, não direito eterno), `IdlePolicy._consumeBossInterrupt` escreve pelo
+  dono da identidade (peer→char), e `RunBossRush` resolve com o mult vigente.
+  A navalha medida: mesmo snapshot perde sem crédito e vence com o perfect em
+  cache; sem demonstração o rush comporta-se exatamente como antes (a suíte antiga
+  não se moveu). `ChallengeBoss` no fallback de sim continua sem crédito — é a
+  luta que demonstra, não o menu.
+- **Q-2 (vazamento S8 no `TriggerSelect`)** — a rota de stats públicos agora só
+  responde sobre o conjunto autoritativo `visibleAgents` do próprio servidor: um
+  RID adivinhado pelo cliente não extrai mais stats do mundo inteiro. Régua de
+  fonte amarra ordem (gate antes do broadcast) e unicidade de saída.
+- **Q-3 (LGPD no log de e-mail)** — `EmailService.MaskEmail`/`RedactEmails`: o log
+  de envio grava `a***@do***`, e o corpo de erro do fornecedor é redigido antes
+  do `printLog`. E-mail completo não volta a morar em log de produção.
+- **Q-4 (`timeout-minutes` em todo job do CI)** — os 15 jobs dos três workflows
+  ganham teto inteiro > 0, e o `check_ci.sh` passa a exigir a chave de todo job
+  novo — a regra virou permanente, não cleanup de rodada.
+- **Q-5 (streak por CONTA, não por char)** — a janela de pagamento do `login_streak`
+  passa a ser reivindicada pelo primeiro char da conta no `ShopDay`: irmãos da
+  mesma conta avançam a continuidade com `reason=account_day_taken` e ouro zero.
+  Fecha a alavanca medida de 10 chars × faucet por char com régua no `balance_test`.
+- **Q-6 (tetos declarados: favor + budget de rush)** — `RebirthData.FavorMaxLevels
+  = 50` vira política (clamp na curva, guarda `maxed` na compra, `favor_max` no
+  painel): teto que só existia como consequência de 1,7^n agora tem porta. O boss
+  rush ganha budget diário durável (`boss_rush_activity`, migração 071, bucket
+  `ShopDay`, cap 2) contabilizado na MESMA transação do gasto da chave — cap em
+  memória reseta com o boot, e a recusa sai com nome (`rush_day_cap`) sem cobrar
+  chave.
+- **Q-7 (onboarding toca o toque; calendário vive dias comuns)** — os passos 2–5 do
+  onboarding ensinam o `TouchButton` do menu (Web/celular não têm F1/F2; F1 fica
+  como atalho secundário honesto), com as quatro linhas do catálogo pt_BR
+  reescritas junto. No live ops, a proteção do golden mudou de dono: os harnesses
+  que AFEREM economia pinam os eixos de bônus (`LiveOpsCalendar.PinNeutral`) e o
+  contrato do pino é medido pelo `season_liveops_test` (E7 re-sondada no deserto
+  novo). Com isso a agenda pôde enfim acender campanha em dia comum: sprint ×2 de de
+  10–11/10 e semana do baú ×1,5 de 15–20/10, e a nota do arquivo deixa de proibir
+  o calendário de existir.
+- **Q-8 (funil por parse; guilda memoizada)** — o `starter_claimed` do painel
+  decide por `json.loads` do payload, não pela forma do LIKE: a claim mintada pelo
+  runtime Godot (`"sku":"starter.pack"`, sem espaço) era invisível ao funil antes
+  de hoje, e o fixture agora exige as duas serializações e o controle negativo.
+  `GetGuildForAccount` ganha memo TTL de 30 s com invalidação em todo verbo de
+  roster (`Create/Join/Leave/RemoveMember`) e porta explícita para fixtures que
+  escrevem por fora (`InvalidateMembershipAll`, já chamada pelas três limpezas
+  cruas das suítes). A régua do censo em `benchmarks` não é cronômetro: 25
+  leituras memoizadas sem escrita intercalada custam UMA ida ao banco, e a
+  invalidação reabre exatamente a segunda.
+
+Veredites após o lote: nada aqui compra nota nova por si — Q-1/Q-2/Q-5/Q-6
+fecham buracos de política que a própria auditoria nomeou; Q-7 remove a
+proibição que transformava live ops em calendário de datas distantes (Achado
+#98 tem agora primeira perna de código); Q-8 fecha o funil que mentia para o
+painel e o SELECT por mensagem de chat. O suite mordeu cinco vezes e as cinco
+eram código meu, não régua: (i) o censo de fonte do `guild_roster_race_test`
+leu a LITERAL `DELETE FROM guild_member` dentro do meu comentário e contabilizou
+o memo como sexta mutadora — comentário é texto de fonte e o gate não distingue
+(bom: é assim que ele pega escrita disfarçada); (ii) `reason_toast_test` cobrou e
+achou os dois códigos novos (`account_day_taken`, `rush_day_cap`) sem linha própria
+no catálogo bilíngue — token sem linha é o jogador lendo chave crua; (iii) o
+`login_hardening` me pegou usando `call` com array no lugar de `callv` — SCRIPT
+ERROR na hora, verde ao defeito nunca; (iv) o mesmo harness depois pegou
+`m.start` em `RegExMatch` (o método é `get_start()`) — a redação de e-mail
+falhava para texto vazio em produção e o check solto não viu; (v) o censo de
+chaves repetidas do i18n achou a linha `reason/same_day` que eu plantei duas
+vezes ao inserir as novas. Nada foi afrouxado; em todos os casos a régua estava
+certa e o registro foi corrigido. E a navalha do Q-1, que passou em duas
+execuções com HP de fixture em 100000, provou no sweep que o limiar dependia do
+HP escolhido: agora o HP é DERIVADO do boss do instante (limiar de dano cravado
+em K=500) e a banda existe por construção em qualquer nível, com diagnóstico
+impresso se um dia faltar. O que continua aberto é o que não coube em lote:
+sharding, teto dos 128, segundo writer, rootless real, conteúdo P1-J e
+endgame P1-G.

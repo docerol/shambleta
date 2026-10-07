@@ -121,16 +121,21 @@ func _show_step():
 		STEP_WELCOME:
 			text = tr("Welcome to Shambleta!\n\nThis is an idle RPG — your character fights on its own. Let's take a quick tour.")
 		STEP_CHARACTER:
-			text = tr("Your character is shown here.\n\nOpen the Menu (F1) and tap the Stat icon — or press F2 on a keyboard — to customize attributes, equipment, and skills.")
+			# Q-7 (2026-10-07): o toque primeiro, a tecla depois. Os passos ensinavam
+			# "Menu (F1)"/"F2" numa plataforma que o produto entrega como web/celular
+			# — §13 já tinha criado o STEP_HUD pelo mesmo motivo; aqui a mentira era
+			# só o atalho. O menu tem `TouchButton` (Game.tscn) e os ícones Stat/
+			# ZoneMap/AFK/Shop são `WindowButton` reais dentro dele.
+			text = tr("Your character is shown here.\n\nTap the Menu button at the top of the screen and tap the Stat icon — on a keyboard, F1 opens the same menu — to customize attributes, equipment, and skills.")
 			_highlight_node(Launcher.GUI.statWindow)
 		STEP_FARM:
-			text = tr("Pick a farm zone to start earning gold and XP automatically.\n\nOpen the Menu (F1) and tap the Zone Map icon to choose where to farm.")
+			text = tr("Pick a farm zone to start earning gold and XP automatically.\n\nTap the Menu button at the top of the screen and tap the Zone Map icon to choose where to farm.")
 			_highlight_node(Launcher.GUI.zoneWindow)
 		STEP_AFK:
-			text = tr("When you come back, your AFK earnings are ready to claim.\n\nOpen the Menu (F1) and tap the AFK icon to collect your offline progress.")
+			text = tr("When you come back, your AFK earnings are ready to claim.\n\nTap the Menu button at the top of the screen and tap the AFK icon to collect your offline progress.")
 			_highlight_node(Launcher.GUI.afkWindow)
 		STEP_SHOP:
-			text = tr("Spend your gems in the shop!\n\nOpen the Menu (F1) and tap the Shop icon to buy chests, VIP status, and more.")
+			text = tr("Spend your gems in the shop!\n\nTap the Menu button at the top of the screen and tap the Shop icon to buy chests, VIP status, and more.")
 			_highlight_node(Launcher.GUI.shopWindow)
 		STEP_HUD:
 			text = tr("The quick bar at the top of your screen is touch-friendly: Eventos lists live events, Guilda opens your guild, AH the auction house, Arena the PvP ladder, and Idle hides everything else.")

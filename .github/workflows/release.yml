@@ -43,6 +43,8 @@ jobs:
           ext: "apk"
 
     runs-on: ubuntu-latest
+    # Q-4 (auditoria 2026-10-06 §19): teto duro de job (régua em scripts/check_ci.sh).
+    timeout-minutes: 45
     container:
       image: barichello/godot-ci:4.7.1
     name: Export ${{ matrix.name }}
@@ -155,6 +157,8 @@ jobs:
   # exato que virou release (`ref: github.sha` em todo checkout daqui).
   tests:
     runs-on: ubuntu-latest
+    # Q-4 (auditoria 2026-10-06 §19): teto duro de job (régua em scripts/check_ci.sh).
+    timeout-minutes: 30
     container:
       image: barichello/godot-ci:4.7.1
     name: Tests for the released commit
@@ -186,6 +190,8 @@ jobs:
 
   snap:
     runs-on: ubuntu-latest
+    # Q-4 (auditoria 2026-10-06 §19): teto duro de job (régua em scripts/check_ci.sh).
+    timeout-minutes: 30
     needs:
       - builds
       - tests
@@ -216,6 +222,8 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
+    # Q-4 (auditoria 2026-10-06 §19): teto duro de job (régua em scripts/check_ci.sh).
+    timeout-minutes: 15
     needs:
       - builds
       - tests

@@ -548,6 +548,18 @@ func _suiteSourceContracts() -> void:
 	Check(confBody.contains("EventResetExhausted") and confBody.contains("HasPendingReset"), "reset: esgotamento do pending contabilizado (sem duplicar a aritmética do teto)")
 	var sqlsrc : String = FileAccess.get_file_as_string("res://sources/sql/SQL.gd")
 	Check(not sqlsrc.contains("SQLSecurity"), "SQL.gd (fachada congelada) não incha para hospedar a regra nova")
+	# Q-3 (LGPD 2026-10-07): o log de reset não carrega mais o e-mail claro, e a
+	# máscara/redação têm unidade própria — régua de fonte sem comportamento é
+	# promessa pela metade.
+	var mailScript : GDScript = load("res://sources/network/server/EmailService.gd")
+	if mailScript != null:
+		var masked : String = str(mailScript.callv("MaskEmail", ["Thiago.X@Exemplo.com"]))
+		Check(masked.begins_with("t***@ex") and not masked.contains("thiago.x"), "q3: máscara guarda inicial + domínio truncado, caixa normalizada (%s)" % masked)
+		CheckEq(str(mailScript.callv("MaskEmail", ["sem-arroba"])), "<invalido>", "q3: entrada sem @ não vira oracle de formato")
+		var red : String = str(mailScript.callv("RedactEmails", ['{"detail":"invalid email thiago@ex.com.br sent"}']))
+		Check(not red.contains("thiago@ex.com.br"), "q3: eco do provedor sai redigido (%s)" % red)
+	var mailspec : String = FileAccess.get_file_as_string("res://sources/network/server/EmailService.gd")
+	Check(mailspec.contains("% MaskEmail(toEmail)"), "q3: a rota de envio loga a máscara, nunca o endereço cru")
 	var secsrc : String = FileAccess.get_file_as_string("res://sources/sql/SQLSecurity.gd")
 	Check(not secsrc.contains("\nvar ") and not secsrc.contains("static var"), "SQLSecurity não guarda estado em memória (tudo na base → restart-safe)")
 	Check(srv.contains("DeleteAccount"), "sanidade: Server.gd não foi truncado pelas edições")

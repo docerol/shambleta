@@ -33,6 +33,9 @@ jobs:
           ext: "apk"
 
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 45
     container:
       image: barichello/godot-ci:4.7.1
     name: Export ${{ matrix.name }}
@@ -128,6 +131,9 @@ jobs:
   # SOM-IDLE code health: gate anti-god-node (>800 linhas, legado em allowlist).
   code-health:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 30
     name: Code Health (structure gates)
     steps:
       - name: Checkout
@@ -148,6 +154,9 @@ jobs:
   # requirements). Rodar em CI é gate P0: bug aqui = prejuízo silencioso.
   companion-tests:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 15
     name: Companion Money Tests
     steps:
       - name: Checkout
@@ -169,6 +178,9 @@ jobs:
   # Godot 4.7.2 headless local.
   idle-tests:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 30
     container:
       image: barichello/godot-ci:4.7.1
     name: SOM-IDLE Idle Tests
@@ -309,6 +321,9 @@ jobs:
   # SOM-IDLE A2: backup restore probe — monthly gate (runs on every push for now).
   backup-restore:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 20
     container:
       image: barichello/godot-ci:4.7.1
     name: Backup Restore Probe
@@ -331,6 +346,9 @@ jobs:
   # SOM-IDLE P2: performance benchmark gate
   benchmarks:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 30
     container:
       image: barichello/godot-ci:4.7.1
     name: Performance Benchmarks
@@ -354,6 +372,9 @@ jobs:
   # servido com COOP/COEP pelo nginx do deploy/web/Dockerfile (Coolify).
   web-export:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 30
     container:
       image: barichello/godot-ci:4.7.1
     name: Export Web
@@ -449,6 +470,9 @@ jobs:
   # quebra o gate se algum job com `docker compose build|config` perder o knob.
   container-images:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 30
     name: Build Deploy Images
     steps:
       - name: Checkout
@@ -509,6 +533,9 @@ jobs:
   # canário dele prova que a régua morre se este nó for trocado por `builds`.
   test-gate:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 10
     needs:
       - code-health
       - companion-tests
@@ -525,6 +552,9 @@ jobs:
 
   snap:
     runs-on: ubuntu-latest
+    # Q-4 (DevOps §19): teto duro de job — runner pendurado não pode comer o
+    # runner do próximo push; folga sobre o maior timeout interno do job.
+    timeout-minutes: 30
     needs:
       - builds
       - test-gate

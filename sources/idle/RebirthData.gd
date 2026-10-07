@@ -38,11 +38,17 @@ static func Cost(upgradeID : String, owned : int) -> int:
 		return -1
 	return roundi(float(BaseCost[upgradeID]) * pow(CostGrowth, float(maxi(0, owned))))
 
+# Q-6 (2026-10-07): o favor compõe 1.05^n e o custo 1.7^n — a curva de custo já
+# era o teto prático, mas um teto que só existe como consequência aritmética não
+# é política declarada. Com `FavorMaxLevels` o cap vira número no catálogo: a
+# renda multiplicada tem piso de teto mesmo que a economia de essência quebre.
+const FavorMaxLevels : int = 50
+
 static func XpMult(owned : int) -> float:
-	return pow(1.0 + XpStep, float(maxi(0, owned)))
+	return pow(1.0 + XpStep, float(clampi(owned, 0, FavorMaxLevels)))
 
 static func GoldMult(owned : int) -> float:
-	return pow(1.0 + GoldStep, float(maxi(0, owned)))
+	return pow(1.0 + GoldStep, float(clampi(owned, 0, FavorMaxLevels)))
 
 static func OfflineFactorWithBonus(base : float, levels : int) -> float:
 	return clampf(base + OfflineStep * float(levels), base, base + OfflineStep * float(OfflineMaxLevels))

@@ -50,6 +50,17 @@ func _run_tests():
 	# beta, que liga a env aqui (o compose de produção NÃO liga — `SuiteDeployMode`).
 	# O par ligado/desligado é provado dentro do próprio SuiteAds.
 	OS.set_environment("SHAMBLETA_AD_STUB", "1")
+	# Q-7 (2026-10-07): pino do calendário de live ops nos dois eixos de bônus
+	# (`double_xp`, `chest_bonus`). As réguas douradas liquidam no tempo real e
+	# conferem `mods == 1,0`; enquanto a defesa era "nenhuma janela pode cobrir o
+	# dia do run", a agenda não podia existir no futuro próximo. O eixo `tournament`
+	# (pool congelado no `ends_at`) fica lendo o arquivo, como sempre; quem TESTA o
+	# calendário (`season_liveops_test`, `doc_facts_test`) não passa por aqui.
+	# Load dinâmico: este arquivo é duck-typed em parse (o main-loop `-s` compila
+	# antes dos globais de autoload).
+	var opsCalendar = load("res://sources/ops/LiveOpsCalendar.gd")
+	if opsCalendar != null:
+		opsCalendar.callv("PinNeutral", [true])
 	var sql : Node = launcher.SQL
 	var economy : Node = launcher.Economy
 

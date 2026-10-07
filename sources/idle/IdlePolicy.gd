@@ -450,6 +450,12 @@ func _consumeBossInterrupt(target : BaseAgent) -> Dictionary:
 	var quality : String = BossService.InterruptQuality(phase, bossIndex)
 	var mult : float = BossService.InterruptBonus(phase, bossIndex)
 	NotifyInterruptFeedback(quality, mult)
+	# Q-1 (2026-10-07): o acerto ao vivo vira crédito consultado pelo BossRush —
+	# persistido pelo dono da identidade (peer -> char), nunca confiado ao cliente.
+	if quality != "miss" and mult > 1.0 and agent != null and agent.peerID != NetworkCommons.PeerUnknownID:
+		var cacheChar : int = Peers.GetCharacter(agent.peerID)
+		if cacheChar > 0:
+			Launcher.SQL.CacheBossInterrupt(cacheChar, mult)
 	var verdict : Dictionary = {"phase" = phase, "index" = bossIndex, "quality" = quality, "mult" = mult}
 	if quality == "miss":
 		return verdict

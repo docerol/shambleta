@@ -10,13 +10,44 @@ class_name GuildService
 
 var _eco : EconomyService = null
 
+# Memo de filiação (Q-8) — ver `GetGuildForAccount`.
+var _membershipMemo : Dictionary = {}
+
 # ------------------------------------------------------------------ E1: guilds
 # Custo de nível 1→2 .. 9→10 (índice = nível atual). Pontos: coluna pronta,
 # acúmulo via settle = fast follow (v0 = gold+gems).
 
+# Q-8 (2026-10-07): a filiação é lida a cada mensagem de chat (só `ChatModeration`
+# são três consultados por linha), a cada settle de guild e em todo gate de
+# roster — cada uma dessas era um SELECT. O memo tem TTL curto (30 s) e é
+# INVALIDADO na escrita, não entregue ao TTL: um 0 velho recusaria um join novo
+# no mesmo segundo, e um id velho deixaria uma linha de chat entrar no canal de
+# uma guilda que o dono já saiu. O TTL é a retaguarda, não o mecanismo. Residual
+# declarado: o purge LGPD (`SQL.gd:335`) apaga `guild_member` sem invalidar —
+# a conta do memo inválido é a conta expurgada, que nunca mais consulta; e
+# fixture que escreve na tabela por fora dos verbos deste serviço precisa chamar
+# `InvalidateMembership` (a suíte de race amarra os verbos, não os fixtures).
 func GetGuildForAccount(accountID : int) -> int:
+	var now : int = SQLCommons.Timestamp()
+	var memo : Variant = _membershipMemo.get(accountID, null)
+	if memo != null and int((memo as Dictionary).get("expiresAt", 0)) > now:
+		return int((memo as Dictionary).get("guildID", 0))
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT guild_id FROM guild_member WHERE account_id = ?;", [accountID])
-	return int(rows[0]["guild_id"]) if not rows.is_empty() else 0
+	var guildID : int = int(rows[0]["guild_id"]) if not rows.is_empty() else 0
+	_membershipMemo[accountID] = {"guildID" = guildID, "expiresAt" = now + 30}
+	return guildID
+
+func InvalidateMembership(accountID : int) -> void:
+	_membershipMemo.erase(accountID)
+
+# Explosão do memo para quem escreve na tabela de filiação FORA dos verbos deste
+# serviço — hoje, medido, são os fixtures das suítes de guild (limpeza crua da
+# fileira por SQL direto) e nada mais no caminho do produto. Sem esta porta,
+# um fixture que apaga a fileira e recicla o account_id na hora leria um id de
+# guilda fantasma do memo — o mesmo shape de bug que o gate de race caça por
+# fonte.
+func InvalidateMembershipAll() -> void:
+	_membershipMemo.clear()
 
 func GetGuild(guildID : int) -> Dictionary:
 	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT guild_id, name, level, points, leader_account, created_at FROM guild WHERE guild_id = ?;", [guildID])
@@ -89,6 +120,8 @@ func CreateGuild(accountID : int, charID : int, guildName : String) -> int:
 		return true):
 		pass
 	_eco.settleMutex.unlock()
+	if int(out["id"]) > 0:
+		InvalidateMembership(accountID)
 	return int(out["id"])
 
 # Admissão ao roster. A checagem de fora (`JoinReason`) é para DEVOLVER O MOTIVO ao
@@ -119,6 +152,8 @@ func JoinGuild(accountID : int, guildID : int) -> bool:
 		return bool(sql.db.query_with_bindings("INSERT INTO guild_member (guild_id, account_id, rank, joined_at) VALUES (?, ?, 'member', ?);", [guildID, accountID, SQLCommons.Timestamp()]))):
 		joined = true
 	_eco.settleMutex.unlock()
+	if joined:
+		InvalidateMembership(accountID)
 	return joined
 
 func LeaveGuild(accountID : int) -> bool:
@@ -155,6 +190,8 @@ func LeaveGuild(accountID : int) -> bool:
 		return true):
 		left = true
 	_eco.settleMutex.unlock()
+	if left:
+		InvalidateMembership(accountID)
 	return left
 
 func DepositToVault(accountID : int, charID : int, itemID : int, count : int) -> bool:
@@ -360,6 +397,8 @@ func RemoveMember(guildID : int, targetAccount : int) -> bool:
 		return _ChangedRaw(sql) > 0):
 		removed = true
 	_eco.settleMutex.unlock()
+	if removed:
+		InvalidateMembership(targetAccount)
 	return removed
 
 # Trilha de auditoria da GOVERNANÇA (AUDITORIA 2026-09-28, item 3): cada promote/demote/

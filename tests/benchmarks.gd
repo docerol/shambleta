@@ -288,6 +288,30 @@ func _run_benchmarks():
         print("FAIL: zona faltando no catálogo (%d de %d)" % [zoneCount, ExpectedZoneCount])
         failures += 1
 
+    # Q-8 (2026-10-07): a filiação de guilda é lida por chat, settle e roster — a
+    # régua é o CENSO de SQL, não cronômetro: 25 leituras do mesmo account têm de
+    # custar UMA ida ao banco (a memoização em `GuildService._membershipMemo`), e
+    # uma invalidação tem de custar exatamente a segunda. Tempo é ruído da
+    # máquina; query count não negocia.
+    sql.AddAccount("bench_guild", "testpass", "bench_guild@test.local")
+    var guildAcct: int = sql.GetAccountID("bench_guild")
+    var guildService = economy.guildService	# RefCounted, não Node: tipo deduzido, como o resto do duck-typing daqui
+    var gqBefore: int = sql.QueryCount()
+    for i in range(25):
+        economy.GetGuildForAccount(guildAcct)
+    var gqMemo: int = sql.QueryCount() - gqBefore
+    guildService.InvalidateMembership(guildAcct)
+    economy.GetGuildForAccount(guildAcct)
+    var gqAfterInval: int = sql.QueryCount() - gqBefore
+    print("Guild membership benchmark: 25 reads = %d queries; após invalidação = %d acumuladas (esperado: 1 e 2)" % [gqMemo, gqAfterInval])
+    if gqMemo != 1:
+        print("FAIL: memo de filiação não segurou o censo (25 leituras custaram %d queries)" % gqMemo)
+        failures += 1
+    if gqAfterInval != 2:
+        print("FAIL: invalidação não reabriu exatamente uma leitura (acumulado %d)" % gqAfterInval)
+        failures += 1
+    sql.RemoveAccount(guildAcct)
+
     # Benchmark: as duas leituras ordenadas quentes do produto, com linhas reais na
     # mesa e o plano de execução conferido. Antes era o "XP walk" de `totalXp += 10`
     # sobre zero linhas: sem dados, o ORDER BY não compete com nada e um índice

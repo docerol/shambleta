@@ -116,6 +116,14 @@ for path, doc in docs.items():
         job = job or {}
         check("runs-on" in job, "%s/%s: declara `runs-on`" % (os.path.basename(path), name),
               "runs-on presente", "ausente")
+        # Q-4 (auditoria 2026-10-06 §19): todo job declara teto duro. Um job sem
+        # `timeout-minutes` herda as 360 min do GitHub — e um runner pendurado lá
+        # dentro bloqueia a fila inteira, que é exatamente o modo de falha que a
+        # auditoria nomeou ("sem timeouts"). O teto precisa ser um número > 0.
+        _to = job.get("timeout-minutes")
+        check(isinstance(_to, int) and _to > 0,
+              "%s/%s: declara `timeout-minutes` inteiro > 0" % (os.path.basename(path), name),
+              "inteiro positivo", str(_to))
         check(bool(job.get("steps") or job.get("uses")),
               "%s/%s: tem steps (ou usa um reusable workflow)" % (os.path.basename(path), name),
               "steps não-vazio", "sem steps")

@@ -56,6 +56,12 @@ func BuyRebirthUpgrade(charID : int, upgradeID : String) -> Dictionary:
 		return {"ok" = false, "reason" = "no_character"}
 	if upgradeID == RebirthData.UpgradeAttune and int(info[upgradeID]) >= RebirthData.OfflineMaxLevels:
 		return {"ok" = false, "reason" = "maxed"}
+	# Q-6 (2026-10-07): o favor tinha teto só como consequência aritmética da curva
+	# de custo 1.7^n. Declarado em `RebirthData.FavorMaxLevels`, a compra obedece o
+	# número — a mesma guarda do attune, pelo mesmo motivo: cap sem porta de entrada
+	# é cap que a economia de essência atravessa quando quebrar.
+	if (upgradeID == RebirthData.UpgradeXp or upgradeID == RebirthData.UpgradeGold) and int(info[upgradeID]) >= RebirthData.FavorMaxLevels:
+		return {"ok" = false, "reason" = "maxed"}
 	var cost : int = RebirthData.Cost(upgradeID, int(info[upgradeID]))
 	if int(info["essence"]) < cost:
 		return {"ok" = false, "reason" = "insufficient_essence", "cost" = cost}
@@ -134,6 +140,7 @@ func GetRebirthState(charID : int) -> Dictionary:
 		"favor_gold" : int(info["favor_gold"]),
 		"attune_offline" : int(info["attune_offline"]),
 		"attune_max" : RebirthData.OfflineMaxLevels,
+		"favor_max" : RebirthData.FavorMaxLevels,
 		"costs" : costs,
 	}
 
@@ -359,23 +366,67 @@ func BuyBossKey(charID : int) -> Dictionary:
 	mutex.unlock()
 	return result
 
+# Q-6: leituras/escritas do budget diário de rush. `select_rows` é a leitura nua do
+# bucket de hoje; a escrita VIVE dentro da transação do gasto da chave (abaixo) —
+# separá-las é exatamente a janela que o cap existe para fechar.
+func _BossRushRunsToday(charID : int) -> int:
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
+	var rows : Array = Launcher.SQL.db.select_rows("boss_rush_activity", "char_id = %d AND day = %d" % [charID, day], ["runs"])
+	return 0 if rows.is_empty() else int(rows[0].get("runs", 0))
+
+# Gasta 1 chave E contabiliza o run na MESMA transação, sob o settleMutex — o
+# espelho de `SpendBossKey` com a perna do budget colada. Se a contabilização
+# falhar, a transação desfaz o gasto: chave no ledger e run no contador ou nada,
+# nunca "rush rodou sem ser contado".
+func _SpendBossKeyAndBookRush(charID : int) -> bool:
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
+	var ok : bool = false
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var current : int = Launcher.SQL.GetCharacterBossKeys(charID)
+		if current < 1:
+			return false
+		var next : int = current - 1
+		if Launcher.SQL.AddCharacterBossKeys(charID, -1) == -1:
+			return false
+		if not Launcher.SQL.db.query_with_bindings("INSERT INTO boss_rush_activity (char_id, day, runs) VALUES (?, ?, 1) ON CONFLICT(char_id, day) DO UPDATE SET runs = runs + 1;", [charID, day]):
+			return false
+		var acct : int = _eco._AccountIDForCharacterRaw(charID)
+		return _eco._LedgerAppendLocked(acct, charID, EconomyCatalog.LedgerKindBossKey, -1, next, "boss_rush")):
+		ok = true
+	_eco.settleMutex.unlock()
+	return ok
+
 func RunBossRush(charID : int, player) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected", "wins": 0, "xp": 0, "gold": 0, "chests": 0}
 	if player == null or not is_instance_valid(player) or player.stat == null:
 		result["reason"] = "not_online"
 		return result
-	if not SpendBossKey(charID, 1, "boss_rush"):
+	# Q-6 (2026-10-07): budget diário do rush, durável em `boss_rush_activity`
+	# (migração 071) no MESMO bucket UTC da loja (`EconomyCatalog.ShopDay`) e com o
+	# mesmo argumento do `ah_activity` (063): um cap que vive na memória do processo
+	# reseta com o boot. O faucet de chaves é ~434/dia/char; sem budget o rush é a
+	# torneira aberta da escada inteira, e o read abaixo é só a porta de entrada — a
+	# contabilização é atômica com o gasto da chave, nunca depois.
+	if _BossRushRunsToday(charID) >= EconomyCatalog.BossRushMaxPerDay:
+		result["reason"] = "rush_day_cap"
+		return result
+	if not _SpendBossKeyAndBookRush(charID):
 		result["reason"] = "no_key"
 		return result
 	var torment : int = player.tormentLevel if player is PlayerAgent else 0
 	var snapshot : Dictionary = BossService.PlayerFightSnapshot(player)
+	# Q-1 (2026-10-07): o rush resolve com o interrupt DEMONSTRADO na janela vigente
+	# (luta ao vivo, cache expirável); sem demonstração o mult é 1.0 — comportamento
+	# idêntico ao antigo, e é por isso que a suíte de rush existente não se moveu.
+	var interruptMult : float = Launcher.SQL.GetCachedBossInterruptMult(charID)
 	var wins : int = 0
 	var totalXp : int = 0
 	var totalGold : int = 0
 	var totalChests : int = 0
 	for i in BossService.GetBossCount():
 		var level : int = BossService.GetBossLevel(player.stat.level, i) + i * EconomyCatalog.BOSS_RUSH_ESCALATION + torment * 2
-		var duel : Dictionary = BossService.Resolve(snapshot, level)
+		var duel : Dictionary = BossService.Resolve(snapshot, level, interruptMult)
 		if not bool(duel.get("win", false)):
 			break
 		var settled : Dictionary = SettleBossResult(charID, player, i, true)
