@@ -318,6 +318,15 @@ services:
       # game server (verify_session_token) — chave diferente do serviço `game`
       # fecha o checkout inteiro em 401 para todo cliente logado por token.
       SHAMBLETA_TOKEN_SIGNING_KEY: ${SHAMBLETA_TOKEN_SIGNING_KEY:-}
+      # P-2 (2026-10-06): o push de temporada sai do papel de "rotas vivas,
+      # ninguém dispara". O scheduler é um thread dentro do próprio companion —
+      # o dedupe mora no outbox (corpo `season:<id>`), então restart não
+      # duplica notificação e não nasce serviço novo com segredo próprio. A
+      # janela de antecedência vem da config da temporada; 60 s é o piso do
+      # scheduler por contrato (`companion/server.py`, C-9). Para desligar sem
+      # editar este arquivo: SHAMBLETA_PUSH_SCHED=0 no painel.
+      SHAMBLETA_PUSH_SCHED: "${SHAMBLETA_PUSH_SCHED:-1}"
+      SHAMBLETA_PUSH_SCHED_SEC: "${SHAMBLETA_PUSH_SCHED_SEC:-900}"
     volumes:
       # MESMO volume do game: grant_queue é consumido do mesmo SQLite (WAL).
       - game-data:/data

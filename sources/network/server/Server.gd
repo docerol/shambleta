@@ -37,13 +37,22 @@ func CreateAccount(accountName : String, password : String, email : String, reme
 					err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
 				elif Launcher.SQL.HasEmail(email):
 					err = NetworkCommons.AuthError.ERR_EMAIL_TAKEN
-				elif not Launcher.SQL.AddAccount(accountName, password, email, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, Peers.GetPeerIP(peerID)):
-					err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
 				else:
-					Network.accounts_list_update.emit()
-					var accountData : Peers.AccountData = Launcher.SQL.ValidateAuthPassword(accountName, password)
+					# P-1 (2026-10-06): o KDF do cadastro saiu do frame junto com o do login.
+					# AddAccount deriva (210k) e a primeira verificação re-deriva (mais 210k);
+					# as duas pernas viajam como uma unidade de intenção para o worker, com a
+					# MESMA serialização por nome do login — o guarda de colisão continua
+					# síncrono, então quem chega ao worker já é nome livre.
+					var accountData : Peers.AccountData = await _CreateAccountOffThread(accountName, password, email, ipAddress)
 					if accountData:
-						err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
+						Network.accounts_list_update.emit()
+						# O await atravessou o relógio: sem sessão viva não há login final.
+						if not Peers.GetPeer(peerID):
+							err = NetworkCommons.AuthError.ERR_NO_PEER_DATA
+						else:
+							err = Peers.FinalizeLogin(peer, accountName, accountData, platform, rememberMe)
+					else:
+						err = NetworkCommons.AuthError.ERR_NAME_AVAILABLE
 			# Qualquer caminho de falha nesta janela conta como tentativa para o
 			# rate-limit de criação — inclusive colisão, que o cliente mostra como "nome
 			# indisponível" (não vaza existência: ERR_EMAIL_TAKEN vira ERR_NAME_AVAILABLE
@@ -94,14 +103,29 @@ func RequestRefund(idempotencyKey : String, peerID : int):
 # contêiner: `BurnKdfTime` parado no frame reabriria o oráculo de latência — "esse
 # nome existe?" — de graça, sem nenhum CPU na vítima. O chamador precisa revalidar o
 # peer depois do await: entre a entrega e a volta o par pode ter caído.
+var _liveWorkerTasks : Dictionary = {}
+
 func _AwaitOnWorker(work : Callable) -> Variant:
 	var result : Array = [null]
 	var taskID : int = WorkerThreadPool.add_task(func() -> void:
 		result[0] = work.call())
+	_liveWorkerTasks[taskID] = true
 	while not WorkerThreadPool.is_task_completed(taskID):
 		await get_tree().process_frame
 	WorkerThreadPool.wait_for_task_completion(taskID)
+	_liveWorkerTasks.erase(taskID)
 	return result[0]
+
+# Dreno de encerramento: um `quit()` com tarefa KDF em voo derruba o motor no
+# meio do worker (double-free nos estáticos — o flake do `login_hardening` depois
+# do C-1). O main loop já não emite frame aqui, então a espera é bloqueante: cada
+# derivação é limitada por construção (210k iterações, não um laço aberto), e o
+# `wait_for_task_completion` ainda devolve o id ao pool. Drenar na saída é o preço
+# honesto de ter tirado o KDF do caminho do tick.
+func _exit_tree():
+	for taskIDV in _liveWorkerTasks.keys():
+		WorkerThreadPool.wait_for_task_completion(int(taskIDV))
+	_liveWorkerTasks.clear()
 
 # C-1 (raça fechada na mesma fatia): o worker abriu um canal que o frame fechava
 # por construção — duas tentativas simultâneas no MESMO nome liam o row antes da
@@ -117,6 +141,22 @@ func _ValidateAuthPasswordOffThread(username : String, password : String) -> Pee
 	var data : Variant = await _AwaitOnWorker(func() -> Variant:
 		return Launcher.SQL.ValidateAuthPassword(username, password))
 	_authValidationInFlight.erase(username)
+	return data as Peers.AccountData
+
+# P-1 (2026-10-06): cadastro off-thread no mesmo contêiner do C-1 — a derivação
+# de AddAccount e a verificação que a confere são um par indissociável e rodam na
+# mesma tarefa do worker; o sinal de lista de contas e o FinalizeLogin continuam no
+# main thread, na borda do frame. Serializa pelo MESMO espaço de nomes do login:
+# criação e tentativa de login do mesmo nome nunca correm soltas uma contra a outra.
+func _CreateAccountOffThread(accountName : String, password : String, email : String, ip : String) -> Peers.AccountData:
+	while _authValidationInFlight.has(accountName):
+		await get_tree().process_frame
+	_authValidationInFlight[accountName] = true
+	var data : Variant = await _AwaitOnWorker(func() -> Variant:
+		if not Launcher.SQL.AddAccount(accountName, password, email, NetworkCommons.AgreementTosVersion, NetworkCommons.AgreementPrivacyVersion, ip):
+			return null
+		return Launcher.SQL.ValidateAuthPassword(accountName, password))
+	_authValidationInFlight.erase(accountName)
 	return data as Peers.AccountData
 
 func _BurnKdfTimeOffThread(password : String) -> void:

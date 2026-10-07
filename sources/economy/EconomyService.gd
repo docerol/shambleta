@@ -704,40 +704,16 @@ func TickTournaments() -> Dictionary:
 	return tournamentArenaService.TickTournaments()
 
 func ReconcileDaily() -> int:
-	return tournamentArenaService.ReconcileDaily() + int(kernel.ReconcileWalletDaily().get("total", 0))
+	return _rec().ReconcileDaily()
 
-# Diagnóstico do contador acima: TODAS as pernas que o produzem, com nome
-# (pilha, soma de ledger, carteira). `ReconcileDaily` é o número que o painel e os
-# gates leem; estas são as LINHAS que o produziram, para o plantão e para o
-# harness que falhou saberem QUAL personagem. Um contador sem nome não abre
-# incidente — foi o que custou uma execução inteira de portão. A suíte de reconcile
-# confere `size() == ReconcileDaily()`: as réãs são textos de SQL gêmeos, e sem
-# essa conferência é exatamente aí que elas divergiriam.
 func ReconcileDetail() -> Array[Dictionary]:
-	var rows : Array[Dictionary] = tournamentArenaService.Divergences()
-	rows.append_array(kernel.DivergingWallets())
-	return rows
+	return _rec().ReconcileDetail()
 
-# O job diário (SQLBackups → Launcher.Economy.RunReconcileJob). A perna de
-# carteira entra na MESMA linha de `reconcile_run` que a arena abriu hoje — o
-# painel lê `divergences`, e duas corridas no mesmo dia inventariam um reconciliar que não houve.
+# P-3 (2026-10-06): as pernas que somam, nomeiam e carimbam `reconcile_run`
+# saíram para `EconomyReconcile.gd` pelo caminho que o `repo_layout_test`
+# registrou como saída da cerca; o seam contratual continua `Launcher.Economy`.
 func RunReconcileJob() -> int:
-	var arenaDivergences : int = tournamentArenaService.RunReconcileJob()
-	var walletDivergences : int = int(kernel.ReconcileWalletDaily().get("total", 0))
-	if walletDivergences > 0:
-		Launcher.SQL.ExecuteBindings("UPDATE reconcile_run SET divergences = divergences + ? WHERE id = (SELECT MAX(id) FROM reconcile_run);", [walletDivergences])
-		# O job da arena já imprimiu os nomes dela; a perna de carteira é somada
-		# AQUI, então é aqui que ela precisa dar nome — senão o painel sobe de 0 para
-		# 3 e o plantão não tem para onde olhar. O NÚMERO continua o do contador
-		# (`ReconcileWalletDaily`); a lista é só o rodapé, e a suíte de reconcile
-		# confere que os dois são o mesmo tamanho.
-		var named : int = 0
-		for offender in kernel.DivergingWallets():
-			if named >= 3:
-				break
-			named += 1
-			Util.PrintLog("Economy", "Reconcile offender: " + JSON.stringify(offender))
-	return arenaDivergences + walletDivergences
+	return _rec().RunReconcileJob()
 
 # ------------------------------------------------------------------ censo de oferta (WorkOrder #185)
 # O reconcile acima responde "a carteira bate com o ledger DESDE o último atesto";
@@ -794,3 +770,9 @@ func ApproveCraftSubmission(gm : PlayerAgent, submissionID : int) -> bool:
 func RejectCraftSubmission(gm : PlayerAgent, submissionID : int, reason : String) -> bool:
 	return itemForgeService.RejectCraftSubmission(gm, submissionID, reason)
 
+# Construído a pedido: o reconcílio roda de minuto em hora, não por frame, e a
+# injeção por `self` dispensa o membro vivo na fachada.
+func _rec() -> EconomyReconcile:
+	var r : EconomyReconcile = EconomyReconcile.new()
+	r._eco = self
+	return r

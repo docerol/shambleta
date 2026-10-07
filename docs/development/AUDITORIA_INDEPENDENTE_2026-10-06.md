@@ -598,9 +598,7 @@ decisão do dono de manter 8 h.
   serializa por nome, e nomes diferentes continuam concorrentes — é ali que o
   alívio de CPU mora. `LoginWithTwoFactor` e o caminho de token ficam síncronos
   (HMAC é caro de outro jeito e não há ledger por tentativa em risco).
-  **Residual confesso:** `CreateAccount` continua pagando o KDF do cadastro no
-  frame — protegido pelo rate-limit de IP da frente 2; offload ali é máquina de
-  estados multi-frame sem necessidade testada.
+  **Residual confesso — fechado no Pacote P do mesmo dia (P-1 abaixo).**
 - **C-2 (reset com sal por conta)** — `Hasher.HashResetCode(code, accountID)` usa o
   salt `reset:<id>`; o hash pendente deixa de ser um PBKDF global da tabela e passa
   a exigir trabalho POR CONTA num dump.
@@ -612,8 +610,9 @@ decisão do dono de manter 8 h.
   `CommandCs*`), `CheckoutReversal.gd` (o bloco de reversão, roda dentro do
   `Transaction(func(` da chamadora) e `VipPolicy.gd`; tetos baixados 1925→1899 e
   923→862 com o motivo escrito no comentário do próprio gate. `EconomyService`
-  (796/800) fica de propósito como tripwire: é hub de delegação puro cujos
-  assentos são contrato de 5 harnesses.
+  `EconomyService`
+  (796/800) ficou como tripwire neste lote; o Pacote P o retirou (P-3
+  abaixo) pelo caminho que o próprio motivo registrado na cerca prescrevia.
 - **C-5 (ordem dos locks regada)** — ordem canônica `settleMutex → queryMutex`
   declarada no header do `EconomyKernel`; o write-funnel ganhou `scan_locks`, que
   proíbe por parêntese balanceado `settleMutex.lock()` e `ApplyGoldMoves(` dentro
@@ -655,3 +654,31 @@ evento sem leitor, o `repo_layout` exigiu motivo para as duas cercas novas, e o
 `doc_drift` mordeu dezesseis ponteiros `arquivo:NN` que as extrações
 deslocaram — em todos os casos a régua estava certa e a correção foi código ou
 registro, nunca o afrouxamento da régua.
+
+## 28. Adendo — Pacote P (2026-10-06): as três pendências fecháveis em código
+
+- **P-1 (cadastro off-thread)** — fecha o residual do C-1: `AddAccount` (deriva a
+  senha nova, 210k) e a primeira `ValidateAuthPassword` (re-deriva, mais 210k)
+  viajam como UMA tarefa no mesmo contêiner `_AwaitOnWorker`, serializando pelo
+  MESMO espaço de nomes do login — criação e tentativa contra o mesmo nome nunca
+  correm soltas. O guarda de colisão (`HasAccount`/`HasEmail`) e o gate de IP
+  continuam síncronos, então o spray bloqueado não ocupa worker; o
+  `accounts_list_update` e o `FinalizeLogin` continuam na borda do frame, com o
+  peer revalidado depois do await. Mapeamento de erro: verificação que falha logo
+  após a criação agora responde `ERR_NAME_AVAILABLE` em vez de silencioso `ERR_OK`
+  sem sessão — falha melhor que o estado antigo.
+- **P-2 (push ligado na operação)** — `SHAMBLETA_PUSH_SCHED=1` e
+  `SHAMBLETA_PUSH_SCHED_SEC=900` entram no serviço companion do compose com
+  escape por env do painel; o dedupe pelo outbox torna o thread reinício-seguro.
+  A pendência "push não disparado" morre aqui, não no papel.
+- **P-3 (EconomyService sai da cerca)** — as pernas do reconcílio (`ReconcileDaily`,
+  `ReconcileDetail`, `RunReconcileJob`) saíram para `sources/economy/EconomyReconcile.gd`
+  com `_eco` injetado; a fachada reteém o seam contratual (`SQLBackups` lê
+  `Launcher.Economy`) com delegadores de duas linhas. 796 → 778 linhas: fora da
+  banda ≥98%, a entrada do `NEAR_FENCE` foi APAGADA — entrada que apodrece é
+  allowlist podre, e foi a régua do `repo_layout` quem cobrou as duas coisas.
+
+Notas após o pacote: a média técnica fica ~7,3 — P-1/P-2/P-3 não compram nota
+nova, fecham o que foi prometido no caminho registrado. O que continua aberto
+continua sendo o que não é commit: conteúdo (P1-J), endgame/sustentação (P1-G na
+leitura de produto), sharding horizontal, rootless de verdade e offsite real.

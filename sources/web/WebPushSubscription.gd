@@ -45,7 +45,7 @@ class_name WebPushSubscription
 #        func UnregisterPushSubscription(peerID = NetworkCommons.PeerAuthorityID)
 #      Os wrappers devolvem void e mandam só os três campos do payload; o que o
 #      jogador recebe de volta é o MOTIVO (`CommandFeedback`), nunca o endpoint.
-#   2) `sources/network/server/Server.gd:1111,1118` — UM handler por RPC, com a
+#   2) `sources/network/server/Server.gd:1270,1277` — UM handler por RPC, com a
 #      conta vindo de `Peers.GetAccount(peerID)` e NUNCA do payload:
 #        func RegisterPushSubscription(endpoint, p256dh, auth, peerID):
 #            WebPushSubscription.RegisterAndReport(Peers.GetAccount(peerID), ...)
