@@ -509,9 +509,14 @@ const NEAR_FENCE : Array = [
 		"reason": "lote C (2026-10-06): o catálogo é a fonte única das políticas de economia e cada fatia do lote pendurou a sua decisão aqui — janela de lavagem `AHWashWindowSec` (C-6), a política declarada da dupla taxa de craftado (C-10) e os validadores de passe/table do VIP (C-7); as 6 suites que leem catálogo juram pelo arquivo, não por extrato. Saída registrada: a próxima onda que acrescentar const aqui parte o AH (fees/banda/lifecycle) para um `AHPolicy` próprio, do mesmo jeito que `AuctionHousePricing` já saiu da fachada.",
 	},
 	{
-		"path": "companion/test_webhook.py",
-		"reason": "lote C-9 (2026-10-06): a régua do push de temporada tem de morar com as rotas do Store que ela exercita — janela de antecedência, dedupe pelo corpo `season:<id>` (sobrevive a restart), temporada fechada silenciosa e os dois hooks do scheduler opt-in entraram nas 6 verificações novas; nada aqui é rede, é sqlite + função pura. Saída registrada: a próxima onda que crescer nesta fileira abre `test_push.py` espelhando o padrão de `test_metrics.py` (suite separada por assunto, mesma fixture).",
+		"path": "sources/economy/EconomyService.gd",
+		"reason": "lote M-1/M-5 (2026-10-07): a fachada do serviço é o contrato público das suítes e do RPC — as fachadas novas `BuyGuildPerk`/`GuildPerks` (M-2) e `FlashToday`/`BuyFlashSlot` (M-5) entraram sem mudar uma linha de decisão (toda ela mora no dono: `GuildService`/`ShopService`); quem entra aqui é assinatura, não lógica. Saída registrada: a próxima onda que acrescentar fachada aqui parte o domain por dono (trade/vault/loja) em sub-fachadas do próprio `EconomyService`, do mesmo jeito que `stateView`/`shopService`/`guildService` já nasceram internos.",
 	},
+	# M-4 (2026-10-07): a entrada `companion/test_webhook.py` saiu da tabela porque
+	# a saída registrada dela FOI CONSUMIDA: a onda abriu `test_push.py` (fila +
+	# ganchos, padrão `test_metrics.py`) e `push_hooks.py` (a fila do Store, mix-in),
+	# e o webhook voltou para baixo da banda. Motivo para arquivo fora da banda é
+	# allowlist podre — a régua de cima caça exatamente isso.
 ]
 
 func _suiteCeiling() -> void:

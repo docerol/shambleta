@@ -463,24 +463,13 @@ const PASS_BONUS_GEMS : int = 20
 # (de EconomyService.gd, antes da divisao)
 const PASS_DOUBLEXP_LAST_DAYS : int = 3
 
-# (de EconomyService.gd, antes da divisao)
-const PASS_FREE : Dictionary = {
-	3: {"gems": 10}, 5: {"chests": 1}, 8: {"gems": 10},
-	10: {"cosmetics": ["emote_tocha"]}, 13: {"gems": 15}, 16: {"chests": 1},
-	20: {"gems": 15}, 24: {"chests": 2}, 27: {"gems": 20},
-	30: {"gems": 30, "cosmetics": ["title_redescobridor"]},
-}
-
-# (de EconomyService.gd, antes da divisao)
-const PASS_PREMIUM : Dictionary = {
-	1: {"cosmetics": ["skin_manto"]}, 3: {"gems": 25}, 5: {"vip_days": 3},
-	6: {"gems": 25}, 8: {"gems": 25}, 9: {"gems": 25},
-	11: {"chests": 2}, 12: {"gems": 25}, 14: {"chests": 2},
-	15: {"gems": 50}, 17: {"cosmetics": ["skin_mascara"]}, 18: {"gems": 25},
-	21: {"chests": 3}, 22: {"gems": 25}, 24: {"gems": 25},
-	26: {"gems": 25}, 28: {"gems": 50},
-	30: {"gems": 100, "cosmetics": ["title_veterano"]},
-}
+# (de EconomyService.gd, antes da divisao; M-1: tabelas na casa nova)
+# M-1 (2026-10-07): as duas tabelas da trilha preenchidas moram em
+# `EconomyPassTrack.gd` (gate anti-god-node, mesmo regime da FATIA 13); os dois
+# aliases preservam TODOS os leitores — validadores, `PassService`, espelho de
+# temporada e census.
+const PASS_FREE : Dictionary = EconomyPassTrack.PASS_FREE
+const PASS_PREMIUM : Dictionary = EconomyPassTrack.PASS_PREMIUM
 
 # (de EconomyService.gd, antes da divisao)
 const PASS_DAILY_POOL : Array = [

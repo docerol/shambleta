@@ -3141,6 +3141,202 @@ func SuiteOfflineAdHours(sql : SQLService) -> void:
 	sql.db.delete_rows("character", "nickname = 'IdleOffAdA' OR nickname = 'IdleOffAdB'")
 	sql.db.delete_rows("account", "username = 'idle_offad_a' OR username = 'idle_offad_b'")
 
+# M-2 (2026-10-07): leitura do saldo/tier NO DISCO — a suíte confere o efeito na
+# linha, não no dicionário de retorno (retorno mente, linha não).
+func _GuildPointsRaw(sql : SQLService, guildID : int) -> int:
+	var r : Array[Dictionary] = sql.QueryBindings("SELECT points FROM guild WHERE guild_id = ?;", [guildID])
+	return int(r[0]["points"]) if not r.is_empty() else -1
+
+func _GuildPerkTierRaw(sql : SQLService, guildID : int, perkID : String) -> int:
+	var r : Array[Dictionary] = sql.QueryBindings("SELECT tier FROM guild_perk WHERE guild_id = ? AND perk_id = ?;", [guildID, perkID])
+	return int(r[0]["tier"]) if not r.is_empty() else 0
+
+# M-2: a loja de perks — o primeiro GASTO de pontos de guilda. Nada de número
+# redigitado: custo, bônus e tiers vêem de `GuildPerkCatalog`, e cada consumidor
+# é medido pela BOCA dele (`VaultSlotsForGuild`, `GuildBuffForAccount`, o texto
+# das duas pontas do teto em `GuildRoster`). O que a régua caça é buraco de
+# funil: recusa que mexe no saldo, compra com saldo falso, tier fantasma.
+func SuiteGuildPerks(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] M-2: loja de perks — pontos viram moeda")
+	var charID : int = CreateFixture(sql, "m2_perk_leader", "M2PerkLeader")
+	if not Check(charID != 0, "perk leader fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 5000)
+	sql.SetCharacterFarmZone(charID, 1)
+	var gid : int = economy.CreateGuild(accountID, charID, "M2PerkGuild")
+	if not Check(gid > 0, "perk guild created"):
+		return
+	var vaultCost : int = GuildPerkCatalog.NextCost("vault", 1, 0)
+	var boonCost : int = GuildPerkCatalog.NextCost("boon", 1, 0)
+	Check(vaultCost > 0 and boonCost > vaultCost, "preços derivados (vault %d, boon %d)" % [vaultCost, boonCost])
+
+	# 1) perk inexistente: recusa ANTES de qualquer escrita, saldo intacto.
+	var before : int = _GuildPointsRaw(sql, gid)
+	var bad : Dictionary = economy.BuyGuildPerk(accountID, "nao_existe")
+	Check(str(bad.get("reason", "")) == "perk_unknown", "perk desconhecido: perk_unknown")
+	CheckEq(_GuildPointsRaw(sql, gid), before, "perk desconhecido não tocou o saldo")
+
+	# 2) saldo zero: recusa com motivo de saldo, SEM linha fantasma na tabela.
+	var noFunds : Dictionary = economy.BuyGuildPerk(accountID, "vault")
+	Check(str(noFunds.get("reason", "")) == "perk_points", "sem pontos: perk_points")
+	CheckEq(_GuildPerkTierRaw(sql, gid, "vault"), 0, "recusa por saldo não cria tier")
+
+	# 3) compra no saldo exato: o preço sai inteiro, tier 1 grava, e o cap do
+	#    cofre responde pela boca do consumidor (+2 stacks derivadas).
+	sql.ExecuteBindings("UPDATE guild SET points = ? WHERE guild_id = ?;", [vaultCost, gid])
+	var cap0 : int = int(economy.VaultSlotsForGuild(gid).get("cap", -1))
+	var buyVault : Dictionary = economy.BuyGuildPerk(accountID, "vault")
+	Check(bool(buyVault.get("ok", false)), "compra no saldo exato passa")
+	CheckEq(_GuildPointsRaw(sql, gid), 0, "o preço saiu inteiro do placar")
+	CheckEq(_GuildPerkTierRaw(sql, gid, "vault"), 1, "tier 1 gravado")
+	var vaultEntry : Dictionary = GuildPerkCatalog.PERKS["vault"]
+	CheckEq(cap0 + GuildPerkCatalog.VaultBonusSlots(1), int(economy.VaultSlotsForGuild(gid).get("cap", -1)),
+		"cap do cofre leu o perk pela boca do consumidor")
+
+	# 4) a guarda de saldo é do UPDATE com `changes()`, não da leitura prévia:
+	#    saldo 1 contra preço 34+ recusa, não negativa, não cria tier.
+	sql.ExecuteBindings("UPDATE guild SET points = 1 WHERE guild_id = ?;", [gid])
+	var cheap : Dictionary = economy.BuyGuildPerk(accountID, "boon")
+	Check(str(cheap.get("reason", "")) == "perk_points", "saldo insuficiente: perk_points")
+	CheckEq(_GuildPointsRaw(sql, gid), 1, "recusa com guarda ativa não negativa o saldo")
+	CheckEq(_GuildPerkTierRaw(sql, gid, "boon"), 0, "nem um tier fantasma entrou")
+
+	# 5) boon medido pela boca do buff: nível 1 sem perk = 1.0 (comportamento
+	#    antigo, palavra por palavra); com tier 1 = BoonMult(1).
+	CheckNear(economy.GuildBuffForAccount(accountID), 1.0, 0.0001, "nível 1 sem boon: buff 1.0")
+	sql.ExecuteBindings("UPDATE guild SET points = ? WHERE guild_id = ?;", [boonCost, gid])
+	Check(bool(economy.BuyGuildPerk(accountID, "boon").get("ok", false)), "boon comprado")
+	CheckNear(economy.GuildBuffForAccount(accountID), GuildPerkCatalog.BoonMult(1), 0.0001,
+		"settle lê a bênção pela boca do multiplicador")
+
+	# 6) a escada até o máximo, tier a tier pelo preço DERIVADO; e a 6ª recusa
+	#    com saldo enorme — maxed não cobra, maxed não sobe.
+	for tierStep : int in range(2, int(vaultEntry["max_tier"]) + 1):
+		var stepCost : int = GuildPerkCatalog.NextCost("vault", 1, tierStep - 1)
+		sql.ExecuteBindings("UPDATE guild SET points = ? WHERE guild_id = ?;", [stepCost, gid])
+		Check(bool(economy.BuyGuildPerk(accountID, "vault").get("ok", false)), "tier %d do vault pelo preço derivado" % tierStep)
+	CheckEq(_GuildPerkTierRaw(sql, gid, "vault"), int(vaultEntry["max_tier"]), "vault estacionou no max_tier")
+	sql.ExecuteBindings("UPDATE guild SET points = 100000 WHERE guild_id = ?;", [gid])
+	Check(str(economy.BuyGuildPerk(accountID, "vault").get("reason", "")) == "perk_maxed", "acima do máximo: perk_maxed")
+	CheckEq(_GuildPointsRaw(sql, gid), 100000, "maxed não cobra nada")
+
+	# 7) só o líder compra: o membro ouve `perk_leader` e nenhum tier nasce.
+	var memChar : int = CreateFixture(sql, "m2_perk_member", "M2PerkMember")
+	if Check(memChar != 0, "perk member fixture created"):
+		var memAcct : int = sql.GetAccountIDForCharacter(memChar)
+		Check(economy.JoinGuild(memAcct, gid), "membro entrou na guilda dos perks")
+		Check(str(economy.BuyGuildPerk(memAcct, "roster").get("reason", "")) == "perk_leader", "membro não compra perk")
+		CheckEq(_GuildPerkTierRaw(sql, gid, "roster"), 0, "a recusa do membro não criou tier")
+
+	# 8) roster: a compra mexe o TETO pela boca única do catálogo, e as DUAS
+	#    pontas (painel `IsFull` / funil `IsFullLocked`) somam o mesmo bônus —
+	#    régua de fonte, porque encher 21 contas vivas custaria mais que o
+	#    produto; quem amarra as duas pontas no runtime é o roster-race de casa.
+	Check(bool(economy.BuyGuildPerk(accountID, "roster").get("ok", false)), "roster comprado")
+	CheckEq(GuildRoster.PerkBonus(gid), GuildPerkCatalog.RosterBonusSlots(1), "teto leu o tier pela boca do roster")
+	var rosterSrc : String = _RepoFile("res://sources/economy/GuildRoster.gd")
+	Check(rosterSrc.contains("MaxMembers + PerkBonus(guildID)") and rosterSrc.contains("MaxMembers + PerkBonusLocked(sql, guildID)"),
+		"as duas pontas do teto somam o bônus na MESMA forma")
+
+	# 9) sem guilda: o token velho `no_guild` (linha i18n existente) responde.
+	var loneChar : int = CreateFixture(sql, "m2_perk_lone", "M2PerkLone")
+	if Check(loneChar != 0, "lone fixture created"):
+		var loneAcct : int = sql.GetAccountIDForCharacter(loneChar)
+		Check(str(economy.BuyGuildPerk(loneAcct, "vault").get("reason", "")) == "no_guild", "sem guilda: no_guild")
+
+	# Higiene: a fixture come o disco cru — perks, fileira e guilda morrem juntas,
+	# e o memo de filiação é invalidado pelo dono (contrato do Q-8).
+	sql.db.delete_rows("guild_perk", "guild_id = %d" % gid)
+	sql.db.delete_rows("guild_vault", "guild_id = %d" % gid)
+	sql.db.delete_rows("guild_member", "guild_id = %d" % gid)
+	sql.db.delete_rows("guild", "guild_id = %d" % gid)
+	economy.guildService.InvalidateMembershipAll()
+	sql.db.delete_rows("character", "nickname = 'M2PerkLeader' OR nickname = 'M2PerkMember' OR nickname = 'M2PerkLone'")
+	sql.db.delete_rows("account", "username = 'm2_perk_leader' OR username = 'm2_perk_member' OR username = 'm2_perk_lone'")
+
+# M-5 (2026-10-07): a vitrine determinística do dia. Três famílias provadas:
+# (1) a SEED é o dia — estável entre chamadas e entre contas, e o dia 1001 é
+#     medido contra o dia 1000 em DIAS FIXOS (uma régua que dependesse do
+#     calendário de hoje seria a próxima "agenda que vira mina");
+# (2) o desconto mora na banda declarada e o preço cobrado é o preço derivado;
+# (3) o carimbo é o ledger: o mesmo (dia, slot) não vende duas vezes, o slot
+#     vizinho vende, e a virada do dia reabre tudo — sem tabela nova, sem
+#     memória em servidor.
+func SuiteFlashShop(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] M-5: vitrine do dia determinística")
+	var charID : int = CreateFixture(sql, "m5_flash_a", "M5FlashA")
+	if not Check(charID != 0, "flash fixture created"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	sql.SetGems(accountID, 100000)
+	var chestPrice : int = EconomyCatalog.ChestCostGems
+	var vipPrice : int = EconomyCatalog.VIP1CostGems
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
+	var v1 : Array[Dictionary] = FlashShop.Showcase(day, chestPrice, vipPrice)
+	var v2 : Array[Dictionary] = FlashShop.Showcase(day, chestPrice, vipPrice)
+	CheckEq(v1.size(), FlashShop.Slots, "a vitrine tem as %d prateleiras do dia" % FlashShop.Slots)
+	var sameAll : bool = true
+	for k in range(0, v1.size()):
+		if str(v1[k]["label"]) != str(v2[k]["label"]) or int(v1[k]["cost"]) != int(v2[k]["cost"]):
+			sameAll = false
+	Check(sameAll, "seed = dia: dois sorteios do mesmo dia são a MESMA vitrine (para todas as contas)")
+	var a : Array[Dictionary] = FlashShop.Showcase(1000, chestPrice, vipPrice)
+	var b : Array[Dictionary] = FlashShop.Showcase(1001, chestPrice, vipPrice)
+	var allSame : bool = true
+	for k in range(0, a.size()):
+		if int(a[k]["cost"]) != int(b[k]["cost"]) or str(a[k]["label"]) != str(b[k]["label"]):
+			allSame = false
+	Check(not allSame, "os dias 1000 e 1001 (fixos, congelados aqui) sorteiam vitrines diferentes — a seed não é enfeite")
+	for e : Dictionary in v1:
+		var pct : int = int(e["pct"])
+		var cost : int = int(e["cost"])
+		var base : int = int(e["base"])
+		Check(pct >= FlashShop.MinPct and pct <= FlashShop.MaxPct and pct % FlashShop.PctStep == 0,
+			"desconto na banda declarada (%d%%)" % pct)
+		CheckEq(cost, maxi(1, roundi(float(base) * float(100 - pct) / 100.0)), "preço = base descontada, derivada (slot %d)" % int(e["slot"]))
+		Check(cost < base, "vitrine que anuncia desconto COBRA menos que a base (slot %d)" % int(e["slot"]))
+		Check(str(e["kind"]) == "chests" or str(e["kind"]) == "vip_days", "prêmio do flash só sai do vocabulário da loja (kind %s)" % str(e["kind"]))
+	# A porta da compra: recusa não mexe na carteira; o recibo é linha de ledger.
+	var miss : Dictionary = economy.BuyFlashSlot(accountID, charID, FlashShop.Slots)
+	Check(str(miss.get("reason", "")) == "unknown_offer", "slot fora da vitrine: unknown_offer (token velho, linha i18n existe)")
+	var buy0 : Dictionary = economy.BuyFlashSlot(accountID, charID, 0)
+	Check(bool(buy0.get("ok", false)), "primeira prateleira compra (reason %s)" % str(buy0.get("reason", "?")))
+	var rows : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, FlashShop.Reason(day, 0)])
+	CheckEq(int(rows[0]["n"]), 1, "o recibo do flash é LINHA de ledger (reason flash:<dia>:<slot>)")
+	var dup : Dictionary = economy.BuyFlashSlot(accountID, charID, 0)
+	Check(str(dup.get("reason", "")) == "already_claimed", "mesma prateleira no mesmo dia não vende duas vezes")
+	var gemsMid : int = economy.GetGems(accountID)
+	var buy1 : Dictionary = economy.BuyFlashSlot(accountID, charID, 1)
+	Check(bool(buy1.get("ok", false)), "a prateleira seguinte do mesmo dia vende")
+	CheckEq(economy.GetGems(accountID), gemsMid - int(buy1.get("cost", 0)), "a segunda compra cobra o preço derivado")
+	var offer0 : Dictionary = v1[0]
+	if str(offer0["kind"]) == "chests":
+		var chests : Array[Dictionary] = sql.QueryBindings("SELECT COUNT(*) AS n FROM chest_instance WHERE char_id = ? AND origin = 'flash';", [charID])
+		CheckEq(int(chests[0]["n"]), int(offer0["count"]), "baús do flash entram com origem 'flash'")
+	else:
+		Check(sql.GetVIPUntil(accountID) > SQLCommons.Timestamp(), "vip do flash empurra o until (pela boca do cap C-7)")
+	# A vitrine exposta no estado é a MESMA sorteada, com o carimbo da conta.
+	var st : Dictionary = economy.GetEconomyState(accountID, charID)
+	var shown : Array = st.get("flash", [])
+	CheckEq(shown.size(), FlashShop.Slots, "o estado entrega a vitrine do dia")
+	if shown.size() == FlashShop.Slots:
+		Check(bool((shown[0] as Dictionary).get("claimed", false)), "o estado carimba a prateleira comprada (slot 0 claimed=true)")
+		Check(not bool((shown[2] as Dictionary).get("claimed", false)), "e não carimba a que ninguém comprou (slot 2)")
+	# Saldo: a última prateleira ainda cabe? Se não couber, a recusa é
+	# `insufficient_gems` (token velho) e o ledger não ganha linha.
+	var gemsNow : int = economy.GetGems(accountID)
+	var cost2 : int = int(v1[2]["cost"])
+	if gemsNow < cost2:
+		var poor : Dictionary = economy.BuyFlashSlot(accountID, charID, 2)
+		Check(str(poor.get("reason", "")) == "insufficient_gems", "sem saldo: insufficient_gems, nada cobrado")
+		CheckEq(economy.GetGems(accountID), gemsNow, "recusa por saldo não mexe na carteira")
+	# Higiene: o ledger é append-only (056 não deixa apagar linha fora de rollup)
+	# — aposentar a fixture é tirar o dono, como em toda suíte de dinheiro.
+	sql.db.delete_rows("chest_instance", "char_id = %d" % charID)
+	sql.db.delete_rows("character", "nickname = 'M5FlashA'")
+	sql.db.delete_rows("account", "username = 'm5_flash_a'")
+
 # Vitrine honesta (plano 2026-09-25, fatias 2 e 4). Duas famílias de defeito,
 # ambas medidas no mapeamento de venda: anunciar algo que a outra porta recusa
 # (o passe fora de temporada) e cobrar por algo que nenhum renderizador mostra
@@ -3322,6 +3518,24 @@ func SuiteStorefrontHonesty(sql : SQLService) -> void:
 	Check(str(blocked.get("reason", "")) == "not_rendered", "rebirth_fx cobrado com saldo => not_rendered")
 	CheckEq(economy.GetGems(accountID), 5000, "not_rendered: o gate é pré-débito, saldo intacto")
 	Check(not economy.HasCosmetic(accountID, "rebirth_fx"), "not_rendered não concedeu o cosmético")
+
+	# M-1 (2026-10-07): censo de slot sem buraco. A vitrine promete recompensa em
+	# todo nível 1..`PASS_MAX_LEVEL` das duas trilhas — nível sem entrada na tabela
+	# e fora da escada de bônus é buraco silencioso: o jogador chega, o botão
+	# acende, e o grant devolve falso. A trilha free não tem saída; na premium, a
+	# partir de `PASS_BONUS_START` o `_GrantPassRewardRaw` substitui a tabela pela
+	# escada — o que não pode é buraco.
+	var passMax : int = EconomyCatalog.PASS_MAX_LEVEL
+	var holes : String = ""
+	for freeLevel : int in range(1, passMax + 1):
+		if (EconomyCatalog.PASS_FREE.get(freeLevel, {}) as Dictionary).is_empty():
+			holes += " %d" % freeLevel
+	Check(holes.is_empty(), "trilha free: todo nível 1..%d tem recompensa não-vazia (buracos:%s)" % [passMax, holes])
+	holes = ""
+	for premLevel : int in range(1, passMax + 1):
+		if (EconomyCatalog.PASS_PREMIUM.get(premLevel, {}) as Dictionary).is_empty() and premLevel < EconomyCatalog.PASS_BONUS_START:
+			holes += " %d" % premLevel
+	Check(holes.is_empty(), "trilha premium: tabela ou escada de bônus em todo nível 1..%d (buracos:%s)" % [passMax, holes])
 
 	# O ledger NÃO é parte da limpeza: `ledger_transaction_no_delete`
 	# (data/conf/migrations/056_ledger_retention.sql:103) recusa qualquer DELETE de

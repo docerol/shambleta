@@ -267,10 +267,10 @@ services:
       # a frente do dinheiro podia estar em crash-loop e o único sintoma era
       # webhook 502 no nginx. É um probe honesto: a rota abre a MESMA conexão
       # SQLite do grant, então 200 quer dizer "banco certo e alcançável", não
-      # apenas "processo vivo". Porta: `EXPOSE 8901` (`deploy/companion/Dockerfile:38`),
+      # apenas "processo vivo". Porta: `EXPOSE 8901` (`deploy/companion/Dockerfile:42`),
       # CMD `"--port", "8901"` (`deploy/companion/Dockerfile:53`) e bind `0.0.0.0`
       # (`deploy/companion/Dockerfile:46`); busybox wget sai !=0 em 4xx/5xx. O timeout
-      # é 6 s, acima do `PRAGMA busy_timeout=5000` (companion/server.py:1168): um lock
+      # é 6 s, acima do `PRAGMA busy_timeout=5000` (companion/server.py:1197): um lock
       # de esperar, não ficar unhealthy.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8901/health"]
       interval: 30s

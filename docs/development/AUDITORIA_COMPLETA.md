@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-Shambleta is a **maturely engineered** Godot 4.7 server-authoritative idle RPG (~61k lines GDScript, 333 GD files, 71 SQL migrations, 120+ test harnesses) with some of the strongest money-boundary and security engineering I have audited: parameterized SQL enforced via allowlist, append-only ledger gated by DB triggers, server-authoritative combat with zero client-trusted damage, a triple-layer gate (ci_gate_log + structure gates + doc-drift) with planted controls, real Prometheus/Alertmanager, and a money pipeline (Mercado Pago HMAC + authoritative re-fetch + idempotency-keyed grant queue) that survives a crash.
+Shambleta is a **maturely engineered** Godot 4.7 server-authoritative idle RPG (~61k lines GDScript, 333 GD files, 72 SQL migrations, 120+ test harnesses) with some of the strongest money-boundary and security engineering I have audited: parameterized SQL enforced via allowlist, append-only ledger gated by DB triggers, server-authoritative combat with zero client-trusted damage, a triple-layer gate (ci_gate_log + structure gates + doc-drift) with planted controls, real Prometheus/Alertmanager, and a money pipeline (Mercado Pago HMAC + authoritative re-fetch + idempotency-keyed grant queue) that survives a crash.
 
 **But it ships RED today.** Three money/state harnesses are failing in the working tree (`refund_revocation_test`, `fraud_test`, `balance_test`), the entry-gate harness (`admission_gate_test`) does not compile, and the production analytics funnel, while on by default in code, depends entirely on a JSON blob that Prometheus cannot scrape. On top of that, the **product model is one axis deep**: a player reaching the level cap (L60) in 7.7 days can finish the 27-zone ladder in 2 hours of attention, after which the only repeatable content is `BossRush` (which pays the active-timing mechanic 0%) followed by a single `torment` integer, and the prestige layer is documented-internal as skippable.
 
@@ -18,7 +18,7 @@ The codebase is **not** five minutes from a bad refactor. Its risk is **commerci
 - **Frontend:** Godot 4 client; web export HTML5/WASM; `sources/gui/` = 90 files / 14,085 lines (largest module). i18n 100% pt_BR (1,337 CSV rows, 0 missing), WCAG 2.5.5 touch targets.
 - **Backend modules (`sources/`):** actor, ads, ai, audio, auth, camera, cell, combat, conf, db, debug, economy (25 files / 11,389 lines), effects, gui, idle, input, launcher, map, network, ops, season, shaders, skill, social, sql, system, util, web, world.
 - **Migrations:** 67 forward-only, dense numbered series addressed by directory position; `apply` transactions each patch, fail-closed, stamps version per-patch.
-- **Test harnesses:** 76 GDScript gates (70 auto-enrolled by filename + 6 explicit) + 10 Python suites (`companion/test_security.py`, `test_webhook.py`) + 11 structure gates + 52 secrets checks.
+- **Test harnesses:** 76 GDScript gates (70 auto-enrolled by filename + 6 explicit) + 12 Python suites (`companion/test_security.py`, `test_webhook.py`, `test_push.py` — fila e ganchos, saída registrada do C-9 consumida no M-4) + 11 structure gates + 52 secrets checks.
 - **CI:** `.github/workflows/godot-ci.yml` — push-only, **no `pull_request` trigger**; `release.yml` gates on `test.sh all`.
 - **`.env.example`** empty-credential policy with in-line rationale; `check_secrets.sh` enforces both directions with planted controls.
 - **Graph:** `graphify-out/` rebuilt during this audit; 1,913 nodes / 2,395 edges / 257 communities (stale at `9e38f16b`, rebuilt to `eb9514e`).
@@ -29,7 +29,7 @@ The codebase is **not** five minutes from a bad refactor. Its risk is **commerci
 
 The architecture is documented honestly at `docs/development/architecture.md` and matches the code. Key verified facts:
 
-- **Authority:** identity read from the transport via `AuthPeerID`/`TransportSenderID` (`Network.gd:1128-1143`), overrides any packet field; **all 126 inbound RPCs** route through it; zero client→SQL paths (only one hit is a comment); client runs combat sim for responsiveness but the server grants XP/gold in `Formula.ApplyXp`.
+- **Authority:** identity read from the transport via `AuthPeerID`/`TransportSenderID` (`Network.gd:1145-1160`), overrides any packet field; **all 126 inbound RPCs** route through it; zero client→SQL paths (only one hit is a comment); client runs combat sim for responsiveness but the server grants XP/gold in `Formula.ApplyXp`.
 - **Money boundary:** webhooks live in companion (HMAC + authoritative re-fetch + idempotency), not in the game process. A compromised game server cannot mint real money.
 - **God-node gate:** ratcheted allowlist, 8 files with named ceilings; currently 0 failures, but **3 of 8 at slack ≤ 3** and `TelemetryService.gd` at 799/800 — refactoring budget is zero.
 - **Lock discipline:** `_eco.settleMutex` (global) on 47 sites + `_eco._get_settle_mutex()` (sharded) on 8 sites — **two locking disciplines**, 85% of sites still global. The shard split is 85% inert and creates a latent two-discipline hazard.
@@ -55,14 +55,14 @@ One axis (zone depth), one integer (torment 0–10), one prestige axis. **No dun
 ### Onboarding / retention hooks
 - Onboarding: 6 steps (`Onboarding.gd:8-16`), touch-aware, but **steps 2-4 teach F1/F2 on the platform that has neither** (`Onboarding.gd:124/127/130/133`).
 - **Login streak UI exists** (correcting an upstream false-positive): rendered inside `AfkReport.gd` via `StreakRows.Build/Refresh`. It IS wired; it IS reachable on return. The streak is 3,250 gold + 75 gems + key + chest per *character* per 7-day cycle, 10 characters = ~1.2–2.0× the declared band (per-character faucets × `MaxCharacterCount=10`, `ActorCommons.gd:407`).
-- Pass: 40 levels, 3 dailies + weeklies, **30/40 free and 22/40 premium are empty reward slots** (`EconomyCatalog.gd:467-483`).
+- Pass: 40 levels, 3 dailies + weeklies, **every slot filled (M-1, 2026-10-07)**: the 30 empty free slots now pay gems/chests plus 2 milestone cosmetics from the track's own shelf (emote-guilda 25, fx-faisca 35) and the 12 empty premium slots below the bonus ladder pay gems/chests/VIP-days; cosmetics promised by other origins (Deluxe-exclusive `emote_coroa`, purchase-backfill titles, cup `title_campeao`) were deliberately kept out of both tracks; premium levels 31–40 pay `PASS_BONUS_GEMS` via the ladder (`EconomyPassTrack.gd:27-61`, no-empty census in `SuiteStorefrontHonesty`).
 - **Login warps to farm; no town portal; `/warp` is MODERATOR-only** (`IdlePolicyService.gd:70/181/219`, `WorldCommands.gd:7`). Quest NPCs, the sole skill trainer, and guildmate interactions are structurally unreachable from game flow.
 
 ### Social
-Guilds, guild chat (verified wired + tested `guild_chat_fanout_test.gd`), chat moderation, social graph, PvP arena (ELO), tournaments, trade (10-gem burn), AH. **Gift is absent. Guild points have zero economic value** (only a display board + season prize behind `SeasonsBetaLock`).
+Guilds, guild chat (verified wired + tested `guild_chat_fanout_test.gd`), chat moderation, social graph, PvP arena (ELO), tournaments, trade (10-gem burn), AH. **Gift is absent. Guild points became money (M-2, 2026-10-07)**: a leader now spends the board on catalog perks — vault shelf (+2 stacks/tier), camp boon (+1% settle/tier), roster push (+1 seat/tier) — priced with a level-scaled ladder inside the `settleMutex + Transaction` funnel (`GuildService.BuyGuildPerk`, `GuildPerkCatalog`, table `guild_perk` from migration 072, census `SuiteGuildPerks`); the display board and season prize remain.
 
 ### Live Ops
-Real remote config: JSON events calendar (15 entries), seasons, paid catalog, base-economy knobs — all fail-closed validated. **No A/B testing, no segmentation, no numeric remote balance.** `double_xp`/`chest_bonus` windows exist but the calendar has **11 of 15 windows as `tournament`** (prize-pool-only, F2P-irrelevant) and the file documents a 44-day gap. S1 anchored to first server boot (`start_unix: 0, end_unix: 0`).
+Real remote config: JSON events calendar (17 entries), seasons, paid catalog, base-economy knobs — all fail-closed validated. **No A/B testing, no segmentation, no numeric remote balance.** `double_xp`/`chest_bonus` windows exist but the calendar has **11 of 17 windows as `tournament`** (prize-pool-only, F2P-irrelevant); the October desert that the file documented is closed by the Q-7 campaign windows (`xp_double_sprint_out1026`, `baus_semana_out1226`). S1 anchored to first server boot (`start_unix: 0, end_unix: 0`).
 
 ---
 
@@ -95,8 +95,8 @@ Real remote config: JSON events calendar (15 entries), seasons, paid catalog, ba
 
 ### Gap crítico de analytics — verificado
 - `FeatureFlags.FUNNEL_DAILY: true` is the code default, and **`deploy/docker-compose.yml` does not override it OFF** → the funnel is ON in the shipped compose. (An upstream report claimed the funnel is "disabled by default in production"; **re-checked against `FeatureFlags.gd:45-50`**: it is not. Marking CORRIGIDO.)
-- **However:** `d1_return` is an *event*, and `IsD1Return()` is only used inside `RecordFunnel`. The GameAnalytics benchmark the roadmap cites (D1 22/27%, D7 3.4-3.9%/7%) needs D1/D7/D30 in Prometheus; D1 retention is a JSON cohort (`cohort_retention` view, `companion/server.py:1500-1510`) that the companion now also publishes as gauges (`companion/server.py:1474-1489`) — **CORRIGIDO na revisão live (2026-10-04).**
-- **`server.py /metrics` returns JSON with `Content-Type: application/json`** (`server.py:1401-1404`), served at `/metrics` (`server.py:1558-1561`). **CORRIGIDO na revisão live (2026-10-04):** `deploy/prometheus.yml:69` scrapeia `companion:8901` em `/metrics/prometheus`, que serve exposition em texto (`companion/server.py:1424-1537`) — o scrape morto virou alvo alcançável, e os money KPIs (ARPU, ARPPU, sales_by_sku, revenue_by_currency, accounts, settles) saem como métrica. **Ainda aberto:** zero das 21 regras de alerta referencia uma métrica do companion (todas apontam métricas do game: `grant_queue`, `reconcile`, `fraud_flags`).
+- **However:** `d1_return` is an *event*, and `IsD1Return()` is only used inside `RecordFunnel`. The GameAnalytics benchmark the roadmap cites (D1 22/27%, D7 3.4-3.9%/7%) needs D1/D7/D30 in Prometheus; D1 retention is a JSON cohort (`cohort_retention` view, `companion/server.py:1354-1364`) that the companion now also publishes as gauges (`companion/server.py:1426-1439`) — **CORRIGIDO na revisão live (2026-10-04).**
+- **`server.py /metrics` returns JSON with `Content-Type: application/json`** (`server.py:1548-1551`), served at `/metrics` (`server.py:1546-1551`). **CORRIGIDO na revisão live (2026-10-04):** `deploy/prometheus.yml:69` scrapeia `companion:8901` em `/metrics/prometheus`, que serve exposition em texto (`companion/server.py:1389-1510`) — o scrape morto virou alvo alcançável, e os money KPIs (ARPU, ARPPU, sales_by_sku, revenue_by_currency, accounts, settles) saem como métrica. **Ainda aberto:** zero das 21 regras de alerta referencia uma métrica do companion (todas apontam métricas do game: `grant_queue`, `reconcile`, `fraud_flags`).
 - `ROrtedMetrics` exposes the **raw components** (`money_units`, `money_gross_minor_cents`) in Prometheus exposition, but the KPI *ratios* (ARPU, ARPPU, conversion) are only composed in the JSON. **No `shambleta_*_arpu` or `_conversion` family exists.**
 
 ---
@@ -197,7 +197,7 @@ PLAYER → faucet (online kill / offline settle / boss / streak / IAP / season /
 
 **S7. AH sem gold sink + sem email-verify gate.** (sink: fechado por P0-7/C-10, o burn hoje mora em `AuctionHouseService.gd:845-861`; o gate de e-mail continua ausente, sem `IsEmailVerifiedRaw`; contraste com `TradeChestService.gd:38`.) Habilita lavagem RMT.
 
-**S8. TriggerSelect vaza stats de qualquer agent** sem visibility gate (`Server.gd:1817-1823`), contrário ao resto do arquivo. **Low** (só public stats), mas é um leak intencionalmente evitado em outro lugar.
+**S8. TriggerSelect vaza stats de qualquer agent** sem visibility gate (`Server.gd:1817-1824`), contrário ao resto do arquivo. **Low** (só public stats), mas é um leak intencionalmente evitado em outro lugar.
 
 ### Correções já presentes (não refazer)
 Email/PII em log (`EmailService.gd:76`), token plaintext em client (`Login.gd:269-272`), SQLi latente em `CommunityService.gd:264` (guardado upstream), account-creation enumeration (deliberado). O RPC authority layer, o lockout exponencial, a equalização de timing, a 2FA anti-replay, os webhooks (HMAC + re-fetch + idempotency), os refund/revocations (total-not-pro-rata, gemas_paid-only), e a DB integrity via trigger são todos fortes.
@@ -338,7 +338,7 @@ Pesquisa via websearch (15 fontes distintas). Principais pontos relevant para Sh
 | P0-6 | Alegava `admission_gate_test` sem compilar (var `probeRecvHeaders` duplicada) | `tests/admission_gate_test.gd:149-150` compila e roda (97 checks, 0 failures) | Segurança: entry gate morto | **REFUTADO na revisão live** |
 | P0-7 | **AH gold sink.** Audit original alegava fee 1% creditado ao criador (sem queima). **VERIFICADO NO CODIGO 2026-10-05:** `sources/economy/AuctionHouseService.gd:766-797` tem burn `ah_burn` (`_MoveGoldLocked(..., -creatorFee, "ah_burn", ...)`) quando `creatorAccount != sellerAccount`; fee = `CraftCatalog.CREATOR_FEE_PCT` (1%). Soma: buyer `-price`, seller `+price - fee`. Gold DESTRUIDO. **NAO EXISTE — ja corrigido em codigo (audit nao atualizado).** | `AuctionHouseService.gd:795-797` | Economia: inflate/anti-RMT | **REFUTADO (ja corrigido no codigo)** |
 | P0-8 | **Password-reset sem `email_verified` gate.** Audit alegava reset sem verificacao. **VERIFICADO NO CODIGO 2026-10-05:** `sources/network/server/Server.gd:445-457` — `if not Launcher.SQL.IsEmailVerified(accountID)` bloqueia reset (log `EventResetOnUnverified`); `elif` so envia se verificado. **NAO EXISTE — ja corrigido no codigo (audit nao atualizado).** | `Server.gd:445-457` | Seguranca | **REFUTADO (ja corrigido no codigo)** |
-| P0-9 | Companion `/metrics` JSON, Prometheus não parseia | `companion/server.py:1694-1699` (`_send`), `companion/server.py:1663-1668`; `deploy/prometheus.yml:69` com `metrics_path` | Observability: exposition alcançável; 0 de 21 alertas citam companion | **CORRIGIDO na revisão live** |
+| P0-9 | Companion `/metrics` JSON, Prometheus não parseia | `companion/server.py:1558-1563` (`_send`), `companion/server.py:1517-1522`; `deploy/prometheus.yml:69` com `metrics_path` | Observability: exposition alcançável; 0 de 21 alertas citam companion | **CORRIGIDO na revisão live** |
 | P0-10 | `MaxPlayerCount=128` binda antes do tick — doc SCALING errado (corrigido) | `NetworkCommons.gd:53`; `Admission.gd` | Produto/doc-drift | **CORRIGIDO na revisão live** |
 
 ### P1 — Altos

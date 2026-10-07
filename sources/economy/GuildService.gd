@@ -58,10 +58,15 @@ func GetMemberRank(accountID : int) -> String:
 	return str(rows[0]["rank"]) if not rows.is_empty() else ""
 
 func GuildBuffForAccount(accountID : int) -> float:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT g.level FROM guild g INNER JOIN guild_member m ON m.guild_id = g.guild_id WHERE m.account_id = ?;", [accountID])
+	# M-2: o buff de nível (2%/nível, casa velha) agora é MULTIPLICADO pela bênção
+	# comprada com pontos (`boon`, `GuildPerkCatalog`) — a leitura continua uma
+	# só query, e sem perk a subselect devolve NULL → tier 0 → mult 1.0, o
+	# comportamento anterior palavra por palavra.
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT g.level, COALESCE((SELECT p.tier FROM guild_perk p WHERE p.guild_id = g.guild_id AND p.perk_id = 'boon'), 0) AS boon FROM guild g INNER JOIN guild_member m ON m.guild_id = g.guild_id WHERE m.account_id = ?;", [accountID])
 	if rows.is_empty():
 		return 1.0
-	return 1.0 + EconomyCatalog.GuildBuffPerLevel * float(maxi(0, int(rows[0]["level"]) - 1))
+	return (1.0 + EconomyCatalog.GuildBuffPerLevel * float(maxi(0, int(rows[0]["level"]) - 1))) \
+		* GuildPerkCatalog.BoonMult(int(rows[0].get("boon", 0)))
 
 func GetGuildLeaderboard(limit : int = 10) -> Array[Dictionary]:
 	return Launcher.SQL.QueryBindings("SELECT g.guild_id, g.name, g.level, g.points, COUNT(m.account_id) AS members FROM guild g LEFT JOIN guild_member m ON m.guild_id = g.guild_id GROUP BY g.guild_id ORDER BY g.level DESC, g.points DESC, members DESC LIMIT ?;", [limit])
@@ -456,12 +461,83 @@ func GuildSettlePoints(accountID : int, hours : float) -> void:
 		AddGuildPoints(guildID, maxi(1, floori(hours)))
 
 func VaultSlotsForGuild(guildID : int) -> Dictionary:
-	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT level, vault_slots_purchased FROM guild WHERE guild_id = ?;", [guildID])
+	# M-2: o cap ganha o bônus do perk `vault` (2 stacks/tier, `GuildPerkCatalog`)
+	# sobre a fórmula velha (base + 2/nível + comprados com gems). Sem linha na
+	# tabela, o COALESCE devolve 0 — `int(NULL)` do subselect nu seria o crash
+	# que a primeira corrida da suíte pegou (e nada muda para guilda sem perk).
+	var rows : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT level, vault_slots_purchased, COALESCE((SELECT p.tier FROM guild_perk p WHERE p.guild_id = ? AND p.perk_id = 'vault'), 0) AS perk_tier FROM guild WHERE guild_id = ?;", [guildID, guildID])
 	if rows.is_empty():
-		return {"cap": 0, "used": 0, "purchased": 0}
-	var cap : int = EconomyCatalog.GUILD_VAULT_BASE_SLOTS + EconomyCatalog.GUILD_VAULT_PER_LEVEL * maxi(0, int(rows[0].get("level", 1)) - 1) + int(rows[0].get("vault_slots_purchased", 0))
+		return {"cap": 0, "used": 0, "purchased": 0, "perk": 0}
+	var perkTier : int = int(rows[0].get("perk_tier", 0))
+	var cap : int = EconomyCatalog.GUILD_VAULT_BASE_SLOTS + EconomyCatalog.GUILD_VAULT_PER_LEVEL * maxi(0, int(rows[0].get("level", 1)) - 1) + int(rows[0].get("vault_slots_purchased", 0)) + GuildPerkCatalog.VaultBonusSlots(perkTier)
 	var used : Array[Dictionary] = Launcher.SQL.QueryBindings("SELECT COUNT(*) AS n FROM guild_vault WHERE guild_id = ?;", [guildID])
-	return {"cap": cap, "used": int(used[0]["n"]) if not used.is_empty() else 0, "purchased": int(rows[0].get("vault_slots_purchased", 0))}
+	return {"cap": cap, "used": int(used[0]["n"]) if not used.is_empty() else 0, "purchased": int(rows[0].get("vault_slots_purchased", 0)), "perk": perkTier}
+
+# M-2 (2026-10-07): a loja de perks — o primeiro GASTO de pontos de guilda. A
+# decisão inteira (líder? maxed? saldo?) é re-feita DENTRO do funil
+# `settleMutex + Transaction` com leituras cruas, no mesmo regime das mutações do
+# roster (rodada 3 da auditoria social): dois líderes comprando o mesmo tier do
+# mesmo perk liam o mesmo saldo fora do funil e escreviam dois tiers — o preço
+# escalonado mascarava o double-spend como "subiu de tier mesmo". O `points >=
+# cost` no UPDATE é a última porta: se outra perna do mesmo funil gastou pontos
+# entre a leitura e o UPDATE (settle, boss), a compra falcha em vez de negativar.
+func BuyGuildPerk(accountID : int, perkID : String) -> Dictionary:
+	if not GuildPerkCatalog.Exists(perkID):
+		return {"ok" = false, "reason" = "perk_unknown"}
+	# O dicionário é MUTADO por chave dentro do lambda: GDScript captura por
+	# valor, e reatribuir `out` escreveria na cópia do lambda — a primeira corrida
+	# devolvia "?" em toda recusa exatamente por isso (e o censo de captura da
+	# suíte aponta reatribuição de local no lambda como defeito, não estilo).
+	var out : Dictionary = {"ok" = false, "reason" = "?"}
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var mine : Array[Dictionary] = sql.ExecNoLockQuery("SELECT m.guild_id, m.rank, g.level, g.points FROM guild_member m INNER JOIN guild g ON g.guild_id = m.guild_id WHERE m.account_id = ?;", [accountID])
+		if mine.is_empty():
+			out["reason"] = "no_guild"
+			return false
+		var row : Dictionary = mine[0]
+		if str(row.get("rank", "")) != "leader":
+			out["reason"] = "perk_leader"
+			return false
+		var guildID : int = int(row["guild_id"])
+		var tierRows : Array[Dictionary] = sql.ExecNoLockQuery("SELECT tier FROM guild_perk WHERE guild_id = ? AND perk_id = ?;", [guildID, perkID])
+		var tier : int = int(tierRows[0]["tier"]) if not tierRows.is_empty() else 0
+		var maxTier : int = int(((GuildPerkCatalog.PERKS[perkID] as Dictionary)["max_tier"]))
+		if tier >= maxTier:
+			out["reason"] = "perk_maxed"
+			return false
+		var cost : int = GuildPerkCatalog.NextCost(perkID, int(row["level"]), tier)
+		if not sql.db.query_with_bindings("UPDATE guild SET points = points - ? WHERE guild_id = ? AND points >= ?;", [cost, guildID, cost]):
+			out["reason"] = "perk_points"
+			return false
+		# Um UPDATE que não casa linha nenhuma É sucesso de query: sem a contagem
+		# da mesma conexão (`_ChangedRaw`), o settle que chegasse entre a leitura
+		# do saldo e o UPDATE viraria compra com saldo insuficiente — o mesmo
+		# contrato que `ResolveChatReport` e os posto-mutations já juram.
+		if _ChangedRaw(sql) <= 0:
+			out["reason"] = "perk_points"
+			return false
+		if not sql.db.query_with_bindings("INSERT INTO guild_perk (guild_id, perk_id, tier, updated_at) VALUES (?, ?, 1, ?) ON CONFLICT(guild_id, perk_id) DO UPDATE SET tier = tier + 1, updated_at = excluded.updated_at;", [guildID, perkID, SQLCommons.Timestamp()]):
+			return false
+		out["ok"] = true
+		out["reason"] = "ok"
+		out["tier"] = tier + 1
+		out["cost"] = cost
+		return true):
+		pass
+	_eco.settleMutex.unlock()
+	return out
+
+func GuildPerks(guildID : int) -> Dictionary:
+	# Estado de leitura para o painel: perk_id → tier comprado. O preço do próximo
+	# tier é derivável do catálogo + nível + tier, então a tela calcula a prévia
+	# com `GuildPerkCatalog.NextCost` — mas o VEREDITO de preço é sempre o do
+	# funil acima, nunca o desenhado.
+	var out : Dictionary = {}
+	for r in Launcher.SQL.QueryBindings("SELECT perk_id, tier FROM guild_perk WHERE guild_id = ?;", [guildID]):
+		out[str(r["perk_id"])] = int(r["tier"])
+	return out
 
 # SOM-IDLE social: stacks distintas do vault (item_id + count), para o painel
 # listar cada pilha com um botão de retirada. Read-only; não mexe no locking nem
@@ -503,6 +579,11 @@ func GetGuildState(accountID : int) -> Dictionary:
 				"level": int(g[0].get("level", 1)),
 				"points": int(g[0].get("points", 0)), "my_rank": GetMemberRank(accountID),
 				"vault": VaultSlotsForGuild(guildID), "vault_stacks": VaultStacks(guildID),
+				# M-2: tier comprado por perk. O PREÇO do próximo tier é fórmula do
+				# catálogo congelado no binário dos dois lados (`GuildPerkCatalog`),
+				# então a prévia da tela e o veredito do funil nunca divergem por
+				# número transportado — o estado só diz o que já foi comprado.
+				"perks": GuildPerks(guildID),
 				"vault_log": VaultTrail(guildID), "members": members}
 	var board : Array = []
 	for b in Launcher.SQL.QueryBindings("SELECT name, tag, level, points FROM guild ORDER BY points DESC, guild_id ASC LIMIT 10;", []):

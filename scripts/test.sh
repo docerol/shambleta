@@ -520,6 +520,7 @@ companion_gates() {
 		record_gate 1 "companion_gates (sem gate_py:$missing)"
 	fi
 	gate_py /tmp/shambleta-companion.log "== COMPANION:" test_webhook
+	gate_py /tmp/shambleta-push-queue.log "== PUSH:" test_push
 	gate_py /tmp/shambleta-security.log "== SECURITY:" test_security
 	gate_py /tmp/shambleta-refund.log "== REFUND CLI:" test_refund_cli
 	gate_py /tmp/shambleta-ad-ssv.log "== AD SSV:" test_ad_ssv

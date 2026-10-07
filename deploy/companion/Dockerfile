@@ -33,6 +33,10 @@ COPY companion/ad_ssv.py .
 # camada cripto não está na imagem. Cópia explícita, não `companion/*`: só estas
 # quatro acompanham server.py (o resto de companion/ é ferramenta de CI).
 COPY companion/push_vapid.py companion/push_common.py companion/push_p256.py companion/push_aesgcm.py ./
+# M-4 (2026-10-07): `server.py` importa `push_hooks` (a fila do Store, mix-in
+# `PushQueue`) em tempo de carga — sem este COPY o container morre no boot com
+# ModuleNotFoundError, e o deploy_ops caça exatamente o fechamento completo.
+COPY companion/push_hooks.py .
 # Fonte única do catálogo pago: o mesmo arquivo que o jogo valida no boot.
 COPY data/conf/paid_catalog.json .
 EXPOSE 8901

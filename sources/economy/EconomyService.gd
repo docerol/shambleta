@@ -280,6 +280,15 @@ func RerollDailyShop(accountID : int) -> Dictionary:
 func BuyDailyOffer(accountID : int, charID : int, offerID : String) -> Dictionary:
 	return shopService.BuyDailyOffer(accountID, charID, offerID)
 
+# M-5 (2026-10-07): fachada da vitrine determinística do dia — a tela e o RPC
+# falam por aqui; o sorteio, o preço e o carimbo de ledger moram no dono da
+# prateleira (`ShopService` + `FlashShop`).
+func FlashToday(accountID : int) -> Array[Dictionary]:
+	return shopService.FlashToday(accountID)
+
+func BuyFlashSlot(accountID : int, charID : int, slot : int) -> Dictionary:
+	return shopService.BuyFlashSlot(accountID, charID, slot)
+
 func GetEconomyState(accountID : int, charID : int) -> Dictionary:
 	return stateView.Build(accountID, charID)
 
@@ -450,6 +459,14 @@ func SetGuildTag(accountID : int, tag : String) -> Dictionary:
 
 func AddGuildPoints(guildID : int, points : int) -> bool:
 	return guildService.AddGuildPoints(guildID, points)
+
+# M-2 (2026-10-07): a fachada da loja de perks — o gasto de pontos, a decisão de
+# líder/maxed/saldo e o funil moram no dono da tabela; aqui só passa o veredito.
+func BuyGuildPerk(accountID : int, perkID : String) -> Dictionary:
+	return guildService.BuyGuildPerk(accountID, perkID)
+
+func GuildPerks(guildID : int) -> Dictionary:
+	return guildService.GuildPerks(guildID)
 
 func GuildSettlePoints(accountID : int, hours : float) -> void:
 	guildService.GuildSettlePoints(accountID, hours)

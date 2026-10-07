@@ -590,8 +590,8 @@ tocam estado de jogo — `SuiteEvidencePointers()`, `SuiteHarnessCitations()` e
 motivo que a sonda existe: o controle de fantasma dela ficou vermelho e ninguém viu
 por 20 min — só o gate completo a roda. Medido em 2026-10-01, nesta máquina:
 **641 checks, 0 failures** em menos de um minuto, contra os ~20 min do gate `idle`,
-que executa as 93 suítes chamadas por
-`tests/run_idle_tests.gd` <!-- DRIFT idle_suites 93 -->. Este número é o único da
+que executa as 95 suítes chamadas por
+`tests/run_idle_tests.gd` <!-- DRIFT idle_suites 95 -->. Este número é o único da
 seção recalculado a cada passada: a régua 22 de `scripts/check_doc_drift.sh` conta os
 chamados no runner e compara com a âncora, porque a frase anterior dizia "137 suítes"
 e nenhum lugar do repo reproduzia 137. Existe porque mexer numa citação

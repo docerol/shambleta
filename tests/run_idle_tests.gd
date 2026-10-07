@@ -306,6 +306,12 @@ func _run_tests():
 		# Depois da régua de ponteiros, no mesmo espírito: leitura da árvore, nenhum
 		# estado tocado. Varre `sources/` procurando navegação externa sem o ramo Web.
 		suites.SuiteExternalLinksWebBranch()
+		# M-2: a loja de perks abre e fecha a própria guilda; nenhum estado fica
+		# para a vitrine (que também é a única que mexe em `season`).
+		suites.SuiteGuildPerks(sql, economy)
+		# M-5: a vitrine do dia compra gems do próprio bolso da fixture e deixa o
+		# recibo no ledger (append-only) — nada de estado vivo para a frente.
+		suites.SuiteFlashShop(sql, economy)
 		# Vitrine por último: é a única suíte que mexe em `season` depois da régua
 		# de ponteiros, e fecha toda temporada ativa ao sair — nada herda o estado.
 		suites.SuiteStorefrontHonesty(sql)

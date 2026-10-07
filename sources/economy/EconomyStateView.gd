@@ -70,4 +70,7 @@ func Build(accountID : int, charID : int) -> Dictionary:
 		"starter_offer" = _eco.GetStarterOfferState(accountID),
 		"pending_grants" = _eco.GetPendingGrants(accountID),
 		"vendor" = _eco.GetVendorState(accountID),
+		# M-5: a vitrine do dia (3 prateleiras determinísticas + carimbo `claimed`
+		# da conta). Preço NÃO se re-derive na tela — ela pinta o que o funil cobra.
+		"flash" = _eco.FlashToday(accountID),
 	}

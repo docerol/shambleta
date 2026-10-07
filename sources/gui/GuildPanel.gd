@@ -337,6 +337,42 @@ func RequestVaultSlot() -> bool:
 	_Arm({"action": "slot", "line": GuildSlotShop.SlotLine()})
 	return true
 
+# M-2 (2026-10-07): as três compras de perk (moeda = PONTOS da guilda, catálogo
+# em `GuildPerkCatalog`, veredito no funil de `GuildService.BuyGuildPerk`) seguem
+# o MESMO portão do slot: o clique arma a prévia com o preço e não fala com
+# ninguém; `ConfirmPending` é o único caminho que gasta. A tela não é o teto de
+# ninguém — líder/maxed/saldo são decididos no servidor.
+func RequestPerk(perkID : String) -> bool:
+	var mine : Dictionary = _lastState.get("my_guild", {})
+	if mine.is_empty():
+		SetFeedback("Perks: join a guild first")
+		return false
+	var perks : Dictionary = mine.get("perks", {})
+	_Arm({"action": "perk", "perk": perkID,
+		"line": GuildPerkShop.Line(perkID, int(mine.get("level", 1)), int(perks.get(perkID, 0)))})
+	return true
+
+func RequestPerkVault() -> bool:
+	return RequestPerk("vault")
+
+func RequestPerkBoon() -> bool:
+	return RequestPerk("boon")
+
+func RequestPerkRoster() -> bool:
+	return RequestPerk("roster")
+
+func BuyGuildPerk(perkID : String) -> Dictionary:
+	var eco : EconomyService = _ResolveEconomy()
+	var ids : Dictionary = LocalPlayerIDs()
+	var accountID : int = int(ids.get("account", 0))
+	var result : Dictionary = GuildPerkShop.Charge(eco, Network, accountID, perkID)
+	SetFeedback(_FeedbackFor(result, GuildPerkShop.Label(perkID)))
+	# Mesmo contrato do slot: pago pelo service o estado é nosso e vale reler;
+	# pago pelo facade, o push do servidor chega sozinho.
+	if eco != null and accountID > 0:
+		Refresh()
+	return result
+
 # Único ponto que arma. Não envia nada.
 func _Arm(pending : Dictionary) -> void:
 	_pending = pending
@@ -357,12 +393,15 @@ func ConfirmPending() -> void:
 	var action : String = str(_pending.get("action", ""))
 	var itemID : int = int(_pending.get("item", 0))
 	var count : int = int(_pending.get("count", 0))
+	var perk : String = str(_pending.get("perk", ""))
 	_pending = {}
 	if _confirmRow:
 		_confirmRow.visible = false
 	match action:
 		"slot":
 			BuyVaultSlot()
+		"perk":
+			BuyGuildPerk(perk)
 		"withdraw":
 			WithdrawItem(itemID, count)
 		_:
@@ -526,6 +565,14 @@ func BuildUI() -> void:
 	actionRow = actions["row"] as HBoxContainer
 	var actionButtons : Dictionary = actions["buttons"] as Dictionary
 	slotButton = actionButtons.get("BuySlotButton") as Button
+	# M-2: os três perks em fileira PRÓPRIA — a cerca de fit (`panel_fit_test`)
+	# mede o mínimo horizontal da janela, e pendurar os quatro botões na mesma
+	# linha estourava o teto nomeado do painel em 1 px. Fileira nova = largura de
+	# três rótulos curtos, não a soma das duas famílias de gasto.
+	var perkRow : Dictionary = GuildPanelRows.ButtonRow(body, "PerkRow", [
+		["PerkVaultButton", "Perk: vault", RequestPerkVault],
+		["PerkBoonButton", "Perk: boon", RequestPerkBoon],
+		["PerkRosterButton", "Perk: roster", RequestPerkRoster]])
 	# Sair da guild é a ação destrutiva da fileira; um botão sozinho na linha não
 	# briga por largura com os dois de cima.
 	var left : Dictionary = GuildPanelRows.ButtonRow(body, "LeaveRow", [["LeaveButton", "Leave", _OnLeavePressed]])

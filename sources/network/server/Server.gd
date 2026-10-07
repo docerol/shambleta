@@ -1080,7 +1080,21 @@ func BuyVaultSlots(peerID : int):
 		Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
 		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
-# As cinco ESCRITAS de guild do painel: identidade do peer, regra de vault do service (§14).
+# M-2 (2026-10-07): terceira escrita do painel de guild. Identidade do peer antes
+# de tudo (§14 — o pacote nunca traz conta), depois o veredito inteiro do funil
+# (`GuildService.BuyGuildPerk`), e o estado volta por `GuildState` porque o
+# placar de pontos da tela é o recibo da compra.
+func BuyGuildPerk(perkID : String, peerID : int):
+	var accountID : int = Peers.GetAccount(peerID)
+	if accountID == NetworkCommons.PeerUnknownID:
+		Network.GuildFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyGuildPerk(accountID, perkID)
+	Network.GuildFeedback(bool(result.get("ok", false)), str(result.get("reason", "?")), peerID)
+	if bool(result.get("ok", false)):
+		Network.GuildState(Launcher.Economy.GetGuildState(accountID), peerID)
+
+# As seis ESCRITAS de guild do painel: identidade do peer, regra de vault do service (§14).
 func CreateGuild(guildName : String, peerID : int):
 	var accountID : int = Peers.GetAccount(peerID)
 	var charID : int = Peers.GetCharacter(peerID)
@@ -1289,6 +1303,23 @@ func BuyDailyOffer(offerID : String, peerID : int):
 		return
 	Network.ShopFeedback(true, "daily offer %s for %d gems" % [offerID, int(result.get("cost", 0))], peerID)
 	Network.DailyShop(Launcher.Economy.GetDailyShop(accountID), peerID)
+	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
+# M-5 (2026-10-07): prateleira da vitrine do dia. Identidade do peer primeiro,
+# depois o veredito integral do funil (`ShopService.BuyFlashSlot` — preço,
+# saldo, carimbo de ledger); o estado volta inteiro porque o `claimed` da tela
+# é o recibo, e re-derive preço no cliente não existe.
+func BuyFlashSlot(slot : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.ShopFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.BuyFlashSlot(accountID, charID, slot)
+	if not bool(result.get("ok", false)):
+		Network.ShopFeedback(false, "flash rejected (%s)" % str(result.get("reason", "?")), peerID)
+		return
+	Network.ShopFeedback(true, "flash shelf %d for %d gems" % [slot, int(result.get("cost", 0))], peerID)
 	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
 # R2 vendor gold: conta/char sempre da sessão.

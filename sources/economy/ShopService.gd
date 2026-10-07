@@ -320,3 +320,74 @@ func BuyVendorOffer(accountID : int, charID : int, offerID : String) -> Dictiona
 	else:
 		goldMoves.clear()
 	return result
+
+# ------------------------------------------------------------------ M-5: vitrine do dia
+
+func BuyFlashSlot(accountID : int, charID : int, slot : int) -> Dictionary:
+	# M-5 (2026-10-07): a vitrine do dia, cobrada. O prêmio e o preço são os do
+	# `FlashShop.Showcase(day,...)` determinístico (seed = dia, igual para todas
+	# as contas); a restrição "uma vez por (dia,slot)" é lida do LEDGER dentro do
+	# mesmo funil que cobra — o recibo É o carimbo, sobrevive a restart, e não
+	# nasce tabela nova. Moeda: gems; reasons: tokens velhos do diário
+	# (`unknown_offer`/`already_claimed`), nenhum vocabulário novo de UI.
+	if slot < 0 or slot >= FlashShop.Slots:
+		return {"ok" = false, "reason" = "unknown_offer"}
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
+	var offers : Array[Dictionary] = FlashShop.Showcase(day, EconomyCatalog.ChestCostGems, EconomyCatalog.VIP1CostGems)
+	var offer : Dictionary = offers[slot]
+	var cost : int = int(offer["cost"])
+	var count : int = int(offer["count"])
+	var kind : String = str(offer["kind"])
+	var reason : String = FlashShop.Reason(day, slot)
+	var result : Dictionary = {"ok" = false, "reason" = "?"}
+	_eco.settleMutex.lock()
+	if Launcher.SQL.Transaction(func() -> bool:
+		var sql : SQLService = Launcher.SQL
+		var bought : Array[Dictionary] = sql.ExecNoLockQuery("SELECT COUNT(*) AS n FROM ledger_transaction WHERE account_id = ? AND reason = ?;", [accountID, reason])
+		if not bought.is_empty() and int(bought[0].get("n", 0)) > 0:
+			result["reason"] = "already_claimed"
+			return false
+		var balance : int = sql.GetGemsRaw(accountID)
+		if balance < cost:
+			result["reason"] = "insufficient_gems"
+			return false
+		if not sql.SetGemsRaw(accountID, balance - cost):
+			return false
+		if not _eco._LedgerAppendLocked(accountID, charID, EconomyCatalog.LedgerKindGems, -cost, balance - cost, reason):
+			return false
+		if kind == "chests":
+			for i in count:
+				if not sql.AddChestInstance(charID, 0, "flash"):
+					return false
+		else:
+			var now : int = SQLCommons.Timestamp()
+			var cur : int = sql.GetVIPUntil(accountID)
+			var until : int = VipPolicy.ClampGrant(cur, now, count * 86400)	# C-7: o teto único dos writers de VIP
+			if not sql.SetVIPUntil(accountID, until):
+				return false
+			var curTier : int = sql.GetVIPTier(accountID)
+			if curTier < 1 or cur <= now:
+				if not sql.SetVIPTier(accountID, 1):
+					return false
+		result["ok"] = true
+		result["reason"] = "ok"
+		result["cost"] = cost
+		result["balance"] = balance - cost
+		result["slot"] = slot
+		return true):
+		pass
+	_eco.settleMutex.unlock()
+	return result
+
+# Vitrine com o carimbo da conta: os três slots do dia + `claimed` lido do ledger
+# em UMA consulta (a tela não re-derive preço nenhum; só mostra o que o funil já
+# decidiu).
+func FlashToday(accountID : int) -> Array[Dictionary]:
+	var day : int = EconomyCatalog.ShopDay(SQLCommons.Timestamp())
+	var offers : Array[Dictionary] = FlashShop.Showcase(day, EconomyCatalog.ChestCostGems, EconomyCatalog.VIP1CostGems)
+	var claimed : Dictionary = {}
+	for r in Launcher.SQL.QueryBindings("SELECT reason FROM ledger_transaction WHERE account_id = ? AND reason LIKE ?;", [accountID, "flash:" + str(day) + ":%"]):
+		claimed[str(r["reason"])] = true
+	for e : Dictionary in offers:
+		e["claimed"] = claimed.has(FlashShop.Reason(day, int(e["slot"])))
+	return offers

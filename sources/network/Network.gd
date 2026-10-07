@@ -564,6 +564,14 @@ func UnregisterPushSubscription(peerID : int = NetworkCommons.PeerAuthorityID):
 func BuyDailyOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyDailyOffer", [offerID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
+# M-5 (2026-10-07): compra de prateleira da vitrine do dia. O pacote nomeia o
+# SLOT (0..2), nunca preço ou prêmio: a vitrine é derivada do dia no servidor e
+# o recibo é o ledger — um cliente que quisesse comprar "o desconto de ontem"
+# não tem como pedir.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyFlashSlot(slot : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyFlashSlot", [slot], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
 # R2 vendor gold: consumíveis por gold (preço e estoque server-side).
 @rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
 func BuyVendorOffer(offerID : String, peerID : int = NetworkCommons.PeerAuthorityID):
@@ -837,8 +845,16 @@ func GuildFeedback(ok : bool, reason : String, peerID : int = NetworkCommons.Pee
 func BuyVaultSlots(peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyVaultSlots", [], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
-# As cinco ESCRITAS do painel de guild (CreateGuildNamed/JoinGuildByID/
-# LeaveCurrentGuild/DepositItem/WithdrawItem em sources/gui/GuildPanel.gd). O pacote
+# M-2 (2026-10-07): a compra de perk de guilda. Como toda escrita do painel, o
+# pacote nomeia O QUE fazer (qual perk), nunca quem: conta e guilda são do peer
+# no servidor, e o veredito de líder/tier/saldo é do funil em `GuildService`.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func BuyGuildPerk(perkID : String, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("BuyGuildPerk", [perkID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
+# As seis ESCRITAS do painel de guild (CreateGuildNamed/JoinGuildByID/
+# LeaveCurrentGuild/DepositItem/WithdrawItem/BuyGuildPerk em
+# sources/gui/GuildPanel.gd). O pacote
 # nomeia o que fazer, nunca quem: conta e personagem são do peer no servidor
 # (`sources/network/server/Server.gd`), porque um `accountID` aqui seria o jogador
 # escrevendo na guilda de outro.

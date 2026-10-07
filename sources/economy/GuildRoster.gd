@@ -107,7 +107,7 @@ static func Count(guildID : int) -> int:
 	return int(rows[0].get("n", 0)) if not rows.is_empty() else 0
 
 static func IsFull(guildID : int) -> bool:
-	return guildID > 0 and Count(guildID) >= MaxMembers
+	return guildID > 0 and Count(guildID) >= MaxMembers + PerkBonus(guildID)
 
 # A MESMA pergunta do teto, respondida DENTRO do funil de escrita. `Count()` acima
 # pega o `queryMutex` por conta própria e por isso não pode ser chamada de dentro do
@@ -127,8 +127,27 @@ static func CountLocked(sql : Object, guildID : int) -> int:
 	var res : Array = sql.ExecNoLockQuery("SELECT COUNT(*) AS n FROM guild_member WHERE guild_id = ?;", [guildID])
 	return int(res[0].get("n", 0)) if not res.is_empty() else MaxMembers + 1
 
+# M-2 (2026-10-07): o teto da fileira é `MaxMembers` + o tier do perk `roster`
+# comprado com pontos da guilda. Ele mora AQUI, nas duas pontas da MESMA pergunta
+# — `IsFull` (quem clica "Join" na busca) e `IsFullLocked` (o funil que vira
+# INSERT) — porque teto conferido por uma perna com bônus e pela outra sem seria
+# exatamente a divergência que a rodada 3 da auditoria social fechou. Leitura
+# errada ou sem linha = bônus 0: recusa, nunca licença (mesmo contrato do
+# `CountLocked` acima).
+static func PerkBonusLocked(sql : Object, guildID : int) -> int:
+	if guildID <= 0 or sql == null:
+		return 0
+	var res : Array = sql.ExecNoLockQuery("SELECT tier FROM guild_perk WHERE guild_id = ? AND perk_id = 'roster';", [guildID])
+	return GuildPerkCatalog.RosterBonusSlots(int(res[0].get("tier", 0))) if not res.is_empty() else 0
+
+static func PerkBonus(guildID : int) -> int:
+	if guildID <= 0:
+		return 0
+	var res : Array = Launcher.SQL.QueryBindings("SELECT tier FROM guild_perk WHERE guild_id = ? AND perk_id = 'roster';", [guildID])
+	return GuildPerkCatalog.RosterBonusSlots(int(res[0].get("tier", 0))) if not res.is_empty() else 0
+
 static func IsFullLocked(sql : Object, guildID : int) -> bool:
-	return CountLocked(sql, guildID) >= MaxMembers
+	return CountLocked(sql, guildID) >= MaxMembers + PerkBonusLocked(sql, guildID)
 
 # `JoinReason` é o choke point de admissão: a pergunta que o `GuildService.JoinGuild`
 # faz a si mesmo antes do INSERT, e que o servidor e o painel refazem para DEVOLVER O

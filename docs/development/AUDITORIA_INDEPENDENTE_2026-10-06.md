@@ -91,7 +91,7 @@ comprometeu no último commit.
   single-writer + read-pool de 2 slots; companion Python 3.12 (webhook Mercado Pago/
   Pix, `/store`, push Web, métricas); nginx; Docker Compose; Prometheus + Alertmanager.
 - **Volume:** ~440 arquivos `.gd` (~61k linhas), 90 arquivos GUI (14,085 linhas),
-  71 patches de migração (001–071, todos rastreados; o lote C criou a 069 e o lote Q criou 070–071), `companion/server.py` ~1.5k
+  72 patches de migração (001–072, todos rastreados; o lote C criou a 069, o lote Q criou 070–071 e o lote M criou 072), `companion/server.py` ~1.5k
   linhas + módulos de push próprios.
 - **Qualidade de borda:** 74 harnesses Godot auto-inscritos + 11 suítes Python +
   11 gates de estrutura + ~52 checks de segredos; i18n pt_BR 100% (1.337 linhas CSV);
@@ -759,3 +759,86 @@ em K=500) e a banda existe por construção em qualquer nível, com diagnóstico
 impresso se um dia faltar. O que continua aberto é o que não coube em lote:
 sharding, teto dos 128, segundo writer, rootless real, conteúdo P1-J e
 endgame P1-G.
+
+## 30. Adendo — Lote M1 (2026-10-07): quatro peças de produto, cada uma com régua nova
+
+- **M-1 (52 slots vazios do passe)** — as duas trilhas foram preenchidas com o
+  acervo que já existia: free 1..40 com gems/báus e DOIS cosméticos de marco da
+  própria prateleira (emote-guilda 25, fx-faísca 35); premium ganhou 12 entradas
+  novas antes da escada (gems,baus e VIP QoL em 10/19/25), e 31..40 continuam
+  pagando `PASS_BONUS_GEMS` pela escada declarada. Cosméticos de OUTRA origem
+  ficaram fora de propósito — `emote_coroa` é exclusividade vitalícia do Deluxe,
+  `title_recruta`/`title_apoiador` são backfill de compra/doação, `title_campeao`
+  é prêmio de copa. O espelho `pass_tiers` da S1 em `seasons.json` foi reescrito
+  nível a nível a partir do catálogo (a régua `suite A` do `season_liveops_test`
+  amarra os dois lados), e o censo novo em `SuiteStorefrontHonesty` decreta:
+  nível sem entrada NÃO-VAZIA (free) ou sem tabela/escada (premium) é vermelho.
+  A casa nova é `EconomyPassTrack.gd` (gate anti-god-node; o catálogo voltou para
+  787 dentro da banda com razão registrada). Morsas do caminho: (1)
+  `formation_skin` é TYPE, não id — o validador fail-closed do `seasons.json`
+  derrubou o arquivo inteiro e cinco checks de temporada caíram em cascata até a
+  sonda imprimir `ValidateSeasonsFile` e dizer a linha; (2) o pointer "linha 319 de
+  PassService" que eu escrevi era 320 — a régua de âncora não perdoa, e não
+  deveria.
+- **M-4 (push de abertura de campanha)** — terceiro gancho do scheduler: cada
+  janela `double_xp`/`chest_bonus` do calendário LiveOps que abrir dentro da
+  antecedência notifica os assinantes UMA vez por evento, dedupe pelo corpo da
+  fila (`campaign:<key>`), torneio fora por construção (eixo de pool, mesma
+  isenção do pin Q-7) e calendário ilegível é silencioso. Diferença deliberada
+  contra o `season:<id>`: a igualdade no corpo, não LIKE — as chaves têm
+  underscore e `_` é curinga; a suíte prova que `w6_alpha` e `w6_alpha_x` são
+  campanhas DISTINTAS. Saída registrada consumida: `test_webhook.py` estourou o
+  teto e abriu `test_push.py` (W5+W6) exatamente como a razão do C-9 previa; a
+  fila do Store fatiou para `push_hooks.py` (mix-in `Store(PushQueue)`) para o
+  ratchet do `server.py` voltar a caber — 13 ponteiros de linha re-ancorados
+  depois dos dois cortes.
+- **M-2 (pontos de guilda viram moeda)** — `BuyGuildPerk` dentro do funil
+  `settleMutex + Transaction`: três perks declarados em `GuildPerkCatalog.gd`
+  (vault +2 stacks/tier, boon +1% settle/tier, roster +1 assento/tier), preço
+  escalonado com o NÍVEL da guilda (a guilda grande colhe pontos na mesma taxa;
+  preço fixo era doação perpétua para si mesma), líder-only, maxed antes do
+  saldo, e a última porta é `UPDATE ... WHERE points >= cost` conferida por
+  `changes()` na MESMA conexão. Tabela nova: `guild_perk` (migração 072). Os
+  consumidores leem pela boca única: cap do cofre, multiplicador do settle e o
+  teto do `GuildRoster` nas DUAS pontas (`IsFull`/`IsFullLocked`). Régua de fonte
+  amarra as duas pontas do teto; `SuiteGuildPerks` mede recusa-sem-saldo,
+  recusa-sem-linha-fantasma, escada até o máximo e o membro que não compra.
+  Morsas: (1) `int(NULL)` do subselect sem `COALESCE` derrubou as duas bocas na
+  primeira corrida — 43 vermelhos, uma causa; (2) reatribuir `out` dentro do
+  lambda escreve na CÓPIA capturada — o censo de captura da suíte já nomeava o
+  defeito, e a primeira corrida devolveu "?" em toda recusa até a forma virar
+  mutação por chave como em `CreateGuild`.
+- **M-5 (flash shop — vitrine do dia)** — `FlashShop.Showcase(day, ...)`: LCG
+  puro com seed = dia, três prateleiras iguais para todas as contas, prêmio do
+  vocabulário existente (chests/vip_days com os caps C-7), desconto 10–30% em
+  degraus de 5, preço derivado da âncora viva do catálogo (`ChestCostGems`,
+  `VIP1CostGems`). O carimbo "uma vez por (dia,slot)" NÃO nasce tabela: é o
+  recibo do ledger (`flash:<dia>:<slot>`) relido dentro do funil que cobra —
+  append-only, sobrevive a restart, e a tela pinta o `claimed` que o servidor
+  derivou, sem re-derive nenhum. A previsibilidade aqui É o produto (vitrine é
+  anúncio, não loot) — o comentário do arquivo registra por que isso não é o
+  P1-F. Régua congelada em dias FIXOS (1000×1001) para a régua não virar mina de
+  calendário. UI no regime runtime do vendor (`FlashBox` sem .tscn), confirmação
+  com preço citado antes do RPC (portão do `spend_confirm_test`), reasons todos
+  com linha velha no catálogo (`unknown_offer`/`already_claimed`/
+  `insufficient_gems`) — zero vocabulário novo de toast.
+- Veredites do lote (métricas honestas, §24-8): `run_idle_tests` 3517 checks / 0
+  failures (as três suítes novas: perks, flash, censo do passe);
+  `season_liveops_test` 182/0 com o espelho novo; `test_push` 30/0,
+  `test_webhook` 207/0 pós-fatiamento; `economy_design_fix` verde com a trilha
+  cheia; `repo_layout_test` 61/0 com a entrada podre da cerca removida; portões
+  de estrutura: god-nodes 433 arquivos / 0, doc-drift 2582 / 0 (13 ponteiros
+  re-ancorados nas ondas companion/Network/Server), write-funnel 13/0,
+  dead-code 14/0, untracked 5/0 (072 no índice). Sweep completa do lote (2026-10-07, máquina quieta após o jogo do dono fechar): SWEEP-EXIT=0, zero gates vermelhos, zero ruído. Nota honesta das
+  duas varreduras anteriores: com o desktop sob 618% de CPU externa o `benchmarks` estourou o p99 (5,09× normalizado contra teto de 4×) e na
+  primeira quieta `economy_knob_range_test` sorteou dois crashes de engine (SIGSEGV no `parse_string` de lixo sintético — caminho pré-lote, nenhum
+  byte meu; no isolamento seguinte morreu uma vez e passou na retomada, classe FLAKES da casa). Nenhum dos dois virou afrouxamento: rodou-se de novo.
+- Resíduo declarado: a trilha S2 declarada em `seasons.json` mantém os 5 níveis
+  próprios (não é espelho; sparse por decisão de live-ops, não por acidente — e
+  o censo "sem buraco" do M-1 é DO CATÁLOGO, a régua de espelho continua sendo a
+  suite A); a venda de perks no painel ainda não filtra por `my_rank` na hora de
+  desenhar (o servidor recusa `perk_leader` com toast, a tela é espelho do
+  estado, não a decisão); o push de campanha mede antecedência só na janela de
+  24 h padrão do tick — afinar por evento é decisão de ops futura; o `boon` é
+  multiplicador de settle e por isso entra nos censos de faucet das suítes de
+  economia (nada fixou número absoluto — as réguas derivam do catálogo).

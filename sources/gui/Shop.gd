@@ -115,6 +115,7 @@ func ShowState(state : Dictionary):
 			parts.append(str(p.get("sku", "?")))
 		pendingLabel.text = "Pending purchases: %s (credit in ~30s)" % ", ".join(parts)
 	ShowVendor(state.get("vendor", {}))
+	ShowFlash(state.get("flash", []))
 
 # R2 vendor gold (runtime, sem .tscn): suprimentos por gold, estoque diário.
 var _vendorBox : VBoxContainer = null
@@ -146,6 +147,56 @@ func ShowVendor(vendor : Dictionary):
 			# o que se compra e quanto sai — primitivos no bind, nunca closure.
 			b.pressed.connect(_on_buy_vendor_pressed.bind(str((e as Dictionary).get("id", "")), str((e as Dictionary).get("label", "?")), int((e as Dictionary).get("cost", 0))))
 		box.add_child(b)
+
+# ------------------------------------------------------------------ M-5: vitrine do dia
+#
+# No mesmo regime runtime do vendor (sem .tscn): a caixa nasce no primeiro
+# estado, e o que a tela pinta é o array que o servidor derivou do DIA — preço,
+# desconto e `claimed` vêm prontos pela boca do funil (`ShopService.FlashToday`).
+# Nenhum número é re-derive aqui: a vitrine é anúncio, a decisão é do ledger.
+
+var _flashBox : VBoxContainer = null
+
+func _flash_box() -> VBoxContainer:
+	if _flashBox == null:
+		_flashBox = VBoxContainer.new()
+		_flashBox.name = "FlashBox"
+		$Layout/ShopScroll/ShopContent.add_child(_flashBox)
+	return _flashBox
+
+func ShowFlash(flash : Array):
+	var box : VBoxContainer = _flash_box()
+	for c in box.get_children():
+		c.queue_free()
+	for e in flash:
+		if not (e is Dictionary):
+			continue
+		var entry : Dictionary = e
+		var slot : int = int(entry.get("slot", -1))
+		var label : String = str(entry.get("label", "?"))
+		var fb := Button.new()
+		if bool(entry.get("claimed", false)):
+			fb.text = "%s — already bought today" % label
+			fb.disabled = true
+		else:
+			fb.text = "%s — %d gems (base %d)" % [label, int(entry.get("cost", 0)), int(entry.get("base", 0))]
+			fb.pressed.connect(_on_buy_flash_pressed.bind(slot, label, int(entry.get("cost", 0))))
+		box.add_child(fb)
+
+func _on_buy_flash_pressed(slot : int, flashLabel : String, costGems : int):
+	RequestBuyFlashSlot(slot, flashLabel, costGems)
+
+func RequestBuyFlashSlot(slot : int, flashLabel : String, costGems : int) -> bool:
+	if slot < 0:
+		return false
+	_pending = {
+		"method" = "BuyFlashSlot",
+		"args" = [slot],
+		"line" = "Buy %s for %d gems? Gems are spent the moment the server accepts — no undo." % [
+			("\"%s\"" % flashLabel) if not flashLabel.is_empty() else "the flash shelf", costGems],
+	}
+	_Ask(str(_pending["line"]))
+	return true
 
 # Os handlers a seguir só ARMAM (`Request*`); a rede fala por `ConfirmPending()`.
 func _on_buy_vendor_pressed(offerID : String, offerLabel : String = "", costGold : int = 0):
@@ -359,6 +410,8 @@ func _send(methodName : String, args : Array) -> void:
 			Network.BuyVendorOffer(str(args[0]))
 		"BuyDailyOffer":
 			Network.BuyDailyOffer(str(args[0]))
+		"BuyFlashSlot":
+			Network.BuyFlashSlot(int(args[0]))
 		"RerollDailyShop":
 			Network.RerollDailyShop()
 		_:
