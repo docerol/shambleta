@@ -83,11 +83,15 @@ const FSOpWeights : PackedInt32Array = [
 	1, 1, 2]
 # Raízes de reason que NÃO criam nem destroem moeda: movem ouro entre contas
 # (`ah_buy`/`ah_sell`/`ah_creator_fee`, que fecham o ciclo do anúncio em soma zero)
-# ou entre carteira e custódia (`ah_bid_escrow`/`ah_bid_release`). A lista é a do
+# ou entre carteira e custódia (`ah_bid_escrow`/`ah_bid_release`). A lista era a do
 # leilão e SÓ ela: as taxas do mesmo leilão (`ah_list_fee`, `ah_slot`,
 # `ah_highlight_fee`) são queima de gema, não transferência, e ficam no sink.
+# M-3 somou o par do presente (`gift_out`/`gift_in`, soma zero entre duas contas) e
+# deixou a taxa fora: `gift_fee` é queima, classificada como sink pelo próprio kernel
+# (`CensusSinkFamilies`), e o espelho aqui tem de dizer o MESMO.
 const FSTransferRoots : PackedStringArray = [
-	"ah_buy", "ah_sell", "ah_creator_fee", "ah_bid_escrow", "ah_bid_release"]
+	"ah_buy", "ah_sell", "ah_creator_fee", "ah_bid_escrow", "ah_bid_release",
+	"gift_out", "gift_in"]
 # amount == 0 é linha legítima em dois lugares e NEUTRA em nenhum dos dois lados da
 # régua: `clawback` de um payment cujo débito já foi consumido, e `ah_creator_fee`
 # de um anúncio barato (fee = roundi(1% × preço) arredonda para 0 abaixo de 50).

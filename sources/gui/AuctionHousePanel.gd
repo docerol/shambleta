@@ -180,7 +180,7 @@ func ShowTradeResult(result : Dictionary) -> void:
 # ------------------------------------------------------------------ texto (módulo)
 # Finas por delegação: quem lê o payload é `AuctionHouseRows`, e a tela é o que
 # o servidor respondeu. `TradeLine`/`ReasonLine` são chamada pública — o cliente
-# as usa para avisar o veredito com a janela fechada (`Client.gd:515`).
+# as usa para avisar o veredito com a janela fechada (`Client.gd:519`).
 func BalanceLine(state : Dictionary) -> String:
 	return AuctionHouseRows.BalanceLine(state)
 

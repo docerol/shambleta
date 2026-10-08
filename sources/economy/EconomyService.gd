@@ -30,6 +30,9 @@ var adsCosmeticsService : AdsCosmeticsService = null
 var tournamentArenaService : TournamentArenaService = null
 var communityService : CommunityService = null
 var tradeChestService : TradeChestService = null
+# M-3: gemas de conta a conta, com taxa queimada — o domínio é a sub-fachada
+# `giftService` (montada em `EconomyDomainBinding`), falada direto por quem precisa.
+var giftService : GiftService = null
 var kernel : EconomyKernel = null
 var stateView : EconomyStateView = null
 var _shardInitMutex : Mutex = Mutex.new()
@@ -519,7 +522,7 @@ static func ReferralCodeFor(accountID : int, username : String) -> String:
 static func IsValidGuildTag(tag : String) -> bool:
 	return EconomyCatalog.IsValidGuildTag(tag)
 static func AchievementByID(achievementID : String) -> Dictionary:
-	return EconomyCatalog.AchievementByID(achievementID)
+	return AchievementCatalog.AchievementByID(achievementID)
 
 func EnsureSeasonS1() -> int:
 	return seasonService.EnsureSeasonS1()

@@ -209,6 +209,13 @@ const VENDOR_CATALOG : Array = [
 	{"id": "drink", "label": "Cactus Drink x1", "item": "Cactus Drink", "count": 1, "cost": 200},
 	{"id": "pitaya", "label": "Pitaya x1", "item": "Pitaya", "count": 1, "cost": 40},
 	{"id": "potion", "label": "Cactus Potion x1", "item": "Cactus Potion", "count": 1, "cost": 500},
+	# M-6 (2026-10-07): o portão PARA a cidade. O produto warpa o login para a
+	# zona e não tinha porta para Tulimshar — quests, treinador e guildmates
+	# inalcançáveis por construção. A VOLTA não é vendida (idle-first religa a
+	# zona de graça); o scroll compra a ida, e qualquer recusa devolve o item
+	# (`TownPortalScript`). Preço abaixo da poção: quem paga 180 gp compra
+	# cidade, não cura.
+	{"id": "portal", "label": "Town Portal Scroll x1", "item": "Town Portal Scroll", "count": 1, "cost": 180},
 ]
 
 # (de EconomyService.gd, antes da divisao)
@@ -434,6 +441,9 @@ const COSMETIC_CATALOG : Dictionary = {
 	# Passe Deluxe (BATTLE_PASS_S1 §4): exclusivo vitalício, nunca retorna nem
 	# na Loja do Legado.
 	"emote_coroa": {"type": "emote", "label": "Coroa do Sol", "price": 0, "req_rebirths": 0},
+	# M-8 (2026-10-07): prêmio de coleção do bestiário — nunca à venda, nunca no
+	# passe, nunca em doação; só sai de `colecao_bestiarista`.
+	"title_bestiarista": {"type": "title", "label": "Bestiarista", "price": 0, "req_rebirths": 0},
 }
 
 # (de EconomyService.gd, antes da divisao)
@@ -544,19 +554,9 @@ const TOURNAMENT_PRIZES : Array[int] = [2000, 1200, 800, 500, 300]
 # (de EconomyService.gd, antes da divisao)
 const TOURNAMENT_CHAMPION_TITLE : String = "title_campeao"
 
-# (de EconomyService.gd, antes da divisao)
-const ACHIEVEMENTS : Array = [
-	{"id": "slayer_100", "label": "Exterminador iniciante", "desc": "Derrote 100 monstros", "counter": "kills_total", "goal": 100, "gems": 25},
-	{"id": "slayer_1000", "label": "Exterminador", "desc": "Derrote 1.000 monstros", "counter": "kills_total", "goal": 1000, "gems": 50, "cosmetic": "emote_tocha"},
-	{"id": "slime_100", "label": "Caça-slimes", "desc": "Derrote 100 Slimes", "counter": "kills_mob", "mob": "Slime", "goal": 100, "gems": 30},
-	{"id": "chest_10", "label": "Abre-baús", "desc": "Abra 10 baús", "counter": "chests", "goal": 10, "gems": 20},
-	{"id": "chest_100", "label": "Mestre dos baús", "desc": "Abra 100 baús", "counter": "chests", "goal": 100, "gems": 60},
-	{"id": "boss_1", "label": "Caçador de chefes", "desc": "Vença 1 chefe", "counter": "bosses", "goal": 1, "gems": 30},
-	{"id": "boss_10", "label": "Lenda viva", "desc": "Vença 10 chefes", "counter": "bosses", "goal": 10, "gems": 100},
-	{"id": "level_20", "label": "Veterano", "desc": "Alcance o nível 20", "counter": "level", "goal": 20, "gems": 25},
-	{"id": "level_40", "label": "Elite", "desc": "Alcance o nível 40", "counter": "level", "goal": 40, "gems": 60},
-	{"id": "rebirth_1", "label": "Renascer", "desc": "Renasça 1 vez", "counter": "rebirths", "goal": 1, "gems": 50},
-]
+# M-8 (2026-10-07): a lista mora no dono (`AchievementCatalog.gd`, no regime
+# do `EconomyPassTrack`); o alias mantém todo leitor antigo sem re-educação.
+const ACHIEVEMENTS : Array = AchievementCatalog.ACHIEVEMENTS
 
 # (de EconomyService.gd, antes da divisao)
 const REFERRAL_BONUS_GEMS : int = 200
@@ -572,6 +572,13 @@ const REFERRAL_WEEKLY_CAP : int = 10
 
 # (de EconomyService.gd, antes da divisao)
 const FraudTradeBurstPerDay : int = 10
+
+# M-3: os knobs do presente vivem no DONO (`GiftService.gd`); alias para os
+# leitores que juram pelo catálogo (GiftForm desenha por aqui).
+const GiftMinGems : int = GiftService.GiftMinGems
+const GiftFeePct : int = GiftService.GiftFeePct
+const GiftMaxPerDay : int = GiftService.GiftMaxPerDay
+const GiftFlipWindowSec : int = GiftService.GiftFlipWindowSec
 
 # (de EconomyService.gd, antes da divisao)
 const FraudLevelJump : int = 20
@@ -675,13 +682,6 @@ static func IsValidGuildTag(tag : String) -> bool:
 			return false
 	return true
 
-
-# (de EconomyService.gd, antes da divisao; renomeado sem underscore)
-static func AchievementByID(achievementID : String) -> Dictionary:
-	for entry in ACHIEVEMENTS:
-		if str(entry.get("id", "")) == achievementID:
-			return entry
-	return {}
 
 # ------------------------------------------------------------------ catálogo pago (fonte única)
 #

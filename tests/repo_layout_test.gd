@@ -506,7 +506,7 @@ func _fnBody(source : String, fnName : String) -> String:
 const NEAR_FENCE : Array = [
 	{
 		"path": "sources/economy/EconomyCatalog.gd",
-		"reason": "lote C (2026-10-06): o catálogo é a fonte única das políticas de economia e cada fatia do lote pendurou a sua decisão aqui — janela de lavagem `AHWashWindowSec` (C-6), a política declarada da dupla taxa de craftado (C-10) e os validadores de passe/table do VIP (C-7); as 6 suites que leem catálogo juram pelo arquivo, não por extrato. Saída registrada: a próxima onda que acrescentar const aqui parte o AH (fees/banda/lifecycle) para um `AHPolicy` próprio, do mesmo jeito que `AuctionHousePricing` já saiu da fachada.",
+		"reason": "lote C (2026-10-06): o catálogo é a fonte única das políticas de economia e cada fatia do lote pendurou a sua decisão aqui — janela de lavagem `AHWashWindowSec` (C-6), a política declarada da dupla taxa de craftado (C-10) e os validadores de passe/table do VIP (C-7); as 6 suites que leem catálogo juram pelo arquivo, não por extrato. Onda M-3/M-8 (2026-10-07): a fatia pendurou knobs de presente e duas coleções aqui e ESTOUROU o teto na hora — a saída foi consumida pela metade honesta: as conquistas saíram para `AchievementCatalog.gd` e os knobs do presente para `GiftService.gd` (aliases de 2 linhas ficam para nenhum leitor ser reensinado), do mesmo jeito que `EconomyPassTrack` saiu no M-1. O plano do `AHPolicy` (fees/banda/lifecycle) segue vivo para a próxima onda que acrescentar const.",
 	},
 	{
 		"path": "sources/economy/EconomyService.gd",

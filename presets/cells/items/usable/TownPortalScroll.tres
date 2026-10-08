@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="ItemCell" format=3]
+
+[ext_resource type="Script" path="res://sources/cell/scripts/TownPortalScript.gd" id="1_tp1scr"]
+[ext_resource type="Texture2D" uid="uid://6djajxhhk1c7" path="res://data/graphics/items/common/treasure-key.png" id="2_tp1ico"]
+[ext_resource type="Script" uid="uid://bsjkeucmohr0d" path="res://sources/cell/ItemCell.gd" id="3_tp1cel"]
+
+[resource]
+script = ExtResource("3_tp1cel")
+id = 3727406510
+name = "Town Portal Scroll"
+description = "A charged scroll that opens the gate to Tulimshar. Farming resumes by itself when you log back in."
+tier = 1
+icon = ExtResource("2_tp1ico")
+weight = 5.0
+stackable = true
+usable = true
+cellScript = ExtResource("1_tp1scr")

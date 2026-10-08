@@ -262,10 +262,18 @@ const CensusSinkFamilies : PackedStringArray = [
 	"ah_burn",
 	# Mesma regra do `flush_untracked` acima: um débito de memória (agente abaixo do
 	# próprio lastro) existe e é escrito; fingir que ele é `unattributed` não o apaga.
-	"flush_correction"]
+	"flush_correction",
+	# M-3: a taxa do presente de gemas (20% do valor) é QUEIMA, não transferência —
+	# sai do remetente e não chega a ninguém. Enumerá-la como sink é o que impede o
+	# censo de ler `gift_fee` como alarme e é o mesmo contrato da `trade_fee`.
+	"gift_fee"]
 const CensusTransferFamilies : PackedStringArray = [
 	"ah_buy", "ah_sell", "ah_bid_escrow", "ah_bid_release",
-	"vault_deposit"]
+	"vault_deposit",
+	# M-3: as duas pernas vivas do presente (`gift_out:<id>` no remetente,
+	# `gift_in:<id>` no destinatário) movem gemas entre contas em soma zero; a taxa
+	# fica fora delas e mora no sink acima. `GiftService.SendGift` é a única autora.
+	"gift_out", "gift_in"]
 
 # `windowSec`/`nowSec` delimitam a figura do DIA (o ledger é append-only e cresce
 # para sempre); o censo "all" da mesma chamada é o de SEMPRE, porque uma pia que só

@@ -314,7 +314,7 @@ O que **depende de terceiros** e por isso NÃO foi (nem pode ser) codado aqui.
   (`sources/network/server/Peers.gd` → `if rememberMe:`). Testar então os dois
   casos: com "lembrar" o corpo leva `auth_token` não-vazio e a resposta é 200;
   sem "lembrar" a janela deve mostrar **"Entre com lembrar-me para ativar o
-  checkout"** (chave `Log in with remember-me to enable checkout`, `ui.csv:926`)
+  checkout"** (chave `Log in with remember-me to enable checkout`, `ui.csv:934`)
   e **nem sair o POST**. Um 401 `missing_token` com "lembrar" marcado é
   a volta do defeito corrigido em 2026-09-24 — `Checkout.gd` lia o token de sessão
   do `var` do painel (sempre vazio: o `Connect()` do login o aparava depois do

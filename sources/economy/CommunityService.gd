@@ -215,6 +215,12 @@ func AchievementProgress(accountID : int, entry : Dictionary) -> int:
 			for row in rows:
 				total += int(row.get("killed_count", 0))
 			return total
+		"mobs_distinct":
+			# M-8: a coleção é VARIEDADE comprovada — quantos monstros diferentes
+			# a conta tem pelo menos `minPerMob` abates. Um farm de um mob só não
+			# move este contador; a consulta é a única lê a tabela, o claim decide.
+			var rows2 : Array = sql.QueryBindings("SELECT COUNT(*) AS n FROM (SELECT b.mob_id FROM bestiary b INNER JOIN character c ON c.char_id = b.char_id WHERE c.account_id = ? AND b.killed_count >= ? GROUP BY b.mob_id);", [accountID, maxi(1, int(entry.get("minPerMob", 1)))])
+			return int(rows2[0].get("n", 0)) if not rows2.is_empty() else 0
 		"chests":
 			var rows : Array = sql.db.select_rows("chest_instance", "item_state = 'opened' AND char_id IN (SELECT char_id FROM character WHERE account_id = %d)" % accountID, ["id"])
 			return rows.size()
@@ -250,7 +256,7 @@ func GetAchievements(accountID : int) -> Array:
 
 func ClaimAchievement(accountID : int, achievementID : String) -> Dictionary:
 	var result : Dictionary = {"ok": false, "reason": "rejected"}
-	var entry : Dictionary = EconomyCatalog.AchievementByID(achievementID)
+	var entry : Dictionary = AchievementCatalog.AchievementByID(achievementID)
 	if entry.is_empty():
 		result["reason"] = "unknown_achievement"
 		return result

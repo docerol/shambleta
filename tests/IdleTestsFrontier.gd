@@ -1297,7 +1297,7 @@ static func _CodeAndDataProseAll() -> Array[String]:
 # A mensagem de um check é o ÚLTIMO literal de linha. `Check(src.contains("SetupTwoFactor"), "…")`
 # tem um identificador no meio e o rótulo no fim, e foi isso que mordeu quando a janela da regra (3)
 # abriu: com ±2 linha, dois nomes de método viraram "mensagem de check" (`SetupTwoFactor`, achado em
-# `IdleTests.gd:5485`, e `GetGuildForAccount` em `GuildService.gd:@GetGuildForAccount`) sem que nenhuma citação
+# `IdleTests.gd:5601`, e `GetGuildForAccount` em `GuildService.gd:@GetGuildForAccount`) sem que nenhuma citação
 # verdadeira tivesse sido ganha. Recortar pelo rótulo é o que permite a janela maior: ela passa a
 # alcançar a citação que a frase separa do ponteiro, e o corte devolve o sinal que a janela sozinha
 # não tem.
@@ -3336,6 +3336,130 @@ func SuiteFlashShop(sql : SQLService, economy : EconomyService) -> void:
 	sql.db.delete_rows("chest_instance", "char_id = %d" % charID)
 	sql.db.delete_rows("character", "nickname = 'M5FlashA'")
 	sql.db.delete_rows("account", "username = 'm5_flash_a'")
+
+# M-7 (2026-10-07): skill leveling por uso com teto. A escada é função PURA
+# (`SkillProgress.Credit`) — teto, atravessa de nível e absorção do excedente
+# são medidos sem tocar banco; o banco mede só o cano: a coluna `xp` que desce
+# pelo MESMO snapshot de `UpdateProgress` do nível, o reload por `ImportProgress`,
+# e o cast que alimenta em `Skill.Casted` (wiring guard nominal, no fonte — o
+# mesmo regime dos irmãos de leilão: o que o headless não pode acionar é declarado).
+func SuiteSkillXp(sql : SQLService) -> void:
+	print("[suite] M-7: skill XP por uso — escada, teto e persistência pelo snapshot que já era")
+	# 1. A escada pura.
+	var credit0 : Array[int] = SkillProgress.Credit(1, 0, SkillProgress.XpPerCast)
+	CheckEq(int(credit0[0]), 1, "um cast isolado não muda o nível")
+	CheckEq(int(credit0[1]), SkillProgress.XpPerCast, "um cast credita XpPerCast")
+	var almost : Array[int] = SkillProgress.Credit(1, SkillProgress.NeededForLevel(1) - 1, SkillProgress.XpPerCast)
+	CheckEq(int(almost[0]), 2, "o cast que fecha o degrau sobe exatamente UM nível")
+	CheckEq(int(almost[1]), 1, "e o resto do estouro recomeça no próximo degrau")
+	var capped : Array[int] = SkillProgress.Credit(SkillProgress.MaxLevel, 7, SkillProgress.XpPerCast)
+	CheckEq(int(capped[0]), SkillProgress.MaxLevel, "no teto o nível não passa")
+	CheckEq(int(capped[1]), 7, "no teto o xp fica parado — ganho extra morre na porta, não infla contador")
+	var lvl : int = 1
+	var xp : int = 0
+	var casts : int = 0
+	while lvl < SkillProgress.MaxLevel and casts < 100000:
+		var step : Array[int] = SkillProgress.Credit(lvl, xp, SkillProgress.XpPerCast)
+		lvl = int(step[0])
+		xp = int(step[1])
+		casts += 1
+	CheckEq(lvl, SkillProgress.MaxLevel, "a escada 1→%d fecha em casts contados" % SkillProgress.MaxLevel)
+	var ladderSum : int = 0
+	for l in range(1, SkillProgress.MaxLevel):
+		ladderSum += SkillProgress.NeededForLevel(l)
+	CheckEq(casts * SkillProgress.XpPerCast, ladderSum, "casts × ganho == soma dos degraus (nada de xp criado do nada)")
+	Check(casts < 100000, "a escada terminou (loops de régua não podem virar mina)")
+	# 2. Persistência pelo cano que já existia: um ActorProgress órfão de agente,
+	# dois números, um UpdateProgress, SELECT * devolve os dois.
+	var cell : SkillCell = DB.GetSkill(DB.GetCellHash("Melee"))
+	if not Check(cell != null, "célula Melee resolve para SkillCell (a escada tem dono)"):
+		return
+	var charID : int = CreateFixture(sql, "m7_skill_a", "M7SkillA")
+	if not Check(charID != 0, "fixture da skill xp criada"):
+		return
+	var prog : ActorProgress = ActorProgress.new(null, false)
+	prog.AddSkill(cell, 2)
+	prog.SetSkillXp(cell, 42)
+	Check(sql.UpdateProgress(charID, prog), "UpdateProgress aceitou nível+xp no mesmo commit")
+	# A fixture já nasce com Melee e Run no nível 1 (`CreateFixture`) — a régua
+	# conta a LINHA DA SKILL, não a tabela.
+	var mine : Array[Dictionary] = []
+	for r in sql.GetSkills(charID):
+		if int(r.get("skill_id", 0)) == cell.id:
+			mine.append(r)
+	CheckEq(mine.size(), 1, "uma linha de skill para a fixture")
+	CheckEq(int(mine[0]["level"]), 2, "o nível persistiu pelo upsert de sempre")
+	CheckEq(int(mine[0]["xp"]), 42, "o xp desceu pela COLUNA nova (migração 074) sem writer novo")
+	var reload : ActorProgress = ActorProgress.new(null, false)
+	reload.ImportProgress(charID)
+	CheckEq(reload.GetSkillXp(cell), 42, "ImportProgress relê o xp (login não recomeça a escada do zero)")
+	CheckEq(reload.GetSkillLevel(cell), 2, "e o nível junto")
+	# O teto também é verdade no cano: creditado até o topo, o reload mostra o
+	# residual 0 — absorção não é só da função pura.
+	prog.SetSkillXp(cell, 0)
+	Check(sql.UpdateProgress(charID, prog), "xp zero no teto persiste")
+	# 3. Wiring guards nominais (declarados, §gameplay_fix_test).
+	var skillSrc : String = _RepoFile("res://sources/skill/Skill.gd")
+	Check(skillSrc.contains("SkillProgress.NoteCast(agent, skill)"), "Skill.Casted alimenta o NoteCast (cast landed é o único ponto de crédito)")
+	var progressSrc : String = _RepoFile("res://sources/skill/SkillProgress.gd")
+	Check(progressSrc.contains("IdlePolicyService.IsServerSide()"), "NoteCast só credita no servidor (o cliente replica o cast, não a contagem)")
+	var sqlSrc : String = _RepoFile("res://sources/sql/SQL.gd")
+	Check(sqlSrc.contains("\"skill\", \"skill_id\", \"xp\""), "UpdateProgress tem o upsert do xp depois do do nível (ordem cria a linha antes)")
+
+# M-8 (2026-10-07): coleções do bestiário com prêmio cosmético. A métrica nova
+# (`mobs_distinct`) é a ÚNICA peça escrita aqui — o claim, a linha de ledger
+# `cosmetic` e o `cosmetic_grant` são o cano que a Fase já tinha. A régua prende
+# justamente o que é novo: variedade (n mob, n kills cada), o teto por mob
+# ignorado quem só farmou um, e o prêmio exclusivo (nunca à venda, nunca no
+# passe) saindo com a fonte nomeada.
+func SuiteCollections(sql : SQLService, economy : EconomyService) -> void:
+	print("[suite] M-8: coleções — variedade medida, prêmio cosmético exclusivo")
+	var cs : CommunityService = economy.communityService
+	if not Check(cs != null, "communityService montado (dono do claim)"):
+		return
+	var charID : int = CreateFixture(sql, "m8_coll_a", "M8CollA")
+	if not Check(charID != 0, "fixture da coleção criada"):
+		return
+	var accountID : int = sql.GetAccountIDForCharacter(charID)
+	var entry : Dictionary = AchievementCatalog.AchievementByID("colecao_cacador")
+	if not Check(not entry.is_empty(), "colecao_cacador existe no catálogo"):
+		return
+	# 1. A métrica é VARIEDADE, não profundidade: um mob com 200 abates conta 1,
+	# nunca 200 — e só um mob não é coleção nenhuma (goal 6).
+	Check(sql.SetBestiary(charID, "Slime".hash(), 200), "seed: um mob farmado fundo")
+	CheckEq(cs.AchievementProgress(accountID, entry), 1, "um mob qualificado conta 1 — profundidade não infla coleção")
+	# 2. Mais três bichos aos 10+; um quarto aos 9 NÃO qualifica; o quarto aos 10
+	# exatos entra. A porta do claim fecha enquanto falta o sexto.
+	for i in range(1, 4):
+		Check(sql.SetBestiary(charID, str("M8mob%d" % i).hash(), 10 + i), "seed: mob %d com 10+ abates" % i)
+	CheckEq(cs.AchievementProgress(accountID, entry), 4, "quatro mobs qualificados = progresso 4")
+	Check(sql.SetBestiary(charID, "M8mobquase".hash(), 9), "seed: mob abaixo do piso")
+	CheckEq(cs.AchievementProgress(accountID, entry), 4, "9 abates NÃO qualificam — o piso minPerMob é porta")
+	Check(sql.SetBestiary(charID, "M8mobquase".hash(), 10), "seed: mesmo mob agora no piso exato")
+	CheckEq(cs.AchievementProgress(accountID, entry), 5, "10 abates exatos qualificam — progresso 5")
+	var early : Dictionary = economy.ClaimAchievement(accountID, "colecao_cacador")
+	Check(str(early.get("reason", "")) == "not_completed", "coleção incompleta: not_completed (token velho, linha i18n existe)")
+	Check(sql.SetBestiary(charID, "M8mob5".hash(), 10), "seed: sexto mob no piso")
+	CheckEq(cs.AchievementProgress(accountID, entry), 6, "sexto mob aos 10 exatos fecha a coleção")
+	# 4. O prêmio: cosmético com fonte nomeada, ledger `cosmetic`, idempotência.
+	var prize : String = str(entry.get("cosmetic", ""))
+	Check(not prize.is_empty() and EconomyCatalog.COSMETIC_CATALOG.has(prize), "o prêmio da coleção é cosmético do catálogo")
+	CheckEq(int(EconomyCatalog.COSMETIC_CATALOG[prize].get("price", -1)), 0, "prêmio de coleção nunca está à venda (price 0)")
+	var claim : Dictionary = economy.ClaimAchievement(accountID, "colecao_cacador")
+	Check(bool(claim.get("ok", false)), "claim da coleção aceita (reason %s)" % str(claim.get("reason", "?")))
+	var grants : Array[Dictionary] = sql.QueryBindings("SELECT source FROM cosmetic_grant WHERE account_id = ? AND cosmetic_id = ?;", [accountID, prize])
+	CheckEq(grants.size(), 1, "uma linha de cosmetic_grant pelo claim")
+	Check(str(grants[0]["source"]) == "achievement:colecao_cacador", "a fonte do grant NOMEA a coleção (auditável por quem foi dado)")
+	var ledger : Array[Dictionary] = sql.QueryBindings("SELECT kind FROM ledger_transaction WHERE account_id = ? AND reason = 'achievement:colecao_cacador';", [accountID])
+	CheckEq(ledger.size(), 1, "o grant cosmético tem linha de ledger (kind cosmetic)")
+	var again : Dictionary = economy.ClaimAchievement(accountID, "colecao_cacador")
+	Check(str(again.get("reason", "")) == "already_claimed", "coleção não se reclama duas vezes")
+	# 5. O claim atravessado de conta NÃO herda progresso (progresso é por conta).
+	var char2 : int = CreateFixture(sql, "m8_coll_b", "M8CollB")
+	if char2 != 0:
+		var acc2 : int = sql.GetAccountIDForCharacter(char2)
+		CheckEq(cs.AchievementProgress(acc2, entry), 0, "outra conta começa a coleção do zero")
+
 
 # Vitrine honesta (plano 2026-09-25, fatias 2 e 4). Duas famílias de defeito,
 # ambas medidas no mapeamento de venda: anunciar algo que a outra porta recusa

@@ -61,6 +61,13 @@ static func Bind(eco : EconomyService) -> void:
 	if eco.tradeChestService == null:
 		eco.tradeChestService = TradeChestService.new()
 		eco.tradeChestService._eco = eco
+	# M-3 (2026-10-07): gifting de gems — domínio novo entra como sub-fachada por
+	# dono (`Launcher.Economy.giftService.SendGift`), não como método do hub: a
+	# fence de 800 do `EconomyService` já está registrada e é a saída declarada
+	# ("parte o domain por dono em sub-fachadas"). Mesmo lock, mesma composição.
+	if eco.giftService == null:
+		eco.giftService = GiftService.new()
+		eco.giftService._eco = eco
 	# SOM-IDLE Fatia 12: kernel compartilhado (carteira, ledger, ops de item raw, baús de chave) extraido.
 	if eco.kernel == null:
 		eco.kernel = EconomyKernel.new()

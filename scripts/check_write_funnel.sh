@@ -50,6 +50,7 @@ economy/BossProgressionService.gd
 economy/CheckoutService.gd
 economy/CheckoutReversal.gd
 economy/EconomyKernel.gd
+economy/GiftService.gd
 economy/GuildService.gd
 economy/ItemForgeService.gd
 economy/SeasonService.gd

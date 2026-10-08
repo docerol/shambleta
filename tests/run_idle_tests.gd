@@ -312,6 +312,12 @@ func _run_tests():
 		# M-5: a vitrine do dia compra gems do próprio bolso da fixture e deixa o
 		# recibo no ledger (append-only) — nada de estado vivo para a frente.
 		suites.SuiteFlashShop(sql, economy)
+		# M-7: a escada da skill é função pura; o banco só prova a coluna e o
+		# reload. Nenhum estado vivo — a fixture de skill é a própria linha.
+		suites.SuiteSkillXp(sql)
+		# M-8: a coleção mede variedade no bestiário da fixture e reclama um
+		# cosmético com fonte nomeada; as linhas ficam na conta-fixture.
+		suites.SuiteCollections(sql, economy)
 		# Vitrine por último: é a única suíte que mexe em `season` depois da régua
 		# de ponteiros, e fecha toda temporada ativa ao sair — nada herda o estado.
 		suites.SuiteStorefrontHonesty(sql)

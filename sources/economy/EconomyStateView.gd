@@ -73,4 +73,7 @@ func Build(accountID : int, charID : int) -> Dictionary:
 		# M-5: a vitrine do dia (3 prateleiras determinísticas + carimbo `claimed`
 		# da conta). Preço NÃO se re-derive na tela — ela pinta o que o funil cobra.
 		"flash" = _eco.FlashToday(accountID),
+		# M-3: o estado da porta do presente (taxa, mínimo, cota do dia, janela
+		# anti-flip) — a tela desenha com esses números, o funil decide com eles.
+		"gift" = _eco.giftService.GetGiftState(accountID),
 	}

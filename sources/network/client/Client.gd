@@ -423,6 +423,10 @@ func EconomyState(state : Dictionary, _peerID : int):
 		Launcher.GUI.shopWindow.ShowState(state)
 	if Launcher.GUI.chestsWindow and Launcher.GUI.chestsWindow.is_visible():
 		Launcher.GUI.chestsWindow.ShowState(state)
+	# M-3: a porta do presente mora na aba Account — a cota/fee desenhada lá é
+	# esta mesma projeção, redesenhada quando o servidor a devolve.
+	if Launcher.GUI.settingsWindow and Launcher.GUI.settingsWindow.is_visible():
+		Launcher.GUI.settingsWindow.RefreshGift(state.get("gift", {}))
 	if Launcher.GUI.has_method("RefreshNotices"):
 		Launcher.GUI.RefreshNotices()
 

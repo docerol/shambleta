@@ -28,6 +28,11 @@ extends SceneTree
 #      FlagMultiAccount, BanAccount/BanIPRange, escrita automática de
 #      referral_hold) — padrão de guard do SuiteOpsA2 (IdleTests), aqui só
 #      LEITURA do IdleTests, sem tocar nele.
+#  S-J presente de gems (M-3): taxa queimada (roundi exato, mín 1), flip B→A
+#      recusado DENTRO da janela e liberado pela linha envelhecida, cota do dia
+#      lida do disco (`gem_gift`, não memória), recusas sem rastro nem
+#      movimentação de carteira, e o tripé de ledger `gift_out`/`gift_fee`/
+#      `gift_in` com balance_after do instante.
 #  S-I wash no LEILÃO (#93.2): o ciclo A anuncia → B compra → B anuncia → A compra
 #      (mesmo item, 7d) abre fila média nos DOIS lados do par, lendo o namespace
 #      VIVO do AH (ah_list:/ah_in: em ledger + ah_price_history). Fornecedor
@@ -127,6 +132,7 @@ func _run() -> void:
 	_suiteMetrics()
 	_suiteChargebackClawback()
 	_suiteAHWashPair()
+	_suiteGemGift()
 	_suitePunitiveAutomationSweep()
 
 	_finish()
@@ -711,6 +717,98 @@ func _ahCleanFixture(item : int, accounts : Array) -> void:
 	for acct in accounts:
 		_sql.db.query("DELETE FROM ah_activity WHERE account_id = %d;" % int(acct))
 		_eco.call("AddGems", int(acct), 200, "frd_ah_gems")
+
+# ------------------------------------------------------------------ S-J presente de gems
+# M-3 — a mesma família de abuso do `ah_wash_pair`, mas SEM o escrow de 7 dias do
+# leilão: gems vão de mão em mão no instante do clique. A defesa é PORTA, não
+# revisão: o funil recusa o flip (B→A dentro da janela depois de A→B), a cota do
+# dia é durável no disco (linhas `gem_gift`, não contador de memória) e a taxa é
+# QUEIMA — um ciclo A→B→A perde 40% por construção, e o que resta deste harness é
+# provar que o ciclo é IMPOSSÍVEL de fechar, não que ele abre fila depois.
+func _giftWalletGems(accountID : int) -> int:
+	var rows : Array = _sql.QueryBindings("SELECT gems FROM wallet WHERE account_id = ?;", [accountID])
+	return int(rows[0]["gems"]) if not rows.is_empty() else -1
+
+func _giftLedgerRow(accountID : int, reason : String) -> Dictionary:
+	var rows : Array = _sql.QueryBindings("SELECT amount, balance_after, char_id FROM ledger_transaction WHERE account_id = ? AND reason = ? ORDER BY id DESC LIMIT 1;", [accountID, reason])
+	return {} if rows.is_empty() else rows[0]
+
+func _suiteGemGift() -> void:
+	print("[suite J] M-3: gifting de gems — taxa queimada, flip recusado na porta, cota durável")
+	var a : int = _mkAccount("ga", 60, true)
+	var b : int = _mkAccount("gb", 60, true)
+	var c : int = _mkAccount("gc", 60, true)
+	var d : int = _mkAccount("gd", 60, true)
+	if not _check(a > 0 and b > 0 and c > 0 and d > 0, "contas do presente criadas"):
+		return
+	for acct in [a, b, c, d]:
+		_sql.ExecuteBindings("DELETE FROM gem_gift WHERE from_account = ? OR to_account = ?;", [acct, acct])
+	_charWithLevel(a, "frd_gift_a", 5)
+	_charWithLevel(b, "frd_gift_b", 5)
+	_charWithLevel(c, "frd_gift_c", 5)
+	_charWithLevel(d, "frd_gift_d", 5)
+	_wallet(a, 1000)
+	_wallet(b, 0)
+	_wallet(c, 0)
+	_wallet(d, 500)
+	var gift : Variant = _eco.giftService
+	if not _check(gift != null, "Economy.giftService montado no boot"):
+		return
+	# 1. A→B 100: ok, taxa 20 queimada, as três pernas com balance_after do instante.
+	var r : Dictionary = gift.SendGift(a, "frd_gift_b", 100)
+	_check(bool(r.get("ok", false)), "A->B de 100 gems aceito (reason %s)" % str(r.get("reason", "?")))
+	var giftID : int = int(r.get("gift_id", 0))
+	_checkEq(int(r.get("fee", 0)), 20, "taxa de 100 = 20 (20%)")
+	_checkEq(_giftWalletGems(a), 880, "debito do A cobra valor + taxa (1000-120)")
+	_checkEq(_giftWalletGems(b), 100, "credito do B recebe o valor, nao o total")
+	var out : Dictionary = _giftLedgerRow(a, "gift_out:%d" % giftID)
+	var feeRow : Dictionary = _giftLedgerRow(a, "gift_fee:%d" % giftID)
+	var inRow : Dictionary = _giftLedgerRow(b, "gift_in:%d" % giftID)
+	_checkEq(int(out.get("balance_after", -1)), 900, "ledger gift_out: -100 sobre 1000")
+	_checkEq(int(feeRow.get("balance_after", -1)), 880, "ledger gift_fee: -20 no instante dela (chain, não contagem)")
+	_checkEq(int(inRow.get("balance_after", -1)), 100, "ledger gift_in no B (+100)")
+	# 2. A volta imediata é RECUSADA na porta — o ciclo de lavagem não fecha.
+	var flip : Dictionary = gift.SendGift(b, "frd_gift_a", 90)
+	_checkEq(str(flip.get("reason", "?")), "gift_flip", "B->A dentro da janela é gift_flip")
+	_checkEq(_giftWalletGems(b), 100, "recusa não move carteira")
+	# 3. A volta só reabre quando o PRESENTE ORIGINAL envelhece: a guarda pergunta
+	# "este destinatário me presenteou na janela?" — para liberar B→A é o A→B do
+	# passo 1 que tem que sair da janela (envelhecemos a linha viva, não plantamos
+	# outra direção: plantar B→A antigo deixaria A→B fresco travando a volta).
+	var now : int = int(Time.get_unix_time_from_system())
+	_sql.ExecuteBindings("UPDATE gem_gift SET created_at = ? WHERE from_account = ? AND to_account = ?;", [now - 86400 - 5, a, b])
+	var back : Dictionary = gift.SendGift(b, "frd_gift_a", 50)
+	_check(bool(back.get("ok", false)), "B->A com a linha antiga plantada passa (reason %s)" % str(back.get("reason", "?")))
+	_checkEq(int(back.get("fee", 0)), 10, "taxa de 50 = 10")
+	_checkEq(_giftWalletGems(b), 40, "Bdebitado 50+10 do saldo que tinha")
+	_checkEq(_giftWalletGems(a), 930, "A recebe os 50 de volta")
+	# 4. Cota do dia DURÁVEL: A já gastou 1; dois seguintes ao C passam, o quarto é gift_cap.
+	_check(bool(gift.SendGift(a, "frd_gift_c", 10).get("ok", false)), "A->C #2 aceita (fee 2)")
+	_check(bool(gift.SendGift(a, "frd_gift_c", 10).get("ok", false)), "A->C #3 aceita")
+	var capped : Dictionary = gift.SendGift(a, "frd_gift_c", 10)
+	_checkEq(str(capped.get("reason", "?")), "gift_cap", "A->C #4 é gift_cap (teto 3/dia lido do disco)")
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM gem_gift WHERE from_account = ?;", [a])[0]["n"]), 3, "linhas duráveis do A no dia = 3")
+	# 5. As portas nominais: mínimo, destinatário, auto-presente, falta de lastro.
+	_checkEq(str(gift.SendGift(a, "frd_gift_c", 5).get("reason", "?")), "gift_min", "5 gems abaixo do mínimo 10")
+	_checkEq(str(gift.SendGift(a, "frd_gift_zzz", 100).get("reason", "?")), "gift_unknown", "nick inexistente")
+	_checkEq(str(gift.SendGift(a, "frd_gift_a", 100).get("reason", "?")), "gift_self", "nick da própria conta é gift_self")
+	_checkEq(str(gift.SendGift(b, "frd_gift_c", 1000).get("reason", "?")), "gift_nofunds", "B sem lastro para 1000+200")
+	# A recusa não pode deixar rastro: só as linhas boas existem.
+	_checkEq(int(_sql.QueryBindings("SELECT COUNT(*) AS n FROM gem_gift WHERE from_account = ? OR to_account = ?;", [a, a])[0]["n"]), 4, "recusas não escrevem gem_gift (A: →B + ←B volta + 2→C)")
+	# 6. Arredondamento da taxa é roundi, não floor nem teto: 12 × 20% = 2,4 → 2.
+	var twelve : Dictionary = gift.SendGift(d, "frd_gift_a", 12)
+	_check(bool(twelve.get("ok", false)), "D->A de 12 aceito")
+	_checkEq(int(twelve.get("fee", 0)), 2, "fee 12 = roundi(2.4) = 2")
+	_checkEq(_giftWalletGems(d), 486, "D cobra 12+2")
+	# 7. O estado da porta que a tela desenha vem do disco, com a cota gasta.
+	var gs : Dictionary = gift.GetGiftState(a)
+	_checkEq(int(gs.get("fee_pct", 0)), 20, "GetGiftState cita a taxa do catálogo")
+	_checkEq(int(gs.get("left_today", -1)), 0, "GetGiftState do A: cota do dia zerada")
+	_checkEq(int(gs.get("left_today", -1)), int(gs.get("max_per_day", -1)) - 3, "cota restante == teto - linhas do dia")
+	# 8. Higiene da mesa: presente algum pode ser apagado do disco entre runs; o
+	# ledger é append-only e fica (as asserções são por reason nomeado, não contagem global).
+	for acct in [a, b, c, d]:
+		_sql.ExecuteBindings("DELETE FROM gem_gift WHERE from_account = ? OR to_account = ?;", [acct, acct])
 
 # ------------------------------------------------------------------ S-G varredura
 # O guard do SuiteOpsA2 (IdleTests.gd ~5220) para automação punitiva: varre os

@@ -1291,11 +1291,16 @@ func UpdateProgress(charID : int, progress : ActorProgress):
 	var quests : Dictionary = _SnapshotEntries(progress.quests, progress.questMutex)
 	var bestiary : Dictionary = _SnapshotEntries(progress.bestiary, progress.bestiaryMutex)
 	var skills : Dictionary = _SnapshotEntries(progress.skills, null)
+	# M-7: o XP residual das skills desce no mesmo commit do nível — a ordem
+	# (level primeiro) importa: o upsert de `xp` nunca cria linha, só atualiza
+	# as que o upsert de nível (ou o `SetSkill` do trainer) já garantiram.
+	var skillXp : Dictionary = _SnapshotEntries(progress.skillXp, null)
 	var ok : bool = false
 	ok = Transaction(func() -> bool:
 		var upserted : bool = _UpsertProgress("quest", "quest_id", "state", charID, quests)
 		upserted = _UpsertProgress("bestiary", "mob_id", "killed_count", charID, bestiary) and upserted
 		upserted = _UpsertProgress("skill", "skill_id", "level", charID, skills) and upserted
+		upserted = _UpsertProgress("skill", "skill_id", "xp", charID, skillXp) and upserted
 		return upserted
 	)
 	if not ok:

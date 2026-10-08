@@ -454,6 +454,7 @@ func _on_visibility_changed():
 	RefreshSettings(false)
 	if is_visible():
 		Network.GetReferralState()
+		Network.GetEconomyState()
 
 # R1 referral UI (runtime, sem .tscn): código próprio, campo p/ informar o
 # código do convidador, status. Refresh via Client.ReferralState.
@@ -502,6 +503,17 @@ func RefreshReferral(state : Dictionary):
 		str(state.get("code", "?")), int(state.get("invited", 0)), int(state.get("bonuses", 0))]
 	if int(state.get("referred_by", 0)) > 0:
 		_referralStatus.text = tr("Invite code accepted — bonus at level %d") % int(state.get("min_level", 10))
+
+# M-3: fileira do presente — widget em `GiftForm.gd`, estado pela projeção.
+var _giftForm : GiftForm = null
+
+func RefreshGift(state : Dictionary):
+	if not accountVBox or state.is_empty():
+		return
+	if _giftForm == null:
+		_giftForm = GiftForm.new()
+	_giftForm.Build(accountVBox)
+	_giftForm.Refresh(state)
 
 func PopulateCredits():
 	Scrollable.AddCategories(creditsContainer, creditsJson.get_data())

@@ -74,6 +74,11 @@ IDENTITY = {"⏎", "\n", "+", "-", "<", ">", "?", "~", "0", "1", "2", "3", "4", 
     # classe do "-" ASCII já listado. O "AH" que esteve aqui saiu junto do botão
     # duplicado da barra: sem chamador, a exceção seria só uma licença de eco.
     "Idle", "Skin", "Arena", "—", "−",
+    # M-3 (2026-10-07): "gems" é o placeholder da caixa de valor do presente
+    # (`GiftForm`) e a comunidade BR usa a palavra crua — mesma classe do
+    # "Gems: —" dos letreiros e de "Mana". Conferida no chamador: o rodapé do
+    # funil e o toast do servidor já dizem "gems" nas duas colunas do CSV.
+    "gems",
 }
 
 def unesc(s):

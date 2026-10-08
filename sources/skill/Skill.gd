@@ -94,6 +94,9 @@ static func Handle(agent : BaseAgent, target : BaseAgent, skill : SkillCell, rng
 static func Casted(agent : BaseAgent, target : BaseAgent, skill : SkillCell):
 	agent.cooldownTimers[skill.id] = true
 	agent.SetSkillCastID(DB.UnknownHash)
+	# M-7: o cast landed — é AQUI (e só no servidor, dentro do NoteCast) que o
+	# uso credita XP para o nível da skill, com o teto declarado na classe.
+	SkillProgress.NoteCast(agent, skill)
 	var timeLeft : float = SkillCommons.GetCooldown(agent, skill)
 	Callback.SelfDestructTimer(agent, timeLeft, CooledDown, [agent, target, skill], skill.name + " CoolDown")
 	Network.NotifyNeighbours(agent, "Casted", [agent.get_rid().get_id(), skill.id, timeLeft])

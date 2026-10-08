@@ -852,6 +852,14 @@ func BuyVaultSlots(peerID : int = NetworkCommons.PeerAuthorityID):
 func BuyGuildPerk(perkID : String, peerID : int = NetworkCommons.PeerAuthorityID):
 	CallServer("BuyGuildPerk", [perkID], AuthPeerID(peerID), NetworkCommons.DelayConfig)
 
+# M-3 (2026-10-07): presente de gems de conta a conta. O pacote nomeia o NICK do
+# destinatário e o valor — nunca a `account_id`: o servidor resolve o nick no disco
+# (mesma regra do referral) e a identidade do remetente é a do peer. Taxa, teto de
+# dia e janela anti-flip são todos veredito do funil em `GiftService`.
+@rpc("any_peer", "call_remote", "reliable", EChannel.ACTION)
+func SendGift(nickname : String, gems : int, peerID : int = NetworkCommons.PeerAuthorityID):
+	CallServer("SendGift", [nickname, gems], AuthPeerID(peerID), NetworkCommons.DelayConfig)
+
 # As seis ESCRITAS do painel de guild (CreateGuildNamed/JoinGuildByID/
 # LeaveCurrentGuild/DepositItem/WithdrawItem/BuyGuildPerk em
 # sources/gui/GuildPanel.gd). O pacote

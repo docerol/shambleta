@@ -1,8 +1,10 @@
 extends SceneTree
 
 # SOM-IDLE auditoria 2026-09-27 (§GASTOS IRREVERSÍVEIS): harness do freio de
-# confirmação. Treze cliques que destroem moeda/item sem volta (abrir baú,
-# comprar baús, vendor, oferta diária, reroll, cosmético, passe standard/deluxe,
+# confirmação. Quinze cliques que destroem moeda/item sem volta (abrir baú,
+# comprar baús, vendor, oferta diária, reroll, prateleira da vitrine do dia
+# (M-5 — enumerada na rodada M-3, tinha ficado de fora), presente de gems,
+# cosmético, passe standard/deluxe,
 # skip do passe, chave de boss, e as TRÊS operações do altar que destroem um
 # equipamento) saíam para a rede com um clique só. Hoje cada um passa pelo
 # idiom da casa (leilão/arena): o handler do botão APENAS arma a pendência e
@@ -139,7 +141,7 @@ func _initialize():
 	_runTests()
 
 func _runTests():
-	print("== SOM-SPEND confirm harness (13 gastos irreversíveis atrás de confirmação) ==")
+	print("== SOM-SPEND confirm harness (15 gastos irreversíveis atrás de confirmação) ==")
 	var launcher : Node = _autoload("Launcher")
 	if launcher == null:
 		print("FATAL: Launcher autoload ausente")
@@ -208,8 +210,28 @@ func _runTests():
 			"handler" = "_on_reroll_daily_pressed", "args" = [],
 			"method" = "RerollDailyShop", "rpcArgs" = [],
 			"needles" = ["20", "gems"]})
+		# M-5 (vitrine do dia) gastava gems atrás do mesmo freio mas NUNCA foi
+		# site deste harness — a enumeração é manual e o buraco era de cega.
+		_driveSpend("Shop", shop["panel"], shop["sends"], {
+			"handler" = "_on_buy_flash_pressed", "args" = [1, "Crate of dusk", 18],
+			"method" = "BuyFlashSlot", "rpcArgs" = [1],
+			"needles" = ["Crate of dusk", "18", "gems"]})
 		Check(not bool(shop["panel"].call("RequestBuyVendor", "", "x", 1)), "Shop: vendor sem id não arma")
 		_guardAskSurface("res://sources/gui/Shop.gd", "Shop")
+
+	# ---------------------------------------------------------------- GiftForm (M-3)
+	# O presente de gems é gasto duplamente irreversível (valor entregue + taxa
+	# queimada): a linha armada tem que citar destinatário, valor e TOTAL.
+	var gift : Dictionary = _spawn("res://sources/gui/GiftForm.gd", "GiftForm")
+	if not gift.is_empty():
+		_driveSpend("GiftForm", gift["panel"], gift["sends"], {
+			"handler" = "RequestSendGift", "args" = ["Bestia", 100],
+			"method" = "SendGift", "rpcArgs" = ["Bestia", 100],
+			"needles" = ["Bestia", "100", "120", "fee"]})
+		Check(not bool(gift["panel"].call("RequestSendGift", "", 100)), "GiftForm: destinatário vazio não arma")
+		Check(not bool(gift["panel"].call("RequestSendGift", "Bestia", 5)), "GiftForm: abaixo do mínimo não arma")
+		CheckEq(_pendingCount(gift["panel"]), 0, "GiftForm: as recusas não deixam pendência")
+		_guardAskSurface("res://sources/gui/GiftForm.gd", "GiftForm")
 
 	# ---------------------------------------------------------------- Cosmetics
 	var cosmetics : Dictionary = _spawn("res://sources/gui/Cosmetics.gd", "Cosmetics")

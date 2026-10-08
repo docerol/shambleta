@@ -1322,6 +1322,25 @@ func BuyFlashSlot(slot : int, peerID : int):
 	Network.ShopFeedback(true, "flash shelf %d for %d gems" % [slot, int(result.get("cost", 0))], peerID)
 	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
 
+# M-3 (2026-10-07): presente de gems. Identidade do peer primeiro, destinatário é o
+# NICK nomeado no pacote (resolvido no disco pelo funil, nunca a conta), e o
+# veredito inteiro — taxa, teto de dia, janela anti-flip, saldo — é do
+# `GiftService.SendGift`. O estado volta em qualquer desfecho porque a cota
+# restante da tela é verdade do disco, não do palpite do cliente.
+func SendGift(nickname : String, gems : int, peerID : int):
+	var charID : int = Peers.GetCharacter(peerID)
+	var accountID : int = Peers.GetAccount(peerID)
+	if charID == NetworkCommons.PeerUnknownID or accountID == NetworkCommons.PeerUnknownID:
+		Network.ShopFeedback(false, "not_logged_in", peerID)
+		return
+	var result : Dictionary = Launcher.Economy.giftService.SendGift(accountID, nickname, gems)
+	if not bool(result.get("ok", false)):
+		Network.ShopFeedback(false, "gift rejected (%s)" % str(result.get("reason", "?")), peerID)
+		Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+		return
+	Network.ShopFeedback(true, "gift of %d gems sent (%d burned as fee)" % [gems, int(result.get("fee", 0))], peerID)
+	Network.EconomyState(Launcher.Economy.GetEconomyState(accountID, charID), peerID)
+
 # R2 vendor gold: conta/char sempre da sessão.
 func BuyVendorOffer(offerID : String, peerID : int):
 	var charID : int = Peers.GetCharacter(peerID)

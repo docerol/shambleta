@@ -3368,7 +3368,8 @@ func SuiteCosmetics(sql : SQLService) -> void:
 
 	var col0 : Dictionary = economy.GetCosmetics(accountID)
 	Check(bool(col0.get("ok", false)), "collection ok")
-	CheckEq((col0.get("catalog", []) as Array).size(), 20, "catalog has 20 entries")
+	# 21 desde M-8 (2026-10-07): `title_bestiarista`, prêmio de coleção, entrou no catálogo.
+	CheckEq((col0.get("catalog", []) as Array).size(), 21, "catalog has 21 entries")
 	Check((col0.get("owned", []) as Array).is_empty(), "starts empty")
 
 	Check(str(economy.EquipCosmetic(accountID, "nope").get("reason", "")) == "unknown_cosmetic", "unknown cosmetic rejected")
@@ -4071,10 +4072,11 @@ func SuiteVendor(sql : SQLService) -> void:
 		return
 	var accountID : int = sql.GetAccountIDForCharacter(charID)
 	var apple : int = FarmZoneData.DefaultDropItemHash
-	# Catálogo no estado: 7 ofertas, preço e estoque server-side
+	# Catálogo no estado: 8 ofertas (M-6 somou o scroll do portão), preço e
+	# estoque server-side
 	var st : Dictionary = economy.GetVendorState(accountID)
 	Check(bool(st.get("ok", false)), "vendor state ok")
-	CheckEq((st.get("offers", []) as Array).size(), 7, "7 vendor offers")
+	CheckEq((st.get("offers", []) as Array).size(), 8, "8 vendor offers")
 	# Compra: +1 apple (prova que "Apple".hash() casa com o drop), -50 gold
 	_SetInventory(sql, charID, apple, 0)
 	_GrantGold(sql, charID, accountID, 1000, "vendor_test_gold")

@@ -5,6 +5,10 @@ class_name ActorProgress
 var bestiary : Dictionary[int, int]			= {}
 var quests : Dictionary[int, int]			= {}
 var skills : Dictionary[int, int]			= {}
+# M-7 (2026-10-07): o XP dentro do nível atual de cada skill. Vive ao lado de
+# `skills` e desce para o banco pelo MESMO `UpdateProgress` (coluna `xp` da
+# migração 074) — nenhum dono novo entrou no funil.
+var skillXp : Dictionary[int, int]			= {}
 
 var actor : Actor							= null
 
@@ -77,12 +81,22 @@ func AddSkill(cell : SkillCell, level : int):
 func GetSkillLevel(cell : SkillCell) -> int:
 	return skills.get(cell.id, 0) if cell else 0
 
+func GetSkillXp(cell : SkillCell) -> int:
+	return skillXp.get(cell.id, 0) if cell else 0
+
+func SetSkillXp(cell : SkillCell, value : int):
+	if cell == null:
+		push_error("Provided skill cell is null")
+		return
+	skillXp[cell.id] = value
+
 func RemoveSkill(cell : SkillCell):
 	if cell == null:
 		push_error("Provided skill cell is null")
 		return
 
 	skills.erase(cell.id)
+	skillXp.erase(cell.id)
 
 	if actor is PlayerAgent and actor.peerID != NetworkCommons.PeerUnknownID:
 		Network.UpdateSkill(cell.id, 0, actor.peerID)
@@ -93,6 +107,7 @@ func ImportProgress(charID : int):
 		var skill : SkillCell = DB.GetSkill(entry.get("skill_id", DB.UnknownHash))
 		if skill:
 			AddSkill(skill, entry.get("level", 1))
+			skillXp[skill.id] = int(entry.get("xp", 0))
 	for entry in Launcher.SQL.GetQuests(charID):
 		SetQuest(entry.get("quest_id", DB.UnknownHash), entry.get("state", 0))
 	for entry in Launcher.SQL.GetBestiaries(charID):
